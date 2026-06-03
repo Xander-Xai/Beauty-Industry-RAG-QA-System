@@ -25,24 +25,45 @@ with open("config.json", encoding="utf-8") as f:
 
 logger = logging.getLogger(__name__)
 
+REWRITE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rewritten_query": {"type": "string"},
+        "business_type": {
+            "type": "string",
+            "enum": ["regulation", "development", "ingredient", "product", "general", "short"]
+        },
+        "intent": {
+            "type": "string",
+            "enum": ["compliance", "formulation", "ingredient", "product", "general"]
+        },
+        "requires_context": {"type": "boolean"},
+        "standardized_entities": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["rewritten_query", "business_type", "intent", "requires_context"],
+}
+
 # Rewrite Prompt 模板
 REWRITE_PROMPT_TEMPLATE = """你是一个化妆品行业知识问答系统的查询改写助手。请分析用户的查询并输出结构化 JSON。
 
 任务：
 1. 将用户的原始查询改写为更适合向量检索的形式
 2. 识别业务类型和意图
-3. 提取标准化实体（成分名、法规条款号、INCI 名称等）
+3. 提取标准化实体（成分名、INCI 名称、法规条款号、产品名等）
 
 业务类型定义：
-- regulation: 法规相关（合规、标准、许可、备案）
-- development: 研发相关（配方、成分、工艺）
+- regulation: 法规相关（合规、标准、许可、备案、禁用清单）
+- development: 研发相关（配方、成分、工艺、制备）
+- ingredient: 成分相关（功效、安全浓度、复配禁忌）
+- product: 产品相关（品牌、价格、适用肤质）
 - general: 通用问答
-- short: 简短查询（品牌、价格等简单问题）
+- short: 简短查询
 
 意图定义：
 - compliance: 合规查询
 - formulation: 配方查询
 - ingredient: 成分查询
+- product: 产品查询
 - general: 通用意图
 
 最近对话历史：
@@ -50,7 +71,7 @@ REWRITE_PROMPT_TEMPLATE = """你是一个化妆品行业知识问答系统的查
 
 当前查询：{query}
 
-请输出严格 JSON 格式（不要输出其他内容）：
+请输出严格 JSON 格式：
 {{
     "rewritten_query": "改写后的查询",
     "business_type": "业务类型",
@@ -157,13 +178,21 @@ class QueryRewriter:
 
     def _call_llm(self, prompt: str, temperature: float = None) -> str:
         """调用 vLLM-Rewrite 实例"""
-        messages = [{"role": "user", "content": prompt}]
-        return self.router.route_chat(
-            "rewrite",
-            messages=messages,
-            max_tokens=self.max_output_tokens,
-            temperature=temperature or self.temperature,
-        )
+        from router.stateless_router import StatelessRouter
+
+        payload = {
+            "prompt": prompt,
+            "max_tokens": self.max_output_tokens,
+            "temperature": temperature if temperature is not None else self.temperature,
+        }
+
+        try:
+            router = StatelessRouter()
+            response = router.route_completion("rewrite", prompt, max_tokens=192, temperature=payload["temperature"])
+            return response
+        except Exception as e:
+            logger.error(f"vLLM-Rewrite 调用失败: {e}")
+            raise
 
     def _parse_response(self, text: str, original_query: str) -> Optional["QueryRewriteResult"]:
         """解析 vLLM 输出为 QueryRewriteResult"""
@@ -187,3 +216,28 @@ class QueryRewriter:
         except (json.JSONDecodeError, KeyError) as e:
             logger.error(f"Rewrite JSON 解析异常: {e}")
             return None
+
+    def _simulate_rewrite(self, query: str) -> str:
+        """模拟 Rewrite（开发/测试用）"""
+        biz_type = "general"
+        intent = "general"
+        if any(kw in query for kw in ["法规", "合规", "标准", "备案", "许可", "禁用", "安全技术规范"]):
+            biz_type = "regulation"
+            intent = "compliance"
+        elif any(kw in query for kw in ["配方", "研发", "工艺", "制备", "开发"]):
+            biz_type = "development"
+            intent = "formulation"
+        elif any(kw in query for kw in ["成分", "INCI", "功效", "浓度", "烟酰胺", "玻色因", "神经酰胺", "A醇"]):
+            biz_type = "ingredient"
+            intent = "ingredient"
+        elif any(kw in query for kw in ["产品", "品牌", "适用", "肤质", "包装"]):
+            biz_type = "product"
+            intent = "product"
+
+        return json.dumps({
+            "rewritten_query": query,
+            "business_type": biz_type,
+            "intent": intent,
+            "requires_context": True,
+            "standardized_entities": [],
+        }, ensure_ascii=False)
