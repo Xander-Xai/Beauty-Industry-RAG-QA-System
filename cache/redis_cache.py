@@ -46,6 +46,8 @@ class RedisCache:
         self.enabled = False
         self._degraded = False  # Redis 降级模式
         self._degraded_since = 0
+        self.l1_ttl = 300
+        self.l2_ttl = 3600
         self._try_connect()
 
     def _try_connect(self):
@@ -60,6 +62,8 @@ class RedisCache:
             self.redis_client.ping()
             self.enabled = True
             self._degraded = False
+            self.l1_ttl = config.get("cache_config", {}).get("l1_ttl_seconds", 300)
+            self.l2_ttl = config.get("cache_config", {}).get("l2_ttl_seconds", 3600)
             logger.info(f"Redis 缓存连接成功: {rc['host']}:{rc['port']}")
         except ImportError:
             logger.info("redis-py 未安装，仅使用 L1 内存缓存")
@@ -140,7 +144,7 @@ class RedisCache:
         # L2 写入（Redis）
         if self.enabled and self.redis_client:
             try:
-                l2_ttl = ttl or config.get("cache_config", {}).get("l2_ttl_seconds", 3600)
+                l2_ttl = ttl or self.l2_ttl
                 self.redis_client.setex(
                     f"rag:l2:{key}",
                     l2_ttl,
