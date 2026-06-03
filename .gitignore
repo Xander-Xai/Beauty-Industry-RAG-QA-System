@@ -47,3 +47,6 @@ logs/
 # Temporary files
 *.tmp
 *.bak
+
+# Claude Code worktrees
+.claude/worktrees/
