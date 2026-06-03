@@ -1,0 +1,1 @@
+        u = sum(self.estimate_kv(v[0],v[1],v[2]) for v in self.active.values()); return u / self.kv_total if self.kv_total  else 0.0 
