@@ -1,177 +1,77 @@
 version: "3.9"
 
 # ============================================================================
-# Automotive Knowledge RAG System - Microservices Docker Compose
+# Automotive Knowledge RAG System - Docker Compose Deployment
 # ============================================================================
 
 services:
 
-  # ── API Gateway ──────────────────────────────────────────────────────────
-  api-gateway:
-    build:
-      context: .
-      dockerfile: api-gateway/Dockerfile
+  # ── Main Application ──────────────────────────────────────────────────────
+  app:
+    build: .
     ports:
-      - "8080:8080"
-    environment:
-      - SERVICE_NAME=api-gateway
-      - CONFIG_PATH=/app/config.json
-      - REDIS_CACHE_HOST=redis-cache
-      - REDIS_STATE_HOST=redis-cache
-      - REWRITE_SERVICE_URL=http://rewrite-service:8081
-      - RETRIEVAL_SERVICE_URL=http://retrieval-service:8082
-      - GENERATION_SERVICE_URL=http://generation-service:8083
-      - CACHE_SERVICE_URL=http://cache-service:8084
-      - MONITORING_SERVICE_URL=http://monitoring-service:8085
-      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-in-production-2026}
+      - "8000:8000"
     volumes:
-      - ./config.json:/app/config.json:ro
+      - ./models:/models
     depends_on:
-      - rewrite-service
-      - retrieval-service
-      - generation-service
-      - cache-service
-      - monitoring-service
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
     networks:
-      - rag-net
+      - rag-network
 
-  # ── Rewrite Service ─────────────────────────────────────────────────────
-  rewrite-service:
-    build:
-      context: .
-      dockerfile: rewrite-service/Dockerfile
+  # ── Infrastructure: Redis ───────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
     ports:
-      - "8081:8081"
-    environment:
-      - SERVICE_NAME=rewrite-service
-      - CONFIG_PATH=/app/config.json
-      - VLLM_REWRITE_URL=http://gpu-host:8101
-      - BERT_COMPLEXITY_PATH=/models/bert-complexity
+      - "6379:6379"
     volumes:
-      - ./config.json:/app/config.json:ro
-      - model-cache:/models:ro
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
     networks:
-      - rag-net
-
-  # ── Retrieval Service ───────────────────────────────────────────────────
-  retrieval-service:
-    build:
-      context: .
-      dockerfile: retrieval-service/Dockerfile
-    ports:
-      - "8082:8082"
-    environment:
-      - SERVICE_NAME=retrieval-service
-      - CONFIG_PATH=/app/config.json
-      - MILVUS_HOST=milvus
-      - MILVUS_PORT=19530
-      - ELASTICSEARCH_HOST=http://elasticsearch:9200
-      - REDIS_CACHE_HOST=redis-cache
-      - BI_ENCODER_PATH=/models/bge-base-zh-v1.5
-      - CROSS_ENCODER_A_PATH=/models/cross-encoder-law
-      - CROSS_ENCODER_B_PATH=/models/cross-encoder-base
-      - NLI_MODEL_PATH=/models/nli-deberta
-      - CLIP_TEXT_ENCODER_PATH=/models/clip-vit-base-patch16
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - model-cache:/models:ro
-    depends_on:
-      - milvus
-      - elasticsearch
-      - redis-cache
-    restart: unless-stopped
-    networks:
-      - rag-net
-
-  # ── Generation Service ──────────────────────────────────────────────────
-  generation-service:
-    build:
-      context: .
-      dockerfile: generation-service/Dockerfile
-    ports:
-      - "8083:8083"
-    environment:
-      - SERVICE_NAME=generation-service
-      - CONFIG_PATH=/app/config.json
-      - VLLM_GEN_14B_URL=http://gpu-host:8100
-      - VLLM_GEN_4B_URL=http://gpu-host:8102
-      - NLI_MODEL_PATH=/models/nli-deberta
-      - RETRIEVAL_SERVICE_URL=http://retrieval-service:8082
-      - CACHE_SERVICE_URL=http://cache-service:8084
-      - REDIS_CACHE_HOST=redis-cache
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - model-cache:/models:ro
-    depends_on:
-      - retrieval-service
-      - cache-service
-    restart: unless-stopped
-    networks:
-      - rag-net
-
-  # ── Cache Service ───────────────────────────────────────────────────────
-  cache-service:
-    build:
-      context: .
-      dockerfile: cache-service/Dockerfile
-    ports:
-      - "8084:8084"
-    environment:
-      - SERVICE_NAME=cache-service
-      - CONFIG_PATH=/app/config.json
-      - REDIS_CACHE_HOST=redis-cache
-      - REDIS_CACHE_PORT=6379
-      - REDIS_CACHE_DB=0
-      - REDIS_STATE_HOST=redis-cache
-      - REDIS_STATE_PORT=6379
-      - REDIS_STATE_DB=1
-    volumes:
-      - ./config.json:/app/config.json:ro
-    depends_on:
-      - redis-cache
-    restart: unless-stopped
-    networks:
-      - rag-net
-
-  # ── Monitoring Service ──────────────────────────────────────────────────
-  monitoring-service:
-    build:
-      context: .
-      dockerfile: monitoring-service/Dockerfile
-    ports:
-      - "8085:8085"
-    environment:
-      - SERVICE_NAME=monitoring-service
-      - CONFIG_PATH=/app/config.json
-    volumes:
-      - ./config.json:/app/config.json:ro
-    restart: unless-stopped
-    networks:
-      - rag-net
+      - rag-network
 
   # ── Infrastructure: Milvus ──────────────────────────────────────────────
   milvus:
-    image: milvusdb/milvus:v2.4.5
+    image: milvusdb/milvus:v2.3.3
     ports:
       - "19530:19530"
       - "9091:9091"
-    environment:
-      - ETCD_ENDPOINTS=etcd:2379
-      - MINIO_ADDRESS=minio:9000
     volumes:
       - milvus-data:/var/lib/milvus
     command: ["milvus", "run", "standalone"]
     depends_on:
       - etcd
       - minio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     restart: unless-stopped
     networks:
-      - rag-net
+      - rag-network
 
+  # ── Infrastructure: etcd ────────────────────────────────────────────────
   etcd:
-    image: quay.io/coreos/etcd:v3.5.15
+    image: quay.io/coreos/etcd:v3.5.5
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
       - ETCD_AUTO_COMPACTION_RETENTION=1000
@@ -191,16 +91,16 @@ services:
       retries: 3
     restart: unless-stopped
     networks:
-      - rag-net
+      - rag-network
 
+  # ── Infrastructure: MinIO ───────────────────────────────────────────────
   minio:
-    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    image: minio/minio:latest
+    ports:
+      - "9001:9001"
     environment:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     volumes:
       - minio-data:/minio_data
     command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
@@ -211,17 +111,17 @@ services:
       retries: 3
     restart: unless-stopped
     networks:
-      - rag-net
+      - rag-network
 
   # ── Infrastructure: Elasticsearch ───────────────────────────────────────
   elasticsearch:
-    image: elasticsearch:8.14.0
+    image: elasticsearch:8.12.0
+    ports:
+      - "9200:9200"
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
-    ports:
-      - "9200:9200"
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
@@ -231,35 +131,95 @@ services:
       retries: 5
     restart: unless-stopped
     networks:
-      - rag-net
+      - rag-network
 
-  # ── Infrastructure: Redis ───────────────────────────────────────────────
-  redis-cache:
-    image: redis:7.2-alpine
+  # ── vLLM: Generation 14B ───────────────────────────────────────────────
+  vllm-gen-14b:
+    image: vllm/vllm-openai:latest
     ports:
-      - "6379:6379"
+      - "8100:8000"
     volumes:
-      - redis-data:/data
-    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      - ./models:/models
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    command: >
+      --model /models/Qwen3-14B-Instruct
+      --host 0.0.0.0
+      --port 8000
+      --gpu-memory-utilization 0.85
+      --max-model-len 8192
+      --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
     networks:
-      - rag-net
+      - rag-network
 
-# ── Volumes ────────────────────────────────────────────────────────────────
+  # ── vLLM: Rewrite ──────────────────────────────────────────────────────
+  vllm-rewrite:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8101:8000"
+    volumes:
+      - ./models:/models
+    environment:
+      - CUDA_VISIBLE_DEVICES=1
+    command: >
+      --model /models/Qwen3-4B-Instruct
+      --host 0.0.0.0
+      --port 8000
+      --gpu-memory-utilization 0.5
+      --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── vLLM: Generation 4B ───────────────────────────────────────────────
+  vllm-gen-4b:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8102:8000"
+    volumes:
+      - ./models:/models
+    environment:
+      - CUDA_VISIBLE_DEVICES=1
+    command: >
+      --model /models/Qwen3-4B-Instruct
+      --host 0.0.0.0
+      --port 8000
+      --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+# ── Volumes ──────────────────────────────────────────────────────────────
 volumes:
+  redis-data:
   milvus-data:
   etcd-data:
   minio-data:
   es-data:
-  redis-data:
-  model-cache:
 
-# ── Network ────────────────────────────────────────────────────────────────
+# ── Network ─────────────────────────────────────────────────────────────
 networks:
-  rag-net:
+  rag-network:
     driver: bridge
