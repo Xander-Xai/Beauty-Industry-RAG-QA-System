@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 
 @dataclass
@@ -169,7 +169,7 @@ class SessionState:
     created_at: float = field(default_factory=time.time)
 
     # 会话级缓存（全局管理）
-    _sessions: dict[str, "SessionState"] = {}
+    _sessions: ClassVar[dict[str, "SessionState"]] = {}
 
     def add_round(self, user_input: str, response: str, rewrite: Optional[QueryRewriteResult] = None):
         """添加一轮对话"""
