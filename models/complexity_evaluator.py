@@ -98,51 +98,22 @@ class ComplexityEvaluator:
 
     def _evaluate_with_rules(self, query: str) -> bool:
         """
-        增强规则兜底评估（模型未加载时使用）
+        规则兜底评估（模型未加载时使用）
 
-        采用多维度加权评分，提高准确率：
-        - 关键词匹配（法规/研发/成分相关）
-        - 查询长度
-        - 句子结构复杂度
-        - 实体密度
+        复杂度关键词匹配（化妆品领域）
         """
-        # 1. 高权重关键词（法规/合规/多条件判断）
-        high_weight_keywords = [
-            "法规", "合规", "标准", "备案", "许可",
-            "安全评估", "毒理", "功效评价",
-            "禁止", "限制", "不允许", "必须",
+        complex_keywords = [
+            # 法规类
+            "法规", "合规", "标准", "备案", "许可", "禁用", "安全评估", "毒理",
+            "功效评价", "原料安全", "禁限用", "化妆品安全技术规范",
+            # 研发类
+            "配方", "复配", "工艺", "稳定性", "相容性", "防腐体系", "功效宣称",
+            # 成分交叉
+            "多成分", "交叉", "综合", "对比", "分析", "评估",
+            # 条款引用
+            "依据", "引用", "条款", "第", "条", "号",
+            # 专业术语
+            "INCI", "分子量", "浓度阈值", "PH范围", "使用量",
         ]
-        # 2. 中权重关键词（研发/分析/对比）
-        mid_weight_keywords = [
-            "配方", "成分", "对比", "分析", "评估",
-            "研发", "工艺", "制备", "INCI",
-            "浓度", "比例", "含量",
-        ]
-        # 3. 低权重关键词（通用复杂信号）
-        low_weight_keywords = [
-            "依据", "引用", "条款", "综合",
-            "审核", "交叉", "多成分",
-        ]
-
-        score = 0
-        for kw in high_weight_keywords:
-            if kw in query:
-                score += 3
-        for kw in mid_weight_keywords:
-            if kw in query:
-                score += 2
-        for kw in low_weight_keywords:
-            if kw in query:
-                score += 1
-
-        # 查询长度加权（长查询更可能是复杂查询）
-        if len(query) > 50:
-            score += 2
-        elif len(query) > 30:
-            score += 1
-
-        # 多问号/多条件判断
-        if query.count("？") > 1 or query.count("?") > 1:
-            score += 1
-
-        return score >= 3
+        score = sum(1 for kw in complex_keywords if kw in query)
+        return score >= 2
