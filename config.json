@@ -1,11 +1,11 @@
 {
   "system": {
-    "name": "��ױƷ��ҵ����ģ̬RAG�����ʴ�ϵͳ",
+    "name": "化妆品企业级多模态RAG智能问答系统",
     "version": "2.0.0",
     "dual_gpu": true
   },
   "gpu0": {
-    "role": "���������",
+    "role": "主生成推理",
     "models": {
       "gen_14b": {
         "name": "Qwen3-14B+QLoRA",
@@ -17,15 +17,17 @@
         "kv_cache_budget_gb": 8.0,
         "max_output_tokens": {
           "regulation": 1024,
-          "formulation": 768,
+          "development": 768,
           "ingredient": 512,
-          "general": 256
+          "product": 512,
+          "general": 256,
+          "short": 256
         }
       }
     }
   },
   "gpu1": {
-    "role": "�������������",
+    "role": "控制与轻推理",
     "models": {
       "vllm_rewrite": {
         "name": "Qwen3-4B",
@@ -43,42 +45,42 @@
         "max_model_len": 4096
       },
       "bert_complexity": {
-        "name": "BERT���Ӷ�����",
+        "name": "BERT复杂度分类",
         "model_path": "./models/bert-complexity",
         "device": "cuda:1"
       },
       "cross_encoder_a": {
-        "name": "���ɳɷֵ���CrossEncoder",
+        "name": "法规成分CrossEncoder",
         "model_path": "./models/cross-encoder-law",
         "device": "cuda:1"
       },
       "cross_encoder_b": {
-        "name": "ͨ������CrossEncoder",
+        "name": "通用CrossEncoder",
         "model_path": "./models/cross-encoder-base",
         "device": "cuda:1"
       },
       "nli_model": {
-        "name": "NLI�̺����",
+        "name": "NLI蕴含模型",
         "model_path": "./models/nli-deberta",
         "device": "cuda:1"
       },
       "bi_encoder": {
-        "name": "BiEncoder�����",
+        "name": "BiEncoder编码器",
         "model_path": "./models/bge-base-zh-v1.5",
         "device": "cuda:1"
       },
       "clip_image_encoder": {
-        "name": "CLIPͼ�������",
+        "name": "CLIP图像编码器",
         "model_path": "./models/clip-vit-base-patch16",
         "device": "cuda:1"
       },
       "clip_text_encoder": {
-        "name": "CLIP�ı�������",
+        "name": "CLIP文本编码器",
         "model_path": "./models/clip-vit-base-patch16",
         "device": "cuda:1"
       },
       "blip": {
-        "name": "BLIPͼ������",
+        "name": "BLIP图像描述",
         "model_path": "./models/blip-image-captioning-large",
         "device": "cuda:1",
         "trigger_threshold": 0.05
@@ -103,7 +105,7 @@
     }
   },
   "milvus": {
-    "host": "localhost",
+    "host": "milvus",
     "port": 19530,
     "collections": {
       "rag_text_768": {
@@ -119,19 +121,19 @@
     }
   },
   "elasticsearch": {
-    "host": "http://localhost:9200",
+    "host": "http://elasticsearch:9200",
     "index": "cosmetics_docs",
     "enabled": true
   },
   "redis": {
     "cache": {
-      "host": "localhost",
+      "host": "redis",
       "port": 6379,
       "db": 0,
       "ttl_seconds": 3600
     },
     "state": {
-      "host": "localhost",
+      "host": "redis",
       "port": 6379,
       "db": 1
     }
@@ -146,6 +148,7 @@
       "visual_weight_repeat": 3
     }
   },
+  "knowledge_version_epoch": "default",
   "query_rewrite": {
     "max_output_tokens": 192,
     "temperature": 0.1,
@@ -153,60 +156,37 @@
   },
   "retrieval": {
     "parallel_paths": {
-      "dense_bge": {
-        "enabled": true,
-        "top_k": 50
-      },
-      "bm25_es": {
-        "enabled": true,
-        "top_k": 50
-      },
-      "clip_visual": {
-        "enabled": true,
-        "top_k": 20
-      },
-      "rewrite_variants": {
-        "enabled": true,
-        "top_k": 30
-      }
+      "dense_bge": { "enabled": true, "top_k": 50 },
+      "bm25_es": { "enabled": true, "top_k": 50 },
+      "clip_visual": { "enabled": true, "top_k": 20 },
+      "rewrite_variants": { "enabled": true, "top_k": 30 }
     },
     "rrf": {
       "k": 60,
-      "weights": {
-        "w_text": 1.0,
-        "w_clip": 1.0,
-        "w_ocr": 0.8
-      }
+      "weights": { "w_text": 1.0, "w_clip": 1.0, "w_ocr": 0.8 }
     },
     "cross_encoder": {
       "ensemble": true,
       "final_top_k": 10
     },
     "evidence_gate": {
-      "weights": {
-        "w1": 0.4,
-        "w2": 0.2,
-        "w3": 0.2,
-        "w4": 0.2
-      },
-      "thresholds": {
-        "high_confidence": 0.7,
-        "low_confidence": 0.4,
-        "reject": 0.3
-      }
+      "weights": { "w1": 0.4, "w2": 0.2, "w3": 0.2, "w4": 0.2 },
+      "thresholds": { "high_confidence": 0.7, "low_confidence": 0.4, "reject": 0.3 }
     }
   },
   "generation": {
     "max_conversation_rounds": 6,
     "prompt_version": "v2.1",
-    "answer_gate": {
-      "nli_threshold": 0.6
-    }
+    "answer_gate": { "nli_threshold": 0.6 }
   },
   "admission_control": {
     "safety_factor": 0.7,
     "kv_utilization_threshold": 0.8,
     "kv_pressure_critical": 0.9
+  },
+  "cache_config": {
+    "l1_ttl_seconds": 300,
+    "l2_ttl_seconds": 3600
   },
   "rbac": {
     "roles": {
@@ -226,59 +206,7 @@
     "super_admin_mask": 4294967295,
     "public_mask": 0
   },
-  "auth": {
-    "dev_mode": true,
-    "jwt_secret": "dev-secret-change-in-production-2026",
-    "jwt_expiry_hours": 24
-  },
   "alerting": {
-    "rules": [
-      {
-        "name": "kv_pressure_critical",
-        "metric": "kv_pressure",
-        "threshold": 0.9,
-        "duration_s": 30,
-        "severity": "critical",
-        "comparison": "gt"
-      },
-      {
-        "name": "kv_cache_high",
-        "metric": "kv_utilization",
-        "threshold": 0.85,
-        "duration_s": 60,
-        "severity": "warning",
-        "comparison": "gt"
-      },
-      {
-        "name": "rerank_batch_delay",
-        "metric": "rerank_batch_queue_delay_p99",
-        "threshold": 50,
-        "duration_s": 30,
-        "severity": "warning",
-        "comparison": "gt"
-      },
-      {
-        "name": "rewrite_fallback_high",
-        "metric": "rewrite_fallback_rate",
-        "threshold": 0.3,
-        "duration_s": 300,
-        "severity": "warning",
-        "comparison": "gt"
-      },
-      {
-        "name": "degradation_spike",
-        "metric": "degradation.total",
-        "threshold": 10,
-        "duration_s": 300,
-        "severity": "critical",
-        "comparison": "gt"
-      }
-    ]
-  },
-  "cache_config": {
-    "l1_max_entries": 1000,
-    "l1_ttl_seconds": 300,
-    "l2_ttl_seconds": 3600
-  },
-  "knowledge_version_epoch": "20260603_00"
+    "rules": []
+  }
 }
