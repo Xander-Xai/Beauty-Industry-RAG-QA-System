@@ -1,7 +1,7 @@
 version: "3.9"
 
 # ============================================================================
-# Automotive Knowledge RAG System - Docker Compose Deployment
+# Beauty Industry RAG QA System - Docker Compose Deployment
 # ============================================================================
 
 services:
@@ -22,13 +22,6 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
     networks:
       - rag-network
@@ -37,7 +30,7 @@ services:
   redis:
     image: redis:7-alpine
     expose:
-      - "6379"  # 仅 Docker 网络内部访问，不映射到宿主机
+      - "6379"
     volumes:
       - redis-data:/data
     command: >
@@ -125,10 +118,10 @@ services:
   elasticsearch:
     image: elasticsearch:8.12.0
     expose:
-      - "9200"  # 仅 Docker 网络内部访问
+      - "9200"
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false  # 内网部署，禁用安全简化配置
+      - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
     volumes:
       - es-data:/usr/share/elasticsearch/data
@@ -137,84 +130,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
-    networks:
-      - rag-network
-
-  # ── vLLM: Generation 14B ───────────────────────────────────────────────
-  vllm-gen-14b:
-    image: vllm/vllm-openai:latest
-    ports:
-      - "8100:8000"
-    volumes:
-      - ./models:/models
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-    command: >
-      --model /models/Qwen3-14B-Instruct
-      --host 0.0.0.0
-      --port 8000
-      --gpu-memory-utilization 0.85
-      --max-model-len 8192
-      --trust-remote-code
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    networks:
-      - rag-network
-
-  # ── vLLM: Rewrite ──────────────────────────────────────────────────────
-  vllm-rewrite:
-    image: vllm/vllm-openai:latest
-    ports:
-      - "8101:8000"
-    volumes:
-      - ./models:/models
-    environment:
-      - CUDA_VISIBLE_DEVICES=1
-    command: >
-      --model /models/Qwen3-4B-Instruct
-      --host 0.0.0.0
-      --port 8000
-      --gpu-memory-utilization 0.5
-      --trust-remote-code
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    networks:
-      - rag-network
-
-  # ── vLLM: Generation 4B ───────────────────────────────────────────────
-  vllm-gen-4b:
-    image: vllm/vllm-openai:latest
-    ports:
-      - "8102:8000"
-    volumes:
-      - ./models:/models
-    environment:
-      - CUDA_VISIBLE_DEVICES=1
-    command: >
-      --model /models/Qwen3-4B-Instruct
-      --host 0.0.0.0
-      --port 8000
-      --trust-remote-code
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     restart: unless-stopped
     networks:
       - rag-network
