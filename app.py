@@ -64,6 +64,9 @@ def create_app() -> FastAPI:
     # ── 路由注册 ─────────────────────────────────────────
     app.include_router(router)
 
+    from api.routes_auth import router as auth_router
+    app.include_router(auth_router)
+
     # ── 全局异常处理器 ───────────────────────────────────
 
     @app.exception_handler(Exception)
@@ -98,6 +101,19 @@ def create_app() -> FastAPI:
             logger.error("MetricsCollector 初始化失败: %s", e)
 
         logger.info("系统启动完成，监听端口: %s", "8000")
+
+    @app.on_event("startup")
+    async def generate_jwt_keys():
+        """Generate JWT key pair if not exists and JWT is configured."""
+        import os
+        from auth.jwt_auth import generate_keypair, get_jwt_config
+        config = get_jwt_config()
+        if config.enabled and config.private_key_path:
+            if not os.path.isfile(config.private_key_path):
+                key_dir = os.path.dirname(config.private_key_path)
+                if key_dir:
+                    os.makedirs(key_dir, exist_ok=True)
+                    generate_keypair(key_dir)
 
     @app.on_event("shutdown")
     async def on_shutdown():

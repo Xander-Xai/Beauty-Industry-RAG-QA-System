@@ -85,3 +85,7 @@ def setup_middleware(app: FastAPI) -> None:
 
     # 请求日志
     app.add_middleware(RequestLoggingMiddleware)
+
+    # 审计日志（最内层，离 app 最近）
+    from auth.audit_log import AuditLogMiddleware
+    app.add_middleware(AuditLogMiddleware)
