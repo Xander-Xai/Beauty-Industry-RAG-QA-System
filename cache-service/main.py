@@ -7,6 +7,7 @@ Port: 8300
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 
@@ -14,7 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # Ensure project root is importable for common models
-sys.path.insert(0, "/home/dev/projects/Intelligent-Q-A-System-for-Automotive-Knowledge")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.models import CacheEntry
 from common.service_auth import verify_service_token

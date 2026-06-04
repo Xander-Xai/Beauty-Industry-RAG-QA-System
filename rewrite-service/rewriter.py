@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 from typing import Dict, List, Optional
@@ -17,7 +18,7 @@ from typing import Dict, List, Optional
 import httpx
 
 # Ensure project root is on path for config.json resolution
-sys.path.insert(0, "/home/dev/projects/Intelligent-Q-A-System-for-Automotive-Knowledge")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 with open("config.json", encoding="utf-8") as f:
     config = json.load(f)

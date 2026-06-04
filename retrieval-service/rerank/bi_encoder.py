@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from typing import Optional
 
 import numpy as np
 
 # Ensure project root on sys.path for config.json and shared modules
-PROJECT_ROOT = "/home/dev/projects/Intelligent-Q-A-System-for-Automotive-Knowledge"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
