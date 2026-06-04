@@ -4,7 +4,7 @@ Singleton configuration loader for the RAG system.
 Usage:
     from common.config import get_config
     cfg = get_config()
-    print(cfg.system.name)
+    pass
 """
 
 from __future__ import annotations

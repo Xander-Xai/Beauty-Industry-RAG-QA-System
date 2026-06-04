@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 # Ensure project root is on sys.path and is the CWD so that all modules
 # that load config.json at import time find it correctly.
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = "/home/dev/projects/Intelligent-Q-A-System-for-Automotive-Knowledge"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 os.chdir(PROJECT_ROOT)
 
