@@ -46,3 +46,19 @@ opentelemetry-sdk>=1.25.0
 # === Utils ===
 numpy>=1.26.0
 protobuf>=3.20.2
+
+# Phase 4: 安全
+PyJWT>=2.8.0
+cryptography>=42.0.0
+
+# Phase 5: 压测
+locust>=2.20.0
+
+# Phase 1: ONNX Runtime (CPU fallback)
+onnxruntime>=1.17.0
+
+# Phase 3: Docker compose 解析 (测试)
+pyyaml>=6.0
+
+# Phase 4: 用户存储
+sqlalchemy>=2.0.0

@@ -1,0 +1,8 @@
+[
+  {"id": "basic_001", "category": "basic", "query": "烟酰胺的安全浓度是多少？", "expected_behavior": "should_answer", "business_type": "ingredient"},
+  {"id": "basic_002", "category": "basic", "query": "化妆品中铅含量的限量标准是什么？", "expected_behavior": "should_answer", "business_type": "regulation"},
+  {"id": "basic_003", "category": "basic", "query": "水杨酸在驻留型产品中的最大允许浓度？", "expected_behavior": "should_answer", "business_type": "regulation"},
+  {"id": "complex_001", "category": "complex", "query": "烟酰胺和维生素C能不能一起用？", "expected_behavior": "should_answer", "business_type": "ingredient"},
+  {"id": "boundary_001", "category": "boundary", "query": "今天天气怎么样？", "expected_behavior": "should_reject_or_deflect", "business_type": "general"},
+  {"id": "boundary_002", "category": "boundary", "query": "", "expected_behavior": "should_reject", "business_type": "general"}
+]
