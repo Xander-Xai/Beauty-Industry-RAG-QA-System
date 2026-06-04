@@ -290,6 +290,27 @@ class AppConfig:
     alerting: AlertingConfig = field(default_factory=AlertingConfig)
     cache_config: CacheConfig = field(default_factory=CacheConfig)
     knowledge_version_epoch: str = "20260603_00"
+    deployment_mode: str = "development"
+
+
+# ---------------------------------------------------------------------------
+# Deployment-mode helpers
+# ---------------------------------------------------------------------------
+
+
+def is_production_mode() -> bool:
+    """Return True if the current deployment mode is 'production'."""
+    return get_config().deployment_mode == "production"
+
+
+def is_testing_mode() -> bool:
+    """Return True if the current deployment mode is 'testing'."""
+    return get_config().deployment_mode == "testing"
+
+
+def is_development_mode() -> bool:
+    """Return True if the current deployment mode is 'development'."""
+    return get_config().deployment_mode == "development"
 
 
 # ---------------------------------------------------------------------------
