@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import sys
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from api.routes import router, get_pipeline, get_metrics
 from api.middleware import setup_middleware
@@ -60,6 +62,19 @@ def create_app() -> FastAPI:
 
     # ── 中间件（CORS + 请求日志）──────────────────────────
     setup_middleware(app)
+
+    # ── 静态文件 & 首页 ───────────────────────────────────
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        from fastapi.responses import FileResponse
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.isfile(index_path):
+            return FileResponse(index_path)
+        return {"message": "化妆品 RAG 系统 API", "docs": "/docs"}
 
     # ── 路由注册 ─────────────────────────────────────────
     app.include_router(router)
