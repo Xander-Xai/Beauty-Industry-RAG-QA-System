@@ -20,8 +20,6 @@ INGREDIENT_CATEGORIES = [
     "美白成分", "抗衰老成分", "舒缓成分", "去角质成分", "收敛剂",
 ]
 
-FORMULA_CATEGORIES = ["护肤", "彩妆", "洗护"]
-
 ROLE_MAP = {"admin": 0x01, "rd": 0x02, "quality": 0x04, "regulation": 0x08, "sales": 0x10}
 DEPT_MAP = {"研发部": 0x01, "品质部": 0x02, "法规部": 0x04, "销售部": 0x08, "市场部": 0x10}
 
@@ -144,6 +142,7 @@ class MockDataGenerator:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def generate_all(self, count_per_type: int = 50):
+        self._metadata = []
         self.generate_regulations(count=min(count_per_type, 100))
         self.generate_ingredients(count=max(count_per_type * 10, 500))
         self.generate_formulas(count=max(count_per_type * 5, 250))
