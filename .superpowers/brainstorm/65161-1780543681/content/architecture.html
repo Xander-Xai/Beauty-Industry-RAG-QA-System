@@ -1,0 +1,71 @@
+<h2>🏗️ 当前系统架构全景</h2>
+<p class="subtitle">代码已实现的模块与 PRD 要求的对照</p>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">在线推理链路 (Online RAG Pipeline)</div>
+    <div class="mockup-body" style="padding: 15px; font-size: 12px; line-height: 2;">
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">Query</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">身份解析</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">L1/L2 缓存</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">KV 准入</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">复杂度评估</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">Rewrite</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">双 Embedding</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px;">
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">4 路并行召回</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">Union 去重</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">BiEncoder Top150</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">CrossEncoder</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">Evidence Gate</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">LLM 生成</span>
+        <span>→</span>
+        <span style="background:#4CAF50;color:white;padding:4px 10px;border-radius:4px;">Answer Gate</span>
+      </div>
+      <p style="margin-top:10px;color:#aaa;">✅ 全部 18 步已在 core/pipeline.py 实现</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">部署架构 (Docker Compose)</div>
+    <div class="mockup-body" style="padding: 15px; font-size: 12px;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+        <div style="border: 1px solid #4CAF50; border-radius: 6px; padding: 10px;">
+          <div style="color:#4CAF50;font-weight:bold;">GPU0</div>
+          <div>vLLM Gen 14B</div>
+          <div style="color:#aaa;font-size:11px;">~8GB 模型 + 8GB KV</div>
+        </div>
+        <div style="border: 1px solid #FFC107; border-radius: 6px; padding: 10px;">
+          <div style="color:#FFC107;font-weight:bold;">GPU1</div>
+          <div>vLLM Rewrite 4B</div>
+          <div>vLLM Gen 4B</div>
+          <div>BERT / CrossEncoders</div>
+          <div>CLIP / NLI / BLIP</div>
+        </div>
+        <div style="border: 1px solid #2196F3; border-radius: 6px; padding: 10px;">
+          <div style="color:#2196F3;font-weight:bold;">CPU / 基础设施</div>
+          <div>Redis (L1/L2 Cache)</div>
+          <div>Milvus (向量检索)</div>
+          <div>Elasticsearch (BM25)</div>
+          <div>MinIO (文档存储)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

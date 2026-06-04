@@ -19,6 +19,8 @@ Generation 路由模块 — 主编排路由器.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import sys
@@ -66,7 +68,7 @@ CACHE_SERVICE_URL = os.environ.get("CACHE_SERVICE_URL", "http://cache-service:83
 # 超时设置（秒）
 CACHE_LOOKUP_TIMEOUT_S = float(os.environ.get("CACHE_LOOKUP_TIMEOUT_S", "2"))
 ADMISSION_CHECK_TIMEOUT_S = float(os.environ.get("ADMISSION_CHECK_TIMEOUT_S", "5"))
-REWRITE_TIMEOUT_S = float(os.environ.get("REWRITE_TIMEOUT_S", "0.045"))  # 45ms
+REWRITE_TIMEOUT_S = float(os.environ.get("REWRITE_TIMEOUT_S", "2.0"))  # 2s（LLM推理需要足够时间）
 RECALL_TIMEOUT_S = float(os.environ.get("RECALL_TIMEOUT_S", "10"))
 RERANK_TIMEOUT_S = float(os.environ.get("RERANK_TIMEOUT_S", "15"))
 EVIDENCE_GATE_TIMEOUT_S = float(os.environ.get("EVIDENCE_GATE_TIMEOUT_S", "5"))
@@ -163,6 +165,41 @@ async def _call_service(
         raise HTTPException(status_code=502, detail=f"下游服务不可达: {url}")
 
 
+# ---------------------------------------------------------------------------
+# Cache key computation (mirrors cache/redis_cache.py RedisCache.compute_cache_key)
+# ---------------------------------------------------------------------------
+# Version defaults -- can be overridden via env vars
+_EMBEDDING_VERSION = os.environ.get("EMBEDDING_VERSION", "")
+_KNOWLEDGE_VERSION_EPOCH = os.environ.get("KNOWLEDGE_VERSION_EPOCH", "default")
+_PROMPT_VERSION = os.environ.get("PROMPT_VERSION", "")
+_SCHEMA_VERSION = os.environ.get("SCHEMA_VERSION", "1.0")
+
+
+def _compute_cache_key(
+    normalized_query: str,
+    role_mask: int = 0,
+    dept_mask: int = 0,
+) -> str:
+    """Compute a SHA-256 cache key matching RedisCache.compute_cache_key."""
+    key_data = {
+        "q": normalized_query,
+        "ev": _EMBEDDING_VERSION,
+        "ke": _KNOWLEDGE_VERSION_EPOCH,
+        "pv": _PROMPT_VERSION,
+        "sv": _SCHEMA_VERSION,
+        "rm": role_mask,
+        "dm": dept_mask,
+    }
+    return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token count estimate (approx 1 token per 2 CJK chars or 4 ASCII chars)."""
+    cjk_count = sum(1 for ch in text if '一' <= ch <= '鿿')
+    ascii_count = len(text) - cjk_count
+    return max(1, cjk_count + ascii_count // 4)
+
+
 # ===========================================================================
 # POST /v1/generate — 主编排端点
 # ===========================================================================
@@ -187,10 +224,19 @@ async def generate(
         # ── 步骤 1: 缓存查询 ────────────────────────────────────────────
         cache_result = None
         try:
+            cache_key = _compute_cache_key(
+                body.query,
+                role_mask=user.user_role_mask,
+                dept_mask=user.user_dept_mask,
+            )
             resp = await _call_service(
                 client, "GET",
                 f"{CACHE_SERVICE_URL}/api/cache",
-                params={"query": body.query, "user_id": user.user_id},
+                params={
+                    "key": cache_key,
+                    "role_mask": user.user_role_mask,
+                    "dept_mask": user.user_dept_mask,
+                },
                 timeout=CACHE_LOOKUP_TIMEOUT_S,
             )
             if resp.status_code == 200:
@@ -204,7 +250,7 @@ async def generate(
                         success=True,
                         answer=cache_result.get("answer", ""),
                         rewritten_query=body.query,
-                        business_type=cache_result.get("business_type", "general"),
+                        business_type=cache_data.get("business_type", cache_result.get("business_type", "general")),
                         from_cache=True,
                         latency_ms=elapsed_ms,
                     )
@@ -213,17 +259,23 @@ async def generate(
             logger.warning("[%s] 缓存查询失败，继续管线", request_id)
 
         # ── 步骤 2: 准入控制检查 ─────────────────────────────────────────
-        admission_token: Optional[str] = None
+        admission_request_id: Optional[str] = None
         try:
+            input_tokens = _estimate_tokens(body.query)
             resp = await _call_service(
                 client, "POST",
                 f"{GENERATION_SERVICE_URL}/api/admission-check",
-                json_body={"user_id": user.user_id, "query": body.query},
+                json_body={
+                    "request_id": request_id,
+                    "input_tokens": input_tokens,
+                    "output_tokens": 512,
+                    "business_type": "general",
+                },
                 timeout=ADMISSION_CHECK_TIMEOUT_S,
             )
             if resp.status_code == 200:
                 admission_data = resp.json()
-                admission_token = admission_data.get("token")
+                admission_request_id = request_id
                 if not admission_data.get("admitted", True):
                     elapsed_ms = (time.monotonic() - pipeline_start) * 1000
                     logger.warning("[%s] 准入控制拒绝: %.1fms", request_id, elapsed_ms)
@@ -264,17 +316,14 @@ async def generate(
                 f"{RETRIEVAL_SERVICE_URL}/api/recall",
                 json_body={
                     "query": effective_query,
-                    "rewritten_query": effective_query,
                     "user_role_mask": user.user_role_mask,
                     "user_dept_mask": user.user_dept_mask,
-                    "business_type": business_type,
-                    "context": body.context,
                 },
                 timeout=RECALL_TIMEOUT_S,
             )
             if resp.status_code == 200:
                 recall_data = resp.json()
-                recall_candidates = recall_data.get("candidates", [])
+                recall_candidates = recall_data.get("results", [])
         except HTTPException:
             logger.warning("[%s] 召回失败，将使用空候选集", request_id)
 
@@ -284,7 +333,7 @@ async def generate(
             # 尝试无检索生成（仅用 LLM 知识）
             return await _generate_without_context(
                 client, request_id, body, user, pipeline_start,
-                rewrite_result, admission_token,
+                rewrite_result, admission_request_id,
             )
 
         # ── 步骤 5: 重排 ────────────────────────────────────────────────
@@ -297,13 +346,12 @@ async def generate(
                     "query": effective_query,
                     "candidates": recall_candidates,
                     "top_k": 10,
-                    "context": body.context,
                 },
                 timeout=RERANK_TIMEOUT_S,
             )
             if resp.status_code == 200:
                 rerank_data = resp.json()
-                reranked_candidates = rerank_data.get("candidates", recall_candidates)
+                reranked_candidates = rerank_data.get("results", recall_candidates)
         except HTTPException:
             logger.warning("[%s] 重排失败，使用召回原始排序", request_id)
 
@@ -315,9 +363,7 @@ async def generate(
                 f"{RETRIEVAL_SERVICE_URL}/api/evidence-gate",
                 json_body={
                     "query": effective_query,
-                    "candidates": reranked_candidates,
-                    "business_type": business_type,
-                    "context": body.context,
+                    "rerank_results": reranked_candidates,
                 },
                 timeout=EVIDENCE_GATE_TIMEOUT_S,
             )
@@ -349,16 +395,15 @@ async def generate(
                 client, "POST",
                 f"{GENERATION_SERVICE_URL}/api/generate",
                 json_body={
-                    "query": effective_query,
-                    "original_query": body.query,
-                    "session_id": body.session_id,
-                    "candidates": reranked_candidates,
-                    "business_type": business_type,
-                    "evidence_decision": evidence_result.decision,
-                    "user_role_mask": user.user_role_mask,
-                    "user_dept_mask": user.user_dept_mask,
-                    "recent_dialogs": body.recent_dialogs,
-                    "context": body.context,
+                    "ctx": {
+                        "user_input": effective_query,
+                        "rewrite_result": rewrite_result.model_dump(),
+                        "rerank_results": reranked_candidates,
+                        "evidence_result": evidence_result.model_dump(),
+                        "session_id": body.session_id,
+                        "max_output_tokens": 512,
+                        "target_model": "qwen3-4b",
+                    },
                 },
                 timeout=GENERATE_TIMEOUT_S,
             )
@@ -373,12 +418,12 @@ async def generate(
             )
 
         # ── 步骤 8: 准入释放 ─────────────────────────────────────────────
-        if admission_token:
+        if admission_request_id:
             try:
                 await _call_service(
                     client, "POST",
                     f"{GENERATION_SERVICE_URL}/api/admission-release",
-                    json_body={"token": admission_token},
+                    json_body={"request_id": admission_request_id},
                     timeout=ADMISSION_RELEASE_TIMEOUT_S,
                 )
             except HTTPException:
@@ -386,16 +431,20 @@ async def generate(
 
         # ── 步骤 9: 写入缓存 ─────────────────────────────────────────────
         try:
+            cache_key_write = _compute_cache_key(
+                body.query,
+                role_mask=user.user_role_mask,
+                dept_mask=user.user_dept_mask,
+            )
             await _call_service(
                 client, "POST",
                 f"{CACHE_SERVICE_URL}/api/cache",
                 json_body={
-                    "query": body.query,
+                    "key": cache_key_write,
                     "value": {
                         "answer": generation_result.answer,
                         "business_type": business_type,
                     },
-                    "user_id": user.user_id,
                     "role_mask": user.user_role_mask,
                     "dept_mask": user.user_dept_mask,
                 },
@@ -435,7 +484,7 @@ async def _generate_without_context(
     user: UserIdentity,
     pipeline_start: float,
     rewrite_result: QueryRewriteResult,
-    admission_token: Optional[str],
+    admission_request_id: Optional[str],
 ) -> GenerateResponse:
     """
     无检索结果时的降级生成：仅基于 LLM 内部知识回答.
@@ -449,16 +498,17 @@ async def _generate_without_context(
             client, "POST",
             f"{GENERATION_SERVICE_URL}/api/generate",
             json_body={
-                "query": body.query,
-                "original_query": body.query,
-                "session_id": body.session_id,
-                "candidates": [],
-                "business_type": "general",
-                "evidence_decision": "reject",
-                "user_role_mask": user.user_role_mask,
-                "user_dept_mask": user.user_dept_mask,
-                "recent_dialogs": body.recent_dialogs,
-                "context": body.context,
+                "ctx": {
+                    "user_input": body.query,
+                    "rewrite_result": rewrite_result.model_dump(),
+                    "rerank_results": [],
+                    "evidence_result": EvidenceGateResult(
+                        decision="reject",
+                    ).model_dump(),
+                    "session_id": body.session_id,
+                    "max_output_tokens": 512,
+                    "target_model": "qwen3-4b",
+                },
             },
             timeout=GENERATE_TIMEOUT_S,
         )
@@ -479,12 +529,12 @@ async def _generate_without_context(
         )
 
     # 释放准入令牌
-    if admission_token:
+    if admission_request_id:
         try:
             await _call_service(
                 client, "POST",
                 f"{GENERATION_SERVICE_URL}/api/admission-release",
-                json_body={"token": admission_token},
+                json_body={"request_id": admission_request_id},
                 timeout=ADMISSION_RELEASE_TIMEOUT_S,
             )
         except HTTPException:

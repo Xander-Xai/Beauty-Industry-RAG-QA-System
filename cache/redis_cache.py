@@ -12,10 +12,25 @@ Redis 缓存模块（readme 10 节）
 import hashlib
 import json
 import logging
+import os
+import threading
 import time
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+try:
+    from common.config import get_config as _get_config
+    _cfg = _get_config()
+    config = {
+        "cache_config": {
+            "l1_max_entries": 1000,
+            "l1_ttl_seconds": 300,
+            "l2_ttl_seconds": 3600,
+        },
+        "redis": {"cache": {"host": _cfg.redis.host, "port": _cfg.redis.port, "db": 0}},
+    }
+except Exception:
+    _config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+    with open(_config_path, encoding="utf-8") as f:
+        config = json.load(f)
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +39,7 @@ class RedisCache:
     """
     L1/L2 双层缓存
 
-    L1: 进程内 dict + TTL，仅服务 role_mask=0 & dept_mask=0 的全公开文档
+    L1: 进程内 dict + TTL + 线程安全锁，仅服务 role_mask=0 & dept_mask=0 的全公开文档
     L2: Redis，服务所有权限组合，Key 中包含权限指纹
 
     用法：
@@ -36,15 +51,16 @@ class RedisCache:
     """
 
     def __init__(self):
-        # L1 内存缓存
+        # L1 内存缓存（线程安全）
         self._l1 = {}
+        self._l1_lock = threading.Lock()
         self._l1_max = config.get("cache_config", {}).get("l1_max_entries", 1000)
         self._l1_ttl = config.get("cache_config", {}).get("l1_ttl_seconds", 300)
 
         # L2 Redis
         self.redis_client = None
         self.enabled = False
-        self._degraded = False  # Redis 降级模式
+        self._degraded = False
         self._degraded_since = 0
         self.l1_ttl = 300
         self.l2_ttl = 3600
@@ -102,17 +118,18 @@ class RedisCache:
         """
         查询缓存
 
-        L1: 仅公开文档 (role_mask=0, dept_mask=0)
+        L1: 仅公开文档 (role_mask=0, dept_mask=0)，线程安全
         L2: 所有权限组合
         """
         # L1 查询（公开文档）
         if role_mask == 0 and dept_mask == 0:
-            if key in self._l1:
-                val, exp = self._l1[key]
-                if time.time() < exp:
-                    return val
-                else:
-                    del self._l1[key]  # 过期清理
+            with self._l1_lock:
+                if key in self._l1:
+                    val, exp = self._l1[key]
+                    if time.time() < exp:
+                        return val
+                    else:
+                        del self._l1[key]
 
         # L2 查询（Redis）
         if self.enabled and self.redis_client:
@@ -130,16 +147,16 @@ class RedisCache:
         """
         写入缓存
 
-        L1: 公开文档写入内存（TTL = l1_ttl_seconds）
+        L1: 公开文档写入内存（TTL = l1_ttl_seconds），线程安全
         L2: 所有文档写入 Redis（TTL = l2_ttl_seconds）
         """
         # L1 写入（公开文档）
         if role_mask == 0 and dept_mask == 0:
-            if len(self._l1) >= self._l1_max:
-                # 淘汰最旧条目
-                oldest_key = next(iter(self._l1))
-                del self._l1[oldest_key]
-            self._l1[key] = (val, time.time() + self._l1_ttl)
+            with self._l1_lock:
+                if len(self._l1) >= self._l1_max:
+                    oldest_key = next(iter(self._l1))
+                    del self._l1[oldest_key]
+                self._l1[key] = (val, time.time() + self._l1_ttl)
 
         # L2 写入（Redis）
         if self.enabled and self.redis_client:
@@ -161,8 +178,9 @@ class RedisCache:
         新请求使用新 epoch 生成 Cache Key，旧 epoch 的缓存由 LRU 自然淘汰。
         L1 需要手动清空（因为是进程内 dict）。
         """
-        cleared = len(self._l1)
-        self._l1.clear()
+        with self._l1_lock:
+            cleared = len(self._l1)
+            self._l1.clear()
         logger.info(f"缓存失效（epoch={new_epoch}）: L1 清空 {cleared} 条")
 
     def _maybe_enter_degraded(self):
@@ -177,9 +195,11 @@ class RedisCache:
         degraded_duration = 0
         if self._degraded:
             degraded_duration = time.time() - self._degraded_since
+        with self._l1_lock:
+            l1_size = len(self._l1)
 
         return {
-            "l1_size": len(self._l1),
+            "l1_size": l1_size,
             "l1_max": self._l1_max,
             "l2_enabled": self.enabled,
             "l2_degraded": self._degraded,

@@ -33,8 +33,8 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 REWRITE_SERVICE_URL = os.environ.get("REWRITE_SERVICE_URL", "http://rewrite-service:8101")
 
-# 转发超时（毫秒）—— rewrite-service 必须在 45ms 内响应
-REWRITE_TIMEOUT_MS = int(os.environ.get("REWRITE_TIMEOUT_MS", "45"))
+# 转发超时（毫秒）—— rewrite-service 需要足够时间完成 LLM 推理（P99≈45ms 为 spec 目标，实际预留 2000ms）
+REWRITE_TIMEOUT_MS = int(os.environ.get("REWRITE_TIMEOUT_MS", "2000"))
 
 
 # ---------------------------------------------------------------------------

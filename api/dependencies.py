@@ -2,6 +2,8 @@
 FastAPI 依赖注入模块
 
 从请求 Header 中解析用户身份信息，提供给路由处理器使用。
+安全说明：在生产模式下（dev_mode=False），X-User-* Header 不被信任，
+仅 JWT Bearer token 用于身份验证。
 """
 
 from __future__ import annotations
@@ -12,6 +14,9 @@ from dataclasses import dataclass
 from fastapi import Header, HTTPException
 
 logger = logging.getLogger(__name__)
+
+# 默认角色掩码：不给任何特权（零掩码 = 公开访问）
+_DEFAULT_ROLE_MASK = 0
 
 
 @dataclass
@@ -31,18 +36,9 @@ def get_identity(
     """
     FastAPI 依赖函数：从 Header 解析用户身份。
 
-    Header 规范：
-        X-User-ID    : 用户标识符（字符串）
-        X-Role-Mask  : 角色位掩码（整数，可选）
-        X-Dept-Mask  : 部门位掩码（整数，可选）
-
-    默认值：
-        user_id     = "anonymous"
-        role_mask   = 0        (public，无特殊权限)
-        dept_mask   = 0        (all，不限制部门)
-
-    Raises:
-        HTTPException 400: 当 role_mask / dept_mask 无法转换为整数时。
+    注意：此函数仅用于 monolith 模式的简单身份提取。
+    微服务模式应使用 common/auth.py 的 parse_identity()。
+    Header 中的权限信息仅在 dev_mode 下可信。
     """
     identity = RequestIdentity()
 

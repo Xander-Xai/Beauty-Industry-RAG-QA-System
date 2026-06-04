@@ -11,13 +11,14 @@ import sys
 import time
 from typing import List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 # Ensure project root is importable for common models
 sys.path.insert(0, "/home/dev/projects/Intelligent-Q-A-System-for-Automotive-Knowledge")
 
 from common.models import QueryRewriteResult
+from common.service_auth import verify_service_token
 
 from rewriter import QueryRewriter
 
@@ -57,7 +58,7 @@ async def health():
 
 
 @app.post("/api/rewrite", response_model=QueryRewriteResult)
-async def rewrite(req: RewriteRequest):
+async def rewrite(req: RewriteRequest, _auth: None = Depends(verify_service_token)):
     """
     Rewrite a user query.
 
@@ -81,7 +82,7 @@ async def rewrite(req: RewriteRequest):
 
 
 @app.post("/api/variants", response_model=VariantsResponse)
-async def variants(req: VariantsRequest):
+async def variants(req: VariantsRequest, _auth: None = Depends(verify_service_token)):
     """
     Generate 2-3 synonymous variant queries for expanded recall.
     """

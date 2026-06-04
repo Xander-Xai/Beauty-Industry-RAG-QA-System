@@ -172,7 +172,7 @@ async def parse_identity(request: Request) -> UserIdentity:
 
     Priority:
     1. ``Authorization: Bearer <jwt>``
-    2. Dev-mode ``X-User-*`` headers
+    2. Dev-mode ``X-User-*`` headers (仅 dev_mode=True 时生效)
     3. Anonymous fallback
     """
     cfg = get_config()
@@ -186,17 +186,19 @@ async def parse_identity(request: Request) -> UserIdentity:
             return _identity_from_jwt(payload)
         logger.warning("JWT decode failed, falling back to dev headers")
 
-    # 2. Dev-mode headers
+    # 2. Dev-mode headers — 仅在 dev_mode=True 时信任 Header
     if cfg.auth.dev_mode:
-        role_str = request.headers.get("X-User-Role-Mask", str(cfg.rbac.super_admin_mask))
+        role_str = request.headers.get("X-User-Role-Mask", "0")
         dept_str = request.headers.get("X-User-Dept-Mask", "0")
+        user_id = request.headers.get("X-User-Id", "anonymous")
+        logger.debug("dev_mode: trusting X-User-* headers for user=%s", user_id)
         return UserIdentity(
-            user_id=request.headers.get("X-User-Id", "anonymous"),
+            user_id=user_id,
             user_role_mask=int(role_str),
             user_dept_mask=int(dept_str),
         )
 
-    # 3. Anonymous
+    # 3. 生产模式：无有效 JWT 则返回匿名（零掩码），不信任 Header
     return UserIdentity(user_id="anonymous", user_role_mask=0, user_dept_mask=0)
 
 

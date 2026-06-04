@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from common.config import get_config
+from common.service_auth import get_service_headers
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ class ServiceClient:
         url = f"{self._registry.get_url(service_name)}{path}"
         client = self._ensure_client()
 
-        merged_headers = {**self._extra_headers}
+        merged_headers = {**self._extra_headers, **get_service_headers()}
         if headers:
             merged_headers.update(headers)
 

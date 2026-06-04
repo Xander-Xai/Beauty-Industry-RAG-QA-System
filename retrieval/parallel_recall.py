@@ -20,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
+from common.audit import log_audit_event
+
 with open("config.json", encoding="utf-8") as f:
     config = json.load(f)
 
@@ -94,6 +96,14 @@ class ParallelRecallManager:
         # 构建 Milvus/ES 权限过滤表达式
         active_epoch = config.get("knowledge_version_epoch", "default")
         filter_expr = build_milvus_filter(user_role_mask, user_dept_mask, active_epoch)
+
+        # 审计日志：记录过滤表达式
+        log_audit_event(
+            event_type="recall_filter",
+            request_id="",
+            user_role_mask=user_role_mask,
+            filter_expr=filter_expr,
+        )
 
         all_results = []
         futures = {}

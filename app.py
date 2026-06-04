@@ -73,7 +73,7 @@ def create_app() -> FastAPI:
             status_code=500,
             content={
                 "error": "internal_server_error",
-                "detail": str(exc),
+                "detail": "服务暂时不可用，请稍后重试",
                 "code": 500,
             },
         )
