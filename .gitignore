@@ -23,6 +23,8 @@ tinybert/
 *.cache
 milvus/
 data/
+!data/__init__.py
+!data/mock_generator.py
 offline/
 
 # IDE
