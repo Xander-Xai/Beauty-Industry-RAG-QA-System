@@ -38,6 +38,17 @@ class LLMClient:
         self.prompt_version = config["generation"]["prompt_version"]
         logger.info("LLMClient 初始化完成")
 
+    def _resolve_endpoint(self, target_model: str) -> str:
+        """根据部署模式解析目标 endpoint。
+
+        单卡 (testing/development) 模式下，14B 降级到 4B。
+        生产模式下，按原始路由。
+        """
+        from common.config import is_production_mode
+        if target_model == "qwen3-14b" and not is_production_mode():
+            return "gen_4b"
+        return "gen_14b" if target_model == "qwen3-14b" else "gen_4b"
+
     @property
     def router(self):
         if self._router is None:
@@ -70,7 +81,7 @@ class LLMClient:
         messages = self._build_messages(ctx)
 
         # 映射目标模型到端点
-        endpoint_key = "gen_14b" if target_model == "qwen3-14b" else "gen_4b"
+        endpoint_key = self._resolve_endpoint(target_model)
 
         # 调用 vLLM
         try:
@@ -130,7 +141,7 @@ class LLMClient:
             ),
         })
 
-        endpoint_key = "gen_14b" if target_model == "qwen3-14b" else "gen_4b"
+        endpoint_key = self._resolve_endpoint(target_model)
 
         try:
             answer = self.router.route_chat(

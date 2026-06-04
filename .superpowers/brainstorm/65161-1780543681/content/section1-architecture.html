@@ -1,0 +1,107 @@
+<h2>📐 Section 1: 总体架构与分阶段规划</h2>
+<p class="subtitle">方案 A — 自底向上补全，6 个 Phase</p>
+
+<div class="section">
+  <h3>系统分层视图</h3>
+  <div class="mockup">
+    <div class="mockup-header">四层架构</div>
+    <div class="mockup-body" style="padding: 20px; font-size: 13px;">
+      <div style="display: grid; grid-template-rows: auto auto auto auto; gap: 10px;">
+        <div style="background: rgba(76,175,80,0.2); border-left: 4px solid #4CAF50; padding: 12px; border-radius: 0 6px 6px 0;">
+          <b>L4 · 接入层</b><br/>
+          <span style="color:#aaa;">FastAPI 路由 + JWT 认证 + RBAC + 前端 Web UI</span><br/>
+          <span style="color:#888;font-size:11px;">→ Phase 4 实现</span>
+        </div>
+        <div style="background: rgba(33,150,243,0.2); border-left: 4px solid #2196F3; padding: 12px; border-radius: 0 6px 6px 0;">
+          <b>L3 · 推理层</b><br/>
+          <span style="color:#aaa;">RAG Pipeline + Rewrite + LLM Generation + Evidence Gate</span><br/>
+          <span style="color:#888;font-size:11px;">→ Phase 2 打通真实模型</span>
+        </div>
+        <div style="background: rgba(255,193,7,0.2); border-left: 4px solid #FFC107; padding: 12px; border-radius: 0 6px 6px 0;">
+          <b>L2 · 检索与排序层</b><br/>
+          <span style="color:#aaa;">Milvus/ES 并行召回 + BiEncoder + CrossEncoder + NLI</span><br/>
+          <span style="color:#888;font-size:11px;">→ Phase 2 向量库 + 数据灌入</span>
+        </div>
+        <div style="background: rgba(244,67,54,0.2); border-left: 4px solid #f44336; padding: 12px; border-radius: 0 6px 6px 0;">
+          <b>L1 · 基础设施层</b><br/>
+          <span style="color:#aaa;">vLLM (GPU) + Redis + Milvus + ES + MinIO + Mock 数据</span><br/>
+          <span style="color:#888;font-size:11px;">→ Phase 1 搭建</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Phase 路线图</h3>
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 12px;">
+    <div style="border:1px solid #4CAF50;border-radius:8px;padding:12px;">
+      <div style="color:#4CAF50;font-weight:bold;">Phase 1 · 基础设施</div>
+      <div style="margin-top:8px;color:#ccc;">
+        • Mock 数据生成器<br/>
+        • 单卡降级模式<br/>
+        • vLLM 配置适配<br/>
+        • 向量库 Schema 初始化<br/>
+        • 清理遗留代码
+      </div>
+      <div style="color:#888;margin-top:6px;">Week 1-2</div>
+    </div>
+    <div style="border:1px solid #2196F3;border-radius:8px;padding:12px;">
+      <div style="color:#2196F3;font-weight:bold;">Phase 2 · 管线打通</div>
+      <div style="margin-top:8px;color:#ccc;">
+        • 真实模型接入验证<br/>
+        • 端到端流程测试<br/>
+        • 检索质量基线<br/>
+        • 集成测试套件<br/>
+        • 性能基线数据
+      </div>
+      <div style="color:#888;margin-top:6px;">Week 3-4</div>
+    </div>
+    <div style="border:1px solid #FFC107;border-radius:8px;padding:12px;">
+      <div style="color:#FFC107;font-weight:bold;">Phase 3 · 部署自动化</div>
+      <div style="margin-top:8px;color:#ccc;">
+        • Docker Compose 优化<br/>
+        • 模型下载脚本<br/>
+        • 健康检查完善<br/>
+        • 环境变量标准化<br/>
+        • 一键启动脚本
+      </div>
+      <div style="color:#888;margin-top:6px;">Week 5</div>
+    </div>
+  </div>
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 12px; margin-top: 12px;">
+    <div style="border:1px solid #9C27B0;border-radius:8px;padding:12px;">
+      <div style="color:#9C27B0;font-weight:bold;">Phase 4 · 安全与前端</div>
+      <div style="margin-top:8px;color:#ccc;">
+        • JWT 认证集成<br/>
+        • 审计日志接入<br/>
+        • 查询脱敏<br/>
+        • Web 聊天界面<br/>
+        • 用户管理
+      </div>
+      <div style="color:#888;margin-top:6px;">Week 6-7</div>
+    </div>
+    <div style="border:1px solid #f44336;border-radius:8px;padding:12px;">
+      <div style="color:#f44336;font-weight:bold;">Phase 5 · 压测与调优</div>
+      <div style="margin-top:8px;color:#ccc;">
+        • Locust 压测脚本<br/>
+        • KV Cache 调优<br/>
+        • RRF 权重校准<br/>
+        • Evidence Gate 阈值<br/>
+        • 延迟优化
+      </div>
+      <div style="color:#888;margin-top:6px;">Week 8-9</div>
+    </div>
+    <div style="border:1px solid #607D8B;border-radius:8px;padding:12px;">
+      <div style="color:#607D8B;font-weight:bold;">Phase 6 · 生产就绪</div>
+      <div style="margin-top:8px;color:#ccc;">
+        • 监控面板 (Grafana)<br/>
+        • 告警通知<br/>
+        • 操作手册<br/>
+        • 故障演练<br/>
+        • 上线 Checklist
+      </div>
+      <div style="color:#888;margin-top:6px;">Week 10-12</div>
+    </div>
+  </div>
+</div>

@@ -1,4 +1,5 @@
 {
+  "deployment_mode": "development",
   "system": {
     "name": "化妆品企业级多模态RAG智能问答系统",
     "version": "2.0.0",
@@ -171,7 +172,7 @@
     },
     "evidence_gate": {
       "weights": { "w1": 0.4, "w2": 0.2, "w3": 0.2, "w4": 0.2 },
-      "thresholds": { "high_confidence": 0.7, "low_confidence": 0.4, "reject": 0.3 }
+      "thresholds": { "high_confidence": 0.75, "low_confidence": 0.55, "reject": 0.3 }
     }
   },
   "generation": {

@@ -52,14 +52,20 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS 中间件 — 允许前端跨域访问
+# CORS 中间件 — 生产环境通过 CORS_ORIGINS 环境变量限制来源
 # ---------------------------------------------------------------------------
+_cors_origins_str = os.environ.get("CORS_ORIGINS", "")
+CORS_ORIGINS = (
+    [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
+    if _cors_origins_str
+    else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],           # 生产环境应限制为前端域名
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=CORS_ORIGINS != ["*"],  # 通配符时不启用 credentials
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-User-ID", "X-Role-Mask", "X-Dept-Mask"],
 )
 
 # ---------------------------------------------------------------------------
@@ -67,14 +73,14 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """捕获所有未处理异常，返回统一 JSON 错误响应。"""
+    """捕获所有未处理异常，返回统一 JSON 错误响应（不泄露内部详情）。"""
     logger.exception("未处理异常: %s %s -> %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=500,
         content={
             "success": False,
             "error": "网关内部错误",
-            "detail": str(exc),
+            "detail": "服务暂时不可用，请稍后重试",
         },
     )
 

@@ -1,0 +1,197 @@
+"""User store -- SQLite-backed user management with RBAC roles."""
+import os
+import sqlite3
+import logging
+import hashlib
+import secrets
+from typing import Optional, List
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+# Default roles and departments from RBAC config
+ROLES = {
+    "admin": 0x01,
+    "rd": 0x02,
+    "quality": 0x04,
+    "regulation": 0x08,
+    "sales": 0x10,
+}
+
+DEPARTMENTS = {
+    "研发部": 0x01,
+    "品质部": 0x02,
+    "法规部": 0x04,
+    "销售部": 0x08,
+    "市场部": 0x10,
+}
+
+
+@dataclass
+class User:
+    user_id: str
+    username: str
+    display_name: str
+    role_mask: int
+    dept_mask: int
+    is_active: bool = True
+    roles: List[str] = None
+    departments: List[str] = None
+
+    def to_dict(self):
+        return {
+            "user_id": self.user_id,
+            "username": self.username,
+            "display_name": self.display_name,
+            "role_mask": self.role_mask,
+            "dept_mask": self.dept_mask,
+            "is_active": self.is_active,
+            "roles": self.roles or [],
+            "departments": self.departments or [],
+        }
+
+
+class UserStore:
+    """SQLite-backed user store for RBAC."""
+
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            db_path = os.environ.get("DATABASE_URL", "sqlite:///./data/users.db")
+            # Strip sqlite:/// prefix
+            if db_path.startswith("sqlite:///"):
+                db_path = db_path[len("sqlite:///"):]
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+        self._init_db()
+
+    def _init_db(self):
+        """Create tables if they don't exist."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    role_mask INTEGER NOT NULL DEFAULT 0,
+                    dept_mask INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_roles (
+                    user_id TEXT NOT NULL,
+                    role_name TEXT NOT NULL,
+                    PRIMARY KEY (user_id, role_name),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_depts (
+                    user_id TEXT NOT NULL,
+                    dept_name TEXT NOT NULL,
+                    PRIMARY KEY (user_id, dept_name),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                )
+            """)
+            conn.commit()
+
+    def _hash_password(self, password: str, salt: str = None) -> str:
+        """Hash password with salt using SHA256."""
+        if salt is None:
+            salt = secrets.token_hex(16)
+        h = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+        return f"{salt}:{h}"
+
+    def _verify_password(self, password: str, stored_hash: str) -> bool:
+        """Verify password against stored hash."""
+        salt, _ = stored_hash.split(":", 1)
+        return self._hash_password(password, salt) == stored_hash
+
+    def create_user(self, user_id: str, username: str, password: str,
+                    display_name: str, role_names: List[str] = None,
+                    dept_names: List[str] = None) -> User:
+        """Create a new user."""
+        role_mask = 0
+        for r in (role_names or []):
+            role_mask |= ROLES.get(r, 0)
+        dept_mask = 0
+        for d in (dept_names or []):
+            dept_mask |= DEPARTMENTS.get(d, 0)
+
+        password_hash = self._hash_password(password)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO users (user_id, username, password_hash, display_name, role_mask, dept_mask) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, username, password_hash, display_name, role_mask, dept_mask),
+            )
+            for r in (role_names or []):
+                conn.execute("INSERT INTO user_roles (user_id, role_name) VALUES (?, ?)", (user_id, r))
+            for d in (dept_names or []):
+                conn.execute("INSERT INTO user_depts (user_id, dept_name) VALUES (?, ?)", (user_id, d))
+            conn.commit()
+
+        return User(user_id=user_id, username=username, display_name=display_name,
+                    role_mask=role_mask, dept_mask=dept_mask,
+                    roles=role_names or [], departments=dept_names or [])
+
+    def authenticate(self, username: str, password: str) -> Optional[User]:
+        """Authenticate user by username/password. Returns User or None."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ? AND is_active = 1", (username,)
+            ).fetchone()
+            if not row:
+                return None
+            if not self._verify_password(password, row["password_hash"]):
+                return None
+            roles = [r[0] for r in conn.execute("SELECT role_name FROM user_roles WHERE user_id = ?", (row["user_id"],)).fetchall()]
+            depts = [d[0] for d in conn.execute("SELECT dept_name FROM user_depts WHERE user_id = ?", (row["user_id"],)).fetchall()]
+            return User(
+                user_id=row["user_id"], username=row["username"],
+                display_name=row["display_name"], role_mask=row["role_mask"],
+                dept_mask=row["dept_mask"], is_active=bool(row["is_active"]),
+                roles=roles, departments=depts,
+            )
+
+    def get_user(self, user_id: str) -> Optional[User]:
+        """Get user by ID."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+            if not row:
+                return None
+            roles = [r[0] for r in conn.execute("SELECT role_name FROM user_roles WHERE user_id = ?", (user_id,)).fetchall()]
+            depts = [d[0] for d in conn.execute("SELECT dept_name FROM user_depts WHERE user_id = ?", (user_id,)).fetchall()]
+            return User(
+                user_id=row["user_id"], username=row["username"],
+                display_name=row["display_name"], role_mask=row["role_mask"],
+                dept_mask=row["dept_mask"], is_active=bool(row["is_active"]),
+                roles=roles, departments=depts,
+            )
+
+    def list_users(self) -> List[User]:
+        """List all users."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT user_id FROM users ORDER BY created_at").fetchall()
+            return [self.get_user(r["user_id"]) for r in rows]
+
+    def update_user_roles(self, user_id: str, role_names: List[str], dept_names: List[str]) -> Optional[User]:
+        """Update user's roles and departments."""
+        role_mask = sum(ROLES.get(r, 0) for r in role_names)
+        dept_mask = sum(DEPARTMENTS.get(d, 0) for d in dept_names)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE users SET role_mask = ?, dept_mask = ? WHERE user_id = ?",
+                        (role_mask, dept_mask, user_id))
+            conn.execute("DELETE FROM user_roles WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM user_depts WHERE user_id = ?", (user_id,))
+            for r in role_names:
+                conn.execute("INSERT INTO user_roles (user_id, role_name) VALUES (?, ?)", (user_id, r))
+            for d in dept_names:
+                conn.execute("INSERT INTO user_depts (user_id, dept_name) VALUES (?, ?)", (user_id, d))
+            conn.commit()
+        return self.get_user(user_id)

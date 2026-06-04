@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import uuid
 import time
+import threading
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
@@ -170,6 +171,7 @@ class SessionState:
 
     # 会话级缓存（全局管理）
     _sessions: ClassVar[dict[str, "SessionState"]] = {}
+    _sessions_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def add_round(self, user_input: str, response: str, rewrite: Optional[QueryRewriteResult] = None):
         """添加一轮对话"""
@@ -197,14 +199,17 @@ class SessionState:
 
     @classmethod
     def get_or_create(cls, session_id: str) -> "SessionState":
-        if session_id not in cls._sessions:
-            cls._sessions[session_id] = cls(session_id=session_id)
-        return cls._sessions[session_id]
+        """线程安全地获取或创建会话状态"""
+        with cls._sessions_lock:
+            if session_id not in cls._sessions:
+                cls._sessions[session_id] = cls(session_id=session_id)
+            return cls._sessions[session_id]
 
     @classmethod
     def cleanup_expired(cls, max_age_seconds: int = 3600):
-        """清理过期会话"""
+        """清理过期会话（需持有 _sessions_lock 或在单线程上下文中调用）"""
         now = time.time()
-        expired = [sid for sid, s in cls._sessions.items() if now - s.created_at > max_age_seconds]
-        for sid in expired:
-            del cls._sessions[sid]
+        with cls._sessions_lock:
+            expired = [sid for sid, s in cls._sessions.items() if now - s.created_at > max_age_seconds]
+            for sid in expired:
+                del cls._sessions[sid]

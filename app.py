@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import sys
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from api.routes import router, get_pipeline, get_metrics
 from api.middleware import setup_middleware
@@ -61,8 +63,24 @@ def create_app() -> FastAPI:
     # ── 中间件（CORS + 请求日志）──────────────────────────
     setup_middleware(app)
 
+    # ── 静态文件 & 首页 ───────────────────────────────────
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        from fastapi.responses import FileResponse
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.isfile(index_path):
+            return FileResponse(index_path)
+        return {"message": "化妆品 RAG 系统 API", "docs": "/docs"}
+
     # ── 路由注册 ─────────────────────────────────────────
     app.include_router(router)
+
+    from api.routes_auth import router as auth_router
+    app.include_router(auth_router)
 
     # ── 全局异常处理器 ───────────────────────────────────
 
@@ -73,7 +91,7 @@ def create_app() -> FastAPI:
             status_code=500,
             content={
                 "error": "internal_server_error",
-                "detail": str(exc),
+                "detail": "服务暂时不可用，请稍后重试",
                 "code": 500,
             },
         )
@@ -98,6 +116,19 @@ def create_app() -> FastAPI:
             logger.error("MetricsCollector 初始化失败: %s", e)
 
         logger.info("系统启动完成，监听端口: %s", "8000")
+
+    @app.on_event("startup")
+    async def generate_jwt_keys():
+        """Generate JWT key pair if not exists and JWT is configured."""
+        import os
+        from auth.jwt_auth import generate_keypair, get_jwt_config
+        config = get_jwt_config()
+        if config.enabled and config.private_key_path:
+            if not os.path.isfile(config.private_key_path):
+                key_dir = os.path.dirname(config.private_key_path)
+                if key_dir:
+                    os.makedirs(key_dir, exist_ok=True)
+                    generate_keypair(key_dir)
 
     @app.on_event("shutdown")
     async def on_shutdown():

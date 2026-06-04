@@ -26,7 +26,7 @@ sys.path.insert(0, PROJECT_ROOT)
 os.chdir(PROJECT_ROOT)
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from common.models import (
@@ -35,6 +35,7 @@ from common.models import (
     RecallResult,
     RerankResult,
 )
+from common.service_auth import verify_service_token
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -62,6 +63,7 @@ _bi_encoder = None
 _cross_encoder = None
 _evidence_gate = None
 _answer_gate = None
+_embedding_service = None
 
 
 def _get_recall_manager():
@@ -104,6 +106,14 @@ def _get_answer_gate():
     return _answer_gate
 
 
+def _get_embedding_service():
+    global _embedding_service
+    if _embedding_service is None:
+        from models.embedding_service import EmbeddingService
+        _embedding_service = EmbeddingService()
+    return _embedding_service
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Request / Response schemas (API boundary types)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -111,7 +121,7 @@ def _get_answer_gate():
 
 class RecallRequest(BaseModel):
     query: str
-    query_embedding: List[float]
+    query_embedding: Optional[List[float]] = None
     user_role_mask: int = 0
     user_dept_mask: int = 0
     use_clip: bool = True
@@ -162,7 +172,7 @@ async def health():
 
 
 @app.post("/api/recall", response_model=RecallResponse)
-async def api_recall(req: RecallRequest):
+async def api_recall(req: RecallRequest, _auth: None = Depends(verify_service_token)):
     """
     Parallel multi-path recall.
 
@@ -171,7 +181,13 @@ async def api_recall(req: RecallRequest):
     """
     t0 = time.time()
     try:
-        query_embedding = np.array(req.query_embedding, dtype=np.float32)
+        # Compute query embedding if not provided by caller
+        if req.query_embedding is not None:
+            query_embedding = np.array(req.query_embedding, dtype=np.float32)
+        else:
+            embedding_svc = _get_embedding_service()
+            query_embedding = embedding_svc.encode_text(req.query).flatten()
+
         manager = _get_recall_manager()
 
         results: List[RecallResult] = manager.execute(
@@ -195,7 +211,7 @@ async def api_recall(req: RecallRequest):
 
 
 @app.post("/api/rerank", response_model=RerankResponse)
-async def api_rerank(req: RerankRequest):
+async def api_rerank(req: RerankRequest, _auth: None = Depends(verify_service_token)):
     """
     BiEncoder wide-preservation rerank followed by CrossEncoder ensemble rerank.
 
@@ -233,7 +249,7 @@ async def api_rerank(req: RerankRequest):
 
 
 @app.post("/api/evidence-gate", response_model=EvidenceGateResult)
-async def api_evidence_gate(req: EvidenceGateRequest):
+async def api_evidence_gate(req: EvidenceGateRequest, _auth: None = Depends(verify_service_token)):
     """
     Evidence Ensemble Gate evaluation.
 
@@ -263,7 +279,7 @@ async def api_evidence_gate(req: EvidenceGateRequest):
 
 
 @app.post("/api/answer-gate", response_model=AnswerGateResult)
-async def api_answer_gate(req: AnswerGateRequest):
+async def api_answer_gate(req: AnswerGateRequest, _auth: None = Depends(verify_service_token)):
     """
     Answer Gate: NLI-based verification of generated answer against top document.
 

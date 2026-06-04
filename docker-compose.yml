@@ -1,7 +1,7 @@
 version: "3.9"
 
 # ============================================================================
-# Automotive Knowledge RAG System - Docker Compose Deployment
+# Beauty Industry RAG QA System - Docker Compose Deployment
 # ============================================================================
 
 services:
@@ -13,6 +13,8 @@ services:
       - "8000:8000"
     volumes:
       - ./models:/models
+    environment:
+      - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:-dev-service-token-2026}
     depends_on:
       redis:
         condition: service_healthy
@@ -20,13 +22,6 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
     networks:
       - rag-network
@@ -34,13 +29,19 @@ services:
   # ── Infrastructure: Redis ───────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     volumes:
       - redis-data:/data
-    command: redis-server --appendonly yes
+    command: >
+      redis-server --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-changeme-in-production}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme-in-production}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme-in-production}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -99,8 +100,8 @@ services:
     ports:
       - "9001:9001"
     environment:
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-changeme-in-production}
     volumes:
       - minio-data:/minio_data
     command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
@@ -116,8 +117,8 @@ services:
   # ── Infrastructure: Elasticsearch ───────────────────────────────────────
   elasticsearch:
     image: elasticsearch:8.12.0
-    ports:
-      - "9200:9200"
+    expose:
+      - "9200"
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -129,84 +130,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: unless-stopped
-    networks:
-      - rag-network
-
-  # ── vLLM: Generation 14B ───────────────────────────────────────────────
-  vllm-gen-14b:
-    image: vllm/vllm-openai:latest
-    ports:
-      - "8100:8000"
-    volumes:
-      - ./models:/models
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-    command: >
-      --model /models/Qwen3-14B-Instruct
-      --host 0.0.0.0
-      --port 8000
-      --gpu-memory-utilization 0.85
-      --max-model-len 8192
-      --trust-remote-code
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    networks:
-      - rag-network
-
-  # ── vLLM: Rewrite ──────────────────────────────────────────────────────
-  vllm-rewrite:
-    image: vllm/vllm-openai:latest
-    ports:
-      - "8101:8000"
-    volumes:
-      - ./models:/models
-    environment:
-      - CUDA_VISIBLE_DEVICES=1
-    command: >
-      --model /models/Qwen3-4B-Instruct
-      --host 0.0.0.0
-      --port 8000
-      --gpu-memory-utilization 0.5
-      --trust-remote-code
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-    networks:
-      - rag-network
-
-  # ── vLLM: Generation 4B ───────────────────────────────────────────────
-  vllm-gen-4b:
-    image: vllm/vllm-openai:latest
-    ports:
-      - "8102:8000"
-    volumes:
-      - ./models:/models
-    environment:
-      - CUDA_VISIBLE_DEVICES=1
-    command: >
-      --model /models/Qwen3-4B-Instruct
-      --host 0.0.0.0
-      --port 8000
-      --trust-remote-code
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     restart: unless-stopped
     networks:
       - rag-network

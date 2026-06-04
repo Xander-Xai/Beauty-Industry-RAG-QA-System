@@ -21,11 +21,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from metrics_collector import MetricsCollector
 from alerting import AlertingManager
+from common.service_auth import verify_service_token
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ async def health():
 
 
 @app.post("/api/metrics/record")
-async def record_metrics(req: RecordMetricsRequest):
+async def record_metrics(req: RecordMetricsRequest, _auth: None = Depends(verify_service_token)):
     """Record request metrics."""
     try:
         metrics.record_request(req.model_dump())
@@ -75,13 +76,13 @@ async def record_metrics(req: RecordMetricsRequest):
 
 
 @app.get("/api/metrics/stats")
-async def metrics_stats():
+async def metrics_stats(_auth: None = Depends(verify_service_token)):
     """Get aggregated metrics."""
     return metrics.get_stats()
 
 
 @app.get("/api/alerts/check")
-async def alerts_check():
+async def alerts_check(_auth: None = Depends(verify_service_token)):
     """Check alert conditions and return active alerts."""
     active = alerting.check_alerts()
     return {
@@ -92,7 +93,7 @@ async def alerts_check():
 
 
 @app.get("/api/alerts")
-async def alerts_list():
+async def alerts_list(_auth: None = Depends(verify_service_token)):
     """List currently active alerts."""
     active = alerting.get_active_alerts()
     return {
@@ -102,7 +103,7 @@ async def alerts_list():
 
 
 @app.post("/api/alerts/{rule_name}/clear")
-async def alert_clear(rule_name: str):
+async def alert_clear(rule_name: str, _auth: None = Depends(verify_service_token)):
     """Clear a named alert."""
     alerting.clear_alert(rule_name)
     return AlertClearResponse(status="cleared", rule_name=rule_name)

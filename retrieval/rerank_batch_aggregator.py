@@ -87,7 +87,10 @@ class RerankBatchAggregator:
     生产环境可升级为异步模式（独立线程收集 pairs + 定时触发）
     """
 
-    def __init__(self):
+    def __init__(self, config=None):
+        if config is None:
+            with open("config.json", encoding="utf-8") as f:
+                config = json.load(f)
         self.time_window_ms = config["gpu1"]["rerank_batch_aggregator"]["time_window_ms"]
         self.max_batch_size = config["gpu1"]["rerank_batch_aggregator"]["max_batch_size"]
         self._lock = threading.Lock()
@@ -141,10 +144,13 @@ class RerankBatchAggregator:
             return all_scores
 
         except Exception as e:
-            logger.error(f"Batch predict 失败: {e}")
             inference_ms = (time.time() - t_start) * 1000
             with self._lock:
                 self._stats.record_batch(len(pairs), 0.0, inference_ms)
+            # Re-raise GPU-related errors so batch_predict_with_fallback can handle them
+            if isinstance(e, RuntimeError):
+                raise
+            logger.error(f"Batch predict 失败: {e}")
             return [0.0] * len(pairs)
 
     def batch_predict_nli(self, model, pairs: list[tuple[str, str]]) -> list:
@@ -180,6 +186,36 @@ class RerankBatchAggregator:
         except Exception as e:
             logger.error(f"NLI batch predict 失败: {e}")
             return [()] * len(pairs)
+
+    def batch_predict_with_fallback(self, model, pairs, use_cpu_fallback=False):
+        """Batch predict with optional CPU fallback on GPU failure."""
+        import torch
+        try:
+            return self.batch_predict(model, pairs)
+        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
+            if not use_cpu_fallback:
+                raise
+            logger.warning(f"GPU inference failed ({e}), falling back to CPU")
+            return self._cpu_fallback_predict(model, pairs)
+
+    def _cpu_fallback_predict(self, model, pairs):
+        """CPU fallback: move model to CPU and predict in small batches."""
+        import torch
+        device_backup = None
+        try:
+            if hasattr(model, 'model') and hasattr(model.model, 'device'):
+                device_backup = model.model.device
+                model.model.cpu()
+            batch_size = min(8, len(pairs))
+            results = []
+            for i in range(0, len(pairs), batch_size):
+                batch = pairs[i:i + batch_size]
+                scores = model.predict(batch)
+                results.extend(scores.tolist() if hasattr(scores, 'tolist') else list(scores))
+            return results
+        finally:
+            if device_backup is not None and hasattr(model, 'model'):
+                model.model.to(device_backup)
 
     def get_stats(self) -> dict:
         """

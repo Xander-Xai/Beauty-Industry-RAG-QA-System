@@ -1,0 +1,93 @@
+<h2>🛡️ Section 5: Phase 4 — 安全加固与前端界面</h2>
+<p class="subtitle">JWT 认证 · 审计日志 · 脱敏 · Web 聊天界面</p>
+
+<div class="section">
+  <h3>5.1 安全加固清单</h3>
+  <div class="mockup">
+    <div class="mockup-header">安全实现方案</div>
+    <div class="mockup-body" style="padding: 15px; font-size: 12px;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div>
+          <b style="color:#4CAF50;">JWT 认证</b>
+          <ul style="margin:4px 0;color:#ccc;">
+            <li>基于已实现的 <code>common/auth.py</code></li>
+            <li>RS256 签名（公私钥分离）</li>
+            <li>Access Token 15min + Refresh Token 7d</li>
+            <li>角色注入: admin/rd/quality/regulation/sales</li>
+            <li>部门注入: dept_mask 位运算</li>
+          </ul>
+        </div>
+        <div>
+          <b style="color:#2196F3;">审计日志</b>
+          <ul style="margin:4px 0;color:#ccc;">
+            <li>记录: user_id, query_hash, 过滤表达式, 拦截原因</li>
+            <li>查询脱敏: user_query → SHA256</li>
+            <li>配方查询: [REDACTED] 替代敏感内容</li>
+            <li>存储: 结构化 JSON → Elasticsearch</li>
+            <li>保留: 180 天 (合规要求)</li>
+          </ul>
+        </div>
+        <div>
+          <b style="color:#FFC107;">传输安全</b>
+          <ul style="margin:4px 0;color:#ccc;">
+            <li>HTTPS (TLS 1.3) — 通过 Nginx 反向代理</li>
+            <li>CORS 白名单 (非 *)</li>
+            <li>Rate Limiting: 法规 60%, 研发 30%, 闲聊 10%</li>
+            <li>请求大小限制: 10KB/query</li>
+          </ul>
+        </div>
+        <div>
+          <b style="color:#f44336;">数据安全</b>
+          <ul style="margin:4px 0;color:#ccc;">
+            <li>MinIO 文档: 临时签名 URL (60s 有效)</li>
+            <li>端点内权限重校验 (is_allowed)</li>
+            <li>Redis 密码 + TLS</li>
+            <li>环境变量敏感值加密</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>5.2 前端 Web 界面</h3>
+  <div class="mockup">
+    <div class="mockup-header">Web UI 方案选型</div>
+    <div class="mockup-body" style="padding: 15px;">
+      <div style="display: flex; gap: 16px;">
+        <div style="flex:1;border:1px solid #4CAF50;border-radius:8px;padding:12px;">
+          <div style="color:#4CAF50;font-weight:bold;">✅ 推荐: React + Chat UI Kit</div>
+          <ul style="margin:4px 0;font-size:12px;color:#ccc;">
+            <li>基于 chatui / ChatGPT-Next-Web 魔改</li>
+            <li>多轮对话 + Markdown 渲染</li>
+            <li>权限切换 (角色选择器)</li>
+            <li>引用溯源展示</li>
+            <li>响应式设计</li>
+          </ul>
+        </div>
+        <div style="flex:1;border:1px solid #666;border-radius:8px;padding:12px;">
+          <div style="color:#888;font-weight:bold;">备选: 纯 Streamlit</div>
+          <ul style="margin:4px 0;font-size:12px;color:#888;">
+            <li>开发速度最快</li>
+            <li>功能受限</li>
+            <li>不适合生产环境</li>
+            <li>仅适合内部工具</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>5.3 用户管理</h3>
+  <div style="font-size: 13px; line-height: 1.8; color: #ccc;">
+    <ul>
+      <li><b>用户注册/管理</b>：基于 SQLite/PostgreSQL 的用户表，存储 role_mask + dept_mask</li>
+      <li><b>角色分配</b>：管理员通过 Web UI 分配角色和部门</li>
+      <li><b>LDAP 集成</b>（可选）：对接企业已有的 AD/LDAP 认证</li>
+      <li><b>会话管理</b>：6 轮对话上下文，session_id 关联用户身份</li>
+    </ul>
+  </div>
+</div>

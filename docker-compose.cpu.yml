@@ -1,0 +1,6 @@
+# CPU 降级覆盖层 — 开发/测试模式
+# 用法: docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+services:
+  app:
+    environment:
+      - DEPLOYMENT_MODE=development

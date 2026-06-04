@@ -1,0 +1,122 @@
+<h2>🐳 Section 4: Phase 3 — 部署自动化</h2>
+<p class="subtitle">Docker 优化 · 模型管理 · 一键启动 · 健康检查</p>
+
+<div class="section">
+  <h3>4.1 Docker Compose 架构优化</h3>
+  <div class="mockup">
+    <div class="mockup-header">docker-compose.yml 重构方案</div>
+    <div class="mockup-body" style="padding: 15px; font-size: 12px; font-family: monospace;">
+<pre style="margin:0;color:#ccc;">
+docker-compose.yml          # 主编排文件
+docker-compose.gpu.yml      # GPU 服务覆盖 (双卡)
+docker-compose.cpu.yml      # CPU 降级覆盖 (开发)
+.env                        # 环境变量 (从 .env.example 复制)
+
+services:
+  app:                      # FastAPI 主应用
+  redis:                    # L1/L2 缓存
+  milvus-standalone:        # 向量数据库
+  elasticsearch:            # BM25 全文检索
+  minio:                    # 文档对象存储
+  etcd:                     # Milvus 依赖
+
+  # GPU 服务 (仅 docker-compose.gpu.yml)
+  vllm-gen-14b:             # GPU0: 复杂生成
+  vllm-gen-4b:              # GPU1: 简单生成
+  vllm-rewrite:             # GPU1: Query Rewrite
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>4.2 模型管理方案</h3>
+  <div style="font-size: 13px; line-height: 1.8; color: #ccc;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <div>
+        <b style="color:#4CAF50;">模型下载脚本</b>
+        <ul style="margin:4px 0;font-size:12px;">
+          <li><code>scripts/download_models.sh</code></li>
+          <li>从 HuggingFace/ModelScope 下载</li>
+          <li>支持镜像源切换（国内加速）</li>
+          <li>SHA256 校验完整性</li>
+          <li>断点续传支持</li>
+        </ul>
+      </div>
+      <div>
+        <b style="color:#2196F3;">模型目录结构</b>
+        <ul style="margin:4px 0;font-size:12px;">
+          <li><code>models/</code> 统一目录挂载</li>
+          <li>Docker Volume 持久化</li>
+          <li>.gitignore + LFS 管理</li>
+          <li>首次启动自动校验</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>4.3 一键启动流程</h3>
+  <div class="mockup">
+    <div class="mockup-header">启动脚本 scripts/start.sh</div>
+    <div class="mockup-body" style="padding: 15px; font-size: 12px; font-family: monospace;">
+<pre style="margin:0;color:#ccc;">
+$ ./scripts/start.sh --mode testing
+
+Step 1/6  检查环境 (Docker, nvidia-smi)     ✅
+Step 2/6  检查模型权重完整性                 ✅ 8/8 模型就绪
+Step 3/6  初始化向量库 Schema                ✅ rag_text_768, rag_image_512
+Step 4/6  导入 Mock 数据 (首次)              ✅ 287 文档, 102 图像
+Step 5/6  启动基础设施 (Redis/Milvus/ES)     ✅ 等待健康检查通过
+Step 6/6  启动应用服务                       ✅ http://localhost:8000
+
+系统就绪 🚀
+</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>4.4 健康检查完善</h3>
+  <div style="font-size: 13px; line-height: 1.8; color: #ccc;">
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <tr style="border-bottom:2px solid #4CAF50;">
+        <td style="padding:6px;font-weight:bold;">检查项</td>
+        <td style="padding:6px;font-weight:bold;">端点</td>
+        <td style="padding:6px;font-weight:bold;">超时</td>
+        <td style="padding:6px;font-weight:bold;">失败行为</td>
+      </tr>
+      <tr style="border-bottom:1px solid #333;">
+        <td style="padding:6px;">Redis 连接</td>
+        <td style="padding:6px;"><code>GET /health/redis</code></td>
+        <td style="padding:6px;">2s</td>
+        <td style="padding:6px;">降级到 L1 内存缓存</td>
+      </tr>
+      <tr style="border-bottom:1px solid #333;">
+        <td style="padding:6px;">Milvus 连接</td>
+        <td style="padding:6px;"><code>GET /health/milvus</code></td>
+        <td style="padding:6px;">3s</td>
+        <td style="padding:6px;">切换 ES Fallback</td>
+      </tr>
+      <tr style="border-bottom:1px solid #333;">
+        <td style="padding:6px;">ES 连接</td>
+        <td style="padding:6px;"><code>GET /health/es</code></td>
+        <td style="padding:6px;">3s</td>
+        <td style="padding:6px;">BM25 路径降级</td>
+      </tr>
+      <tr style="border-bottom:1px solid #333;">
+        <td style="padding:6px;">vLLM 就绪</td>
+        <td style="padding:6px;"><code>GET /health/vllm</code></td>
+        <td style="padding:6px;">30s</td>
+        <td style="padding:6px;">启动阶段等待；运行阶段 503</td>
+      </tr>
+      <tr>
+        <td style="padding:6px;">GPU 可用性</td>
+        <td style="padding:6px;"><code>nvidia-smi</code></td>
+        <td style="padding:6px;">5s</td>
+        <td style="padding:6px;">自动降级到 CPU 模式</td>
+      </tr>
+    </table>
+  </div>
+</div>

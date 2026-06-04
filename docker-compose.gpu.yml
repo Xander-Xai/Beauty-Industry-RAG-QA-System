@@ -1,0 +1,79 @@
+# GPU 服务覆盖层 — 双卡生产模式
+# 用法: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+services:
+  app:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  vllm-gen-14b:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8100:8000"
+    volumes:
+      - ${MODEL_DIR:-./models}:/models
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    command: >
+      --model /models/qwen3-14b
+      --max-model-len 4096
+      --gpu-memory-utilization 0.85
+      --port 8000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  vllm-rewrite:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8101:8000"
+    volumes:
+      - ${MODEL_DIR:-./models}:/models
+    environment:
+      - CUDA_VISIBLE_DEVICES=1
+    command: >
+      --model /models/qwen3-4b
+      --max-model-len 2048
+      --gpu-memory-utilization 0.3
+      --port 8000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  vllm-gen-4b:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8102:8000"
+    volumes:
+      - ${MODEL_DIR:-./models}:/models
+    environment:
+      - CUDA_VISIBLE_DEVICES=1
+    command: >
+      --model /models/qwen3-4b
+      --max-model-len 4096
+      --gpu-memory-utilization 0.4
+      --port 8000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

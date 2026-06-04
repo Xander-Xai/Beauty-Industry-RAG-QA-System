@@ -10,13 +10,14 @@ import logging
 import sys
 import time
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # Ensure project root is importable for common models
 sys.path.insert(0, "/home/dev/projects/Intelligent-Q-A-System-for-Automotive-Knowledge")
 
 from common.models import CacheEntry
+from common.service_auth import verify_service_token
 
 from redis_cache import RedisCache
 
@@ -69,6 +70,7 @@ async def cache_get(
     key: str = Query(..., description="Cache key (SHA256 hash)"),
     role_mask: int = Query(0, description="Caller role bitmask"),
     dept_mask: int = Query(0, description="Caller department bitmask"),
+    _auth: None = Depends(verify_service_token),
 ):
     """
     Look up a cache entry.
@@ -87,7 +89,7 @@ async def cache_get(
 
 
 @app.post("/api/cache", response_model=CacheWriteResponse)
-async def cache_set(req: CacheWriteRequest):
+async def cache_set(req: CacheWriteRequest, _auth: None = Depends(verify_service_token)):
     """
     Write a value into the cache.
     """
@@ -105,6 +107,7 @@ async def cache_set(req: CacheWriteRequest):
 @app.delete("/api/cache")
 async def cache_invalidate(
     epoch: str = Query(..., description="New knowledge version epoch"),
+    _auth: None = Depends(verify_service_token),
 ):
     """
     Invalidate cache entries by rolling to a new epoch.
@@ -117,7 +120,7 @@ async def cache_invalidate(
 
 
 @app.get("/api/cache/stats", response_model=CacheStatsResponse)
-async def cache_stats():
+async def cache_stats(_auth: None = Depends(verify_service_token)):
     """
     Return cache-layer statistics.
     """

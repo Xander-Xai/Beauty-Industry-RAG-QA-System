@@ -16,6 +16,8 @@ import logging
 import hashlib
 from typing import Optional
 
+from common.audit import log_audit_event
+
 with open("config.json", encoding="utf-8") as f:
     config = json.load(f)
 
@@ -158,6 +160,15 @@ class OnlineRAGPipeline:
             最终回答文本
         """
         from core.pipeline_context import SessionState
+
+        # 审计日志：记录查询接收事件（query 仅存哈希）
+        log_audit_event(
+            event_type="query_received",
+            request_id=ctx.request_id,
+            user_id=ctx.user_id,
+            user_role_mask=ctx.user_role_mask,
+            query=ctx.user_input,
+        )
 
         t_total = time.time()
         try:

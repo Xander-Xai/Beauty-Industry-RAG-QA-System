@@ -1,13 +1,14 @@
 """
 FastAPI 中间件
 
-- CORS 中间件（允许所有来源）
+- CORS 中间件（可通过 CORS_ORIGINS 环境变量配置允许来源）
 - 请求日志中间件（记录 method, path, status, elapsed, X-Request-ID）
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 
@@ -16,6 +17,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 logger = logging.getLogger(__name__)
+
+# CORS 来源白名单：通过环境变量配置，多个来源用逗号分隔
+# 生产环境应设置为具体前端域名，如 "https://internal.example.com"
+_cors_origins_str = os.environ.get("CORS_ORIGINS", "")
+CORS_ORIGINS = (
+    [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
+    if _cors_origins_str
+    else ["*"]
+)
+# 当使用通配符时禁用 credentials（浏览器安全要求）
+CORS_ALLOW_CREDENTIALS = CORS_ORIGINS != ["*"]
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -62,14 +74,18 @@ def setup_middleware(app: FastAPI) -> None:
     注意：中间件按注册的 **逆序** 执行（先注册的后执行）。
     这里先添加 CORS（最外层），再添加请求日志。
     """
-    # CORS - 允许所有来源（开发阶段）
+    # CORS — 生产环境通过 CORS_ORIGINS 环境变量限制来源
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=CORS_ORIGINS,
+        allow_credentials=CORS_ALLOW_CREDENTIALS,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-User-ID", "X-Role-Mask", "X-Dept-Mask"],
     )
 
     # 请求日志
     app.add_middleware(RequestLoggingMiddleware)
+
+    # 审计日志（最内层，离 app 最近）
+    from auth.audit_log import AuditLogMiddleware
+    app.add_middleware(AuditLogMiddleware)

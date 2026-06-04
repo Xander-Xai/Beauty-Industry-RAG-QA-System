@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>化妆品知识问答系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>🧬 化妆品 RAG</h2>
+                <p class="subtitle">智能知识问答系统</p>
+            </div>
+            <div class="user-section">
+                <label>身份模拟</label>
+                <select id="user-select">
+                    <option value="admin" data-role="1" data-dept="0">管理员</option>
+                    <option value="rd" data-role="2" data-dept="1" selected>研发人员</option>
+                    <option value="quality" data-role="4" data-dept="2">品质人员</option>
+                    <option value="regulation" data-role="8" data-dept="4">法规人员</option>
+                    <option value="sales" data-role="16" data-dept="8">销售人员</option>
+                </select>
+            </div>
+            <div class="sidebar-info">
+                <div class="info-item">
+                    <span class="label">服务状态</span>
+                    <span id="health-status" class="status checking">检查中...</span>
+                </div>
+                <div class="info-item">
+                    <span class="label">延迟</span>
+                    <span id="latency-display">-</span>
+                </div>
+            </div>
+            <div class="sidebar-footer">
+                <button id="clear-btn" class="btn-secondary">清除对话</button>
+            </div>
+        </div>
+
+        <!-- Main Chat -->
+        <div class="main">
+            <div class="chat-messages" id="chat-messages">
+                <div class="welcome-message">
+                    <h3>👋 欢迎使用化妆品知识问答系统</h3>
+                    <p>我可以帮您查询化妆品成分信息、法规标准、配方研发等问题。</p>
+                    <div class="quick-questions">
+                        <button class="quick-q" data-q="烟酰胺的安全浓度是多少？">烟酰胺安全浓度</button>
+                        <button class="quick-q" data-q="化妆品中铅含量的限量标准是什么？">铅含量限量</button>
+                        <button class="quick-q" data-q="水杨酸在化妆品中的使用限制？">水杨酸使用限制</button>
+                        <button class="quick-q" data-q="防晒产品需要哪些法规认证？">防晒法规认证</button>
+                    </div>
+                </div>
+            </div>
+            <div class="chat-input-area">
+                <div class="input-wrapper">
+                    <textarea id="query-input" placeholder="输入您的问题..." rows="1"></textarea>
+                    <button id="send-btn" class="send-button">发送</button>
+                </div>
+                <div class="input-hint">按 Enter 发送，Shift+Enter 换行</div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

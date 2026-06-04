@@ -21,7 +21,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from llm_client import LLMClient
@@ -33,6 +33,7 @@ from common.models import (
     QueryRewriteResult,
     RerankResult,
 )
+from common.service_auth import verify_service_token
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ async def status():
 
 
 @app.post("/api/generate")
-async def generate(req: GenerateRequest):
+async def generate(req: GenerateRequest, _auth: None = Depends(verify_service_token)):
     """
     Main generation endpoint.
 
@@ -193,7 +194,7 @@ async def generate(req: GenerateRequest):
 
 
 @app.post("/api/continuation")
-async def continuation(req: ContinuationRequest):
+async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_service_token)):
     """Long-text continuation endpoint."""
     try:
         ctx = _rebuild_context(req.ctx)
@@ -211,7 +212,7 @@ async def continuation(req: ContinuationRequest):
 
 
 @app.post("/api/admission-check", response_model=AdmissionCheckResponse)
-async def admission_check(req: AdmissionCheckRequest):
+async def admission_check(req: AdmissionCheckRequest, _auth: None = Depends(verify_service_token)):
     """KV admission check."""
     admitted, reason = kv_admission.admit(
         req.request_id, req.input_tokens, req.output_tokens, req.business_type
@@ -225,14 +226,14 @@ async def admission_check(req: AdmissionCheckRequest):
 
 
 @app.post("/api/admission-release")
-async def admission_release(req: AdmissionReleaseRequest):
+async def admission_release(req: AdmissionReleaseRequest, _auth: None = Depends(verify_service_token)):
     """Release KV admission for a request."""
     kv_admission.release(req.request_id)
     return {"status": "released", "request_id": req.request_id}
 
 
 @app.post("/api/complexity", response_model=ComplexityResponse)
-async def complexity(req: ComplexityRequest):
+async def complexity(req: ComplexityRequest, _auth: None = Depends(verify_service_token)):
     """Evaluate query complexity."""
     is_complex = complexity_evaluator.evaluate(req.query)
     return ComplexityResponse(is_complex=is_complex)
