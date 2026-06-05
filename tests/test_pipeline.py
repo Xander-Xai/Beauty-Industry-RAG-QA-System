@@ -99,20 +99,21 @@ class TestComplexityEvaluator:
 
 class TestKVAdmission:
     def test_admission_critical(self):
-        """KV 准入：压力 > 0.95 时拒绝"""
+        """KV 准入：压力 > 0.97 + P2 时返回 critical_p2_rejected"""
         from admission.kv_admission import KVAdmissionControl
         control = KVAdmissionControl()
-        with patch.object(control, "_pressure_unlocked", return_value=0.96), \
+        with patch.object(control, "_pressure_unlocked", return_value=0.98), \
              patch("admission.kv_admission.log_audit_event"):
-            admitted, reason = control.admit("req_test", 1000, 512, "general")
+            admitted, reason, priority = control.admit("req_test", 1000, 512, "general")
         assert admitted == False
-        assert reason == "critical"
+        assert reason == "critical_p2_rejected"
+        assert priority == "P2"
 
     def test_admission_budget_exceeded(self):
-        """KV 准入：预算超限时拒绝"""
+        """KV 准入：预算未超限时 admitted"""
         from admission.kv_admission import KVAdmissionControl
         control = KVAdmissionControl()
-        admitted, reason = control.admit("req_1", 5000, 512, "general")
+        admitted, reason, priority = control.admit("req_1", 5000, 512, "general")
         assert admitted == True
 
 

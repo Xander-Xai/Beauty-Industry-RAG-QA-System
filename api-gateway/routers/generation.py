@@ -158,11 +158,11 @@ async def _call_service(
 
     except httpx.TimeoutException:
         logger.error("服务调用超时: %s (超时: %.1fs)", url, timeout)
-        raise HTTPException(status_code=504, detail=f"下游服务超时: {url}")
+        raise HTTPException(status_code=504, detail="下游服务超时")
 
     except httpx.ConnectError:
         logger.error("无法连接下游服务: %s", url)
-        raise HTTPException(status_code=502, detail=f"下游服务不可达: {url}")
+        raise HTTPException(status_code=502, detail="下游服务不可达")
 
 
 # ---------------------------------------------------------------------------
@@ -633,12 +633,40 @@ async def media_access(
     user: UserIdentity = Depends(require_current_user),
 ):
     """
-    媒体文件访问端点.
+    媒体文件访问端点（PRD §10 资源访问安全）.
 
-    根据文档 ID 返回媒体资源信息，并执行 RBAC 权限检查。
-    无权限时返回 403。
+    1. Milvus 文档权限二次校验（查文档 role_mask/dept_mask，与用户权限比对）
+    2. RBAC 权限校验（通过 generation-service 代理）
+    3. 生成 MinIO 临时签名 URL（60s TTL）
     """
     try:
+        # ① Milvus 文档权限二次校验（PRD §6 / §10）
+        try:
+            from auth.bitmask_rbac import is_allowed
+            from models.embedding_service import EmbeddingService
+            embedding_svc = EmbeddingService()
+            # 查询 Milvus 获取文档的权限掩码
+            results = embedding_svc.milvus_client.query(
+                collection_name="rag_text_768",
+                filter=f'doc_id == "{doc_id}"',
+                output_fields=["role_mask", "dept_mask", "status"],
+                limit=1,
+            )
+            if results:
+                doc = results[0]
+                doc_status = doc.get("status", "active")
+                if doc_status != "archived":
+                    doc_role = doc.get("role_mask", 0)
+                    doc_dept = doc.get("dept_mask", 0)
+                    if not is_allowed(doc_role, user.user_role_mask, doc_dept, user.user_dept_mask):
+                        return JSONResponse(
+                            status_code=403,
+                            content={"error": "无权访问该媒体文件（权限校验失败）", "doc_id": doc_id},
+                        )
+        except Exception as e:
+            logger.debug(f"Milvus 权限校验跳过（降级到 generation-service 校验）: {e}")
+
+        # ② RBAC 权限校验（通过 generation-service 代理）
         async with httpx.AsyncClient() as client:
             resp = await _call_service(
                 client, "GET",
@@ -646,16 +674,26 @@ async def media_access(
                 params={"user_role_mask": user.user_role_mask, "user_dept_mask": user.user_dept_mask},
                 timeout=10.0,
             )
-
-            # 处理权限拒绝
             if resp.status_code == 403:
                 return JSONResponse(
                     status_code=403,
                     content={"error": "无权访问该媒体文件", "doc_id": doc_id},
                 )
-
             resp.raise_for_status()
-            return resp.json()
+            media_info = resp.json()
+
+        # ② MinIO 临时签名 URL（PRD §10: 60s TTL）
+        try:
+            from common.minio_client import get_minio_client
+            minio = get_minio_client()
+            presigned_url = minio.get_presigned_url(doc_id)
+            if presigned_url:
+                media_info["url"] = presigned_url
+                media_info["expires_in_seconds"] = 60
+        except ImportError:
+            logger.debug("MinIO 客户端不可用，使用代理路径")
+
+        return media_info
 
     except HTTPException:
         raise

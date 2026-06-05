@@ -1,8 +1,15 @@
 import json
 import logging
 import os
+import re
 
 logger = logging.getLogger(__name__)
+
+# 输入验证正则：仅允许字母、数字、下划线、连字符（用于 knowledge_version_epoch）
+_SAFE_VERSION_PATTERN = re.compile(r'^[a-zA-Z0-9_\-]+$')
+
+# 输入验证：整数范围校验（32位无符号）
+_MAX_UINT32 = 0xFFFFFFFF
 
 # 优先使用 common.config 统一配置，回退到直接读取 config.json
 try:
@@ -41,12 +48,25 @@ def build_milvus_filter(ur, ue, ae):
         AND (dept_mask == 0 OR ((dept_mask & user_dept) != 0))
         AND doc_version_epoch == '{epoch}'
         AND status == 'active'
+
+    安全：对所有输入进行类型和范围验证，防止过滤器注入。
     """
+    # 输入验证：确保整数在 uint32 范围内
+    if not isinstance(ur, int) or not (0 <= ur <= _MAX_UINT32):
+        raise ValueError(f"user_role_mask 必须为 uint32 整数，收到: {ur!r}")
+    if not isinstance(ue, int) or not (0 <= ue <= _MAX_UINT32):
+        raise ValueError(f"user_dept_mask 必须为 uint32 整数，收到: {ue!r}")
+
+    # 输入验证：knowledge_version_epoch 仅允许安全字符
+    ae_str = str(ae)
+    if not _SAFE_VERSION_PATTERN.match(ae_str):
+        raise ValueError(f"knowledge_version_epoch 包含非法字符: {ae_str!r}")
+
     rm0 = "(role_mask == 0)"
     rmu = f"((role_mask & {ur}) != 0)"
     dm0 = "(dept_mask == 0)"
     dmu = f"((dept_mask & {ue}) != 0)"
-    ep = f"doc_version_epoch == '{ae}'"
+    ep = f"doc_version_epoch == '{ae_str}'"
     st = "status == 'active'"
     return f"({rm0} OR {rmu}) AND ({dm0} OR {dmu}) AND {ep} AND {st}" 
  

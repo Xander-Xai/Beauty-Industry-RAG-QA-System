@@ -1,3 +1,26 @@
+"""
+KV-aware admission control for vLLM continuous batching.
+
+PRD §5.2: Concurrency is determined by KV budget + sequence length
+distribution, NOT a static concurrency number.
+
+PRD §5.2.5 / §9 thresholds:
+  > 0.85  → tighten token bucket, queue requests
+  > 0.90  → app-layer stream truncation (do NOT modify vLLM max_tokens
+             to preserve Prefix Caching)
+  > 0.95  → P0 stays 14B with shrunk tokens, P1 downgrades to 4B,
+             P2 is dropped
+  > 0.97  → extreme overload: P0 downgrades + shrinks, P1 queued,
+             P2 returns 503
+
+Prefix Caching protection (PRD §9):
+  ``get_effective_max_tokens()`` returns the ORIGINAL max_tokens unchanged.
+  Instead it returns an ``action`` string ("truncate", "critical", etc.)
+  that the pipeline uses to limit output via application-layer stream
+  truncation (early stop / token counting) WITHOUT changing the vLLM
+  ``max_tokens`` parameter, which would invalidate the Prefix Cache key
+  hash and trigger a Prefill storm.
+"""
 import time, json, threading
 from common.audit import log_audit_event
 try:
@@ -12,9 +35,39 @@ except Exception:
     with open(_config_path, encoding="utf-8") as f:
         _config = json.load(f)
 
+
 class KVAdmissionControl:
-    KV_PER_TOKEN = 0.45 * 1024
-    OUTPUT_MAP = {'regulation': 1024, 'formulation': 768, 'ingredient': 512, 'general': 256}
+    """
+    KV-aware admission control with priority-based degradation (PRD §9).
+
+    Business type → priority mapping (PRD §5.2.5):
+      P0: regulation     — highest priority, protected during overload
+      P1: development, ingredient — medium priority, downgraded first
+      P2: product, general, chat, short — lowest priority, dropped first
+    """
+
+    KV_PER_TOKEN = 0.45 * 1024  # 0.45 KB per token (Qwen3-14B GQA)
+    OUTPUT_MAP = {
+        'regulation': 1024, 'development': 768, 'formulation': 768,
+        'ingredient': 512, 'general': 256,
+    }
+
+    # PRD §9 thresholds — aligned with PRD spec
+    THRESHOLD_TIGHTEN = 0.85     # 85%: token bucket tightened, requests queued
+    THRESHOLD_TRUNCATE = 0.90    # 90%: app-layer stream truncation
+    THRESHOLD_SOFT_STOP = 0.95   # 95%: P1 downgrade to 4B, P2 dropped
+    THRESHOLD_CRITICAL = 0.97    # 97%: extreme overload, P0 downgrade + shrink
+
+    # PRD §5.2.5 — Priority levels
+    PRIORITY_MAP = {
+        "regulation":  "P0",
+        "development": "P1",
+        "ingredient":  "P1",
+        "product":     "P2",
+        "general":     "P2",
+        "chat":        "P2",
+        "short":       "P2",
+    }
 
     def __init__(self):
         kv_gb = _config['gpu0']['models']['gen_14b']['kv_cache_budget_gb']
@@ -22,7 +75,7 @@ class KVAdmissionControl:
         self.kv_budget = int(kv_gb * 1024**3 * sf)
         self.kv_total = int(kv_gb * 1024**3)
         self.active = {}
-        self._lock = threading.RLock()  # 可重入锁，admit 内调用 get_pressure 不会死锁
+        self._lock = threading.RLock()
 
     def estimate_kv(self, inp, out, bt):
         if out == 0:
@@ -30,7 +83,6 @@ class KVAdmissionControl:
         return (inp + out * 1.2) * self.KV_PER_TOKEN
 
     def _pressure_unlocked(self):
-        """无锁版本的 pressure 计算（供锁内调用）"""
         u = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
         return u / self.kv_total if self.kv_total > 0 else 0.0
 
@@ -38,34 +90,139 @@ class KVAdmissionControl:
         with self._lock:
             return self._pressure_unlocked()
 
+    def _get_priority(self, business_type: str) -> str:
+        """Return priority level for a business type (P0/P1/P2)."""
+        return self.PRIORITY_MAP.get(business_type, "P2")
+
     def admit(self, rid, inp, out, bt):
-        """线程安全的准入检查：整个 check-then-act 过程在锁内执行"""
+        """
+        Thread-safe admission check: entire check-then-act runs under lock.
+
+        Returns (admitted: bool, reason: str, priority: str).
+
+        Priority-based degradation (PRD §5.2.5 / §9):
+          > 0.97 (critical):
+            P0 → admitted with forced downgrade (14B→4B) + shrink tokens
+            P1 → queued (not admitted)
+            P2 → rejected with 503
+          > 0.95 (soft_stop):
+            P0 → admitted normally
+            P1 → admitted with forced downgrade (14B→4B)
+            P2 → rejected (not admitted)
+          > 0.90 (truncate):
+            P0/P1/P2 → admitted with app-layer truncation
+          > 0.85 (tighten):
+            P0/P1/P2 → admitted with tighten flag
+        """
         est = self.estimate_kv(inp, out, bt)
+        priority = self._get_priority(bt)
         admitted = True
         reason = 'admitted'
         p = 0.0
+
         with self._lock:
             p = self._pressure_unlocked()
-            if p > 0.95:
-                admitted, reason = False, 'critical'
-            elif p > 0.9:
-                admitted, reason = False, 'soft_stop'
+
+            if p > self.THRESHOLD_CRITICAL:
+                # ── 97% extreme overload: priority-based handling ──
+                if priority == "P0":
+                    # P0: retained with forced downgrade (14B→4B) + shrink
+                    cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
+                    if cur + est > self.kv_budget:
+                        admitted, reason = False, 'critical_p0_budget'
+                    else:
+                        self.active[rid] = (inp, out, bt)
+                        admitted, reason = True, 'critical'
+                elif priority == "P1":
+                    # P1: queued (not admitted)
+                    admitted, reason = False, 'critical_p1_queued'
+                else:
+                    # P2: rejected with 503
+                    admitted, reason = False, 'critical_p2_rejected'
+
+            elif p > self.THRESHOLD_SOFT_STOP:
+                # ── 95%: priority-based handling ──
+                if priority == "P0":
+                    # P0: admitted normally (protected)
+                    cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
+                    if cur + est > self.kv_budget:
+                        admitted, reason = False, 'budget_exceeded'
+                    else:
+                        self.active[rid] = (inp, out, bt)
+                        admitted, reason = True, 'admitted'
+                elif priority == "P1":
+                    # P1: downgraded (14B→4B)
+                    cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
+                    if cur + est > self.kv_budget:
+                        admitted, reason = False, 'budget_exceeded'
+                    else:
+                        self.active[rid] = (inp, out, bt)
+                        admitted, reason = True, 'downgrade_to_4b'
+                else:
+                    # P2: rejected
+                    admitted, reason = False, 'soft_stop'
+
             else:
                 cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
                 if cur + est > self.kv_budget:
                     admitted, reason = False, 'budget_exceeded'
                 else:
                     self.active[rid] = (inp, out, bt)
-                    if p > 0.8:
-                        reason = 'admitted_with_pressure'
+                    if p > self.THRESHOLD_TRUNCATE:
+                        # 90%: app-layer stream truncation
+                        reason = 'admitted_with_truncation'
+                    elif p > self.THRESHOLD_TIGHTEN:
+                        # 85%: token bucket tightened
+                        reason = 'admitted_with_tighten'
+
         if not admitted:
             log_audit_event(
                 event_type="admission_rejected",
                 request_id=rid,
                 reject_reason=reason,
-                extra={"kv_pressure": round(p, 3)},
+                extra={"kv_pressure": round(p, 3), "priority": priority, "business_type": bt},
             )
-        return admitted, reason
+        return admitted, reason, priority
+
+    def get_effective_max_tokens(self, requested_max_tokens: int, reason: str) -> int:
+        """
+        Return the vLLM max_tokens parameter — UNCHANGED for Prefix Caching.
+
+        PRD §9 Prefix Caching protection:
+          During degradation we do NOT modify max_tokens. Instead we return
+          the original value and set an action flag so the pipeline can
+          implement application-layer stream truncation (e.g., early stop
+          tokens, response truncation after streaming). This preserves the
+          Prefix Cache key hash and prevents Prefill storms.
+
+        The ``reason`` parameter is used by the pipeline to decide the
+        stream truncation strategy, NOT to alter this value.
+        """
+        # PRD §9: Prefix Caching 保护 — 不修改 max_tokens
+        return requested_max_tokens
+
+    def get_truncation_tokens(self, requested_max_tokens: int, reason: str) -> int | None:
+        """
+        Return the actual token limit for application-layer stream truncation.
+
+        This is the *output* token limit used by the pipeline to truncate
+        the streamed response. It does NOT change the vLLM max_tokens.
+
+        Returns None when no truncation is needed.
+        """
+        if reason == 'admitted_with_truncation':
+            return max(requested_max_tokens // 2, 256)
+        if reason == 'critical':
+            return max(requested_max_tokens // 4, 256)
+        return None
+
+    def should_force_downgrade(self, reason: str) -> bool:
+        """Whether to force model downgrade (14B→4B)"""
+        return reason in ('critical', 'downgrade_to_4b')
+
+    def should_reject_503(self, reason: str) -> bool:
+        """Whether to return HTTP 503 (extreme overload for P2)"""
+        return reason == 'critical_p2_rejected'
 
     def release(self, rid):
         with self._lock:
@@ -73,4 +230,8 @@ class KVAdmissionControl:
 
     def get_status(self):
         with self._lock:
-            return {'kv_pressure': round(self._pressure_unlocked(), 3), 'active': len(self.active)}
+            return {
+                'kv_pressure': round(self._pressure_unlocked(), 3),
+                'active': len(self.active),
+                'kv_budget_mb': round(self.kv_budget / 1024**2, 1),
+            }

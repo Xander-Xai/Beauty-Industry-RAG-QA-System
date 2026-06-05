@@ -243,8 +243,8 @@ class RbacConfig:
 
 @dataclass(frozen=True)
 class AuthConfig:
-    dev_mode: bool = True
-    jwt_secret: str = "dev-secret-change-in-production-2026"
+    dev_mode: bool = False
+    jwt_secret: str = ""
     jwt_expiry_hours: int = 24
 
 

@@ -16,6 +16,7 @@ Public API:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import List, Optional
 
@@ -24,6 +25,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from common.config import get_config
 from common.models import UserIdentity
+
+_EPOCH_SAFE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,17 @@ def build_milvus_filter(
         AND doc_version_epoch == '20260603_00'
         AND status == 'active'
     """
+    # Input validation (§11 安全: 防止过滤注入)
+    if not isinstance(user_role_mask, int) or not (0 <= user_role_mask <= 0xFFFFFFFF):
+        raise ValueError(f"user_role_mask must be uint32, got {user_role_mask!r}")
+    if not isinstance(user_dept_mask, int) or not (0 <= user_dept_mask <= 0xFFFFFFFF):
+        raise ValueError(f"user_dept_mask must be uint32, got {user_dept_mask!r}")
+    if not knowledge_version_epoch or not _EPOCH_SAFE_RE.match(knowledge_version_epoch):
+        raise ValueError(
+            f"knowledge_version_epoch must match [a-zA-Z0-9_-], "
+            f"got {knowledge_version_epoch!r}"
+        )
+
     rm0 = "(role_mask == 0)"
     rmu = f"((role_mask & {user_role_mask}) != 0)"
     dm0 = "(dept_mask == 0)"

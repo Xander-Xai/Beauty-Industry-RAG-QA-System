@@ -127,7 +127,8 @@ async def create_user(req: CreateUserRequest, authorization: str = Header(None))
         )
         return user.to_dict()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"创建用户失败: {e}")
+        logger.error("创建用户失败: %s", e)
+        raise HTTPException(status_code=400, detail="创建用户失败，请检查参数后重试")
 
 
 @router.put("/users/{user_id}/roles")

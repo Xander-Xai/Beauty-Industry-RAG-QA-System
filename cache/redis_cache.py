@@ -15,6 +15,7 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 
 try:
     from common.config import get_config as _get_config
@@ -51,8 +52,8 @@ class RedisCache:
     """
 
     def __init__(self):
-        # L1 内存缓存（线程安全）
-        self._l1 = {}
+        # L1 内存缓存（线程安全，LRU 淘汰）— PRD §10
+        self._l1: OrderedDict = OrderedDict()
         self._l1_lock = threading.Lock()
         self._l1_max = config.get("cache_config", {}).get("l1_max_entries", 1000)
         self._l1_ttl = config.get("cache_config", {}).get("l1_ttl_seconds", 300)
@@ -71,10 +72,19 @@ class RedisCache:
         try:
             import redis
             rc = config["redis"]["cache"]
-            self.redis_client = redis.Redis(
-                host=rc["host"], port=rc["port"], db=rc.get("db", 0),
-                decode_responses=True, socket_timeout=2, socket_connect_timeout=2,
-            )
+            # 支持密码认证：优先从环境变量读取，其次从配置读取
+            redis_password = os.environ.get("REDIS_CACHE_PASSWORD") or rc.get("password")
+            connect_kwargs = {
+                "host": rc["host"],
+                "port": rc["port"],
+                "db": rc.get("db", 0),
+                "decode_responses": True,
+                "socket_timeout": 2,
+                "socket_connect_timeout": 2,
+            }
+            if redis_password:
+                connect_kwargs["password"] = redis_password
+            self.redis_client = redis.Redis(**connect_kwargs)
             self.redis_client.ping()
             self.enabled = True
             self._degraded = False
@@ -121,12 +131,13 @@ class RedisCache:
         L1: 仅公开文档 (role_mask=0, dept_mask=0)，线程安全
         L2: 所有权限组合
         """
-        # L1 查询（公开文档）
+        # L1 查询（公开文档）— LRU 淘汰
         if role_mask == 0 and dept_mask == 0:
             with self._l1_lock:
                 if key in self._l1:
                     val, exp = self._l1[key]
                     if time.time() < exp:
+                        self._l1.move_to_end(key)  # LRU: 标记为最近使用
                         return val
                     else:
                         del self._l1[key]
@@ -150,13 +161,15 @@ class RedisCache:
         L1: 公开文档写入内存（TTL = l1_ttl_seconds），线程安全
         L2: 所有文档写入 Redis（TTL = l2_ttl_seconds）
         """
-        # L1 写入（公开文档）
+        # L1 写入（公开文档）— LRU 淘汰
         if role_mask == 0 and dept_mask == 0:
             with self._l1_lock:
-                if len(self._l1) >= self._l1_max:
-                    oldest_key = next(iter(self._l1))
-                    del self._l1[oldest_key]
+                if key in self._l1:
+                    self._l1.pop(key)
+                elif len(self._l1) >= self._l1_max:
+                    self._l1.popitem(last=False)  # LRU: 淘汰最久未使用的
                 self._l1[key] = (val, time.time() + self._l1_ttl)
+                self._l1.move_to_end(key)  # 标记为最近使用
 
         # L2 写入（Redis）
         if self.enabled and self.redis_client:

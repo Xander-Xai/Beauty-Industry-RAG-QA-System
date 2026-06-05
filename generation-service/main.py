@@ -190,17 +190,32 @@ async def generate(req: GenerateRequest, _auth: None = Depends(verify_service_to
         return result.model_dump()
     except Exception as e:
         logger.error(f"Generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="生成失败，请稍后重试")
 
 
 @app.post("/api/continuation")
 async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_service_token)):
-    """Long-text continuation endpoint."""
+    """
+    PRD §4.6 续写端点 — 上下文重建 + 约束式完整生成.
+
+    关键修正：正确加载 SessionState（含锁定的 evidence doc_ids），
+    避免因 session_state=None 导致证据锁定丢失。
+    """
     try:
         ctx = _rebuild_context(req.ctx)
+
+        # PRD §4.6: 从 SessionState 注册表加载会话状态（含锁定的 evidence doc_ids）
+        session_state = None
+        if ctx.session_id:
+            from core.pipeline_context import SessionState
+            session_state = SessionState.get_or_create(ctx.session_id)
+            # 恢复锁定的证据文档 ID
+            if session_state.locked_doc_ids:
+                ctx.evidence_locked_doc_ids = list(session_state.locked_doc_ids)
+
         result = llm_client.generate_continuation(
             ctx,
-            session_state=None,
+            session_state=session_state,
             already_generated=req.already_generated,
             target_model=ctx.target_model,
             max_tokens=ctx.max_output_tokens,
@@ -214,7 +229,7 @@ async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_se
 @app.post("/api/admission-check", response_model=AdmissionCheckResponse)
 async def admission_check(req: AdmissionCheckRequest, _auth: None = Depends(verify_service_token)):
     """KV admission check."""
-    admitted, reason = kv_admission.admit(
+    admitted, reason, priority = kv_admission.admit(
         req.request_id, req.input_tokens, req.output_tokens, req.business_type
     )
     pressure = kv_admission.get_pressure()

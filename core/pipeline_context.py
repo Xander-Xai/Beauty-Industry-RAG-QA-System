@@ -142,6 +142,13 @@ class RequestContext:
     degraded: bool = False
     fallback_reason: Optional[str] = None
 
+    # === A/B 实验（PRD §12.2） ===
+    ab_experiment: Optional[str] = None
+    ab_variant: Optional[str] = None
+
+    # === BLIP 在线触发（PRD §6） ===
+    blip_triggered: bool = False
+
     def record_timing(self, stage: str, duration_ms: float):
         """记录各阶段延迟"""
         self.stage_timings[stage] = duration_ms

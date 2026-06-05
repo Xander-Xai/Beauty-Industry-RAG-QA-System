@@ -82,9 +82,11 @@
       },
       "blip": {
         "name": "BLIP图像描述",
-        "model_path": "./models/blip-image-captioning-large",
+        "model_path": "./blip-image-captioning-large",
         "device": "cuda:1",
-        "trigger_threshold": 0.05
+        "trigger_threshold": 0.05,
+        "max_images_per_request": 5,
+        "cache_ttl_seconds": 3600
       }
     },
     "rerank_batch_aggregator": {
@@ -189,6 +191,30 @@
     "l1_ttl_seconds": 300,
     "l2_ttl_seconds": 3600
   },
+  "permission_rules": {
+    "_comment": "离线管线根据文件所在路径自动注入 role_mask / dept_mask",
+    "rules": [
+      { "path_pattern": "**/法规/**", "role_mask": 4, "dept_mask": 4 },
+      { "path_pattern": "**/研发/**", "role_mask": 1, "dept_mask": 1 },
+      { "path_pattern": "**/质量/**", "role_mask": 2, "dept_mask": 2 },
+      { "path_pattern": "**/销售/**", "role_mask": 8, "dept_mask": 8 },
+      { "path_pattern": "**/公开/**", "role_mask": 0, "dept_mask": 0 }
+    ],
+    "default_role_mask": 0,
+    "default_dept_mask": 0
+  },
+  "minio": {
+    "endpoint": "minio:9000",
+    "access_key": "minioadmin",
+    "secret_key": "minioadmin",
+    "bucket": "rag-media",
+    "signed_url_ttl_seconds": 60
+  },
+  "clip_async": {
+    "enabled": true,
+    "top_k": 100,
+    "preheat_on_multiturn": true
+  },
   "rbac": {
     "roles": {
       "admin": 2147483647,
@@ -209,5 +235,10 @@
   },
   "alerting": {
     "rules": []
+  },
+  "auth": {
+    "dev_mode": false,
+    "jwt_secret": "",
+    "jwt_expiry_hours": 24
   }
 }

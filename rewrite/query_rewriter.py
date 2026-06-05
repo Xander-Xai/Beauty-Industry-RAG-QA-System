@@ -89,6 +89,9 @@ class QueryRewriter:
     通过 vLLM-Rewrite (Qwen3-4B) 执行查询改写，
     输出 business_type / intent / rewritten_query 等结构化字段，
     为后续检索路由和权限控制提供信号。
+
+    支持 Prompt 反馈闭环（PRD §12.2）：
+    启动时加载活跃的 Prompt 版本，反馈循环可热更新。
     """
 
     def __init__(self):
@@ -96,6 +99,7 @@ class QueryRewriter:
         self.max_output_tokens = config["query_rewrite"]["max_output_tokens"]
         self.temperature = config["query_rewrite"]["temperature"]
         self.dialog_rounds = config["query_rewrite"]["dialog_rounds"]
+        self._prompt_template = None  # 懒加载活跃 prompt 版本
         logger.info("QueryRewriter 初始化完成")
 
     @property
@@ -104,6 +108,35 @@ class QueryRewriter:
             from router.stateless_router import StatelessRouter
             self._router = StatelessRouter()
         return self._router
+
+    def _get_prompt_template(self) -> str:
+        """
+        获取活跃的 Prompt 模板（PRD §12.2 反馈闭环）。
+
+        优先加载 Feedback 系统管理的活跃版本，
+        不存在则回退到默认硬编码模板。
+        """
+        if self._prompt_template is not None:
+            return self._prompt_template
+
+        try:
+            from rewrite.feedback import RewriteFeedback
+            feedback = RewriteFeedback()
+            active_version = feedback.get_active_prompt_version()
+            if active_version and active_version.get("prompt_text"):
+                self._prompt_template = active_version["prompt_text"]
+                logger.info(f"加载活跃 Prompt 版本: {active_version.get('version', 'unknown')}")
+                return self._prompt_template
+        except Exception as e:
+            logger.debug(f"加载活跃 Prompt 版本失败（使用默认模板）: {e}")
+
+        self._prompt_template = REWRITE_PROMPT_TEMPLATE
+        return self._prompt_template
+
+    def reload_prompt_template(self):
+        """强制重新加载 Prompt 模板（用于反馈循环热更新后调用）"""
+        self._prompt_template = None
+        logger.info("Prompt 模板已重置，下次 rewrite 将重新加载")
 
     def rewrite(self, query: str, recent_dialogs: list[str] = None) -> "QueryRewriteResult":
         """
@@ -127,8 +160,8 @@ class QueryRewriter:
             for i, d in enumerate(recent_dialogs[-self.dialog_rounds:], 1):
                 dialog_text += f"第{i}轮: {d}\n"
 
-        # 构造 prompt
-        prompt = REWRITE_PROMPT_TEMPLATE.format(
+        # 构造 prompt（使用活跃的 Prompt 版本）
+        prompt = self._get_prompt_template().format(
             dialog_history=dialog_text or "（无历史对话）",
             query=query,
         )

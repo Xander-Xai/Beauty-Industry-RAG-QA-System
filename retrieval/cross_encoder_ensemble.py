@@ -5,6 +5,7 @@ CrossEncoder Ensemble 重排模块（readme 7.3 Stage 2）
 - CE-A：法律/成分调优版 CrossEncoder
 - CE-B：通用语义 CrossEncoder
 计算逻辑：CE_score = avg(CE_A(doc), CE_B(doc))
+Platt Scaling：将 CE 原始分映射为校准概率 [0, 1]
 
 GPU 批处理架构：
 - Rerank Batch Aggregator 位于 GPU1
@@ -17,12 +18,64 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import Optional
+
+import numpy as np
 
 with open("config.json", encoding="utf-8") as f:
     config = json.load(f)
 
 logger = logging.getLogger(__name__)
+
+
+class PlattScaler:
+    """
+    Platt Scaling 校准器（PRD §7.3）
+
+    将 CrossEncoder 原始分映射为校准概率。
+    使用 sigmoid(A * x + B) 公式，参数通过少量校准数据拟合。
+
+    冷启动：使用默认参数 A=-1.0, B=0.0（近似 S 形映射），
+    后续由离线反馈闭环用标注数据更新 A, B。
+    """
+
+    def __init__(self):
+        self._calibrators: dict[str, dict] = {}  # model_name -> {a, b}
+        self._load_calibrators()
+
+    def _load_calibrators(self):
+        """从配置或校准数据加载 Platt Scaling 参数"""
+        calib_config = config.get("retrieval", {}).get("cross_encoder", {}).get("platt_scaling", {})
+        for model_name in ("ce_a", "ce_b", "ensemble"):
+            params = calib_config.get(model_name, {})
+            self._calibrators[model_name] = {
+                "a": params.get("a", -1.0),
+                "b": params.get("b", 0.0),
+            }
+        logger.info(f"PlattScaler 初始化: {self._calibrators}")
+
+    def calibrate(self, raw_score: float, model_name: str = "ensemble") -> float:
+        """
+        将原始 CrossEncoder 分数映射为校准概率。
+
+        Platt Scaling: P(y=1|s) = sigmoid(a * s + b)
+        """
+        params = self._calibrators.get(model_name, self._calibrators.get("ensemble"))
+        a, b = params["a"], params["b"]
+        # sigmoid(a * score + b)
+        z = a * raw_score + b
+        z = max(-500, min(500, z))  # 溢出保护
+        return 1.0 / (1.0 + math.exp(-z))
+
+    def calibrate_batch(self, raw_scores: list[float], model_name: str = "ensemble") -> list[float]:
+        """批量校准"""
+        return [self.calibrate(s, model_name) for s in raw_scores]
+
+    def update_params(self, model_name: str, a: float, b: float):
+        """更新校准参数（由离线反馈闭环调用）"""
+        self._calibrators[model_name] = {"a": a, "b": b}
+        logger.info(f"PlattScaler 参数更新: {model_name} -> a={a}, b={b}")
 
 
 class CrossEncoderEnsemble:
@@ -37,6 +90,7 @@ class CrossEncoderEnsemble:
         self._ce_a = None  # CrossEncoder-A (法律/成分)
         self._ce_b = None  # CrossEncoder-B (通用)
         self._batch_aggregator = None
+        self._platt_scaler = PlattScaler()
         logger.info("CrossEncoderEnsemble 初始化完成")
 
     @property
@@ -94,13 +148,20 @@ class CrossEncoderEnsemble:
             scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs)
             scores_b = self.batch_aggregator.batch_predict(self.ce_b, pairs)
 
-            # 计算 Ensemble 分数
+            # 计算 Ensemble 分数 + Platt Scaling 校准（PRD §7.3）
+            raw_ensembles = []
             for i, candidate in enumerate(candidates):
                 candidate.ce_score_a = float(scores_a[i]) if i < len(scores_a) else 0.0
                 candidate.ce_score_b = float(scores_b[i]) if i < len(scores_b) else 0.0
-                candidate.ce_score_ensemble = (candidate.ce_score_a + candidate.ce_score_b) / 2.0
+                raw_avg = (candidate.ce_score_a + candidate.ce_score_b) / 2.0
+                raw_ensembles.append(raw_avg)
 
-            # 按 ensemble 分数降序排序
+            # Platt Scaling 校准：将原始分映射为 [0, 1] 概率
+            calibrated_scores = self._platt_scaler.calibrate_batch(raw_ensembles, "ensemble")
+            for i, candidate in enumerate(candidates):
+                candidate.ce_score_ensemble = calibrated_scores[i]
+
+            # 按校准后分数降序排序
             candidates.sort(key=lambda x: x.ce_score_ensemble, reverse=True)
 
             results = candidates[:top_k]

@@ -28,6 +28,15 @@ class RequestIdentity:
     user_dept_mask: int = 0  # all departments
 
 
+def _get_dev_mode() -> bool:
+    """延迟获取 dev_mode 配置，避免循环导入"""
+    try:
+        from common.config import get_config
+        return get_config().auth.dev_mode
+    except Exception:
+        return False  # 默认不信任 header
+
+
 def get_identity(
     x_user_id: str | None = Header(default=None, alias="X-User-ID"),
     x_role_mask: str | None = Header(default=None, alias="X-Role-Mask"),
@@ -42,6 +51,14 @@ def get_identity(
     """
     identity = RequestIdentity()
 
+    # 生产模式下：忽略 Header 中的权限信息，仅提取 user_id
+    if not _get_dev_mode():
+        if x_user_id is not None:
+            identity.user_id = x_user_id
+        # 生产模式下 Header 权限掩码不可信，保持默认零掩码
+        return identity
+
+    # 开发模式下：完整读取 Header（方便本地调试）
     if x_user_id is not None:
         identity.user_id = x_user_id
 

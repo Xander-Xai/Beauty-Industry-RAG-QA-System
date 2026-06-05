@@ -103,6 +103,19 @@ async def log_requests(request: Request, call_next):
     return response
 
 # ---------------------------------------------------------------------------
+# 安全响应头中间件
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """为所有响应添加安全头。"""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+# ---------------------------------------------------------------------------
 # 挂载路由
 # ---------------------------------------------------------------------------
 # 所有 API 路由统一挂载在 /v1 前缀下

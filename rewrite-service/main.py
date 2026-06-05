@@ -79,7 +79,7 @@ async def rewrite(req: RewriteRequest, _auth: None = Depends(verify_service_toke
         return QueryRewriteResult(**result)
     except Exception as exc:
         logger.error("rewrite failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="查询改写失败，请稍后重试")
 
 
 @app.post("/api/variants", response_model=VariantsResponse)

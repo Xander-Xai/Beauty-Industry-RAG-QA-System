@@ -158,13 +158,32 @@ class NLIRequest(BaseModel):
     pairs: list[list[str]]  # [[premise, hypothesis], ...]
 
 _aggregator = None
+_nli_tokenizer = None
+_nli_model = None
 
 @app.on_event("startup")
 def startup():
-    global _aggregator
+    global _aggregator, _nli_tokenizer, _nli_model
     from retrieval.rerank_batch_aggregator import RerankBatchAggregator
     _aggregator = RerankBatchAggregator()
     logger.info("Rerank Batch Aggregator 初始化完成")
+
+    # NLI 模型：尝试加载，失败则 _nli_model 保持 None，/rerank/nli 返回 501
+    try:
+        import os as _os
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        _nli_model_path = "./models/nli-deberta"
+        if _os.path.exists(_nli_model_path):
+            _nli_tokenizer = AutoTokenizer.from_pretrained(_nli_model_path)
+            _nli_model = AutoModelForSequenceClassification.from_pretrained(_nli_model_path)
+            _nli_model.eval()
+            logger.info(f"NLI 模型加载完成: {_nli_model_path}")
+        else:
+            logger.warning(f"NLI 模型路径不存在: {_nli_model_path}，/rerank/nli 将返回 501")
+    except ImportError:
+        logger.warning("transformers 未安装，/rerank/nli 将返回 501")
+    except Exception as e:
+        logger.warning(f"NLI 模型加载失败: {e}，/rerank/nli 将返回 501")
 
 @app.post("/rerank/batch")
 def rerank_batch(req: RerankRequest):
@@ -185,14 +204,43 @@ def rerank_batch(req: RerankRequest):
 def nli_batch(req: NLIRequest):
     if _aggregator is None:
         raise HTTPException(503, "Aggregator not initialized")
+
+    if _nli_model is None:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "NLI model not available.  Deploy a transformers-compatible NLI model "
+                "at ./models/nli-deberta and ensure the 'transformers' package is installed.  "
+                "Contract: POST /rerank/nli  body={{pairs:[[premise,hypothesis],...]}}  "
+                "response={{results:[{{contradiction:float,entailment:float,neutral:float}},...],count:int}}"
+            ),
+        )
+
+    if not req.pairs:
+        return {{"results": [], "count": 0}}
+
     try:
-        # NLI 模型（实际部署时按配置加载）
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
-        from retrieval.rerank_batch_aggregator import RerankBatchAggregator
-        # 简化：使用通用 NLI 模型
+        import torch
+        premises = [pair[0] for pair in req.pairs]
+        hypotheses = [pair[1] for pair in req.pairs]
+
+        inputs = _nli_tokenizer(
+            premises, hypotheses,
+            return_tensors="pt", truncation=True, max_length=512, padding=True,
+        )
+
+        with torch.no_grad():
+            outputs = _nli_model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=-1)
+
+        # DeBERTa-NLI label order: 0=contradiction, 1=entailment, 2=neutral
         results = []
-        for premise, hypothesis in req.pairs:
-            results.append({{"contradiction": 0.1, "entailment": 0.8, "neutral": 0.1}})
+        for i in range(len(req.pairs)):
+            results.append({{
+                "contradiction": round(probs[i][0].item(), 6),
+                "entailment":    round(probs[i][1].item(), 6),
+                "neutral":       round(probs[i][2].item(), 6),
+            }})
         return {{"results": results, "count": len(results)}}
     except Exception as e:
         logger.error(f"NLI batch failed: {{e}}")

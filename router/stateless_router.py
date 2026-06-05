@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Optional
 
-import requests
+import httpx
 
 with open("config.json", encoding="utf-8") as f:
     config = json.load(f)
@@ -44,10 +44,16 @@ class StatelessRouter:
             "gen_14b": f"http://localhost:{config['gpu0']['models']['gen_14b']['port']}",
         }
         self.timeout_seconds = 10.0
+        self._client = httpx.Client(timeout=self.timeout_seconds)
         logger.info("StatelessRouter 初始化完成")
 
-    def route_chat(self, endpoint_key: str, messages: list[dict],
-                   max_tokens: int = 512, temperature: float = 0.7) -> str:
+    def route_chat(
+        self,
+        endpoint_key: str,
+        messages: list[dict],
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+    ) -> str:
         """
         调用 vLLM OpenAI-compatible Chat Completions API
 
@@ -76,22 +82,27 @@ class StatelessRouter:
         }
 
         try:
-            resp = requests.post(url, json=payload, timeout=self.timeout_seconds)
+            resp = self._client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
-        except requests.Timeout:
+        except httpx.TimeoutException:
             logger.error(f"vLLM 端点超时: {endpoint_key} ({self.timeout_seconds}s)")
             raise
-        except requests.ConnectionError:
+        except httpx.ConnectError:
             logger.error(f"vLLM 端点连接失败: {endpoint_key}")
             raise
         except (KeyError, IndexError) as e:
             logger.error(f"vLLM 响应解析异常: {e}")
             raise
 
-    def route_completion(self, endpoint_key: str, prompt: str,
-                         max_tokens: int = 512, temperature: float = 0.7) -> str:
+    def route_completion(
+        self,
+        endpoint_key: str,
+        prompt: str,
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+    ) -> str:
         """
         调用 vLLM Completions API（兼容旧接口）
 
@@ -111,14 +122,14 @@ class StatelessRouter:
         }
 
         try:
-            resp = requests.post(url, json=payload, timeout=self.timeout_seconds)
+            resp = self._client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["text"]
-        except requests.Timeout:
+        except httpx.TimeoutException:
             logger.error(f"vLLM 端点超时: {endpoint_key}")
             raise
-        except requests.ConnectionError:
+        except httpx.ConnectError:
             logger.error(f"vLLM 端点连接失败: {endpoint_key}")
             raise
 
@@ -126,7 +137,7 @@ class StatelessRouter:
         """检查端点健康状态"""
         try:
             base_url = self.endpoints.get(endpoint_key, "")
-            resp = requests.get(f"{base_url}/health", timeout=2)
+            resp = self._client.get(f"{base_url}/health", timeout=2.0)
             return resp.status_code == 200
         except Exception:
             return False

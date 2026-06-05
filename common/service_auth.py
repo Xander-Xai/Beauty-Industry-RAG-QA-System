@@ -12,16 +12,26 @@ logger = logging.getLogger(__name__)
 
 # 服务间共享令牌，从环境变量读取
 _SERVICE_TOKEN = os.environ.get("SERVICE_AUTH_TOKEN", "")
+_DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "")
 
 
 async def verify_service_token(request: Request):
     """
     FastAPI 依赖：验证 X-Service-Token Header。
 
-    如果 SERVICE_AUTH_TOKEN 环境变量未设置，则跳过验证（开发模式）。
+    生产模式下 SERVICE_AUTH_TOKEN 必须配置，否则拒绝启动。
+    开发模式下未配置令牌时跳过验证。
     """
     if not _SERVICE_TOKEN:
+        # 生产模式：令牌未配置时必须拒绝
+        if _DEPLOYMENT_MODE == "production":
+            logger.critical("SERVICE_AUTH_TOKEN 未配置，生产模式下拒绝所有服务间请求")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service authentication not configured",
+            )
         # 开发模式：未配置令牌时跳过验证
+        logger.warning("SERVICE_AUTH_TOKEN 未配置，服务认证已禁用（仅限开发环境）")
         return
 
     token = request.headers.get("X-Service-Token", "")

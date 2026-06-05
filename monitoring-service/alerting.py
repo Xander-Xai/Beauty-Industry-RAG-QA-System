@@ -43,6 +43,7 @@ class AlertingManager:
     告警管理器（readme 12 节）
 
     支持从 config.json 读取告警规则，实时检测阈值并生成告警。
+    支持 Webhook/Slack/Email 通知分发（PRD §12）。
 
     默认告警规则：
     - KV Pressure > 0.9 持续 30s
@@ -57,7 +58,12 @@ class AlertingManager:
         self._alert_rules = self._load_alert_rules()
         self._active_alerts: Dict[str, Dict[str, Any]] = {}
         self._alert_timestamps: Dict[str, float] = {}  # 记录告警首次触发时间
-        logger.info(f"AlertingManager 初始化完成 ({len(self._alert_rules)} 条规则)")
+        self._notification_channels = self._load_notification_channels()
+        self._notified_alerts: set = set()  # 已通知的告警（避免重复通知）
+        logger.info(
+            f"AlertingManager 初始化完成 ({len(self._alert_rules)} 条规则, "
+            f"{len(self._notification_channels)} 个通知渠道)"
+        )
 
     def _load_alert_rules(self) -> list:
         """
@@ -151,6 +157,14 @@ class AlertingManager:
                                    f"持续 {elapsed:.0f}s",
                     }
                     logger.warning(f"告警触发: {self._active_alerts[rule_name]['message']}")
+
+                    # 首次触发时发送通知（PRD §12）
+                    if rule_name not in self._notified_alerts:
+                        self._notified_alerts.add(rule_name)
+                        try:
+                            self._send_notifications(self._active_alerts[rule_name])
+                        except Exception as e:
+                            logger.error(f"告警通知发送异常: {e}")
             else:
                 # 条件恢复，清除告警
                 if rule_name in self._active_alerts:
@@ -184,6 +198,13 @@ class AlertingManager:
                 return self.metrics._counters.get("rewrite.fallback", 0) / total
             return 0.0
 
+        # 特殊计算：blip_trigger_rate（PRD §6: 触发率 <5%）
+        if metric_name == "blip_trigger_rate":
+            total = self.metrics._counters.get("blip.total", 0)
+            if total > 0:
+                return self.metrics._counters.get("blip.triggered", 0) / total
+            return 0.0
+
         # 特殊计算：cache_hit_rate
         if metric_name == "cache_hit_rate_L1":
             total = self.metrics._counters.get("cache.total", 0)
@@ -209,3 +230,75 @@ class AlertingManager:
         """手动清除告警"""
         self._active_alerts.pop(rule_name, None)
         self._alert_timestamps.pop(rule_name, None)
+        self._notified_alerts.discard(rule_name)
+
+    # ─── 通知渠道（PRD §12）──────────────────────────────────
+
+    def _load_notification_channels(self) -> list:
+        """从 config.json 加载通知渠道配置"""
+        channels = config.get("alerting", {}).get("notification_channels", [])
+        return channels
+
+    def _send_notifications(self, alert: dict):
+        """
+        向所有配置的通知渠道发送告警。
+
+        支持渠道类型：
+        - webhook: HTTP POST 到指定 URL
+        - slack: Slack Incoming Webhook
+        """
+        severity = alert.get("severity", "warning")
+        message = alert.get("message", alert.get("name", "unknown alert"))
+
+        for channel in self._notification_channels:
+            channel_type = channel.get("type", "webhook")
+            channel_url = channel.get("url", "")
+            min_severity = channel.get("min_severity", "warning")
+
+            # 严重级别过滤
+            severity_order = {"info": 0, "warning": 1, "critical": 2}
+            if severity_order.get(severity, 0) < severity_order.get(min_severity, 0):
+                continue
+
+            if not channel_url:
+                continue
+
+            try:
+                if channel_type == "webhook":
+                    self._send_webhook(channel_url, alert)
+                elif channel_type == "slack":
+                    self._send_slack(channel_url, alert)
+                else:
+                    logger.warning(f"未知通知渠道类型: {channel_type}")
+            except Exception as e:
+                logger.error(f"告警通知发送失败 ({channel_type}): {e}")
+
+    def _send_webhook(self, url: str, alert: dict):
+        """发送 Webhook 通知"""
+        import urllib.request
+        payload = json.dumps({
+            "alert": alert["name"],
+            "severity": alert.get("severity", "warning"),
+            "message": alert.get("message", ""),
+            "metric": alert.get("metric", ""),
+            "current_value": alert.get("current_value"),
+            "threshold": alert.get("threshold"),
+            "triggered_at": alert.get("triggered_at"),
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+
+    def _send_slack(self, webhook_url: str, alert: dict):
+        """发送 Slack 通知"""
+        import urllib.request
+        severity_emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}
+        emoji = severity_emoji.get(alert.get("severity", "warning"), "⚪")
+        text = (
+            f"{emoji} *{alert.get('name', 'Alert')}*\n"
+            f"> {alert.get('message', '')}\n"
+            f"> Metric: `{alert.get('metric', '')}` = `{alert.get('current_value', '')}` "
+            f"(threshold: `{alert.get('threshold', '')}`)"
+        )
+        payload = json.dumps({"text": text}).encode("utf-8")
+        req = urllib.request.Request(webhook_url, data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)

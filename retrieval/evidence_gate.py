@@ -56,6 +56,8 @@ class EvidenceEnsembleGate:
         query: str,
         rerank_results: list,
         retrieval_agreement_score: float = 0.0,
+        weights_override: dict = None,
+        thresholds_override: dict = None,
     ) -> "EvidenceGateResult":
         """
         评估证据综合置信度
@@ -64,6 +66,8 @@ class EvidenceEnsembleGate:
             query: 查询文本
             rerank_results: CrossEncoder 输出的 RerankResult 列表
             retrieval_agreement_score: 检索一致性评分（readme 7.2）
+            weights_override: A/B 实验覆盖权重（PRD §12.2）
+            thresholds_override: A/B 实验覆盖阈值（PRD §12.2）
 
         Returns:
             EvidenceGateResult 含决策结果
@@ -93,18 +97,27 @@ class EvidenceEnsembleGate:
         # ④ Doc_Consistency_Score（NLI 交叉校验 Top-3 文档间逻辑一致性）
         doc_consistency_score = self._compute_doc_consistency(query, rerank_results[:3])
 
+        # 应用 A/B 实验覆盖权重（PRD §12.2）
+        w = {**self.weights}
+        if weights_override:
+            w.update(weights_override)
+
+        t = {**self.thresholds}
+        if thresholds_override:
+            t.update(thresholds_override)
+
         # 综合 Evidence Score
         evidence_score = (
-            self.weights["w1"] * ce_top1_score +
-            self.weights["w2"] * ce_top3_mean_score +
-            self.weights["w3"] * retrieval_agreement_score +
-            self.weights["w4"] * doc_consistency_score
+            w.get("w1", 0) * ce_top1_score +
+            w.get("w2", 0) * ce_top3_mean_score +
+            w.get("w3", 0) * retrieval_agreement_score +
+            w.get("w4", 0) * doc_consistency_score
         )
 
         # 决策
-        if evidence_score >= self.thresholds["high_confidence"]:
+        if evidence_score >= t.get("high_confidence", 0.75):
             decision = "pass"
-        elif evidence_score >= self.thresholds["low_confidence"]:
+        elif evidence_score >= t.get("low_confidence", 0.55):
             decision = "enhanced_generate"
         else:
             decision = "reject"

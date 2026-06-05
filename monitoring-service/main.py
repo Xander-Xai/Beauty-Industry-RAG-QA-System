@@ -21,7 +21,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from metrics_collector import MetricsCollector
@@ -107,6 +107,49 @@ async def alert_clear(rule_name: str, _auth: None = Depends(verify_service_token
     """Clear a named alert."""
     alerting.clear_alert(rule_name)
     return AlertClearResponse(status="cleared", rule_name=rule_name)
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """
+    Prometheus 文本格式指标端点（PRD §12）
+
+    供 Prometheus Server 拉取，无需认证（标准行为）。
+    """
+    stats = metrics.get_stats()
+    lines = []
+
+    # Counters
+    for name, value in stats.get("counters", {}).items():
+        safe_name = name.replace(".", "_").replace("-", "_")
+        lines.append(f"# TYPE rag_{safe_name} counter")
+        lines.append(f"rag_{safe_name} {value}")
+
+    # Gauges
+    for name, value in stats.get("gauges", {}).items():
+        safe_name = name.replace(".", "_").replace("-", "_")
+        lines.append(f"# TYPE rag_{safe_name} gauge")
+        lines.append(f"rag_{safe_name} {value}")
+
+    # Cache hit rates as gauges
+    cache_rates = stats.get("cache_hit_rate", {})
+    for level, rate in cache_rates.items():
+        lines.append(f"# TYPE rag_cache_hit_rate_{level} gauge")
+        lines.append(f"rag_cache_hit_rate_{level} {rate:.4f}")
+
+    # Latency percentiles as summaries
+    for name, pcts in stats.get("latency_percentiles", {}).items():
+        safe_name = name.replace(".", "_").replace("-", "_")
+        lines.append(f"# TYPE rag_latency_{safe_name}_seconds summary")
+        for quantile, value in [("0.5", pcts.get("p50", 0)), ("0.95", pcts.get("p95", 0)), ("0.99", pcts.get("p99", 0))]:
+            lines.append(f'rag_latency_{safe_name}_seconds{{quantile="{quantile}"}} {value / 1000:.6f}')
+        lines.append(f"rag_latency_{safe_name}_seconds_count {pcts.get('count', 0)}")
+
+    # Uptime
+    lines.append("# TYPE rag_uptime_seconds gauge")
+    lines.append(f"rag_uptime_seconds {stats.get('uptime_seconds', 0)}")
+
+    return Response(content="\n".join(lines) + "\n", media_type="text/plain; charset=utf-8")
 
 
 # -- main -------------------------------------------------------------------

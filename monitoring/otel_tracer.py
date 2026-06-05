@@ -48,17 +48,29 @@ class OpenTelemetryTracer:
         logger.info(f"OpenTelemetryTracer 初始化完成 ({'OTel' if self._use_otel else '本地模式'})")
 
     def _try_init_otel(self):
-        """尝试初始化 OpenTelemetry（可选）"""
+        """尝试初始化 OpenTelemetry + Jaeger 导出器（PRD §12）"""
         try:
             from opentelemetry import trace
             from opentelemetry.sdk.trace import TracerProvider
             from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
             provider = TracerProvider()
-            # 如需 Jaeger 导出，添加 JaegerExporter
-            # from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-            # jaeger_exporter = JaegerExporter(agent_host_name="localhost", agent_port=6831)
-            # provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
+
+            # Jaeger 导出器（PRD §12: 全链路追踪 OpenTelemetry + Jaeger）
+            jaeger_config = config.get("monitoring", {}).get("jaeger", {})
+            if jaeger_config.get("enabled", False):
+                try:
+                    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+                    jaeger_exporter = JaegerExporter(
+                        agent_host_name=jaeger_config.get("agent_host", "localhost"),
+                        agent_port=jaeger_config.get("agent_port", 6831),
+                    )
+                    provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
+                    logger.info("Jaeger 导出器已启用")
+                except ImportError:
+                    logger.warning("opentelemetry-exporter-jaeger 未安装，跳过 Jaeger 导出")
+                except Exception as e:
+                    logger.warning(f"Jaeger 导出器初始化失败: {e}")
 
             trace.set_tracer_provider(provider)
             self._otel_tracer = trace.get_tracer("rag-system")
@@ -203,6 +215,11 @@ class MetricsCollector:
         if ctx.degraded:
             self.increment("degradation.total")
 
+        # BLIP 触发统计
+        if hasattr(ctx, 'blip_triggered') and ctx.blip_triggered:
+            self.increment("blip.triggered")
+        self.increment("blip.total")
+
         # KV Pressure
         if ctx.kv_pressure_at_entry > 0:
             self.set_gauge("kv_pressure", ctx.kv_pressure_at_entry)
@@ -243,6 +260,51 @@ class MetricsCollector:
             }
 
         return stats
+
+    def to_prometheus_text(self) -> str:
+        """
+        导出 Prometheus 文本格式指标（PRD §12）
+
+        支持 counter / gauge / histogram 类型。
+        用于 /metrics 端点暴露给 Prometheus 拉取。
+        """
+        lines = []
+
+        # Counters
+        for name, value in self._counters.items():
+            safe_name = name.replace(".", "_").replace("-", "_")
+            lines.append(f"# TYPE rag_{safe_name} counter")
+            lines.append(f"rag_{safe_name} {value}")
+
+        # Gauges
+        for name, value in self._gauges.items():
+            safe_name = name.replace(".", "_").replace("-", "_")
+            lines.append(f"# TYPE rag_{safe_name} gauge")
+            lines.append(f"rag_{safe_name} {value}")
+
+        # Histograms → summary (simplified: expose p50/p95/p99 + count)
+        for name, values in self._histograms.items():
+            if not values:
+                continue
+            safe_name = name.replace(".", "_").replace("-", "_")
+            sorted_v = sorted(values)
+            n = len(sorted_v)
+
+            def _pct(p):
+                idx = int(n * p)
+                return sorted_v[min(idx, n - 1)]
+
+            lines.append(f"# TYPE rag_{safe_name}_seconds summary")
+            lines.append(f'rag_{safe_name}_seconds{{quantile="0.5"}} {_pct(0.5) / 1000:.6f}')
+            lines.append(f'rag_{safe_name}_seconds{{quantile="0.95"}} {_pct(0.95) / 1000:.6f}')
+            lines.append(f'rag_{safe_name}_seconds{{quantile="0.99"}} {_pct(0.99) / 1000:.6f}')
+            lines.append(f"rag_{safe_name}_seconds_count {n}")
+
+        # Uptime
+        lines.append("# TYPE rag_uptime_seconds gauge")
+        lines.append(f"rag_uptime_seconds {round(time.time() - self._start_time, 1)}")
+
+        return "\n".join(lines) + "\n"
 
 
 class AlertingManager:
@@ -289,6 +351,8 @@ class AlertingManager:
              "duration_s": 300, "severity": "warning", "comparison": "gt"},
             {"name": "degradation_spike", "metric": "degradation.total", "threshold": 10,
              "duration_s": 300, "severity": "critical", "comparison": "gt"},
+            {"name": "blip_trigger_rate_high", "metric": "blip_trigger_rate", "threshold": 0.10,
+             "duration_s": 300, "severity": "warning", "comparison": "gt"},
         ]
 
         # 从 config 加载自定义规则（覆盖默认）

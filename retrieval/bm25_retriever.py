@@ -114,6 +114,15 @@ class BM25Retriever:
             {"term": {"status": "active"}},
         ]
 
+        # 输入验证：确保整数类型和范围
+        _MAX_UINT32 = 0xFFFFFFFF
+        if not isinstance(user_role_mask, int) or not (0 <= user_role_mask <= _MAX_UINT32):
+            logger.error("user_role_mask 类型或范围无效: %r", user_role_mask)
+            user_role_mask = 0
+        if not isinstance(user_dept_mask, int) or not (0 <= user_dept_mask <= _MAX_UINT32):
+            logger.error("user_dept_mask 类型或范围无效: %r", user_dept_mask)
+            user_dept_mask = 0
+
         # 判断 ES 版本选择过滤策略
         use_script_filter = self._es_version is not None and self._es_version >= (8, 0)
 

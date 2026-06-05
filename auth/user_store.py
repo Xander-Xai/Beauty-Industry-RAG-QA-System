@@ -9,6 +9,14 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# bcrypt 可选依赖
+try:
+    import bcrypt
+    _HAS_BCRYPT = True
+except ImportError:
+    _HAS_BCRYPT = False
+    logger.warning("bcrypt 未安装，密码哈希使用 SHA-256（不推荐用于生产）")
+
 # Default roles and departments from RBAC config
 ROLES = {
     "admin": 0x01,
@@ -98,15 +106,37 @@ class UserStore:
             conn.commit()
 
     def _hash_password(self, password: str, salt: str = None) -> str:
-        """Hash password with salt using SHA256."""
+        """Hash password: bcrypt (preferred) or SHA-256 fallback.
+
+        Returns:
+            bcrypt: "$2b$..." format (no salt prefix)
+            sha256: "salt:hash" format (legacy, for migration compatibility)
+        """
+        if _HAS_BCRYPT:
+            if salt is not None:
+                # 验证模式：使用传入的 salt 重新计算（仅用于旧格式兼容）
+                h = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+                return f"{salt}:{h}"
+            return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        # bcrypt 不可用：降级到 SHA-256
         if salt is None:
             salt = secrets.token_hex(16)
         h = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
         return f"{salt}:{h}"
 
     def _verify_password(self, password: str, stored_hash: str) -> bool:
-        """Verify password against stored hash."""
-        salt, _ = stored_hash.split(":", 1)
+        """Verify password against stored hash (supports bcrypt + SHA-256 migration)."""
+        if stored_hash.startswith("$2b$") or stored_hash.startswith("$2a$"):
+            # bcrypt 格式
+            if _HAS_BCRYPT:
+                return bcrypt.checkpw(password.encode(), stored_hash.encode())
+            logger.error("存储的密码为 bcrypt 格式但 bcrypt 未安装")
+            return False
+        # 旧版 SHA-256 格式: "salt:hash"
+        try:
+            salt, _ = stored_hash.split(":", 1)
+        except ValueError:
+            return False
         return self._hash_password(password, salt) == stored_hash
 
     def create_user(self, user_id: str, username: str, password: str,

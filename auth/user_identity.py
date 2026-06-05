@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Optional
 
@@ -18,9 +19,17 @@ with open("config.json", encoding="utf-8") as f:
 logger = logging.getLogger(__name__)
 
 # JWT 配置
-JWT_SECRET = config.get("auth", {}).get("jwt_secret", "dev-secret-change-in-production")
+JWT_SECRET = os.environ.get("JWT_SECRET") or config.get("auth", {}).get("jwt_secret", "")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = config.get("auth", {}).get("jwt_expiry_hours", 24)
+
+# 生产模式安全检查
+_deploy_mode = config.get("deployment_mode", "development")
+if _deploy_mode == "production":
+    if not JWT_SECRET or JWT_SECRET.startswith("dev-"):
+        raise RuntimeError(
+            "生产模式下必须设置强 JWT_SECRET 环境变量（不得以 'dev-' 开头）"
+        )
 
 
 class UserIdentity:
@@ -84,7 +93,10 @@ class UserIdentity:
 
     def parse_from_token(self, token: str) -> Optional[dict]:
         """
-        从 JWT Token 解析用户身份
+        从 JWT Token 解析用户身份（PRD §11 — 统一 RS256 验证）
+
+        优先使用 jwt_auth.verify_token (RS256) 验证，
+        失败则回退到 HS256（向后兼容）。
 
         JWT Payload 格式（由认证服务签发）:
         {
@@ -101,6 +113,18 @@ class UserIdentity:
         Returns:
             {"user_id": str, "user_role_mask": int, "user_dept_mask": int} 或 None
         """
+        # 优先尝试 RS256 验证（PRD §11 统一 JWT）
+        try:
+            from auth.jwt_auth import verify_token
+            payload = verify_token(token, "access")
+            if payload:
+                return self._extract_identity_from_payload(payload)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"RS256 JWT 验证失败，尝试 HS256: {e}")
+
+        # 回退到 HS256（向后兼容）
         try:
             import jwt
 
@@ -111,24 +135,7 @@ class UserIdentity:
                 logger.warning("JWT Token 已过期")
                 return None
 
-            # 从 payload 提取身份信息
-            user_id = payload.get("user_id") or payload.get("sub", "unknown")
-
-            # 优先使用显式的 role_mask / dept_mask
-            role_mask = payload.get("role_mask")
-            dept_mask = payload.get("dept_mask")
-
-            # 如果没有显式 mask，从 roles/depts 列表编码
-            if role_mask is None and "roles" in payload:
-                role_mask = self._encode_roles(payload["roles"])
-            if dept_mask is None and "depts" in payload:
-                dept_mask = self._encode_depts(payload["depts"])
-
-            return {
-                "user_id": user_id,
-                "user_role_mask": role_mask if role_mask is not None else 0,
-                "user_dept_mask": dept_mask if dept_mask is not None else 0,
-            }
+            return self._extract_identity_from_payload(payload)
 
         except ImportError:
             logger.warning("PyJWT 未安装，无法解析 JWT Token")
@@ -139,6 +146,24 @@ class UserIdentity:
         except jwt.InvalidTokenError as e:
             logger.warning(f"JWT Token 无效: {e}")
             return None
+
+    def _extract_identity_from_payload(self, payload: dict) -> dict:
+        """从 JWT payload 提取身份信息"""
+        user_id = payload.get("user_id") or payload.get("sub", "unknown")
+
+        role_mask = payload.get("role_mask")
+        dept_mask = payload.get("dept_mask")
+
+        if role_mask is None and "roles" in payload:
+            role_mask = self._encode_roles(payload["roles"])
+        if dept_mask is None and "depts" in payload:
+            dept_mask = self._encode_depts(payload["depts"])
+
+        return {
+            "user_id": user_id,
+            "user_role_mask": role_mask if role_mask is not None else 0,
+            "user_dept_mask": dept_mask if dept_mask is not None else 0,
+        }
 
     def generate_token(
         self,

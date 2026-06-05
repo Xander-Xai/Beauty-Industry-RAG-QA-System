@@ -62,3 +62,6 @@ pyyaml>=6.0
 
 # Phase 4: 用户存储
 sqlalchemy>=2.0.0
+
+# Phase 11: MinIO 签名 URL (PRD §10)
+minio>=7.2.0
