@@ -5,16 +5,20 @@ POST /query  - 单轮 RAG 查询
 POST /chat   - 多轮对话（带会话管理）
 GET  /health - 健康检查（Redis/Milvus/ES 连通性）
 GET  /stats  - 系统指标
+GET  /media/{doc_id} - 文档媒体预签名 URL（权限二次校验）
+GET  /metrics - Prometheus 文本格式指标
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import threading
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import PlainTextResponse
 
 from api.models import (
     QueryRequest,
@@ -44,8 +48,6 @@ _active_requests = 0
 _active_requests_lock = threading.Lock()
 
 # 配置（与原有行为保持一致）
-import json
-
 with open("config.json", encoding="utf-8", errors="replace") as _f:
     _config = json.load(_f)
 
@@ -284,3 +286,143 @@ def stats_handler():
         kv_pressure=kv_pressure,
         active_requests=_active_requests,
     )
+
+
+# ─── GET /api/media/{doc_id} ──────────────────────────────
+
+
+@router.get(
+    "/media/{doc_id}",
+    summary="文档媒体预签名 URL（权限二次校验）",
+    responses={
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
+def media_handler(
+    doc_id: str,
+    identity: RequestIdentity = Depends(get_identity),
+):
+    """
+    PRD §10: 资源访问安全
+
+    流程：
+    1. 通过 Milvus 查询 doc_id 的元数据（role_mask, dept_mask, status）
+    2. 使用 common/auth.is_allowed 进行权限二次校验
+    3. 通过 common/minio_client 生成 60s 有效 presigned URL
+    4. 返回 {doc_id, url, expires_in_seconds}
+    """
+    # ── 1. 查询 Milvus 获取文档元数据 ──
+    doc_role_mask = 0
+    doc_dept_mask = 0
+    doc_status = "active"
+    found = False
+
+    try:
+        from pymilvus import Collection
+
+        collection_name = _config.get("embedding", {}).get("text", {}).get(
+            "collection", "rag_text_768"
+        )
+        collection = Collection(collection_name)
+
+        results = collection.query(
+            expr=f'doc_id == "{doc_id}"',
+            output_fields=["role_mask", "dept_mask", "status"],
+            limit=1,
+        )
+
+        if results:
+            found = True
+            doc_role_mask = results[0].get("role_mask", 0)
+            doc_dept_mask = results[0].get("dept_mask", 0)
+            doc_status = results[0].get("status", "active")
+
+    except Exception as e:
+        logger.warning(f"Milvus 查询 doc_id={doc_id} 失败: {e}")
+
+    # ── 2. 检查文档是否存在 / 是否已归档 ──
+    if not found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "not_found",
+                "detail": f"文档 {doc_id} 不存在",
+            },
+        )
+
+    if doc_status == "archived":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "archived",
+                "detail": f"文档 {doc_id} 已归档",
+            },
+        )
+
+    # ── 3. 权限二次校验 ──
+    from common.auth import is_allowed
+
+    if not is_allowed(
+        doc_role_mask=doc_role_mask,
+        user_role_mask=identity.user_role_mask,
+        doc_dept_mask=doc_dept_mask,
+        user_dept_mask=identity.user_dept_mask,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "permission_denied",
+                "detail": f"无权访问文档 {doc_id}",
+            },
+        )
+
+    # ── 4. 生成 MinIO presigned URL ──
+    from common.minio_client import get_minio_client, MINIO_URL_TTL
+
+    minio = get_minio_client()
+
+    if not minio.is_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "storage_unavailable",
+                "detail": "文件存储服务暂不可用",
+            },
+        )
+
+    presigned_url = minio.get_presigned_url(doc_id)
+
+    if not presigned_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "url_generation_failed",
+                "detail": f"无法为文档 {doc_id} 生成访问链接",
+            },
+        )
+
+    return {
+        "doc_id": doc_id,
+        "url": presigned_url,
+        "expires_in_seconds": MINIO_URL_TTL,
+    }
+
+
+# ─── GET /api/metrics ──────────────────────────────────────
+
+
+@router.get(
+    "/metrics",
+    summary="Prometheus 文本格式指标",
+    response_class=PlainTextResponse,
+)
+def metrics_handler():
+    """
+    PRD §12: 暴露 Prometheus 抓取端点。
+
+    无需鉴权，直接返回 metrics.to_prometheus_text() 输出。
+    """
+    metrics = get_metrics()
+    return PlainTextResponse(content=metrics.to_prometheus_text())
