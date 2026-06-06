@@ -52,3 +52,21 @@ logs/
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Claude Code internals (config, memory, transcripts)
+.claude/
+
+# E2E remote test configs (may contain API keys)
+tests/e2e_remote/
+
+# Keys & certificates
+keys/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3

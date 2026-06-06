@@ -34,6 +34,7 @@ from common.models import (
     RerankResult,
 )
 from common.service_auth import verify_service_token
+from monitoring_service.metrics_collector import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ app = FastAPI(title="Generation Service", version="1.0.0")
 llm_client = LLMClient()
 kv_admission = KVAdmissionControl()
 complexity_evaluator = ComplexityEvaluator()
+metrics = MetricsCollector()
 
 # -- request / response schemas --------------------------------------------
 
@@ -180,6 +182,10 @@ async def generate(req: GenerateRequest, _auth: None = Depends(verify_service_to
         user_input, rewrite_result, rerank_results, evidence_result,
         session_id, max_output_tokens, target_model
     """
+    t0 = time.time()
+    metrics.increment("generation.requests")
+    target_model = req.ctx.get("target_model", "qwen3-4b")
+    metrics.increment(f"generation.model.{target_model}")
     try:
         ctx = _rebuild_context(req.ctx)
         result = llm_client.generate(
@@ -187,8 +193,12 @@ async def generate(req: GenerateRequest, _auth: None = Depends(verify_service_to
             target_model=ctx.target_model,
             max_tokens=ctx.max_output_tokens,
         )
+        elapsed_ms = (time.time() - t0) * 1000
+        metrics.observe_histogram("generation.latency_ms", elapsed_ms)
+        metrics.increment("generation.success")
         return result.model_dump()
     except Exception as e:
+        metrics.increment("generation.errors")
         logger.error(f"Generation failed: {e}")
         raise HTTPException(status_code=500, detail="生成失败，请稍后重试")
 
@@ -201,6 +211,8 @@ async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_se
     关键修正：正确加载 SessionState（含锁定的 evidence doc_ids），
     避免因 session_state=None 导致证据锁定丢失。
     """
+    t0 = time.time()
+    metrics.increment("generation.continuation.requests")
     try:
         ctx = _rebuild_context(req.ctx)
 
@@ -220,8 +232,12 @@ async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_se
             target_model=ctx.target_model,
             max_tokens=ctx.max_output_tokens,
         )
+        elapsed_ms = (time.time() - t0) * 1000
+        metrics.observe_histogram("generation.continuation.latency_ms", elapsed_ms)
+        metrics.increment("generation.continuation.success")
         return result.model_dump()
     except Exception as e:
+        metrics.increment("generation.continuation.errors")
         logger.error(f"Continuation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -229,10 +245,17 @@ async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_se
 @app.post("/api/admission-check", response_model=AdmissionCheckResponse)
 async def admission_check(req: AdmissionCheckRequest, _auth: None = Depends(verify_service_token)):
     """KV admission check."""
+    metrics.increment("admission.check.requests")
     admitted, reason, priority = kv_admission.admit(
         req.request_id, req.input_tokens, req.output_tokens, req.business_type
     )
     pressure = kv_admission.get_pressure()
+    metrics.set_gauge("admission.kv_pressure", pressure)
+    if not admitted:
+        metrics.increment("admission.check.rejected")
+        metrics.increment(f"admission.rejected.{reason}")
+    else:
+        metrics.increment("admission.check.admitted")
     return AdmissionCheckResponse(
         admitted=admitted,
         reason=reason,
@@ -243,6 +266,7 @@ async def admission_check(req: AdmissionCheckRequest, _auth: None = Depends(veri
 @app.post("/api/admission-release")
 async def admission_release(req: AdmissionReleaseRequest, _auth: None = Depends(verify_service_token)):
     """Release KV admission for a request."""
+    metrics.increment("admission.release.requests")
     kv_admission.release(req.request_id)
     return {"status": "released", "request_id": req.request_id}
 
@@ -250,8 +274,19 @@ async def admission_release(req: AdmissionReleaseRequest, _auth: None = Depends(
 @app.post("/api/complexity", response_model=ComplexityResponse)
 async def complexity(req: ComplexityRequest, _auth: None = Depends(verify_service_token)):
     """Evaluate query complexity."""
+    t0 = time.time()
+    metrics.increment("complexity.requests")
     is_complex = complexity_evaluator.evaluate(req.query)
+    elapsed_ms = (time.time() - t0) * 1000
+    metrics.observe_histogram("complexity.latency_ms", elapsed_ms)
+    metrics.increment(f"complexity.{'complex' if is_complex else 'simple'}")
     return ComplexityResponse(is_complex=is_complex)
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Prometheus 格式指标端点 (PRD §12)"""
+    return metrics.get_prometheus_metrics()
 
 
 # -- main -------------------------------------------------------------------

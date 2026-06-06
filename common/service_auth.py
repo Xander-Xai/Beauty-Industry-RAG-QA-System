@@ -4,6 +4,7 @@
 使用共享密钥（通过环境变量 SERVICE_AUTH_TOKEN 传入）进行服务间认证。
 每个请求需携带 X-Service-Token Header。
 """
+import hmac
 import logging
 import os
 from fastapi import Request, HTTPException, status
@@ -35,7 +36,7 @@ async def verify_service_token(request: Request):
         return
 
     token = request.headers.get("X-Service-Token", "")
-    if not token or token != _SERVICE_TOKEN:
+    if not token or not hmac.compare_digest(token, _SERVICE_TOKEN):
         logger.warning("服务认证失败: 缺少或无效的 X-Service-Token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

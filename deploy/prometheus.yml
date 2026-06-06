@@ -1,0 +1,19 @@
+# Prometheus 配置 — 化妆品 RAG 智能问答系统
+# 抓取 monitoring-service 的 /metrics 端点
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # PRD §12: 监控微服务指标
+  - job_name: 'rag-monitoring-service'
+    static_configs:
+      - targets: ['monitoring-service:8400']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Prometheus 自监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

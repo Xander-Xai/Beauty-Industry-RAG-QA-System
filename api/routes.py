@@ -32,7 +32,8 @@ from api.models import (
     CacheHitRate,
     LatencyPercentiles,
 )
-from api.dependencies import get_identity, RequestIdentity
+from common.auth import require_identity
+from common.models import UserIdentity
 from core.pipeline import OnlineRAGPipeline
 from core.pipeline_context import RequestContext, SessionState
 
@@ -92,7 +93,7 @@ def _decrement_active():
 )
 def query_handler(
     req: QueryRequest,
-    identity: RequestIdentity = Depends(get_identity),
+    identity: UserIdentity = Depends(require_identity),
 ):
     """
     单轮 RAG 查询入口。
@@ -148,7 +149,7 @@ def query_handler(
 )
 def chat_handler(
     req: ChatRequest,
-    identity: RequestIdentity = Depends(get_identity),
+    identity: UserIdentity = Depends(require_identity),
 ):
     """
     多轮对话入口。
@@ -302,7 +303,7 @@ def stats_handler():
 )
 def media_handler(
     doc_id: str,
-    identity: RequestIdentity = Depends(get_identity),
+    identity: UserIdentity = Depends(require_identity),
 ):
     """
     PRD §10: 资源访问安全

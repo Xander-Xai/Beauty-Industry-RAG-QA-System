@@ -3,36 +3,57 @@ import os
 import sqlite3
 import logging
 import hashlib
+import json
 import secrets
 from typing import Optional, List
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# bcrypt 可选依赖
+# bcrypt 依赖 — 生产模式下必须可用
 try:
     import bcrypt
     _HAS_BCRYPT = True
 except ImportError:
     _HAS_BCRYPT = False
+    try:
+        from common.config import is_production_mode
+        if is_production_mode():
+            raise RuntimeError("生产模式下 bcrypt 为硬依赖，请安装: pip install bcrypt")
+    except ImportError:
+        pass
     logger.warning("bcrypt 未安装，密码哈希使用 SHA-256（不推荐用于生产）")
 
-# Default roles and departments from RBAC config
-ROLES = {
-    "admin": 0x01,
-    "rd": 0x02,
-    "quality": 0x04,
-    "regulation": 0x08,
-    "sales": 0x10,
-}
-
-DEPARTMENTS = {
-    "研发部": 0x01,
-    "品质部": 0x02,
-    "法规部": 0x04,
-    "销售部": 0x08,
-    "市场部": 0x10,
-}
+# 从 config.json 读取 RBAC 角色和部门定义（与系统其他部分保持一致）
+try:
+    from common.config import get_config
+    _cfg = get_config()
+    ROLES = dict(_cfg.rbac.roles)
+    DEPARTMENTS = dict(_cfg.rbac.departments)
+except Exception:
+    # Fallback: 直接读取 config.json
+    _config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
+    try:
+        with open(_config_path, encoding="utf-8") as f:
+            _config = json.load(f)
+        ROLES = dict(_config["rbac"]["roles"])
+        DEPARTMENTS = dict(_config["rbac"]["departments"])
+    except Exception:
+        # 最终 fallback：与 config.json 对齐的默认值
+        ROLES = {
+            "admin": 2147483647,
+            "rd": 1,
+            "quality": 2,
+            "regulation": 4,
+            "sales": 8,
+        }
+        DEPARTMENTS = {
+            "all": 0,
+            "rd_dept": 1,
+            "quality_dept": 2,
+            "regulation_dept": 4,
+            "sales_dept": 8,
+        }
 
 
 @dataclass
@@ -175,6 +196,9 @@ class UserStore:
                 "SELECT * FROM users WHERE username = ? AND is_active = 1", (username,)
             ).fetchone()
             if not row:
+                # H-5: 不存在用户也执行 dummy bcrypt，防止时序侧信道枚举
+                if _HAS_BCRYPT:
+                    bcrypt.hashpw(b"dummy_password", bcrypt.gensalt(rounds=4))
                 return None
             if not self._verify_password(password, row["password_hash"]):
                 return None
@@ -212,8 +236,12 @@ class UserStore:
 
     def update_user_roles(self, user_id: str, role_names: List[str], dept_names: List[str]) -> Optional[User]:
         """Update user's roles and departments."""
-        role_mask = sum(ROLES.get(r, 0) for r in role_names)
-        dept_mask = sum(DEPARTMENTS.get(d, 0) for d in dept_names)
+        role_mask = 0
+        for r in role_names:
+            role_mask |= ROLES.get(r, 0)
+        dept_mask = 0
+        for d in dept_names:
+            dept_mask |= DEPARTMENTS.get(d, 0)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("UPDATE users SET role_mask = ?, dept_mask = ? WHERE user_id = ?",
                         (role_mask, dept_mask, user_id))

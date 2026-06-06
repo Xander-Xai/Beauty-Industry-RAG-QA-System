@@ -9,20 +9,21 @@ PRD §10: 资源访问安全
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-with open("config.json", encoding="utf-8") as f:
-    _config = json.load(f)
+from common.config import get_config_dict
+
+_config = get_config_dict()
 
 _minio_cfg = _config.get("minio", {})
 MINIO_ENDPOINT = _minio_cfg.get("endpoint", "minio:9000")
-MINIO_ACCESS_KEY = _minio_cfg.get("access_key", "minioadmin")
-MINIO_SECRET_KEY = _minio_cfg.get("secret_key", "minioadmin")
+# SEC-2: MinIO 凭证从环境变量读取，不再使用硬编码默认值
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "") or _minio_cfg.get("access_key", "")
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "") or _minio_cfg.get("secret_key", "")
 MINIO_BUCKET = _minio_cfg.get("bucket", "rag-media")
 MINIO_URL_TTL = _minio_cfg.get("signed_url_ttl_seconds", 60)
 

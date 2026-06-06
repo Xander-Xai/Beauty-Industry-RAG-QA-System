@@ -13,15 +13,15 @@ OpenTelemetry 全链路追踪（readme 12 节）
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Optional
 from contextlib import contextmanager
 from collections import defaultdict
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +41,14 @@ class OpenTelemetryTracer:
     """
 
     def __init__(self):
+        import threading
         self._spans = []
         self._max_spans = 1000
+        self._thread_lock = threading.Lock()
         self._use_otel = False
+        # 吞吐量 QPS 追踪（PRD §5.2.6）
+        self._request_count = 0
+        self._throughput_start_time = time.time()
         self._try_init_otel()
         logger.info(f"OpenTelemetryTracer 初始化完成 ({'OTel' if self._use_otel else '本地模式'})")
 
@@ -117,33 +122,47 @@ class OpenTelemetryTracer:
                     self._spans = self._spans[-self._max_spans:]
 
     def _trace_with_otel(self, span_name: str, attributes: dict):
-        """OpenTelemetry 追踪"""
-        otel_span = self._otel_tracer.start_as_current_span(span_name)
-        with otel_span:
-            for k, v in attributes.items():
-                otel_span.set_attribute(k, str(v))
-            span = {
-                "name": span_name,
-                "start_time": time.time(),
-                "attributes": attributes,
-                "status": "OK",
-            }
+        """OpenTelemetry 追踪（防御性实现）"""
+        span = {
+            "name": span_name,
+            "start_time": time.time(),
+            "attributes": attributes,
+            "status": "OK",
+        }
+        otel_span = None
+        try:
+            ctx_mgr = self._otel_tracer.start_as_current_span(span_name)
+            otel_span = ctx_mgr.__enter__()
+            # 防御性设置属性（OTel span 可能不支持 set_attribute）
+            if otel_span and hasattr(otel_span, "set_attribute"):
+                for k, v in attributes.items():
+                    otel_span.set_attribute(k, str(v))
+        except Exception:
+            pass  # OTel 不可用时静默降级
+
+        try:
+            yield span
+        except Exception as e:
+            span["status"] = "ERROR"
+            span["error"] = str(e)
+            if otel_span and hasattr(otel_span, "set_status"):
+                try:
+                    otel_span.set_status({"status_code": "ERROR", "description": str(e)})
+                except Exception:
+                    pass
+            raise
+        finally:
+            span["end_time"] = time.time()
+            span["duration_ms"] = (span["end_time"] - span["start_time"]) * 1000
+            # 安全退出 OTel span
             try:
-                yield span
-            except Exception as e:
-                span["status"] = "ERROR"
-                span["error"] = str(e)
-                otel_span.set_status({"status_code": "ERROR", "description": str(e)})
-                raise
-            finally:
-                span["end_time"] = time.time()
-                span["duration_ms"] = (span["end_time"] - span["start_time"]) * 1000
+                if otel_span is not None:
+                    ctx_mgr.__exit__(None, None, None)
+            except Exception:
+                pass
 
     def _lock(self):
         """简单线程安全"""
-        import threading
-        if not hasattr(self, "_thread_lock"):
-            self._thread_lock = threading.Lock()
         return self._thread_lock
 
     def get_trace_summary(self) -> list[dict]:
@@ -224,9 +243,42 @@ class MetricsCollector:
         if ctx.kv_pressure_at_entry > 0:
             self.set_gauge("kv_pressure", ctx.kv_pressure_at_entry)
 
+        # PRD §12: NLI 矛盾比例（Answer Gate）
+        if hasattr(ctx, 'answer_gate_result') and ctx.answer_gate_result:
+            nli_score = ctx.answer_gate_result.nli_contradiction_score
+            self.observe_histogram("nli.contradiction_score", nli_score)
+            if nli_score > 0.5:
+                self.increment("nli.contradiction_high")
+
+        # PRD §12: Admission Control 拒绝/排队计数
+        if hasattr(ctx, 'kv_pressure_at_entry'):
+            self.increment("admission.total")
+            # 在 pipeline 中 admission_reason 已记录到 audit log，此处统计通过/拒绝
+            if hasattr(ctx, '_admission_admitted'):
+                if ctx._admission_admitted:
+                    self.increment("admission.admitted")
+                else:
+                    self.increment("admission.rejected")
+
         # 各阶段延迟
         for stage, duration_ms in ctx.stage_timings.items():
             self.observe_histogram(f"latency.{stage}", duration_ms)
+
+    def record_prefix_cache_hit(self):
+        """PRD §12: Prefix Cache 命中"""
+        self.increment("prefix_cache.hits")
+
+    def record_prefix_cache_miss(self):
+        """PRD §12: Prefix Cache 未命中"""
+        self.increment("prefix_cache.misses")
+
+    def record_cache_epoch_switch(self):
+        """PRD §12: 缓存版本切换次数"""
+        self.increment("cache.epoch_switches")
+
+    def record_redis_degraded(self):
+        """PRD §12: Redis 降级模式"""
+        self.increment("redis.degraded_events")
 
     def get_stats(self) -> dict:
         """获取统计摘要"""
@@ -244,10 +296,29 @@ class MetricsCollector:
             "cache_hit_rate": {
                 "L1": self._counters.get("cache.hit.L1", 0) / max(self._counters.get("cache.total", 1), 1),
                 "L2": self._counters.get("cache.hit.L2", 0) / max(self._counters.get("cache.total", 1), 1),
+                "L2_SESSION": self._counters.get("cache.hit.L2_SESSION", 0) / max(self._counters.get("cache.total", 1), 1),
             },
             "rewrite_fallback_rate": self._counters.get("rewrite.fallback", 0) / max(
                 self._counters.get("rewrite.success", 0) + self._counters.get("rewrite.fail", 0), 1
             ),
+            # PRD §12: NLI 矛盾比例
+            "nli_contradiction_rate": self._counters.get("nli.contradiction_high", 0) / max(
+                self._counters.get("answer_gate.total", 1), 1
+            ),
+            # PRD §12: Prefix Caching 命中率
+            "prefix_cache_hit_rate": self._counters.get("prefix_cache.hits", 0) / max(
+                self._counters.get("prefix_cache.hits", 0) + self._counters.get("prefix_cache.misses", 0), 1
+            ),
+            # PRD §12: Redis 降级状态
+            "redis_degraded": self._counters.get("redis.degraded_events", 0),
+            # PRD §12: 缓存版本切换次数
+            "cache_epoch_switches": self._counters.get("cache.epoch_switches", 0),
+            # PRD §12: Admission 拒绝/排队计数
+            "admission": {
+                "total": self._counters.get("admission.total", 0),
+                "admitted": self._counters.get("admission.admitted", 0),
+                "rejected": self._counters.get("admission.rejected", 0),
+            },
             "latency_percentiles": {},
         }
 
@@ -339,7 +410,7 @@ class AlertingManager:
             ]
         }
         """
-        # 默认规则
+        # 默认规则（PRD §12 完整告警清单）
         default_rules = [
             {"name": "kv_pressure_critical", "metric": "kv_pressure", "threshold": 0.9,
              "duration_s": 30, "severity": "critical", "comparison": "gt"},
@@ -353,6 +424,17 @@ class AlertingManager:
              "duration_s": 300, "severity": "critical", "comparison": "gt"},
             {"name": "blip_trigger_rate_high", "metric": "blip_trigger_rate", "threshold": 0.10,
              "duration_s": 300, "severity": "warning", "comparison": "gt"},
+            # PRD §12 新增告警规则
+            {"name": "prefix_cache_drop", "metric": "prefix_cache_hit_rate", "threshold": 0.5,
+             "duration_s": 300, "severity": "warning", "comparison": "lt"},
+            {"name": "redis_degraded_long", "metric": "redis.degraded_events", "threshold": 5,
+             "duration_s": 300, "severity": "warning", "comparison": "gt"},
+            {"name": "l1_hit_rate_drop", "metric": "cache_hit_rate_L1", "threshold": 0.3,
+             "duration_s": 300, "severity": "warning", "comparison": "lt"},
+            {"name": "l2_hit_rate_drop", "metric": "cache_hit_rate_L2", "threshold": 0.3,
+             "duration_s": 300, "severity": "warning", "comparison": "lt"},
+            {"name": "cache_failure_spike", "metric": "cache.failure_rate", "threshold": 0.1,
+             "duration_s": 300, "severity": "critical", "comparison": "gt"},
         ]
 
         # 从 config 加载自定义规则（覆盖默认）
@@ -454,6 +536,32 @@ class AlertingManager:
             if total > 0:
                 return self.metrics._counters.get("cache.hit.L1", 0) / total
             return 0.0
+
+        if metric_name == "cache_hit_rate_L2":
+            total = self.metrics._counters.get("cache.total", 0)
+            if total > 0:
+                return self.metrics._counters.get("cache.hit.L2", 0) / total
+            return 0.0
+
+        # PRD §12: Prefix Caching 命中率
+        if metric_name == "prefix_cache_hit_rate":
+            hits = self.metrics._counters.get("prefix_cache.hits", 0)
+            misses = self.metrics._counters.get("prefix_cache.misses", 0)
+            total = hits + misses
+            return hits / total if total > 0 else 1.0
+
+        # PRD §12: BLIP 触发率
+        if metric_name == "blip_trigger_rate":
+            triggered = self.metrics._counters.get("blip.triggered", 0)
+            total = self.metrics._counters.get("blip.total", 0)
+            return triggered / total if total > 0 else 0.0
+
+        # PRD §12: Cache 失败率
+        if metric_name == "cache.failure_rate":
+            # 从 Redis 降级事件估算缓存失败率
+            degraded = self.metrics._counters.get("redis.degraded_events", 0)
+            total = self.metrics._counters.get("cache.total", 1)
+            return degraded / total if total > 0 else 0.0
 
         # 从直方图取 p99
         if metric_name in self.metrics._histograms:

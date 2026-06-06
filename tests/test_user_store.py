@@ -1,7 +1,7 @@
 import os
 import tempfile
 import pytest
-from auth.user_store import UserStore, User
+from auth.user_store import UserStore, User, ROLES, DEPARTMENTS
 
 
 @pytest.fixture
@@ -12,11 +12,11 @@ def store():
 
 
 def test_create_user(store):
-    user = store.create_user("u1", "alice", "password123", "Alice", ["rd"], ["研发部"])
+    user = store.create_user("u1", "alice", "password123", "Alice", ["rd"], ["rd_dept"])
     assert user.user_id == "u1"
     assert user.username == "alice"
-    assert user.role_mask == 0x02  # rd
-    assert user.dept_mask == 0x01  # 研发部
+    assert user.role_mask == ROLES["rd"]  # rd role from config.json
+    assert user.dept_mask == DEPARTMENTS["rd_dept"]  # rd_dept from config.json
     assert "rd" in user.roles
 
 
@@ -46,9 +46,10 @@ def test_list_users(store):
 
 
 def test_update_roles(store):
-    store.create_user("u6", "frank", "pass", "Frank", ["rd"], ["研发部"])
-    updated = store.update_user_roles("u6", ["admin", "rd"], ["法规部"])
-    assert updated.role_mask == 0x01 | 0x02  # admin | rd
-    assert updated.dept_mask == 0x04  # 法规部
+    store.create_user("u6", "frank", "pass", "Frank", ["rd"], ["rd_dept"])
+    updated = store.update_user_roles("u6", ["admin", "rd"], ["regulation_dept"])
+    # admin mask (0x7FFFFFFF) 已包含所有位，OR rd(1) 结果不变
+    assert updated.role_mask == ROLES["admin"] | ROLES["rd"]
+    assert updated.dept_mask == DEPARTMENTS["regulation_dept"]
     assert "admin" in updated.roles
-    assert "法规部" in updated.departments
+    assert "regulation_dept" in updated.departments

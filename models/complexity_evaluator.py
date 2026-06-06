@@ -9,12 +9,12 @@ BERT 复杂度评估器（readme 4.3 节）
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,17 @@ class ComplexityEvaluator:
         self._model = None
         self._tokenizer = None
         self._use_model = False
-        self.device = "cuda:1" if __import__("torch").cuda.is_available() else "cpu"
-        self._try_load_model()
+        try:
+            self.device = "cuda:1" if __import__("torch").cuda.is_available() else "cpu"
+        except ImportError:
+            self.device = "cpu"
+
+        # 非生产模式直接使用规则，跳过模型加载（延迟优化：节省 ~17s）
+        from common.config import is_production_mode
+        if is_production_mode():
+            self._try_load_model()
+        else:
+            logger.info("非生产模式，复杂度评估使用规则兜底（跳过 BERT 模型加载）")
 
     def _try_load_model(self):
         """尝试加载 BERT 复杂度分类模型，失败则使用规则兜底"""

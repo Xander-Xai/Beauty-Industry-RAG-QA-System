@@ -50,6 +50,7 @@ protobuf>=3.20.2
 # Phase 4: 安全
 PyJWT>=2.8.0
 cryptography>=42.0.0
+bcrypt>=4.0.0
 
 # Phase 5: 压测
 locust>=2.20.0

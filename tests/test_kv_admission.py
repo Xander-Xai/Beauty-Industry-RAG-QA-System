@@ -4,7 +4,7 @@ KV 准入控制测试 (admission/kv_admission.py)
 覆盖 §5.2 KV Cache 准入控制逻辑：
 - KV 压力计算
 - 准入/拒绝决策（critical / soft_stop / admitted_with_truncation / admitted_with_tighten / budget_exceeded / admitted）
-- PRD §5.2.5 / §9 阈值对齐 (0.85/0.90/0.95/0.97)
+- PRD §5.2.5 / §9 阈值对齐 (0.70/0.80/0.90/0.95)
 - P0/P1/P2 优先级差异化降级
 - get_effective_max_tokens Prefix Caching 保护（不修改 max_tokens）
 - get_truncation_tokens 应用层流式截断
@@ -36,27 +36,26 @@ def admission():
 # ── KV 压力计算 ──
 
 class TestEstimateKV:
-    """测试 KV 估算逻辑"""
+    """测试 KV 估算逻辑（PRD §5.2.3 双因子模型）"""
 
     def test_estimate_kv_with_explicit_output(self):
-        """指定 output tokens 时的 KV 估算"""
+        """指定 output tokens 时的 KV 估算: inp × prefill + out × decode"""
         ctrl = KVAdmissionControl()
-        kv_per_token = 0.45 * 1024  # 460.8
-        expected = (100 + 200 * 1.2) * kv_per_token  # 340 * 460.8 = 156672
+        expected = 100 * ctrl.KV_PER_TOKEN_PREFILL + 200 * ctrl.KV_PER_TOKEN_DECODE
         result = ctrl.estimate_kv(100, 200, "general")
         assert result == pytest.approx(expected, rel=1e-6)
 
     def test_estimate_kv_with_zero_output_uses_default(self):
-        """output=0 时使用 business_type 的默认值"""
+        """output=0 时使用 business_type 的默认值 (general=512)"""
         ctrl = KVAdmissionControl()
-        expected = (50 + 256 * 1.2) * ctrl.KV_PER_TOKEN
+        expected = 50 * ctrl.KV_PER_TOKEN_PREFILL + 512 * ctrl.KV_PER_TOKEN_DECODE
         result = ctrl.estimate_kv(50, 0, "general")
         assert result == pytest.approx(expected, rel=1e-6)
 
     def test_estimate_kv_regulation_default_output(self):
         """regulation 类型默认 output=1024"""
         ctrl = KVAdmissionControl()
-        expected = (50 + 1024 * 1.2) * ctrl.KV_PER_TOKEN
+        expected = 50 * ctrl.KV_PER_TOKEN_PREFILL + 1024 * ctrl.KV_PER_TOKEN_DECODE
         result = ctrl.estimate_kv(50, 0, "regulation")
         assert result == pytest.approx(expected, rel=1e-6)
 
@@ -67,21 +66,21 @@ class TestThresholdAlignment:
     """验证阈值与 PRD §5.2.5 / §9 规格一致"""
 
     def test_thresholds_match_prd(self):
-        """PRD §9 规定: 85% tighten, 90% truncate, 95% soft_stop, 97% critical"""
+        """PRD §5.2.5 规定: 70% tighten, 80% truncate, 90% soft_stop, 95% critical"""
         ctrl = KVAdmissionControl()
-        assert ctrl.THRESHOLD_TIGHTEN == 0.85
-        assert ctrl.THRESHOLD_TRUNCATE == 0.90
-        assert ctrl.THRESHOLD_SOFT_STOP == 0.95
-        assert ctrl.THRESHOLD_CRITICAL == 0.97
+        assert ctrl.threshold_tighten == 0.70
+        assert ctrl.threshold_truncate == 0.80
+        assert ctrl.threshold_soft_stop == 0.90
+        assert ctrl.threshold_critical == 0.95
 
 
 # ── 压力阈值分层决策（PRD §5.2.5 优先级差异化）──
 
 class TestAdmitDecision:
-    """测试各压力等级的准入/拒绝决策（含 P0/P1/P2 优先级差异化）"""
+    """测试各压力等级的准入/拒绝决策（含 P0/P1/P2 优先级差异化，PRD §5.2.5 阈值）"""
 
     def test_admit_at_low_pressure(self):
-        """低压力 (<0.85) 且预算未超：admitted"""
+        """低压力 (<0.70) 且预算未超：admitted"""
         ctrl = KVAdmissionControl()
         admitted, reason, priority = ctrl.admit("req_001", 50, 128, "general")
         assert admitted is True
@@ -89,9 +88,9 @@ class TestAdmitDecision:
         assert priority == "P2"
 
     def test_reject_at_critical_pressure_p2(self):
-        """压力 >0.97 + P2：critical_p2_rejected"""
+        """压力 >0.95 + P2：critical_p2_rejected"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.98), \
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.97), \
              patch("admission.kv_admission.log_audit_event"):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
         assert admitted is False
@@ -99,9 +98,9 @@ class TestAdmitDecision:
         assert priority == "P2"
 
     def test_admit_at_critical_pressure_p0(self):
-        """压力 >0.97 + P0：admitted with critical (强制降级)"""
+        """压力 >0.95 + P0：admitted with critical (强制降级)"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.98), \
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.97), \
              patch("admission.kv_admission.log_audit_event"):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "regulation")
         assert admitted is True
@@ -109,9 +108,9 @@ class TestAdmitDecision:
         assert priority == "P0"
 
     def test_reject_at_critical_pressure_p1(self):
-        """压力 >0.97 + P1：critical_p1_queued"""
+        """压力 >0.95 + P1：critical_p1_queued"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.98), \
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.97), \
              patch("admission.kv_admission.log_audit_event"):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "development")
         assert admitted is False
@@ -119,9 +118,9 @@ class TestAdmitDecision:
         assert priority == "P1"
 
     def test_reject_at_soft_stop_pressure_p2(self):
-        """压力在 0.95~0.97 + P2：soft_stop 拒绝"""
+        """压力在 0.90~0.95 + P2：soft_stop 拒绝"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.96), \
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.94), \
              patch("admission.kv_admission.log_audit_event"):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
         assert admitted is False
@@ -129,72 +128,72 @@ class TestAdmitDecision:
         assert priority == "P2"
 
     def test_admit_at_soft_stop_pressure_p0(self):
-        """压力在 0.95~0.97 + P0：admitted (P0 受保护)"""
+        """压力在 0.90~0.95 + P0：admitted (P0 受保护)"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.96):
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.94):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "regulation")
         assert admitted is True
         assert reason == "admitted"
         assert priority == "P0"
 
     def test_admit_at_soft_stop_pressure_p1_downgrade(self):
-        """压力在 0.95~0.97 + P1：admitted with downgrade_to_4b"""
+        """压力在 0.90~0.95 + P1：admitted with downgrade_to_4b"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.96):
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.94):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "development")
         assert admitted is True
         assert reason == "downgrade_to_4b"
         assert priority == "P1"
 
     def test_admitted_with_truncation(self):
-        """压力在 0.90~0.95：admitted_with_truncation（应用层截断）"""
+        """压力在 0.80~0.90：admitted_with_truncation（应用层截断）"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.92):
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.85):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
         assert admitted is True
         assert reason == "admitted_with_truncation"
 
     def test_admitted_with_tighten(self):
-        """压力在 0.85~0.90：admitted_with_tighten（限流器收紧）"""
+        """压力在 0.70~0.80：admitted_with_tighten（限流器收紧）"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.87):
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.75):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
         assert admitted is True
         assert reason == "admitted_with_tighten"
 
-    def test_boundary_exactly_at_097(self):
-        """压力恰好 = 0.97：不触发 critical（仅 > 0.97 才触发）"""
-        ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.97):
-            admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
-        # 0.97 不 > 0.97，不触发 critical；但 0.97 > 0.95 -> soft_stop
-        assert admitted is False
-        assert reason == "soft_stop"
-
     def test_boundary_exactly_at_095(self):
-        """压力恰好 = 0.95：不触发 soft_stop（仅 > 0.95 才触发），但触发 truncation"""
+        """压力恰好 = 0.95：不触发 critical（仅 > 0.95 才触发），但触发 soft_stop"""
         ctrl = KVAdmissionControl()
         with patch.object(ctrl, "_pressure_unlocked", return_value=0.95):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
-        # 0.95 不 > 0.95，不触发 soft_stop；但 0.95 > 0.90 -> admitted_with_truncation
-        assert admitted is True
-        assert reason == "admitted_with_truncation"
+        # 0.95 不 > 0.95，不触发 critical；但 0.95 > 0.90 -> soft_stop
+        assert admitted is False
+        assert reason == "soft_stop"
 
     def test_boundary_exactly_at_090(self):
-        """压力恰好 = 0.90：不触发 truncation（仅 > 0.90 才触发），但触发 tighten"""
+        """压力恰好 = 0.90：不触发 soft_stop（仅 > 0.90 才触发），但触发 truncation"""
         ctrl = KVAdmissionControl()
         with patch.object(ctrl, "_pressure_unlocked", return_value=0.90):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
-        # 0.90 不 > 0.90，不触发 truncation；但 0.90 > 0.85 -> admitted_with_tighten
+        # 0.90 不 > 0.90，不触发 soft_stop；但 0.90 > 0.80 -> admitted_with_truncation
+        assert admitted is True
+        assert reason == "admitted_with_truncation"
+
+    def test_boundary_exactly_at_080(self):
+        """压力恰好 = 0.80：不触发 truncation（仅 > 0.80 才触发），但触发 tighten"""
+        ctrl = KVAdmissionControl()
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.80):
+            admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
+        # 0.80 不 > 0.80，不触发 truncation；但 0.80 > 0.70 -> tighten
         assert admitted is True
         assert reason == "admitted_with_tighten"
 
-    def test_boundary_exactly_at_085(self):
-        """压力恰好 = 0.85：不触发 tighten（仅 > 0.85 才触发），返回 admitted"""
+    def test_boundary_exactly_at_070(self):
+        """压力恰好 = 0.70：不触发 tighten（仅 > 0.70 才触发），返回 admitted"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.85):
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.70):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
-        # 0.85 不 > 0.85，不触发 tighten；也不 > 0.90，不触发 truncation
+        # 0.70 不 > 0.70，不触发 tighten
         assert admitted is True
         assert reason == "admitted"
 
@@ -205,13 +204,16 @@ class TestBudgetExceeded:
     """测试 KV 预算超限拒绝"""
 
     def test_budget_exceeded_at_normal_pressure(self):
-        """压力 <0.85 但超出预算时拒绝"""
+        """压力正常但超出预算时拒绝"""
         ctrl = KVAdmissionControl()
         prefill_kv = ctrl.estimate_kv(1000, 512, "general")
         needed = int(0.98 * ctrl.kv_budget / prefill_kv)
         for i in range(needed):
             ctrl.active[f"prefill_{i}"] = (1000, 512, "general")
-        admitted, reason, _ = ctrl.admit("req_test", 1000000, 100000, "general")
+        # 填充后压力可能超过阈值触发 critical/soft_stop 而非 budget_exceeded
+        # 因此 mock 压力为低值，单独测试 budget 逻辑
+        with patch.object(ctrl, "_pressure_unlocked", return_value=0.50):
+            admitted, reason, _ = ctrl.admit("req_test", 1000000, 100000, "general")
         assert admitted is False
         assert reason == "budget_exceeded"
 

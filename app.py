@@ -28,6 +28,9 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routes import router, get_pipeline, get_metrics
 from api.middleware import setup_middleware
+# H-7: 显式导入 SessionState，避免延迟导入导致清理任务 NameError
+from core.pipeline_context import SessionState
+from common.config import get_config as _get_sys_config
 
 # ─── 日志配置 ──────────────────────────────────────────────
 
@@ -56,8 +59,9 @@ def create_app() -> FastAPI:
         title="化妆品企业级多模态 RAG 智能问答系统",
         description="基于双 GPU、多模态检索增强生成（RAG）的企业级知识问答 API",
         version=_APP_VERSION,
-        docs_url="/docs",
-        redoc_url="/redoc",
+        # H-9: 生产模式下禁用 Swagger/ReDoc，避免暴露 API schema
+        docs_url="/docs" if _get_sys_config().deployment_mode != "production" else None,
+        redoc_url="/redoc" if _get_sys_config().deployment_mode != "production" else None,
     )
 
     # ── 中间件（CORS + 请求日志）──────────────────────────
@@ -114,6 +118,20 @@ def create_app() -> FastAPI:
             logger.info("MetricsCollector 初始化完成")
         except Exception as e:
             logger.error("MetricsCollector 初始化失败: %s", e)
+
+        # 启动 SessionState 定期清理（每 5 分钟清理过期会话，防止内存泄漏）
+        import asyncio
+
+        async def _cleanup_sessions():
+            while True:
+                await asyncio.sleep(300)  # 每 5 分钟
+                try:
+                    SessionState.cleanup_expired()
+                except Exception as e:
+                    logger.debug("会话定期清理跳过: %s", e)
+
+        asyncio.create_task(_cleanup_sessions())
+        logger.info("SessionState 定期清理任务已启动（间隔 5 分钟）")
 
         logger.info("系统启动完成，监听端口: %s", "8000")
 

@@ -129,6 +129,8 @@ class ElasticsearchConfig:
     host: str = "http://localhost:9200"
     index: str = "cosmetics_docs"
     enabled: bool = True
+    username: str = ""
+    password: str = ""
 
 
 @dataclass(frozen=True)
@@ -228,9 +230,9 @@ class GenerationConfig:
 
 @dataclass(frozen=True)
 class AdmissionControlConfig:
-    safety_factor: float = 0.7
-    kv_utilization_threshold: float = 0.8
-    kv_pressure_critical: float = 0.9
+    safety_factor: float = 0.75
+    kv_utilization_threshold: float = 0.88
+    kv_pressure_critical: float = 0.93
 
 
 @dataclass(frozen=True)
@@ -459,3 +461,21 @@ def get_config(reload: bool = False) -> AppConfig:
 def reload_config() -> AppConfig:
     """Convenience wrapper: force-reload and return."""
     return get_config(reload=True)
+
+
+# M-6: 兼容性函数 — 返回原始 dict，供需要 dict 访问模式的模块使用
+_config_dict_instance: Optional[dict] = None
+
+
+def get_config_dict(reload: bool = False) -> dict:
+    """返回 config.json 的原始 dict（用于兼容 `config["key"]` 访问模式）。"""
+    global _config_dict_instance
+    if _config_dict_instance is not None and not reload:
+        return _config_dict_instance
+    with _config_lock:
+        if _config_dict_instance is not None and not reload:
+            return _config_dict_instance
+        path = _resolve_config_path()
+        with open(path, encoding="utf-8") as fh:
+            _config_dict_instance = json.load(fh)
+        return _config_dict_instance

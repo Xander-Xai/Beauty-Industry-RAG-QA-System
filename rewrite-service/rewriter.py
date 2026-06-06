@@ -20,8 +20,9 @@ import httpx
 # Ensure project root is on path for config.json resolution
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger("rewrite-service.rewriter")
 

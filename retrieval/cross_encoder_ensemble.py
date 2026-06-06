@@ -16,15 +16,15 @@ GPU 批处理架构：
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 from typing import Optional
 
 import numpy as np
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,26 @@ class CrossEncoderEnsemble:
         self._platt_scaler = PlattScaler()
         logger.info("CrossEncoderEnsemble 初始化完成")
 
+    def _truncate_to_tokens(self, text: str, max_tokens: int) -> str:
+        """
+        PRD §7.3: Token 级截断，确保 CrossEncoder 输入不超过 max_tokens tokens。
+
+        中文文本 512 字符可能对应 >512 tokens，必须使用 tokenizer 截断。
+        截断策略：使用 CE-A 的 tokenizer 进行 encode → truncate → decode。
+        若 tokenizer 不可用则回退到字符截断（保守估计中文 ~1.5 token/char）。
+        """
+        if not text:
+            return ""
+        try:
+            tokenizer = self.ce_a.tokenizer
+            encoded = tokenizer(text, truncation=True, max_length=max_tokens,
+                                return_tensors="pt", add_special_tokens=True)
+            return tokenizer.decode(encoded["input_ids"][0], skip_special_tokens=True)
+        except Exception:
+            # 回退：中文保守估计 1.5 token/char，使用更短的字符截断
+            fallback_len = max(max_tokens * 2 // 3, 128)
+            return text[:fallback_len]
+
     @property
     def ce_a(self):
         if self._ce_a is None:
@@ -141,8 +161,13 @@ class CrossEncoderEnsemble:
             return []
 
         try:
-            # 构造 (query, doc) pairs
-            pairs = [(query, c.content) for c in candidates]
+            # PRD §7.3: 截断输入至 seq<=512 tokens（使用 tokenizer 精确截断，而非字符截断）
+            max_seq_len = config.get("retrieval", {}).get("cross_encoder", {}).get("max_seq_length", 512)
+            pairs = []
+            for c in candidates:
+                q_trunc = self._truncate_to_tokens(query, max_seq_len)
+                d_trunc = self._truncate_to_tokens(c.content, max_seq_len)
+                pairs.append((q_trunc, d_trunc))
 
             # 通过 Rerank Batch Aggregator 批处理执行
             scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs)
@@ -165,6 +190,16 @@ class CrossEncoderEnsemble:
             candidates.sort(key=lambda x: x.ce_score_ensemble, reverse=True)
 
             results = candidates[:top_k]
+
+            # PRD §12.2 / GAP-20: 记录 CLIP 来源文档在 Rerank Top-K 中的贡献度
+            clip_in_top = sum(1 for r in results if r.source and 'clip' in r.source)
+            clip_contribution = clip_in_top / len(results) if results else 0.0
+            # 将贡献度附加到每条结果，供 pipeline 传递给 metrics_collector
+            for r in results:
+                r._clip_contribution_ratio = clip_contribution
+            if clip_in_top > 0:
+                logger.info(f"CLIP 贡献度: {clip_in_top}/{len(results)} 条 Top-K 来自 CLIP 路径 (ratio={clip_contribution:.2f})")
+
             logger.info(f"CrossEncoder Ensemble 重排完成: {len(candidates)} → {len(results)}")
             return results
 

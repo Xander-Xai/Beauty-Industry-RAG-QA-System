@@ -11,12 +11,12 @@ BM25 关键词检索模块（readme 7.1 并行多路召回第 2 路）
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
-with open("config.json", encoding="utf-8", errors="replace") as f:
-    config = json.loads(f.read().replace('\\"', '"'))
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,13 @@ class BM25Retriever:
         if self._es_client is None and self.enabled:
             try:
                 from elasticsearch import Elasticsearch
-                self._es_client = Elasticsearch([config["elasticsearch"]["host"]])
+                es_cfg = config.get("elasticsearch", {})
+                kwargs = {"hosts": [es_cfg.get("host", "http://localhost:9200")]}
+                username = es_cfg.get("username", "")
+                password = es_cfg.get("password", "")
+                if username and password:
+                    kwargs["basic_auth"] = (username, password)
+                self._es_client = Elasticsearch(**kwargs)
                 # 获取 ES 版本
                 self._es_version = tuple(map(int, self._es_client.info()["version"]["number"].split(".")[:2]))
                 logger.info(f"ES 连接成功: version={self._es_version}")

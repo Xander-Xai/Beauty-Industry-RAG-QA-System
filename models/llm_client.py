@@ -10,13 +10,13 @@ LLM 客户端模块
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Optional
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,11 @@ class LLMClient:
         1. 重建完整上下文
         2. 构造约束式 Prompt（不重复已输出内容，保持语义一致）
         3. 证据锁定：续写时使用首次检索的 Top-3 doc_id
+
+        PRD §4.6 增强:
+        - 约束式 Prompt 明确要求保持语义/语气/结构一致
+        - 已生成部分作为"约束前缀"（非续写主体）
+        - 使用 temperature=0 确定性解码锁定前半部分输出一致性
         """
         from core.pipeline_context import GenerationResult
 
@@ -137,7 +142,10 @@ class LLMClient:
                 "请继续补充后续内容。要求：\n"
                 "1. 保持与已有回答的语义、语气、结构完全一致\n"
                 "2. 不重复已输出的内容\n"
-                "3. 仅补充后续部分"
+                "3. 仅补充后续部分\n"
+                "4. 如有结构化大纲，请仅补充尚未覆盖的章节\n"
+                "5. 引用的证据来源必须与前文一致，不得引入新的证据来源\n"
+                "6. 保持与前文相同的格式风格（标题层级、列表缩进等）"
             ),
         })
 
@@ -228,15 +236,15 @@ class LLMClient:
         return base_prompt
 
     def _format_evidence(self, ctx) -> str:
-        """格式化检索证据"""
+        """格式化检索证据（优化：仅传 top-3，每条截断 300 字符，减少 token 数）"""
         if not ctx.rerank_results:
             return "（无相关证据）"
 
         evidence_parts = []
-        for i, doc in enumerate(ctx.rerank_results[:5], 1):
+        for i, doc in enumerate(ctx.rerank_results[:3], 1):  # top-5 → top-3
             score = doc.ce_score_ensemble or doc.bi_score or 0.0
             evidence_parts.append(
-                f"[证据{i}] (相关度:{score:.2f})\n{doc.content[:500]}"
+                f"[证据{i}] (相关度:{score:.2f})\n{doc.content[:300]}"  # 500 → 300 字符
             )
         return "\n\n".join(evidence_parts)
 

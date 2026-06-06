@@ -44,6 +44,7 @@ class RerankResult:
     """Rerank 阶段结果"""
     doc_id: str
     content: str
+    source: str = ""                 # 来源标记（从 RecallResult 继承: dense_bge/bm25_es/clip_visual 等）
     ce_score_a: float = 0.0        # CrossEncoder-A (法规/成分) 分数
     ce_score_b: float = 0.0        # CrossEncoder-B (通用) 分数
     ce_score_ensemble: float = 0.0  # 两模型均分
@@ -148,6 +149,13 @@ class RequestContext:
 
     # === BLIP 在线触发（PRD §6） ===
     blip_triggered: bool = False
+
+    # === CLIP 异步/贡献度指标（PRD §4.5 / GAP-20） ===
+    clip_use: bool = False                 # CLIP 是否被激活（图像 query 标记）
+    clip_top_k: int = 0                    # CLIP 召回 top_k（50=全量, 20=降级, 0=跳过）
+    clip_sync_timeout: bool = False        # CLIP 同步召回是否超时
+    clip_async_hit: bool = False           # CLIP 异步补充召回是否命中
+    clip_contribution_ratio: float = 0.0   # CLIP 来源文档在 Rerank Top-K 中的占比
 
     def record_timing(self, stage: str, duration_ms: float):
         """记录各阶段延迟"""

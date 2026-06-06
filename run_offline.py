@@ -26,6 +26,7 @@ def main():
         "incremental", "full", "create-index", "feedback", "rewrite-feedback",
     ], default="incremental", help="运行模式")
     parser.add_argument("--data-dir", default=None, help="数据目录（覆盖 config）")
+    parser.add_argument("--force-full", action="store_true", help="强制全量更新（增量模式下忽略增量状态）")
     args = parser.parse_args()
 
     with open("config.json", encoding="utf-8") as f:
@@ -43,7 +44,7 @@ def main():
     elif args.mode == "incremental":
         from offline.scheduler import OfflineScheduler
         scheduler = OfflineScheduler()
-        result = scheduler.run_incremental_update()
+        result = scheduler.run_incremental_update(force=args.force_full)
         logger.info(f"增量更新结果: {json.dumps(result, ensure_ascii=False)}")
 
     elif args.mode == "full":

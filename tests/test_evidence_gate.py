@@ -205,6 +205,8 @@ class TestDocConsistency:
         """NLI 推理异常时返回默认值 0.8"""
         g = EvidenceEnsembleGate()
         mock_gate = MagicMock()
+        # 批量 NLI 和逐条 NLI 都抛出异常
+        mock_gate._batch_nli_inference.side_effect = RuntimeError("NLI batch error")
         mock_gate._nli_inference.side_effect = RuntimeError("NLI model error")
         g._answer_gate = mock_gate
 
@@ -219,6 +221,8 @@ class TestDocConsistency:
         """所有文档对一致 (contradiction < 0.5)：一致性为 1.0"""
         g = EvidenceEnsembleGate()
         mock_gate = MagicMock()
+        # 批量 NLI 不可用，降级为逐条推理
+        mock_gate._batch_nli_inference.side_effect = AttributeError("no batch")
         mock_gate._nli_inference.return_value = (0.1, 0.8)  # (contradiction, entailment)
         g._answer_gate = mock_gate
 
@@ -235,6 +239,8 @@ class TestDocConsistency:
         """所有文档对矛盾 (contradiction > 0.5)：一致性为 0.0"""
         g = EvidenceEnsembleGate()
         mock_gate = MagicMock()
+        # 批量 NLI 不可用，降级为逐条推理
+        mock_gate._batch_nli_inference.side_effect = AttributeError("no batch")
         mock_gate._nli_inference.return_value = (0.8, 0.1)  # 高矛盾
         g._answer_gate = mock_gate
 
@@ -250,6 +256,8 @@ class TestDocConsistency:
         """部分文档对矛盾：一致性按比例计算"""
         g = EvidenceEnsembleGate()
         mock_gate = MagicMock()
+        # 批量 NLI 不可用，降级为逐条推理
+        mock_gate._batch_nli_inference.side_effect = AttributeError("no batch")
         # 3 对文档：第 1 对一致，第 2 对矛盾，第 3 对一致
         mock_gate._nli_inference.side_effect = [
             (0.1, 0.8),   # d1 vs d2: 一致

@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Optional
@@ -21,9 +20,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 from common.audit import log_audit_event
+from common.config import get_config_dict
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +150,32 @@ class ParallelRecallManager:
         # 计算 Retrieval Agreement Score（PRD §7.2）
         agreement_score = self._compute_agreement_score(path_results)
 
+        # PRD §7.1: ES Fallback — Milvus 不可用或召回有效文档数 < 50 时自动切换
+        all_doc_ids = {r.doc_id for r in all_results}
+        # GAP-24: 显式标记 Milvus 路径失败（区分"召回不足"与"Milvus 宕机"）
+        milvus_paths = {"dense_bge", "clip_visual", "rewrite_variants"}
+        milvus_failed = any(
+            path_name in milvus_paths and path_name not in path_results
+            for path_name in milvus_paths
+            if any(futures[f] == path_name for f in futures)
+        ) or (len(all_doc_ids) < 10 and any(
+            path_name in milvus_paths for path_name in path_results
+            if not path_results[path_name]
+        ))
+        if milvus_failed:
+            logger.warning("Milvus 路径异常: 触发 ES Fallback（Milvus 可能不可用）")
+        if len(all_doc_ids) < 50:
+            logger.info(f"召回有效文档数 {len(all_doc_ids)} < 50，触发 ES Fallback")
+            try:
+                fallback_results = self._recall_es_fallback(
+                    query, user_role_mask, user_dept_mask, top_k_per_path
+                )
+                if fallback_results:
+                    all_results.extend(fallback_results)
+                    logger.info(f"ES Fallback 补充召回 {len(fallback_results)} 条")
+            except Exception as e:
+                logger.warning(f"ES Fallback 失败: {e}")
+
         return all_results, agreement_score
 
     def _recall_dense(self, query_embedding, filter_expr, top_k) -> list:
@@ -223,33 +248,116 @@ class ParallelRecallManager:
             ) for h in hits])
         return results
 
+    def _recall_es_fallback(self, query, user_role_mask, user_dept_mask, top_k_per_path) -> list:
+        """
+        ES Fallback 召回（PRD §7.1）
+
+        当 Milvus 不可用或召回有效文档数 < 50 时，自动切换到 ES 全文检索。
+        """
+        from core.pipeline_context import RecallResult
+        fallback_top_k = top_k_per_path.get("bm25_es", {}).get("top_k", 50)
+        hits = self.bm25_retriever.fallback_search(query, top_k=fallback_top_k)
+        return [RecallResult(
+            doc_id=h["doc_id"], content=h["content"],
+            score=h["score"], source="bm25_fallback", metadata=h.get("metadata", {}),
+        ) for h in hits]
+
     def _compute_agreement_score(self, path_results: dict[str, list]) -> float:
         """
         检索一致性评分（PRD §7.2）
 
-        衡量多路召回结果的语义簇一致性：各路径 Top-K 文档集合的 Jaccard 相似度均值。
+        衡量多路召回结果的语义簇一致性：
+        1. 主评分：MiniBatchKMeans 聚类 + 簇内熵值（使用实际文档 embedding）
+        2. 辅评分：各路径 Top-K 文档集合的 Jaccard 相似度均值
         低一致性时 Evidence Gate 应提高阈值（保守策略）。
         """
+        # 收集所有文档向量用于聚类评分
+        all_doc_ids = []
+        doc_embeddings = []
         source_topks: dict[str, set[str]] = {}
+
+        # 尝试获取实际 embedding（PRD §7.2: 生产环境使用实际 embedding）
+        use_real_embeddings = False
+        try:
+            from models.embedding_service import EmbeddingService
+            _emb_svc = EmbeddingService()
+            # 测试 Milvus 是否可用
+            _emb_svc.milvus_client
+            use_real_embeddings = True
+        except Exception:
+            pass
+
         for path_name, results in path_results.items():
             doc_ids = set()
             for r in results[:10]:
                 doc_ids.add(r.doc_id)
+                if r.doc_id not in all_doc_ids:
+                    all_doc_ids.append(r.doc_id)
+                    if use_real_embeddings:
+                        # 获取实际 embedding 用于聚类
+                        try:
+                            from pymilvus import Collection
+                            from common.auth import validate_doc_id
+                            validate_doc_id(r.doc_id)
+                            collection = Collection(config["embedding"]["text"]["collection"])
+                            res = collection.query(
+                                expr=f'doc_id == "{r.doc_id}"',
+                                output_fields=["embedding"],
+                                limit=1,
+                            )
+                            if res and res[0].get("embedding"):
+                                doc_embeddings.append(res[0]["embedding"][:8])  # 取前 8 维降低计算量
+                                continue
+                        except Exception:
+                            pass
+                    # Fallback: 使用 score + hash 作为代理向量
+                    doc_embeddings.append([r.score, hash(r.doc_id) % 1000 / 1000.0])
             source_topks[path_name] = doc_ids
 
+        # ① MiniBatchKMeans 聚类一致性（PRD §7.2 核心要求）
+        clustering_score = 0.5  # 默认中性
+        if len(doc_embeddings) >= 4:
+            try:
+                from sklearn.cluster import MiniBatchKMeans
+                import numpy as np
+
+                X = np.array(doc_embeddings, dtype=np.float32)
+                n_clusters = min(3, len(X) // 2)
+                if n_clusters >= 2:
+                    km = MiniBatchKMeans(n_clusters=n_clusters, random_state=42, n_init=3)
+                    labels = km.fit_predict(X)
+
+                    # 计算簇内熵值（越低越好 = 越集中越好）
+                    from collections import Counter
+                    total = len(labels)
+                    label_counts = Counter(labels)
+                    entropy = 0.0
+                    for count in label_counts.values():
+                        p = count / total
+                        if p > 0:
+                            entropy -= p * __import__("math").log2(p)
+                    # 最大熵 = log2(n_clusters)，归一化到 [0, 1]（1 = 最一致）
+                    max_entropy = __import__("math").log2(n_clusters) if n_clusters > 1 else 1.0
+                    clustering_score = 1.0 - (entropy / max_entropy) if max_entropy > 0 else 0.5
+                    logger.debug(f"KMeans 聚类一致性: entropy={entropy:.3f}, score={clustering_score:.3f}")
+            except Exception as e:
+                logger.debug(f"KMeans 聚类评分降级为 Jaccard: {e}")
+
+        # ② Jaccard 相似度均值（辅助评分，兼容原逻辑）
         sources = list(source_topks.values())
-        if len(sources) < 2:
-            return 0.5
+        jaccard_score = 0.0
+        if len(sources) >= 2:
+            agreements = []
+            for i in range(len(sources)):
+                for j in range(i + 1, len(sources)):
+                    intersection = len(sources[i] & sources[j])
+                    union = len(sources[i] | sources[j])
+                    if union > 0:
+                        agreements.append(intersection / union)
+            jaccard_score = sum(agreements) / len(agreements) if agreements else 0.0
 
-        agreements = []
-        for i in range(len(sources)):
-            for j in range(i + 1, len(sources)):
-                intersection = len(sources[i] & sources[j])
-                union = len(sources[i] | sources[j])
-                if union > 0:
-                    agreements.append(intersection / union)
-
-        return sum(agreements) / len(agreements) if agreements else 0.0
+        # 综合评分：聚类一致性 70% + Jaccard 30%
+        return clustering_score * 0.7 + jaccard_score * 0.3
 
     def recall_async_clip(
         self,

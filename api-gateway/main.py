@@ -1,7 +1,7 @@
 """
 API Gateway 主入口模块.
 
-FastAPI 应用程序，作为汽车知识智能问答系统的统一入口网关。
+FastAPI 应用程序，作为化妆品企业级多模态 RAG 智能问答系统的统一入口网关。
 负责路由分发、鉴权、限流和请求编排。
 """
 
@@ -43,10 +43,10 @@ logger = logging.getLogger("api-gateway")
 # 应用实例
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="汽车知识智能问答系统 API Gateway",
+    title="化妆品企业级多模态 RAG 智能问答系统 API Gateway",
     description=(
         "统一 API 网关，聚合 rewrite、retrieval、generation、cache、monitoring 等微服务，"
-        "对外提供汽车知识问答能力。"
+        "对外提供化妆品行业知识问答能力。"
     ),
     version="2.0.0",
 )
@@ -55,11 +55,17 @@ app = FastAPI(
 # CORS 中间件 — 生产环境通过 CORS_ORIGINS 环境变量限制来源
 # ---------------------------------------------------------------------------
 _cors_origins_str = os.environ.get("CORS_ORIGINS", "")
-CORS_ORIGINS = (
-    [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
-    if _cors_origins_str
-    else ["*"]
-)
+if _cors_origins_str:
+    CORS_ORIGINS = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
+else:
+    # H-10: 生产模式下 CORS_ORIGINS 必须显式设置
+    try:
+        from common.config import is_production_mode
+        if is_production_mode():
+            raise RuntimeError("生产模式下必须通过 CORS_ORIGINS 环境变量设置允许的来源")
+    except (ImportError, RuntimeError):
+        pass
+    CORS_ORIGINS = ["*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -136,7 +142,7 @@ async def on_startup():
     """应用启动时打印各下游服务地址，便于运维排查。"""
     cfg = get_config()
     logger.info("=" * 60)
-    logger.info("汽车知识智能问答系统 API Gateway 启动中...")
+    logger.info("化妆品企业级多模态 RAG 智能问答系统 API Gateway 启动中...")
     logger.info("系统名称: %s", cfg.system.name)
     logger.info("系统版本: %s", cfg.system.version)
     logger.info("知识版本: %s", cfg.knowledge_version_epoch)

@@ -10,14 +10,14 @@ Embedding 服务模块
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
 import numpy as np
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,63 @@ class EmbeddingService:
         with torch.no_grad():
             text_features = self.clip_model.get_text_features(**inputs)
         return text_features.cpu().numpy().flatten()
+
+    def encode_texts_clip_batch(self, texts: list[str]) -> np.ndarray:
+        """
+        CLIP 文本批量编码（512d）— PRD §5.1 CLIP Text Encoder 批处理
+
+        Args:
+            texts: 输入文本列表
+
+        Returns:
+            (N, 512) 向量矩阵
+        """
+        import torch
+        inputs = self.clip_processor(text=texts, return_tensors="pt", padding=True, truncation=True)
+        with torch.no_grad():
+            text_features = self.clip_model.get_text_features(**inputs)
+        # L2 归一化
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        return text_features.cpu().numpy()
+
+    def get_image_centroid(self) -> np.ndarray | None:
+        """
+        PRD §4.5: 获取图像库质心向量
+
+        用于 CLIP 判别器的第三个分量: query_emb vs image_centroid_sim。
+        从 Milvus rag_image_512 采样向量计算质心。
+        """
+        try:
+            from pymilvus import MilvusClient
+            collection = config.get("milvus", {}).get("image_collection", "rag_image_512")
+            milvus_cfg = config.get("milvus", {})
+            host = milvus_cfg.get("host", "localhost")
+            port = milvus_cfg.get("port", 19530)
+
+            client = MilvusClient(uri=f"http://{host}:{port}")
+
+            # 采样最多 100 条向量计算质心
+            import random
+            sample_ids = [str(i) for i in random.sample(range(1, 200), min(100, 199))]
+            results = client.get(
+                collection_name=collection,
+                ids=sample_ids,
+                output_fields=["embedding"],
+            )
+
+            if not results:
+                return None
+
+            embeddings = np.array([r["entity"]["embedding"] for r in results], dtype=np.float32)
+            centroid = np.mean(embeddings, axis=0)
+            # 归一化
+            norm = np.linalg.norm(centroid)
+            if norm > 0:
+                centroid = centroid / norm
+            return centroid
+        except Exception as e:
+            logger.debug(f"图像质心计算失败: {e}")
+            return None
 
     def search_milvus_text(
         self,

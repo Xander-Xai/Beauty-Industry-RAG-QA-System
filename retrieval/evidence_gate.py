@@ -18,12 +18,12 @@ Evidence Score =
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class EvidenceEnsembleGate:
         retrieval_agreement_score: float = 0.0,
         weights_override: dict = None,
         thresholds_override: dict = None,
+        conservative_mode: bool = False,
     ) -> "EvidenceGateResult":
         """
         评估证据综合置信度
@@ -68,6 +69,7 @@ class EvidenceEnsembleGate:
             retrieval_agreement_score: 检索一致性评分（readme 7.2）
             weights_override: A/B 实验覆盖权重（PRD §12.2）
             thresholds_override: A/B 实验覆盖阈值（PRD §12.2）
+            conservative_mode: 保守模式（PRD §4.4 Rewrite 降级时阈值提升至 ≥0.8）
 
         Returns:
             EvidenceGateResult 含决策结果
@@ -94,7 +96,7 @@ class EvidenceEnsembleGate:
 
         # ③ Retrieval_Agreement_Score（来自 readme 7.2，外部计算传入）
 
-        # ④ Doc_Consistency_Score（NLI 交叉校验 Top-3 文档间逻辑一致性）
+        # ④ Doc_Consistency_Score（NLI 批量推理 Top-3 文档间逻辑一致性，GPU Batch）
         doc_consistency_score = self._compute_doc_consistency(query, rerank_results[:3])
 
         # 应用 A/B 实验覆盖权重（PRD §12.2）
@@ -105,6 +107,21 @@ class EvidenceEnsembleGate:
         t = {**self.thresholds}
         if thresholds_override:
             t.update(thresholds_override)
+
+        # PRD §4.4 保守模式：Rewrite 降级时强制提升 Evidence Gate 阈值至 ≥0.8
+        if conservative_mode:
+            t["high_confidence"] = max(t.get("high_confidence", 0.75), 0.8)
+            t["low_confidence"] = max(t.get("low_confidence", 0.55), 0.65)
+            logger.info(f"Evidence Gate 保守模式: high={t['high_confidence']}, low={t['low_confidence']}")
+
+        # PRD §7.2: 检索一致性过低时动态提高阈值（保守策略）
+        if retrieval_agreement_score < 0.3:
+            t["high_confidence"] = max(t.get("high_confidence", 0.75), 0.8)
+            t["low_confidence"] = max(t.get("low_confidence", 0.55), 0.65)
+            logger.info(
+                f"Evidence Gate 低一致性阈值调整: agreement={retrieval_agreement_score:.3f}, "
+                f"high={t['high_confidence']}, low={t['low_confidence']}"
+            )
 
         # 综合 Evidence Score
         evidence_score = (
@@ -141,36 +158,46 @@ class EvidenceEnsembleGate:
 
     def _compute_doc_consistency(self, query: str, top_docs: list) -> float:
         """
-        文档间逻辑矛盾检测（NLI 交叉校验，GPU Batch）
+        文档间逻辑矛盾检测（NLI 交叉校验，GPU Batch — PRD §7.4）
 
         对 Top-3 候选文档进行批量蕴含关系判断：
-        - 对每对文档做 NLI（前提=doc_i内容, 假设=doc_j内容）
+        - 收集所有文档对 (premise, hypothesis)
+        - 调用 AnswerGate 的批量 NLI 推理接口一次性推理
         - 一致文档对占比越高，一致性分数越高
         """
         if len(top_docs) < 2:
             return 1.0
 
         try:
-            # 通过 AnswerGate 的 NLI 模型进行批量推理
-            # 检查每对 Top-3 文档间是否互相蕴含（而非矛盾）
             doc_texts = [doc.content[:512] for doc in top_docs]
 
-            contradiction_count = 0
-            total_pairs = 0
-
+            # 收集所有文档对
+            pairs = []
             for i in range(len(doc_texts)):
                 for j in range(i + 1, len(doc_texts)):
-                    # NLI: premise=doc_i, hypothesis=doc_j
-                    contradiction, entailment = self.answer_gate._nli_inference(
-                        doc_texts[i], doc_texts[j]
-                    )
-                    if contradiction > 0.5:
-                        contradiction_count += 1
-                    total_pairs += 1
+                    pairs.append((doc_texts[i], doc_texts[j]))
 
-            if total_pairs == 0:
+            if not pairs:
                 return 1.0
 
+            # 使用批量 NLI 推理（GPU Batch，PRD §7.4 要求 ≤25ms）
+            try:
+                batch_results = self.answer_gate._batch_nli_inference(
+                    [(p[0], p[1]) for p in pairs],
+                )
+                contradiction_count = sum(
+                    1 for (contradiction, _entailment) in batch_results
+                    if contradiction > 0.5
+                )
+            except (AttributeError, Exception):
+                # 降级为逐条推理
+                contradiction_count = 0
+                for premise, hypothesis in pairs:
+                    contradiction, _entailment = self.answer_gate._nli_inference(premise, hypothesis)
+                    if contradiction > 0.5:
+                        contradiction_count += 1
+
+            total_pairs = len(pairs)
             # 一致性 = 1 - 矛盾文档对比例
             consistency = 1.0 - (contradiction_count / total_pairs)
             return consistency

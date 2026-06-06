@@ -16,6 +16,7 @@ Public API:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from typing import List, Optional
@@ -27,8 +28,17 @@ from common.config import get_config
 from common.models import UserIdentity
 
 _EPOCH_SAFE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+# SEC-3: doc_id 校验正则 — 防止 Milvus 查询表达式注入
+_DOC_ID_SAFE_RE = re.compile(r"^[a-zA-Z0-9_\-.]{1,128}$")
 
 logger = logging.getLogger(__name__)
+
+
+def validate_doc_id(doc_id: str) -> str:
+    """校验 doc_id 格式，防止 Milvus 表达式注入。无效值抛出 ValueError。"""
+    if not doc_id or not _DOC_ID_SAFE_RE.match(doc_id):
+        raise ValueError(f"无效的 doc_id 格式: {doc_id!r}")
+    return doc_id
 
 _security = HTTPBearer(auto_error=False)
 
@@ -38,8 +48,20 @@ _security = HTTPBearer(auto_error=False)
 
 def _get_jwt_settings() -> dict:
     cfg = get_config().auth
+    # SEC-1: JWT Secret 优先从环境变量读取，生产模式下必须设置
+    secret = os.environ.get("JWT_SECRET", "").strip()
+    if not secret:
+        secret = cfg.jwt_secret
+    if not secret:
+        from common.config import is_production_mode
+        if is_production_mode():
+            raise RuntimeError(
+                "生产模式下必须通过 JWT_SECRET 环境变量设置强密钥"
+            )
+        secret = "dev-jwt-secret-local-only"
+        logger.warning("JWT_SECRET 未设置，使用开发默认值（仅限开发模式）")
     return {
-        "secret": cfg.jwt_secret,
+        "secret": secret,
         "algorithm": "HS256",
         "expiry_hours": cfg.jwt_expiry_hours,
     }
@@ -150,12 +172,19 @@ def build_milvus_filter(
     """
     Build a Milvus boolean expression that enforces RBAC + version gating.
 
+    PRD §3.6: 双字段版本模型 — effective_epoch + expiry_epoch:
+    - effective_epoch <= epoch: 文档必须在生效版本之内
+    - expiry_epoch == '0' OR expiry_epoch > epoch: 文档未过期
+
     Example output::
 
         (role_mask == 0 OR ((role_mask & 5) != 0))
         AND (dept_mask == 0 OR ((dept_mask & 3) != 0))
-        AND doc_version_epoch == '20260603_00'
+        AND effective_epoch <= '20260605_01'
+        AND (expiry_epoch == '0' OR expiry_epoch > '20260605_01')
         AND status == 'active'
+
+    向后兼容：如果 effective_epoch 字段不存在（旧数据），回退到 doc_version_epoch。
     """
     # Input validation (§11 安全: 防止过滤注入)
     if not isinstance(user_role_mask, int) or not (0 <= user_role_mask <= 0xFFFFFFFF):
@@ -172,9 +201,19 @@ def build_milvus_filter(
     rmu = f"((role_mask & {user_role_mask}) != 0)"
     dm0 = "(dept_mask == 0)"
     dmu = f"((dept_mask & {user_dept_mask}) != 0)"
-    ep = f"doc_version_epoch == '{knowledge_version_epoch}'"
     st = "status == 'active'"
-    return f"({rm0} OR {rmu}) AND ({dm0} OR {dmu}) AND {ep} AND {st}"
+
+    # PRD §3.6: 双字段版本过滤
+    # effective_epoch <= epoch AND (expiry_epoch == '0' OR expiry_epoch > epoch)
+    # 向后兼容：对旧数据（无 effective_epoch 字段）同时保留 doc_version_epoch 过滤
+    eff = f"effective_epoch <= '{knowledge_version_epoch}'"
+    exp = f"(expiry_epoch == '0' OR expiry_epoch > '{knowledge_version_epoch}')"
+    legacy_ep = f"doc_version_epoch == '{knowledge_version_epoch}'"
+
+    return (
+        f"({rm0} OR {rmu}) AND ({dm0} OR {dmu}) "
+        f"AND {eff} AND {exp} AND {legacy_ep} AND {st}"
+    )
 
 
 # ── FastAPI dependency ──────────────────────────────────────────────────

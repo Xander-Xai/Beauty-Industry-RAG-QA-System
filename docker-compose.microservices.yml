@@ -1,0 +1,190 @@
+# ============================================================================
+# Beauty Industry RAG QA System — 微服务模式 Docker Compose
+# 用法: docker compose -f docker-compose.yml -f docker-compose.microservices.yml up -d
+# ============================================================================
+
+services:
+
+  # ── API Gateway ─────────────────────────────────────────────────────
+  api-gateway:
+    build: .
+    command: python -m uvicorn api-gateway.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:-dev-service-token-2026}
+      - REWRITE_SERVICE_URL=http://rewrite-service:8101
+      - RETRIEVAL_SERVICE_URL=http://retrieval-service:8200
+      - GENERATION_SERVICE_URL=http://generation-service:8100
+      - CACHE_SERVICE_URL=http://cache-service:8300
+      - MONITORING_SERVICE_URL=http://monitoring-service:8400
+    depends_on:
+      rewrite-service:
+        condition: service_healthy
+      retrieval-service:
+        condition: service_healthy
+      generation-service:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── Rewrite Service (GPU1) ────────────────────────────────────────
+  rewrite-service:
+    build: .
+    command: python -m uvicorn rewrite-service.main:app --host 0.0.0.0 --port 8101
+    ports:
+      - "8101:8101"
+    environment:
+      - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:-dev-service-token-2026}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── Retrieval Service ──────────────────────────────────────────────
+  retrieval-service:
+    build: .
+    command: python -m uvicorn retrieval-service.main:app --host 0.0.0.0 --port 8200
+    ports:
+      - "8200:8200"
+    environment:
+      - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:-dev-service-token-2026}
+    depends_on:
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── Generation Service ─────────────────────────────────────────────
+  generation-service:
+    build: .
+    command: python -m uvicorn generation-service.main:app --host 0.0.0.0 --port 8100
+    ports:
+      - "8100:8100"
+    environment:
+      - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:-dev-service-token-2026}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── Cache Service ──────────────────────────────────────────────────
+  cache-service:
+    build: .
+    command: python -m uvicorn cache-service.main:app --host 0.0.0.0 --port 8300
+    ports:
+      - "8300:8300"
+    environment:
+      - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:-dev-service-token-2026}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8300/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── Monitoring Service ─────────────────────────────────────────────
+  monitoring-service:
+    build: .
+    command: python -m uvicorn monitoring-service.main:app --host 0.0.0.0 --port 8400
+    ports:
+      - "8400:8400"
+    environment:
+      - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:-dev-service-token-2026}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8400/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── PRD §12: Prometheus 指标采集 ──────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+    depends_on:
+      monitoring-service:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── PRD §12: Grafana 可视化仪表盘 ────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=rag_monitor_2026
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── PRD §12: Jaeger 分布式追踪 ───────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "6831:6831/udp"  # Jaeger agent UDP
+      - "14268:14268"  # Jaeger collector HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ── Frontend (React SPA) ────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:80"
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+volumes:
+  grafana_data:

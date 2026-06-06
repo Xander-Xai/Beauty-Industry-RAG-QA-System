@@ -212,6 +212,10 @@ class AlertingManager:
                 return self.metrics._counters.get("cache.hit.L1", 0) / total
             return 0.0
 
+        # PRD §12: Redis 降级持续次数
+        if metric_name == "redis.degraded_events":
+            return float(self.metrics._counters.get("redis.degraded_events", 0))
+
         # 从直方图取 p99
         if metric_name in self.metrics._histograms:
             values = self.metrics._histograms[metric_name]
@@ -246,6 +250,7 @@ class AlertingManager:
         支持渠道类型：
         - webhook: HTTP POST 到指定 URL
         - slack: Slack Incoming Webhook
+        - email: SMTP 邮件通知（PRD §12）
         """
         severity = alert.get("severity", "warning")
         message = alert.get("message", alert.get("name", "unknown alert"))
@@ -260,7 +265,8 @@ class AlertingManager:
             if severity_order.get(severity, 0) < severity_order.get(min_severity, 0):
                 continue
 
-            if not channel_url:
+            # email 类型不需要 url，需要 to_address
+            if channel_type != "email" and not channel_url:
                 continue
 
             try:
@@ -268,6 +274,8 @@ class AlertingManager:
                     self._send_webhook(channel_url, alert)
                 elif channel_type == "slack":
                     self._send_slack(channel_url, alert)
+                elif channel_type == "email":
+                    self._send_email(channel, alert)
                 else:
                     logger.warning(f"未知通知渠道类型: {channel_type}")
             except Exception as e:
@@ -302,3 +310,58 @@ class AlertingManager:
         payload = json.dumps({"text": text}).encode("utf-8")
         req = urllib.request.Request(webhook_url, data=payload, headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=10)
+
+    def _send_email(self, channel: dict, alert: dict):
+        """
+        PRD §12: 发送邮件告警通知。
+
+        channel 配置示例:
+        {"type": "email", "to": "admin@example.com",
+         "smtp_host": "smtp.example.com", "smtp_port": 587,
+         "smtp_user": "...", "smtp_password": "...",
+         "from": "alerts@example.com", "min_severity": "critical"}
+        """
+        import smtplib
+        from email.mime.text import MIMEText
+
+        to_addr = channel.get("to", "")
+        if not to_addr:
+            logger.warning("邮件通知缺少 to 地址")
+            return
+
+        smtp_host = channel.get("smtp_host", "localhost")
+        smtp_port = channel.get("smtp_port", 587)
+        smtp_user = channel.get("smtp_user", "")
+        smtp_password = channel.get("smtp_password", "")
+        from_addr = channel.get("from", "alerts@rag-system.local")
+
+        severity_emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}
+        emoji = severity_emoji.get(alert.get("severity", "warning"), "⚪")
+
+        subject = f"{emoji} [RAG System Alert] {alert.get('name', 'Unknown')}"
+        body = (
+            f"告警名称: {alert.get('name', 'Unknown')}\n"
+            f"严重级别: {alert.get('severity', 'warning')}\n"
+            f"指标: {alert.get('metric', '')}\n"
+            f"当前值: {alert.get('current_value', '')}\n"
+            f"阈值: {alert.get('threshold', '')}\n"
+            f"持续时间: {alert.get('duration_s', 0)}s\n"
+            f"详细信息: {alert.get('message', '')}\n"
+            f"\n---\n"
+            f"化妆品 RAG 智能问答系统自动告警"
+        )
+
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = to_addr
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                if smtp_user and smtp_password:
+                    server.starttls()
+                    server.login(smtp_user, smtp_password)
+                server.sendmail(from_addr, [to_addr], msg.as_string())
+            logger.info(f"邮件告警已发送: {to_addr}")
+        except Exception as e:
+            logger.error(f"邮件发送失败: {e}")

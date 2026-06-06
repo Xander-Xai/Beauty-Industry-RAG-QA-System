@@ -36,6 +36,7 @@ from common.models import (
     RerankResult,
 )
 from common.service_auth import verify_service_token
+from monitoring_service.metrics_collector import MetricsCollector
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -64,6 +65,14 @@ _cross_encoder = None
 _evidence_gate = None
 _answer_gate = None
 _embedding_service = None
+_metrics = None
+
+
+def _get_metrics():
+    global _metrics
+    if _metrics is None:
+        _metrics = MetricsCollector()
+    return _metrics
 
 
 def _get_recall_manager():
@@ -180,6 +189,8 @@ async def api_recall(req: RecallRequest, _auth: None = Depends(verify_service_to
     paths concurrently and returns the union recall set.
     """
     t0 = time.time()
+    m = _get_metrics()
+    m.increment("recall.requests")
     try:
         # Compute query embedding if not provided by caller
         if req.query_embedding is not None:
@@ -200,12 +211,16 @@ async def api_recall(req: RecallRequest, _auth: None = Depends(verify_service_to
         )
 
         elapsed_ms = (time.time() - t0) * 1000
+        m.observe_histogram("recall.latency_ms", elapsed_ms)
+        m.set_gauge("recall.result_count", len(results))
+        m.increment("recall.success")
         logger.info(
             f"POST /api/recall -> {len(results)} results in {elapsed_ms:.1f} ms"
         )
         return RecallResponse(results=results)
 
     except Exception as e:
+        m.increment("recall.errors")
         logger.error(f"/api/recall failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -219,6 +234,8 @@ async def api_rerank(req: RerankRequest, _auth: None = Depends(verify_service_to
     Stage 2: CrossEncoder ensemble produces the final Top-K.
     """
     t0 = time.time()
+    m = _get_metrics()
+    m.increment("rerank.requests")
     try:
         bi_encoder = _get_bi_encoder()
         cross_encoder = _get_cross_encoder()
@@ -238,12 +255,15 @@ async def api_rerank(req: RerankRequest, _auth: None = Depends(verify_service_to
         )
 
         elapsed_ms = (time.time() - t0) * 1000
+        m.observe_histogram("rerank.latency_ms", elapsed_ms)
+        m.increment("rerank.success")
         logger.info(
             f"POST /api/rerank -> {len(ce_results)} results in {elapsed_ms:.1f} ms"
         )
         return RerankResponse(results=ce_results)
 
     except Exception as e:
+        m.increment("rerank.errors")
         logger.error(f"/api/rerank failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -257,6 +277,8 @@ async def api_evidence_gate(req: EvidenceGateRequest, _auth: None = Depends(veri
     retrieval agreement, and cross-document NLI consistency.
     """
     t0 = time.time()
+    m = _get_metrics()
+    m.increment("evidence_gate.requests")
     try:
         gate = _get_evidence_gate()
 
@@ -267,6 +289,9 @@ async def api_evidence_gate(req: EvidenceGateRequest, _auth: None = Depends(veri
         )
 
         elapsed_ms = (time.time() - t0) * 1000
+        m.observe_histogram("evidence_gate.latency_ms", elapsed_ms)
+        m.observe_histogram("evidence_gate.score", result.evidence_score)
+        m.increment(f"evidence_gate.decision.{result.decision}")
         logger.info(
             f"POST /api/evidence-gate -> decision={result.decision} "
             f"score={result.evidence_score:.3f} in {elapsed_ms:.1f} ms"
@@ -274,6 +299,7 @@ async def api_evidence_gate(req: EvidenceGateRequest, _auth: None = Depends(veri
         return result
 
     except Exception as e:
+        m.increment("evidence_gate.errors")
         logger.error(f"/api/evidence-gate failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -286,6 +312,8 @@ async def api_answer_gate(req: AnswerGateRequest, _auth: None = Depends(verify_s
     For regulation queries, contradiction > 0.5 triggers forced rejection.
     """
     t0 = time.time()
+    m = _get_metrics()
+    m.increment("answer_gate.requests")
     try:
         gate = _get_answer_gate()
 
@@ -296,6 +324,9 @@ async def api_answer_gate(req: AnswerGateRequest, _auth: None = Depends(verify_s
         )
 
         elapsed_ms = (time.time() - t0) * 1000
+        m.observe_histogram("answer_gate.latency_ms", elapsed_ms)
+        m.observe_histogram("answer_gate.contradiction", result.nli_contradiction_score)
+        m.increment(f"answer_gate.{'passed' if result.passed else 'rejected'}")
         logger.info(
             f"POST /api/answer-gate -> passed={result.passed} "
             f"contradiction={result.nli_contradiction_score:.3f} "
@@ -304,8 +335,15 @@ async def api_answer_gate(req: AnswerGateRequest, _auth: None = Depends(verify_s
         return result
 
     except Exception as e:
+        m.increment("answer_gate.errors")
         logger.error(f"/api/answer-gate failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Prometheus 格式指标端点 (PRD §12)"""
+    return _get_metrics().get_prometheus_metrics()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

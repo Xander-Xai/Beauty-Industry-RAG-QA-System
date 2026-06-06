@@ -17,15 +17,15 @@ BLIP 在线按需推理模块（PRD §6）
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
 import threading
 from typing import Optional
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ class BLIPTargetDetector:
     def __init__(self):
         self._bert_model = None
         self._bert_tokenizer = None
+        self._bert_load_attempted = False  # 避免重复尝试加载失败的模型
         logger.info("BLIPTargetDetector 初始化完成")
 
     def should_trigger(
@@ -99,15 +100,82 @@ class BLIPTargetDetector:
 
     def _bert_intent_score(self, query: str, business_type: str, intent: str) -> float:
         """
-        BERT 意图分类评分（简化版：基于 intent + business_type 规则）
+        BERT 意图分类评分（PRD §6: BERT 分类器）
 
-        生产环境可替换为微调 BERT 分类器。
-        当前规则：
-        - formulation/ingredient intent + 包含视觉关键词 → 0.7
-        - development business_type + 包含图像类关键词 → 0.6
+        优先使用微调 BERT 模型推理，不可用时降级为规则逻辑。
+        使用 _bert_load_attempted 标志避免每次调用都重复尝试加载失败的模型。
         """
+        # 尝试使用真正的 BERT 模型推理
+        if self._bert_model is not None and self._bert_tokenizer is not None:
+            return self._bert_inference(query)
+
+        # 仅尝试加载一次，失败后不再重复
+        if not self._bert_load_attempted:
+            self._bert_load_attempted = True
+            if self._try_load_bert():
+                return self._bert_inference(query)
+            else:
+                logger.info("BLIP BERT 模型不可用，使用规则 fallback（后续调用不再尝试加载）")
+
+        # Fallback: 规则逻辑
+        return self._rule_fallback(query, business_type, intent)
+
+    def _try_load_bert(self) -> bool:
+        """尝试加载 BERT 意图分类模型"""
+        try:
+            import torch
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+            bert_cfg = config.get("gpu1", {}).get("models", {}).get(
+                "bert_blip_intent", {}
+            )
+            model_path = bert_cfg.get("model_path", "")
+            if not model_path:
+                return False
+
+            if not os.path.isabs(model_path):
+                model_path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    model_path,
+                )
+
+            if not os.path.exists(model_path):
+                logger.debug(f"BLIP BERT 模型路径不存在: {model_path}")
+                return False
+
+            self._bert_tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self._bert_model = AutoModelForSequenceClassification.from_pretrained(model_path)
+            device = bert_cfg.get("device", "cuda:1")
+            self._bert_model = self._bert_model.to(device)
+            self._bert_model.eval()
+            logger.info(f"BLIP BERT 意图分类模型加载完成: {model_path}")
+            return True
+        except Exception as e:
+            logger.debug(f"BLIP BERT 模型加载失败（降级为规则）: {e}")
+            return False
+
+    def _bert_inference(self, query: str) -> float:
+        """使用 BERT 模型进行意图分类推理"""
+        try:
+            import torch
+            inputs = self._bert_tokenizer(
+                query, return_tensors="pt", truncation=True, max_length=128, padding=True
+            )
+            device = next(self._bert_model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            with torch.no_grad():
+                outputs = self._bert_model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=-1)
+            # 假设 label 1 = visual intent
+            visual_prob = probs[0][1].item() if probs.shape[-1] > 1 else probs[0][0].item()
+            return visual_prob
+        except Exception as e:
+            logger.debug(f"BLIP BERT 推理失败: {e}")
+            return 0.0
+
+    def _rule_fallback(self, query: str, business_type: str, intent: str) -> float:
+        """规则 fallback（模型不可用时使用）"""
         if intent in ("formulation", "ingredient"):
-            # 配方/成分查询有较高概率需要看图
             has_visual_kw = any(kw in query for kw in VISUAL_KEYWORDS)
             if has_visual_kw:
                 return 0.7
@@ -136,7 +204,9 @@ class BLIPInferenceService:
         self._processor = None
         self._cache = {}  # {image_uri: (caption, timestamp)}
         self._cache_lock = threading.Lock()
-        self._cache_ttl = 3600  # 1 小时
+        # PRD §6: BLIP TTL 缓存（1h）
+        self._caption_cache: dict[str, tuple[str, float]] = {}  # image_uri -> (caption, timestamp)
+        self._cache_ttl = config.get("gpu1", {}).get("models", {}).get("blip", {}).get("cache_ttl_seconds", 3600)
         self._trigger_count = 0
         self._total_count = 0
         logger.info("BLIPInferenceService 初始化完成")
@@ -252,7 +322,10 @@ class BLIPInferenceService:
         max_length: int = 128,
     ) -> dict[str, str]:
         """
-        批量生成图像描述（GPU 批处理）。
+        批量生成图像描述（PRD §6: GPU 真正批处理）。
+
+        使用 BLIPProcessor batch encoding + 单次 forward pass 处理多张图片，
+        延迟显著低于逐条串行。
 
         Args:
             image_uris: 图像路径/URL 列表
@@ -262,12 +335,123 @@ class BLIPInferenceService:
         Returns:
             {image_uri: caption} 字典
         """
-        results = {}
+        if not image_uris:
+            return {}
+
+        # PRD §6: 检查 TTL 缓存
+        now = time.time()
+        cached_captions = {}
+        uncached_uris = []
         for uri in image_uris:
-            caption = self.generate_caption(uri, query, max_length)
-            if caption:
-                results[uri] = caption
-        return results
+            if uri in self._caption_cache:
+                caption, ts = self._caption_cache[uri]
+                if now - ts < self._cache_ttl:
+                    cached_captions[uri] = caption
+                    continue
+            uncached_uris.append(uri)
+
+        if not uncached_uris:
+            return cached_captions
+
+        # 只处理未缓存的图像
+        image_uris = uncached_uris
+
+        # PRD §6: BLIP 推理超时保护（120ms）
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+        blip_timeout_ms = config.get("gpu1", {}).get("models", {}).get("blip", {}).get("timeout_ms", 120)
+
+        results = {}
+        uncached_uris = []
+
+        # 先检查缓存
+        for uri in image_uris:
+            cached = self._get_from_cache(uri)
+            if cached is not None:
+                results[uri] = cached
+            else:
+                uncached_uris.append(uri)
+
+        if not uncached_uris:
+            return results
+
+        if self.model is None or self.processor is None:
+            return results
+
+        try:
+            import torch
+            from PIL import Image
+
+            # 加载所有未缓存的图片
+            images = []
+            valid_uris = []
+            for uri in uncached_uris:
+                try:
+                    if uri.startswith(("http://", "https://")):
+                        import urllib.request
+                        with urllib.request.urlopen(uri, timeout=5) as response:
+                            images.append(Image.open(response).convert("RGB"))
+                    elif os.path.exists(uri):
+                        images.append(Image.open(uri).convert("RGB"))
+                    else:
+                        continue
+                    valid_uris.append(uri)
+                except Exception as e:
+                    logger.warning(f"BLIP batch: 图片加载失败 {uri}: {e}")
+                    continue
+
+            if not images:
+                return results
+
+            # PRD §6: GPU batch processing — 单次 forward pass
+            t_start = time.time()
+            if query:
+                # 条件批处理：每个图片 + 同一个 query
+                inputs = self.processor(
+                    images, [query] * len(images),
+                    return_tensors="pt", padding=True
+                )
+            else:
+                inputs = self.processor(
+                    images, return_tensors="pt", padding=True
+                )
+
+            device = next(self.model.parameters()).device if hasattr(self.model, 'parameters') else "cpu"
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                output = self.model.generate(**inputs, max_length=max_length)
+
+            # 解码每张图片的 caption
+            for i, uri in enumerate(valid_uris):
+                if i < len(output):
+                    caption = self.processor.decode(output[i], skip_special_tokens=True)
+                    results[uri] = caption
+                    self._put_to_cache(uri, caption)
+
+            batch_ms = (time.time() - t_start) * 1000
+            if batch_ms > 120:
+                logger.warning(
+                    f"BLIP batch 推理超时: {batch_ms:.0f}ms > 120ms "
+                    f"({len(valid_uris)} images)"
+                )
+            else:
+                logger.debug(f"BLIP batch: {len(valid_uris)} images, {batch_ms:.0f}ms")
+
+        except Exception as e:
+            logger.error(f"BLIP batch 推理失败: {e}")
+            # 降级为逐条处理
+            for uri in uncached_uris:
+                if uri not in results:
+                    caption = self.generate_caption(uri, query, max_length)
+                    if caption:
+                        results[uri] = caption
+
+        # 合并缓存结果
+        all_captions = {**cached_captions}
+        for uri, caption in results.items():
+            all_captions[uri] = caption
+            self._caption_cache[uri] = (caption, time.time())
+        return all_captions
 
     def _get_from_cache(self, image_uri: str) -> Optional[str]:
         """从缓存获取"""

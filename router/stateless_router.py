@@ -9,14 +9,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
 import httpx
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 

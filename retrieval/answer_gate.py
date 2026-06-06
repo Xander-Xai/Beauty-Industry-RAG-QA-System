@@ -10,14 +10,14 @@ GPU 批处理，延迟 ≤25ms
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional, Tuple
 
 import numpy as np
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,32 @@ class AnswerGate:
                 is_regulation=is_regulation,
             )
 
+        # 快速路径：Jaccard 字符相似度预筛选（<1ms vs LLM NLI ~6s）
+        jaccard_score = self._jaccard_similarity(top_doc.content, answer)
+
+        # 高相似度 → 直接通过（跳过 NLI 模型）
+        if jaccard_score > 0.6:
+            logger.debug(f"Answer Gate 快速通过: jaccard={jaccard_score:.3f} > 0.6")
+            return AnswerGateResult(
+                nli_contradiction_score=0.0,
+                nli_entailment_score=jaccard_score,
+                passed=True,
+                warning=False,
+                is_regulation=is_regulation,
+            )
+
+        # 低相似度 → 法规类强制标记，非法规类标记 warning
+        if jaccard_score < 0.15:
+            logger.debug(f"Answer Gate 快速标记: jaccard={jaccard_score:.3f} < 0.15")
+            return AnswerGateResult(
+                nli_contradiction_score=0.6,
+                nli_entailment_score=jaccard_score,
+                passed=not is_regulation,
+                warning=True,
+                is_regulation=is_regulation,
+            )
+
+        # 中间地带 → 走完整 NLI 推理
         # NLI 推理
         contradiction_score, entailment_score = self._nli_inference(
             top_doc.content, answer
@@ -159,6 +185,19 @@ class AnswerGate:
             for i, doc in enumerate(top_docs)
         ]
 
+    def _jaccard_similarity(self, text_a: str, text_b: str) -> float:
+        """Jaccard 字符级相似度（快速路径，<1ms）"""
+        if not text_a or not text_b:
+            return 0.0
+        # 按字符 3-gram 切分
+        def ngrams(text, n=3):
+            return set(text[i:i+n] for i in range(max(0, len(text) - n + 1)))
+        a = ngrams(text_a[:500])
+        b = ngrams(text_b[:500])
+        if not a or not b:
+            return 0.0
+        return len(a & b) / len(a | b)
+
     def _nli_inference(self, premise: str, hypothesis: str) -> Tuple[float, float]:
         """
         NLI 推理
@@ -173,7 +212,7 @@ class AnswerGate:
 
     def _batch_nli_inference(self, pairs: list) -> list[Tuple[float, float]]:
         """
-        批量 NLI 推理（共享模型上下文）
+        批量 NLI 推理（通过 RerankBatchAggregator 聚合 — PRD §5.1）
 
         Args:
             pairs: [(premise, hypothesis), ...]
@@ -181,10 +220,22 @@ class AnswerGate:
         Returns:
             [(contradiction_score, entailment_score), ...]
         """
-        if self._use_nli:
-            return self._batch_nli_with_model(pairs)
-        else:
+        if not self._use_nli:
             return [self._nli_inference_with_similarity(p, h) for p, h in pairs]
+
+        # PRD §5.1: 优先通过 RerankBatchAggregator 批处理
+        try:
+            from retrieval.rerank_batch_aggregator import RerankBatchAggregator
+            aggregator = RerankBatchAggregator()
+            batch_results = aggregator.batch_predict_nli(self._nli_model, pairs)
+            if batch_results and len(batch_results) == len(pairs) and batch_results[0]:
+                # batch_predict_nli returns [(contradiction, entailment, neutral), ...]
+                return [(r[0], r[1]) for r in batch_results]
+        except Exception as e:
+            logger.debug(f"RerankBatchAggregator NLI 批处理失败，回退直调: {e}")
+
+        # Fallback: 直接调用模型
+        return self._batch_nli_with_model(pairs)
 
     def _nli_inference_with_model(self, premise: str, hypothesis: str) -> Tuple[float, float]:
         """使用 NLI 模型推理"""

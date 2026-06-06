@@ -8,6 +8,7 @@
     python run_services.py --service rewrite
     python run_services.py --service gen
     python run_services.py --service rerank
+    python run_services.py --deployment-mode testing  # 单卡模式：跳过 14B，复用 4B
 """
 
 import argparse
@@ -286,15 +287,25 @@ def main():
         help="启动的服务"
     )
     parser.add_argument(
+        "--deployment-mode",
+        choices=["production", "testing", "development"],
+        default=None,
+        help="部署模式 (默认从 config.json 读取)。testing/development 跳过 14B，复用 4B"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="仅打印启动命令，不实际执行"
     )
     args = parser.parse_args()
 
-    with open("config.json", encoding="utf-8", errors="replace") as f:
-        content = f.read().replace('\\"', '"')
-    config = json.loads(content)
+    from common.config import get_config_dict
+    config = get_config_dict()
+
+    # 解析部署模式：CLI 参数 > config.json > 默认 development
+    deployment_mode = args.deployment_mode or config.get("deployment_mode", "development")
+    is_production = deployment_mode == "production"
+    logger.info(f"部署模式: {deployment_mode}" + (" (双卡: 14B + 4B)" if is_production else " (单卡: 仅 4B)"))
 
     launched = []
 
@@ -314,19 +325,23 @@ def main():
             start_vllm_service("vllm-gen-4b", gen_4b["port"], gen_4b["model_path"], gen_4b["max_model_len"])
             launched.append("vllm-gen-4b")
 
-        gen_14b = config["gpu0"]["models"]["gen_14b"]
-        if args.dry_run:
-            logger.info(f"[DRY RUN] vllm-gen-14b: port={gen_14b['port']}")
+        # 生产模式才启动 14B；单卡模式跳过（由 llm_client._resolve_endpoint 降级到 4B）
+        if is_production:
+            gen_14b = config["gpu0"]["models"]["gen_14b"]
+            if args.dry_run:
+                logger.info(f"[DRY RUN] vllm-gen-14b: port={gen_14b['port']}")
+            else:
+                gpu_mem = gen_14b.get("gpu_memory_utilization", 0.85)
+                start_vllm_service(
+                    "vllm-gen-14b",
+                    gen_14b["port"],
+                    gen_14b["model_path"],
+                    gen_14b["max_model_len"],
+                    gpu_memory_utilization=gpu_mem,
+                )
+                launched.append("vllm-gen-14b")
         else:
-            gpu_mem = gen_14b.get("gpu_memory_utilization", 0.85)
-            start_vllm_service(
-                "vllm-gen-14b",
-                gen_14b["port"],
-                gen_14b["model_path"],
-                gen_14b["max_model_len"],
-                gpu_memory_utilization=gpu_mem,
-            )
-            launched.append("vllm-gen-14b")
+            logger.info("单卡模式: 跳过 vllm-gen-14B (14B 请求将降级到 4B)")
 
     if args.service in ("all", "rerank"):
         rerank_port = config["gpu1"]["models"].get("rerank_service", {}).get("port", 8103)

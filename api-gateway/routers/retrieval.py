@@ -111,10 +111,10 @@ async def recall(body: RecallRequest):
         )
 
     except httpx.HTTPStatusError as exc:
-        logger.error("召回服务返回错误: %d", exc.response.status_code)
+        logger.error("召回服务返回错误: %d %s", exc.response.status_code, exc.response.text)
         raise HTTPException(
             status_code=exc.response.status_code,
-            detail=f"召回服务错误: {exc.response.text}",
+            detail="召回服务暂时不可用，请稍后重试",
         )
 
 
@@ -157,10 +157,10 @@ async def rerank(body: RerankRequest):
         )
 
     except httpx.HTTPStatusError as exc:
-        logger.error("重排服务返回错误: %d", exc.response.status_code)
+        logger.error("重排服务返回错误: %d %s", exc.response.status_code, exc.response.text)
         raise HTTPException(
             status_code=exc.response.status_code,
-            detail=f"重排服务错误: {exc.response.text}",
+            detail="重排服务暂时不可用，请稍后重试",
         )
 
 
@@ -204,8 +204,8 @@ async def evidence_gate(body: EvidenceGateRequest):
         )
 
     except httpx.HTTPStatusError as exc:
-        logger.error("证据门控服务返回错误: %d", exc.response.status_code)
+        logger.error("证据门控服务返回错误: %d %s", exc.response.status_code, exc.response.text)
         raise HTTPException(
             status_code=exc.response.status_code,
-            detail=f"证据门控服务错误: {exc.response.text}",
+            detail="证据门控服务暂时不可用，请稍后重试",
         )

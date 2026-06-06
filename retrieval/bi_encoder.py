@@ -9,14 +9,14 @@ BiEncoder 宽保留重排模块（readme 7.3 Stage 1）
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
 import numpy as np
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ class BiEncoderReranker:
                 results.append(RerankResult(
                     doc_id=candidate.doc_id,
                     content=candidate.content,
+                    source=getattr(candidate, 'source', ''),
                     bi_score=float(similarities[idx]),
                 ))
 
@@ -94,6 +95,6 @@ class BiEncoderReranker:
             logger.error(f"BiEncoder 重排失败: {e}")
             # 降级：返回原始候选的前 top_k 条
             return [
-                RerankResult(doc_id=c.doc_id, content=c.content, bi_score=0.0)
+                RerankResult(doc_id=c.doc_id, content=c.content, source=getattr(c, 'source', ''), bi_score=0.0)
                 for c in candidates[:top_k]
             ]

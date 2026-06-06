@@ -7,14 +7,14 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
 from typing import Optional
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,9 @@ if _deploy_mode == "production":
         raise RuntimeError(
             "生产模式下必须设置强 JWT_SECRET 环境变量（不得以 'dev-' 开头）"
         )
+    # H-2 修复: 生产模式下禁止 dev_mode
+    if config.get("auth", {}).get("dev_mode", False):
+        raise RuntimeError("生产模式下不允许 dev_mode=true")
 
 
 class UserIdentity:
@@ -77,10 +80,11 @@ class UserIdentity:
             logger.warning("JWT 解析失败，降级到开发模式 Header")
 
         # 开发模式：从请求头直接读取
+        # H-2 修复: 默认角色掩码改为 0（零权限），不再默认 super_admin
         if self.dev_mode:
             return {
                 "user_id": request.headers.get("X-User-Id", "anonymous"),
-                "user_role_mask": int(request.headers.get("X-User-Role-Mask", self.super_admin_mask)),
+                "user_role_mask": int(request.headers.get("X-User-Role-Mask", 0)),
                 "user_dept_mask": int(request.headers.get("X-User-Dept-Mask", 0)),
             }
 

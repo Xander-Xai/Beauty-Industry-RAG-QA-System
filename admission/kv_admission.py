@@ -46,17 +46,20 @@ class KVAdmissionControl:
       P2: product, general, chat, short — lowest priority, dropped first
     """
 
-    KV_PER_TOKEN = 0.45 * 1024  # 0.45 KB per token (Qwen3-14B GQA)
+    # PRD §5.2.3 双因子 KV 成本模型
+    KV_PER_TOKEN = 0.45 * 1024           # 兼容旧代码
+    KV_PER_TOKEN_PREFILL = 0.45 * 1024   # 0.45 KB per token (prefill phase)
+    KV_PER_TOKEN_DECODE = 0.54 * 1024    # 0.54 KB per token (decode phase = 1.2x prefill)
     OUTPUT_MAP = {
         'regulation': 1024, 'development': 768, 'formulation': 768,
-        'ingredient': 512, 'general': 256,
+        'ingredient': 512, 'product': 512, 'general': 512, 'short': 256,
     }
 
-    # PRD §9 thresholds — aligned with PRD spec
-    THRESHOLD_TIGHTEN = 0.85     # 85%: token bucket tightened, requests queued
-    THRESHOLD_TRUNCATE = 0.90    # 90%: app-layer stream truncation
-    THRESHOLD_SOFT_STOP = 0.95   # 95%: P1 downgrade to 4B, P2 dropped
-    THRESHOLD_CRITICAL = 0.97    # 97%: extreme overload, P0 downgrade + shrink
+    # PRD §5.2.5 / §9 thresholds — unified with PRD spec
+    THRESHOLD_TIGHTEN = 0.70     # 70%: token bucket tightened, requests queued
+    THRESHOLD_TRUNCATE = 0.80    # 80%: app-layer stream truncation
+    THRESHOLD_SOFT_STOP = 0.90   # 90%: P1 downgrade to 4B, P2 dropped
+    THRESHOLD_CRITICAL = 0.95    # 95%: extreme overload, P0 downgrade + shrink
 
     # PRD §5.2.5 — Priority levels
     PRIORITY_MAP = {
@@ -74,17 +77,24 @@ class KVAdmissionControl:
         sf = _config['admission_control']['safety_factor']
         self.kv_budget = int(kv_gb * 1024**3 * sf)
         self.kv_total = int(kv_gb * 1024**3)
+        # PRD §5.2.5 / §9: four-level thresholds, all configurable
+        ac = _config.get('admission_control', {})
+        self.threshold_tighten = ac.get('kv_pressure_tighten', self.THRESHOLD_TIGHTEN)
+        self.threshold_truncate = ac.get('kv_pressure_truncate', self.THRESHOLD_TRUNCATE)
+        self.threshold_soft_stop = ac.get('kv_pressure_soft_stop', self.THRESHOLD_SOFT_STOP)
+        self.threshold_critical = ac.get('kv_pressure_critical', self.THRESHOLD_CRITICAL)
         self.active = {}
         self._lock = threading.RLock()
 
     def estimate_kv(self, inp, out, bt):
+        """PRD §5.2.3 双因子 KV 成本估算: input_tokens × prefill_factor + output_tokens × decode_factor"""
         if out == 0:
             out = self.OUTPUT_MAP.get(bt, 512)
-        return (inp + out * 1.2) * self.KV_PER_TOKEN
+        return inp * self.KV_PER_TOKEN_PREFILL + out * self.KV_PER_TOKEN_DECODE
 
     def _pressure_unlocked(self):
         u = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
-        return u / self.kv_total if self.kv_total > 0 else 0.0
+        return u / self.kv_budget if self.kv_budget > 0 else 0.0
 
     def get_pressure(self):
         with self._lock:
@@ -101,17 +111,17 @@ class KVAdmissionControl:
         Returns (admitted: bool, reason: str, priority: str).
 
         Priority-based degradation (PRD §5.2.5 / §9):
-          > 0.97 (critical):
+          > 0.95 (critical):
             P0 → admitted with forced downgrade (14B→4B) + shrink tokens
             P1 → queued (not admitted)
             P2 → rejected with 503
-          > 0.95 (soft_stop):
+          > 0.90 (soft_stop):
             P0 → admitted normally
             P1 → admitted with forced downgrade (14B→4B)
             P2 → rejected (not admitted)
-          > 0.90 (truncate):
+          > 0.80 (truncate):
             P0/P1/P2 → admitted with app-layer truncation
-          > 0.85 (tighten):
+          > 0.70 (tighten):
             P0/P1/P2 → admitted with tighten flag
         """
         est = self.estimate_kv(inp, out, bt)
@@ -123,7 +133,7 @@ class KVAdmissionControl:
         with self._lock:
             p = self._pressure_unlocked()
 
-            if p > self.THRESHOLD_CRITICAL:
+            if p > self.threshold_critical:
                 # ── 97% extreme overload: priority-based handling ──
                 if priority == "P0":
                     # P0: retained with forced downgrade (14B→4B) + shrink
@@ -140,7 +150,7 @@ class KVAdmissionControl:
                     # P2: rejected with 503
                     admitted, reason = False, 'critical_p2_rejected'
 
-            elif p > self.THRESHOLD_SOFT_STOP:
+            elif p > self.threshold_soft_stop:
                 # ── 95%: priority-based handling ──
                 if priority == "P0":
                     # P0: admitted normally (protected)
@@ -168,11 +178,11 @@ class KVAdmissionControl:
                     admitted, reason = False, 'budget_exceeded'
                 else:
                     self.active[rid] = (inp, out, bt)
-                    if p > self.THRESHOLD_TRUNCATE:
-                        # 90%: app-layer stream truncation
+                    if p > self.threshold_truncate:
+                        # 80%: app-layer stream truncation
                         reason = 'admitted_with_truncation'
-                    elif p > self.THRESHOLD_TIGHTEN:
-                        # 85%: token bucket tightened
+                    elif p > self.threshold_tighten:
+                        # 70%: token bucket tightened
                         reason = 'admitted_with_tighten'
 
         if not admitted:

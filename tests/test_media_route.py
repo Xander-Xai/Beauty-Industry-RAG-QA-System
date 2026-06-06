@@ -19,7 +19,8 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from app import app
-from api.dependencies import get_identity, RequestIdentity
+from common.auth import require_identity
+from common.models import UserIdentity
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -48,8 +49,8 @@ def _mock_minio(available=True, url="https://minio.example.com/signed/test"):
 
 
 def _make_identity(user_id="test_user", user_role_mask=0, user_dept_mask=0):
-    """Create a RequestIdentity for dependency override."""
-    return RequestIdentity(
+    """Create a UserIdentity for dependency override."""
+    return UserIdentity(
         user_id=user_id,
         user_role_mask=user_role_mask,
         user_dept_mask=user_dept_mask,
@@ -81,7 +82,7 @@ class TestMediaEndpointAllowed:
     @patch("common.minio_client.get_minio_client")
     def test_public_doc_returns_200_with_url(self, mock_get_minio):
         """Public document (role_mask=0): presigned URL returned for any user."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity(
+        app.dependency_overrides[require_identity] = lambda: _make_identity(
             user_id="any_user", user_role_mask=0, user_dept_mask=0
         )
         mock_pymilvus, _ = _setup_mock_pymilvus(
@@ -106,7 +107,7 @@ class TestMediaEndpointAllowed:
     @patch("common.minio_client.get_minio_client")
     def test_rd_user_can_access_rd_doc(self, mock_get_minio):
         """RD user (role_mask=1) can access RD-restricted document."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity(
+        app.dependency_overrides[require_identity] = lambda: _make_identity(
             user_id="rd_user", user_role_mask=1, user_dept_mask=1
         )
         mock_pymilvus, _ = _setup_mock_pymilvus(
@@ -130,7 +131,7 @@ class TestMediaEndpointAllowed:
     @patch("common.minio_client.get_minio_client")
     def test_admin_bypasses_all_restrictions(self, mock_get_minio):
         """Admin (super_admin_mask) can access any document regardless of doc masks."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity(
+        app.dependency_overrides[require_identity] = lambda: _make_identity(
             user_id="admin", user_role_mask=4294967295, user_dept_mask=0
         )
         mock_pymilvus, _ = _setup_mock_pymilvus(
@@ -153,7 +154,7 @@ class TestMediaEndpointAllowed:
     @patch("common.minio_client.get_minio_client")
     def test_dept_restricted_doc_accessible_by_matching_dept(self, mock_get_minio):
         """Document with only dept restriction: user with matching dept can access."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity(
+        app.dependency_overrides[require_identity] = lambda: _make_identity(
             user_id="reg_user", user_role_mask=0, user_dept_mask=4
         )
         mock_pymilvus, _ = _setup_mock_pymilvus(
@@ -182,7 +183,7 @@ class TestMediaEndpointDenied:
 
     def test_denied_returns_403(self):
         """User without matching role/dept gets 403."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity(
+        app.dependency_overrides[require_identity] = lambda: _make_identity(
             user_id="rd_user", user_role_mask=1, user_dept_mask=1
         )
         mock_pymilvus, _ = _setup_mock_pymilvus(
@@ -200,7 +201,7 @@ class TestMediaEndpointDenied:
 
     def test_dept_mismatch_returns_403(self):
         """User with correct role but wrong dept gets 403."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity(
+        app.dependency_overrides[require_identity] = lambda: _make_identity(
             user_id="reg_user", user_role_mask=4, user_dept_mask=4
         )
         mock_pymilvus, _ = _setup_mock_pymilvus(
@@ -225,7 +226,7 @@ class TestMediaEndpointNotFound:
 
     def test_not_found_returns_404(self):
         """Missing doc_id returns 404 with 'not_found' error."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity()
+        app.dependency_overrides[require_identity] = lambda: _make_identity()
         mock_pymilvus, _ = _setup_mock_pymilvus(_empty_milvus_result())
 
         client = TestClient(app)
@@ -239,7 +240,7 @@ class TestMediaEndpointNotFound:
 
     def test_archived_returns_404(self):
         """Archived document returns 404 with 'archived' error."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity()
+        app.dependency_overrides[require_identity] = lambda: _make_identity()
         mock_pymilvus, _ = _setup_mock_pymilvus(
             _milvus_doc(doc_id="old_doc", role_mask=0, dept_mask=0, status="archived")
         )
@@ -255,7 +256,7 @@ class TestMediaEndpointNotFound:
 
     def test_milvus_query_exception_treated_as_not_found(self):
         """Milvus connection failure is treated as document not found (404)."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity()
+        app.dependency_overrides[require_identity] = lambda: _make_identity()
         mock_collection = MagicMock()
         mock_collection.query.side_effect = RuntimeError("Milvus connection refused")
 
@@ -281,7 +282,7 @@ class TestMediaEndpointMinioUnavailable:
     @patch("common.minio_client.get_minio_client")
     def test_minio_unavailable_returns_503(self, mock_get_minio):
         """MinIO client reports unavailable -> 503."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity()
+        app.dependency_overrides[require_identity] = lambda: _make_identity()
         mock_pymilvus, _ = _setup_mock_pymilvus(
             _milvus_doc(doc_id="doc_001", role_mask=0, dept_mask=0, status="active")
         )
@@ -299,7 +300,7 @@ class TestMediaEndpointMinioUnavailable:
     @patch("common.minio_client.get_minio_client")
     def test_minio_url_generation_failure_returns_503(self, mock_get_minio):
         """MinIO available but presigned URL generation returns empty string -> 503."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity()
+        app.dependency_overrides[require_identity] = lambda: _make_identity()
         mock_pymilvus, _ = _setup_mock_pymilvus(
             _milvus_doc(doc_id="doc_002", role_mask=0, dept_mask=0, status="active")
         )
@@ -324,7 +325,7 @@ class TestMediaEndpointUrlStructure:
     @patch("common.minio_client.get_minio_client")
     def test_response_contains_all_required_fields(self, mock_get_minio):
         """Successful response must contain doc_id, url, and expires_in_seconds."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity()
+        app.dependency_overrides[require_identity] = lambda: _make_identity()
         mock_pymilvus, _ = _setup_mock_pymilvus(
             _milvus_doc(doc_id="structured_doc", role_mask=0, dept_mask=0, status="active")
         )
@@ -350,7 +351,7 @@ class TestMediaEndpointUrlStructure:
     @patch("common.minio_client.get_minio_client")
     def test_expires_in_seconds_matches_config(self, mock_get_minio):
         """expires_in_seconds should match MINIO_URL_TTL from config (60s default)."""
-        app.dependency_overrides[get_identity] = lambda: _make_identity()
+        app.dependency_overrides[require_identity] = lambda: _make_identity()
         mock_pymilvus, _ = _setup_mock_pymilvus(
             _milvus_doc(doc_id="ttl_doc", role_mask=0, dept_mask=0, status="active")
         )

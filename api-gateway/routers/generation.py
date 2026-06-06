@@ -66,6 +66,7 @@ GENERATION_SERVICE_URL = os.environ.get("GENERATION_SERVICE_URL", "http://genera
 CACHE_SERVICE_URL = os.environ.get("CACHE_SERVICE_URL", "http://cache-service:8300")
 
 # 超时设置（秒）
+COMPLEXITY_TIMEOUT_S = float(os.environ.get("COMPLEXITY_TIMEOUT_S", "1"))
 CACHE_LOOKUP_TIMEOUT_S = float(os.environ.get("CACHE_LOOKUP_TIMEOUT_S", "2"))
 ADMISSION_CHECK_TIMEOUT_S = float(os.environ.get("ADMISSION_CHECK_TIMEOUT_S", "5"))
 REWRITE_TIMEOUT_S = float(os.environ.get("REWRITE_TIMEOUT_S", "2.0"))  # 2s（LLM推理需要足够时间）
@@ -75,6 +76,35 @@ EVIDENCE_GATE_TIMEOUT_S = float(os.environ.get("EVIDENCE_GATE_TIMEOUT_S", "5"))
 GENERATE_TIMEOUT_S = float(os.environ.get("GENERATE_TIMEOUT_S", "30"))
 ADMISSION_RELEASE_TIMEOUT_S = float(os.environ.get("ADMISSION_RELEASE_TIMEOUT_S", "3"))
 CACHE_WRITE_TIMEOUT_S = float(os.environ.get("CACHE_WRITE_TIMEOUT_S", "2"))
+
+# ── PRD §4.7: 按 business_type 的最大输出 token 数 ───────────────────────
+# 从 config.json 读取映射表；若加载失败使用默认值
+_DEFAULT_MAX_OUTPUT_TOKENS = {
+    "regulation": 1024,
+    "development": 768,
+    "ingredient": 512,
+    "product": 512,
+    "general": 512,
+    "short": 256,
+}
+_MAX_OUTPUT_TOKENS_MAP: Dict[str, int] = _DEFAULT_MAX_OUTPUT_TOKENS.copy()
+try:
+    _CFG_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "config.json",
+    )
+    with open(_CFG_PATH, "r", encoding="utf-8") as _f:
+        _CFG = json.load(_f)
+    _MAX_OUTPUT_TOKENS_MAP = _CFG.get("gpu0", {}).get("models", {}).get(
+        "gen_14b", {}
+    ).get("max_output_tokens", _DEFAULT_MAX_OUTPUT_TOKENS)
+except Exception:
+    pass
+
+
+def _get_max_output_tokens(business_type: str) -> int:
+    """PRD §4.7: 根据 business_type 返回对应的 max_output_tokens。"""
+    return _MAX_OUTPUT_TOKENS_MAP.get(business_type, _DEFAULT_MAX_OUTPUT_TOKENS["general"])
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +209,14 @@ def _compute_cache_key(
     normalized_query: str,
     role_mask: int = 0,
     dept_mask: int = 0,
+    session_id: str = None,
 ) -> str:
-    """Compute a SHA-256 cache key matching RedisCache.compute_cache_key."""
+    """
+    Compute a SHA-256 cache key matching RedisCache.compute_cache_key.
+
+    GAP-18: PRD §10.6 — 当 session_id 提供时，将其加入 Key 计算，
+    确保 requires_context=true 的缓存仅限同一 session 复用。
+    """
     key_data = {
         "q": normalized_query,
         "ev": _EMBEDDING_VERSION,
@@ -190,12 +226,14 @@ def _compute_cache_key(
         "rm": role_mask,
         "dm": dept_mask,
     }
+    if session_id:
+        key_data["sid"] = session_id
     return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
 
 def _estimate_tokens(text: str) -> int:
     """Rough token count estimate (approx 1 token per 2 CJK chars or 4 ASCII chars)."""
-    cjk_count = sum(1 for ch in text if '一' <= ch <= '鿿')
+    cjk_count = sum(1 for ch in text if '一' <= ch <= '鿿' or '㐀' <= ch <= '䶿')
     ascii_count = len(text) - cjk_count
     return max(1, cjk_count + ascii_count // 4)
 
@@ -258,7 +296,47 @@ async def generate(
             # 缓存查询失败不阻断流程，继续后续步骤
             logger.warning("[%s] 缓存查询失败，继续管线", request_id)
 
-        # ── 步骤 2: 准入控制检查 ─────────────────────────────────────────
+        # ── 步骤 3: 查询改写（提前至准入控制之前）─────────────────────────
+        rewrite_result = QueryRewriteResult(rewritten_query=body.query)
+        try:
+            resp = await _call_service(
+                client, "POST",
+                f"{REWRITE_SERVICE_URL}/api/rewrite",
+                json_body={"query": body.query, "recent_dialogs": body.recent_dialogs},
+                timeout=REWRITE_TIMEOUT_S,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                rewrite_result = QueryRewriteResult(**data)
+        except HTTPException:
+            # 改写超时/失败时使用原始查询
+            logger.warning("[%s] 查询改写失败，使用原始查询", request_id)
+
+        effective_query = rewrite_result.rewritten_query or body.query
+        business_type = rewrite_result.business_type or "general"
+
+        # ── 步骤 3.5: PRD §4.3 BERT 复杂度评估 → 模型路由 ────────────────
+        target_model = "qwen3-4b"  # 默认简单模型
+        try:
+            resp = await _call_service(
+                client, "POST",
+                f"{GENERATION_SERVICE_URL}/api/complexity",
+                json_body={"query": effective_query},
+                timeout=COMPLEXITY_TIMEOUT_S,
+            )
+            if resp.status_code == 200:
+                complexity_data = resp.json()
+                is_complex = complexity_data.get("is_complex", False)
+                target_model = "qwen3-14b" if is_complex else "qwen3-4b"
+                logger.info("[%s] 复杂度评估: is_complex=%s, target_model=%s",
+                            request_id, is_complex, target_model)
+        except HTTPException:
+            logger.warning("[%s] 复杂度评估失败，使用默认模型 4B", request_id)
+
+        # ── PRD §4.7: 根据 business_type 确定输出长度 ─────────────────────
+        max_output_tokens = _get_max_output_tokens(business_type)
+
+        # ── 步骤 2: 准入控制检查（在改写和复杂度评估之后，确保变量已赋值）──
         admission_request_id: Optional[str] = None
         try:
             input_tokens = _estimate_tokens(body.query)
@@ -268,8 +346,8 @@ async def generate(
                 json_body={
                     "request_id": request_id,
                     "input_tokens": input_tokens,
-                    "output_tokens": 512,
-                    "business_type": "general",
+                    "output_tokens": max_output_tokens,
+                    "business_type": business_type,
                 },
                 timeout=ADMISSION_CHECK_TIMEOUT_S,
             )
@@ -289,24 +367,47 @@ async def generate(
         except HTTPException:
             logger.warning("[%s] 准入控制检查失败，继续管线", request_id)
 
-        # ── 步骤 3: 查询改写 ─────────────────────────────────────────────
-        rewrite_result = QueryRewriteResult(rewritten_query=body.query)
-        try:
-            resp = await _call_service(
-                client, "POST",
-                f"{REWRITE_SERVICE_URL}/api/rewrite",
-                json_body={"query": body.query, "recent_dialogs": body.recent_dialogs},
-                timeout=REWRITE_TIMEOUT_S,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                rewrite_result = QueryRewriteResult(**data)
-        except HTTPException:
-            # 改写超时/失败时使用原始查询
-            logger.warning("[%s] 查询改写失败，使用原始查询", request_id)
+        logger.info("[%s] business_type=%s, max_output_tokens=%d, target_model=%s",
+                    request_id, business_type, max_output_tokens, target_model)
 
-        effective_query = rewrite_result.rewritten_query or body.query
-        business_type = rewrite_result.business_type or "general"
+        # GAP-18: PRD §10.6 — requires_context=true 的缓存仅限同 session 复用
+        # 改写完成后，若 requires_context=true，用 session-scoped key 重新查缓存
+        requires_context = getattr(rewrite_result, 'requires_context', False) or False
+        if requires_context and body.session_id:
+            session_scoped_key = _compute_cache_key(
+                effective_query,
+                role_mask=user.user_role_mask,
+                dept_mask=user.user_dept_mask,
+                session_id=body.session_id,
+            )
+            try:
+                resp = await _call_service(
+                    client, "GET",
+                    f"{CACHE_SERVICE_URL}/api/cache",
+                    params={
+                        "key": session_scoped_key,
+                        "role_mask": user.user_role_mask,
+                        "dept_mask": user.user_dept_mask,
+                    },
+                    timeout=CACHE_LOOKUP_TIMEOUT_S,
+                )
+                if resp.status_code == 200:
+                    cache_data = resp.json()
+                    if cache_data.get("hit"):
+                        cache_result = cache_data.get("value")
+                        elapsed_ms = (time.monotonic() - pipeline_start) * 1000
+                        logger.info("[%s] Session-scoped 缓存命中: %.1fms", request_id, elapsed_ms)
+                        return GenerateResponse(
+                            request_id=request_id,
+                            success=True,
+                            answer=cache_result.get("answer", ""),
+                            rewritten_query=effective_query,
+                            business_type=business_type,
+                            from_cache=True,
+                            latency_ms=elapsed_ms,
+                        )
+            except HTTPException:
+                logger.debug("[%s] Session-scoped 缓存未命中", request_id)
 
         # ── 步骤 4: 多路召回 ─────────────────────────────────────────────
         recall_candidates: List[Dict[str, Any]] = []
@@ -334,6 +435,9 @@ async def generate(
             return await _generate_without_context(
                 client, request_id, body, user, pipeline_start,
                 rewrite_result, admission_request_id,
+                target_model=target_model,
+                max_output_tokens=max_output_tokens,
+                business_type=business_type,
             )
 
         # ── 步骤 5: 重排 ────────────────────────────────────────────────
@@ -401,8 +505,8 @@ async def generate(
                         "rerank_results": reranked_candidates,
                         "evidence_result": evidence_result.model_dump(),
                         "session_id": body.session_id,
-                        "max_output_tokens": 512,
-                        "target_model": "qwen3-4b",
+                        "max_output_tokens": max_output_tokens,
+                        "target_model": target_model,
                     },
                 },
                 timeout=GENERATE_TIMEOUT_S,
@@ -431,11 +535,20 @@ async def generate(
 
         # ── 步骤 9: 写入缓存 ─────────────────────────────────────────────
         try:
-            cache_key_write = _compute_cache_key(
-                body.query,
-                role_mask=user.user_role_mask,
-                dept_mask=user.user_dept_mask,
-            )
+            # GAP-18: PRD §10.6 — requires_context=true 使用 session-scoped key
+            if requires_context and body.session_id:
+                cache_key_write = _compute_cache_key(
+                    effective_query,
+                    role_mask=user.user_role_mask,
+                    dept_mask=user.user_dept_mask,
+                    session_id=body.session_id,
+                )
+            else:
+                cache_key_write = _compute_cache_key(
+                    body.query,
+                    role_mask=user.user_role_mask,
+                    dept_mask=user.user_dept_mask,
+                )
             await _call_service(
                 client, "POST",
                 f"{CACHE_SERVICE_URL}/api/cache",
@@ -485,6 +598,9 @@ async def _generate_without_context(
     pipeline_start: float,
     rewrite_result: QueryRewriteResult,
     admission_request_id: Optional[str],
+    target_model: str = "qwen3-4b",
+    max_output_tokens: int = 512,
+    business_type: str = "general",
 ) -> GenerateResponse:
     """
     无检索结果时的降级生成：仅基于 LLM 内部知识回答.
@@ -506,8 +622,8 @@ async def _generate_without_context(
                         decision="reject",
                     ).model_dump(),
                     "session_id": body.session_id,
-                    "max_output_tokens": 512,
-                    "target_model": "qwen3-4b",
+                    "max_output_tokens": max_output_tokens,
+                    "target_model": target_model,
                 },
             },
             timeout=GENERATE_TIMEOUT_S,
@@ -522,7 +638,7 @@ async def _generate_without_context(
             success=True,
             answer="抱歉，未能找到相关知识信息。建议您咨询专业人员获取准确答案。",
             rewritten_query=rewrite_result.rewritten_query or body.query,
-            business_type="general",
+            business_type=business_type,
             confidence=0.0,
             evidence_decision="reject",
             latency_ms=elapsed_ms,
@@ -546,7 +662,7 @@ async def _generate_without_context(
         success=True,
         answer=gen_result.answer,
         rewritten_query=rewrite_result.rewritten_query or body.query,
-        business_type="general",
+        business_type=business_type,
         confidence=0.0,
         evidence_decision="reject",
         model_used=gen_result.model_used,
@@ -590,7 +706,7 @@ async def continuation(
         raise
     except Exception as exc:
         logger.exception("续写请求失败: %s", exc)
-        raise HTTPException(status_code=500, detail=f"续写失败: {exc}")
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
 
 
 # ===========================================================================
@@ -621,7 +737,7 @@ async def dialog_history(
         raise
     except Exception as exc:
         logger.exception("对话历史查询失败: %s", exc)
-        raise HTTPException(status_code=500, detail=f"对话历史查询失败: {exc}")
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
 
 
 # ===========================================================================
@@ -639,6 +755,13 @@ async def media_access(
     2. RBAC 权限校验（通过 generation-service 代理）
     3. 生成 MinIO 临时签名 URL（60s TTL）
     """
+    try:
+        # SEC-3: 校验 doc_id 格式，防止 Milvus 表达式注入
+        from common.auth import validate_doc_id
+        validate_doc_id(doc_id)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "invalid_doc_id", "detail": "doc_id 格式不合法"})
+
     try:
         # ① Milvus 文档权限二次校验（PRD §6 / §10）
         try:
@@ -699,4 +822,4 @@ async def media_access(
         raise
     except Exception as exc:
         logger.exception("媒体访问失败: %s", exc)
-        raise HTTPException(status_code=500, detail=f"媒体访问失败: {exc}")
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")

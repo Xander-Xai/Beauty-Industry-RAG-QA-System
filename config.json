@@ -13,15 +13,21 @@
         "engine": "vllm",
         "port": 8100,
         "model_path": "./models/Qwen3-14B-Instruct",
+        "lora_adapter_path": "./models/Qwen3-14B-QLoRA-adapter",
+        "lora_rank": 16,
+        "lora_target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "quantization_bits": 4,
+        "quant_type": "nf4",
         "max_model_len": 8192,
         "gpu_memory_utilization": 0.85,
         "kv_cache_budget_gb": 8.0,
         "max_output_tokens": {
           "regulation": 1024,
           "development": 768,
+          "formulation": 768,
           "ingredient": 512,
           "product": 512,
-          "general": 256,
+          "general": 512,
           "short": 256
         }
       }
@@ -87,6 +93,13 @@
         "trigger_threshold": 0.05,
         "max_images_per_request": 5,
         "cache_ttl_seconds": 3600
+      },
+      "bert_blip_intent": {
+        "name": "BERT BLIP意图分类",
+        "model_path": "",
+        "device": "cuda:1",
+        "num_labels": 2,
+        "_comment": "2分类: visual_intent vs non_visual_intent，model_path 为空时回退到规则引擎"
       }
     },
     "rerank_batch_aggregator": {
@@ -126,7 +139,9 @@
   "elasticsearch": {
     "host": "http://elasticsearch:9200",
     "index": "cosmetics_docs",
-    "enabled": true
+    "enabled": true,
+    "username": "",
+    "password": ""
   },
   "redis": {
     "cache": {
@@ -170,7 +185,9 @@
     },
     "cross_encoder": {
       "ensemble": true,
-      "final_top_k": 10
+      "final_top_k": 10,
+      "max_seq_length": 512,
+      "p99_sla_ms": 60
     },
     "evidence_gate": {
       "weights": { "w1": 0.4, "w2": 0.2, "w3": 0.2, "w4": 0.2 },
@@ -184,10 +201,13 @@
   },
   "admission_control": {
     "safety_factor": 0.7,
-    "kv_utilization_threshold": 0.8,
-    "kv_pressure_critical": 0.9
+    "kv_pressure_tighten": 0.70,
+    "kv_pressure_truncate": 0.80,
+    "kv_pressure_soft_stop": 0.90,
+    "kv_pressure_critical": 0.95
   },
   "cache_config": {
+    "l1_max_entries": 1000,
     "l1_ttl_seconds": 300,
     "l2_ttl_seconds": 3600
   },
@@ -205,10 +225,14 @@
   },
   "minio": {
     "endpoint": "minio:9000",
-    "access_key": "minioadmin",
-    "secret_key": "minioadmin",
+    "access_key": "",
+    "secret_key": "",
     "bucket": "rag-media",
     "signed_url_ttl_seconds": 60
+  },
+  "clip_sync": {
+    "timeout_ms": 120,
+    "low_cost_top_k": 20
   },
   "clip_async": {
     "enabled": true,
@@ -234,7 +258,23 @@
     "public_mask": 0
   },
   "alerting": {
-    "rules": []
+    "rules": [
+      {"name": "blip_trigger_high", "metric": "blip_trigger_rate", "threshold": 0.1,
+       "duration_s": 300, "severity": "warning", "comparison": "gt"},
+      {"name": "cache_hit_L1_drop", "metric": "cache_hit_rate_L1", "threshold": 0.3,
+       "duration_s": 300, "severity": "warning", "comparison": "lt"},
+      {"name": "rerank_batch_queue_high", "metric": "rerank_batch_queue_delay_p99", "threshold": 50,
+       "duration_s": 60, "severity": "warning", "comparison": "gt"},
+      {"name": "redis_degraded_long", "metric": "redis.degraded_events", "threshold": 5,
+       "duration_s": 300, "severity": "warning", "comparison": "gt"}
+    ]
+  },
+  "monitoring": {
+    "jaeger": {
+      "enabled": false,
+      "agent_host": "localhost",
+      "agent_port": 6831
+    }
   },
   "auth": {
     "dev_mode": false,

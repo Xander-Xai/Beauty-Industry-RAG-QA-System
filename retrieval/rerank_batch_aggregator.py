@@ -15,7 +15,6 @@ Rerank Batch Aggregator（readme 5.1 节）
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import threading
@@ -26,31 +25,44 @@ from concurrent.futures import Future
 
 import numpy as np
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class BatchStats:
-    """批处理统计"""
+    """批处理统计（PRD §12: 含 GPU 利用率追踪）"""
     total_batches: int = 0
     total_pairs: int = 0
     total_inference_time_ms: float = 0.0
+    total_wall_time_ms: float = 0.0  # 墙钟时间（用于 GPU 利用率计算）
     queue_delays_ms: list = field(default_factory=list)
+    total_latencies_ms: list = field(default_factory=list)  # 端到端延迟 = queue + inference
     batch_sizes: list = field(default_factory=list)
+    gpu_utilization_samples: list = field(default_factory=list)
 
     def record_batch(self, batch_size: int, queue_delay_ms: float, inference_ms: float):
         self.total_batches += 1
         self.total_pairs += batch_size
         self.total_inference_time_ms += inference_ms
+        self.total_wall_time_ms += queue_delay_ms + inference_ms
         self.queue_delays_ms.append(queue_delay_ms)
+        # 端到端延迟 = 排队延迟 + 推理延迟（PRD §7.3: 用于 P99 SLA 自适应）
+        self.total_latencies_ms.append(queue_delay_ms + inference_ms)
         self.batch_sizes.append(batch_size)
+        # GPU 利用率 = 推理时间 / (排队延迟 + 推理时间)
+        wall = queue_delay_ms + inference_ms
+        if wall > 0:
+            self.gpu_utilization_samples.append(inference_ms / wall)
         # 保持最近 1000 条
         if len(self.queue_delays_ms) > 1000:
             self.queue_delays_ms = self.queue_delays_ms[-1000:]
+            self.total_latencies_ms = self.total_latencies_ms[-1000:]
             self.batch_sizes = self.batch_sizes[-1000:]
+            self.gpu_utilization_samples = self.gpu_utilization_samples[-1000:]
 
     def get_fill_rate(self, max_batch: int) -> float:
         if not self.batch_sizes:
@@ -65,6 +77,15 @@ class BatchStats:
         return sorted_d[len(sorted_d) // 2]
 
     def get_avg_delay_p99(self) -> float:
+        """PRD §7.3: P99 端到端延迟（queue + inference），用于 SLA 自适应"""
+        if not self.total_latencies_ms:
+            return 0.0
+        sorted_d = sorted(self.total_latencies_ms)
+        idx = int(len(sorted_d) * 0.99)
+        return sorted_d[min(idx, len(sorted_d) - 1)]
+
+    def get_queue_delay_p99(self) -> float:
+        """仅队列排队延迟 P99（用于诊断）"""
         if not self.queue_delays_ms:
             return 0.0
         sorted_d = sorted(self.queue_delays_ms)
@@ -73,6 +94,12 @@ class BatchStats:
 
     def get_avg_pairs_per_batch(self) -> float:
         return self.total_pairs / self.total_batches if self.total_batches > 0 else 0.0
+
+    def get_gpu_utilization(self) -> float:
+        """PRD §12: GPU 利用率（推理时间 / 总时间）"""
+        if not self.gpu_utilization_samples:
+            return 0.0
+        return sum(self.gpu_utilization_samples) / len(self.gpu_utilization_samples)
 
 
 @dataclass
@@ -99,10 +126,11 @@ class RerankBatchAggregator:
 
     def __init__(self, config=None):
         if config is None:
-            with open("config.json", encoding="utf-8") as f:
-                config = json.load(f)
+            config = get_config_dict()
         self.time_window_ms = config["gpu1"]["rerank_batch_aggregator"]["time_window_ms"]
         self.max_batch_size = config["gpu1"]["rerank_batch_aggregator"]["max_batch_size"]
+        # PRD §7.3: P99 延迟 SLA 阈值（ms），超过时收紧批处理窗口
+        self._p99_sla_ms = config.get("retrieval", {}).get("cross_encoder", {}).get("p99_sla_ms", 60)
         self._lock = threading.Lock()
         self._stats = BatchStats()
 
@@ -130,10 +158,23 @@ class RerankBatchAggregator:
         触发条件（满足任一即 flush）：
         1. 累积 pair 数 >= max_batch_size
         2. 距最早 submit_time 已过 time_window_ms
+
+        PRD §7.3: P99 SLA 自适应 — 当 P99 超过阈值时收紧窗口以降低排队延迟。
         """
         while self._running:
+            # PRD §7.3: 自适应窗口 — P99 超过 SLA 时缩短等待窗口
+            effective_window = self.time_window_ms
+            with self._lock:
+                p99 = self._stats.get_avg_delay_p99()
+            if p99 > self._p99_sla_ms and self._stats.total_batches > 10:
+                effective_window = max(1, self.time_window_ms // 2)
+                logger.warning(
+                    f"CrossEncoder P99={p99:.1f}ms 超过 SLA {self._p99_sla_ms}ms，"
+                    f"收紧窗口: {self.time_window_ms}ms → {effective_window}ms"
+                )
+
             # 等待直到有 pending 或超时
-            self._flush_event.wait(timeout=self.time_window_ms / 1000.0)
+            self._flush_event.wait(timeout=effective_window / 1000.0)
             self._flush_event.clear()
 
             self._flush_if_ready()
@@ -176,20 +217,19 @@ class RerankBatchAggregator:
                 all_pairs.extend(item.pairs)
                 mapping.append((item, start, len(item.pairs)))
 
-            # 分块执行推理
-            scores = self._execute_batch_sync(all_pairs)
+            # 分块执行推理（传入最早提交时间用于计算队列延迟）
+            earliest_submit = min(item.submit_time for item in batch_items) if batch_items else 0.0
+            scores = self._execute_batch_sync(all_pairs, submit_time=earliest_submit)
 
             # 将结果分发回各 Future
             for item, start, count in mapping:
                 item_scores = scores[start:start + count]
                 item.future.set_result(item_scores)
 
-    def _execute_batch_sync(self, pairs: list[tuple[str, str]]) -> list[float]:
+    def _execute_batch_sync(self, pairs: list[tuple[str, str]], submit_time: float = 0.0) -> list[float]:
         """同步执行一批 pairs 的推理（CrossEncoder 模型）"""
         t_start = time.time()
-        queue_delay = 0.0
-        if pairs:
-            queue_delay = (time.time() - pairs[0][0].submit_time if hasattr(pairs, '_submit_time') else 0.0) * 1000
+        queue_delay = (time.time() - submit_time) * 1000 if submit_time > 0 else 0.0
 
         all_scores = []
         for i in range(0, len(pairs), self.max_batch_size):
@@ -361,11 +401,12 @@ class RerankBatchAggregator:
 
     def get_stats(self) -> dict:
         """
-        获取批处理统计信息（用于可观测性监控）
+        获取批处理统计信息（用于可观测性监控，PRD §12）
 
         返回：
         - batch_fill_rate: avg batch size / max batch size
         - queue_delay_p50/p99: 批处理排队延迟
+        - gpu_utilization: GPU 利用率（推理时间 / 总时间）
         - total_batches: 总批次数
         - avg_pairs_per_batch: 平均每批 pair 数
         - pending_count: 异步队列中待处理 pair 数
@@ -375,7 +416,10 @@ class RerankBatchAggregator:
             return {
                 "batch_fill_rate": round(self._stats.get_fill_rate(self.max_batch_size), 3),
                 "queue_delay_p50": round(self._stats.get_avg_delay_p50(), 2),
-                "queue_delay_p99": round(self._stats.get_avg_delay_p99(), 2),
+                "queue_delay_p99": round(self._stats.get_queue_delay_p99(), 2),
+                # PRD §7.3: 端到端 P99 = queue + inference（用于 SLA 自适应）
+                "e2e_latency_p99": round(self._stats.get_avg_delay_p99(), 2),
+                "gpu_utilization": round(self._stats.get_gpu_utilization(), 4),
                 "total_batches": self._stats.total_batches,
                 "total_pairs": self._stats.total_pairs,
                 "avg_pairs_per_batch": round(self._stats.get_avg_pairs_per_batch(), 1),

@@ -6,10 +6,13 @@ Port: 8300
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import sys
 import time
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -42,6 +45,9 @@ class CacheWriteRequest(BaseModel):
     role_mask: int = 0
     dept_mask: int = 0
     ttl: int = 3600
+    # GAP-25: PRD §10.6 — session-scoped caching for requires_context queries
+    session_id: Optional[str] = None
+    requires_context: bool = False
 
 
 class CacheWriteResponse(BaseModel):
@@ -93,15 +99,28 @@ async def cache_get(
 async def cache_set(req: CacheWriteRequest, _auth: None = Depends(verify_service_token)):
     """
     Write a value into the cache.
+
+    GAP-25: PRD §10.6 — 当 requires_context=true 且 session_id 提供时，
+    将 session_id 加入缓存 Key，确保上下文依赖型回答仅限同一 session 复用。
     """
+    effective_key = req.key
+    # GAP-25: session-scoped caching
+    if req.requires_context and req.session_id:
+        scoped_data = {"base": req.key, "sid": req.session_id}
+        effective_key = hashlib.sha256(
+            json.dumps(scoped_data, sort_keys=True).encode()
+        ).hexdigest()
+
     cache.set(
-        req.key,
+        effective_key,
         req.value,
         role_mask=req.role_mask,
         dept_mask=req.dept_mask,
         ttl=req.ttl,
     )
-    logger.info("cache_set OK key=%s role_mask=%d dept_mask=%d", req.key[:12], req.role_mask, req.dept_mask)
+    logger.info("cache_set OK key=%s role_mask=%d dept_mask=%d session_scoped=%s",
+                effective_key[:12], req.role_mask, req.dept_mask,
+                bool(req.requires_context and req.session_id))
     return CacheWriteResponse(stored=True)
 
 
