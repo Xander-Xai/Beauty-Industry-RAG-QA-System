@@ -14,18 +14,19 @@ Redis 缓存体系测试 (cache/redis_cache.py)
 注意：所有 Redis 调用通过 mock 隔离，不需要实际 Redis 服务。
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
-import time
 import hashlib
 import json
-from unittest.mock import patch, MagicMock
+import threading
+import time
+from collections import OrderedDict
+from unittest.mock import MagicMock, patch
 
 from cache.redis_cache import RedisCache
-
 
 # ── Cache Key 计算 ──
 
@@ -308,3 +309,82 @@ class TestStats:
         stats = cache.get_stats()
         assert stats["l2_degraded"] is True
         assert stats["l2_degraded_duration_s"] >= 9.0  # 允许微小时间误差
+
+
+class TestRedisCacheHitStats:
+    """测试 RedisCache 命中/未命中统计（B3c）"""
+
+    def _make_cache_no_redis(self):
+        """创建仅 L1 模式的 RedisCache（避免依赖 Redis 连接）。"""
+        cache = RedisCache.__new__(RedisCache)
+        cache._l1 = OrderedDict()
+        cache._l1_lock = threading.Lock()
+        cache._l1_max = 1000
+        cache._l1_ttl = 300
+        cache.redis_client = None
+        cache.enabled = False
+        cache._degraded = False
+        cache._degraded_since = 0
+        cache._hit_count = 0
+        cache._miss_count = 0
+        return cache
+
+    def test_hit_count_increments_on_get(self):
+        """get() 命中应递增 hit_count。"""
+        cache = self._make_cache_no_redis()
+        # 模拟 L1 有数据
+        cache._l1["test_key"] = ("test_val", time.time() + 300)
+        result = cache.get("test_key", role_mask=0, dept_mask=0)
+        assert result == "test_val"
+        assert cache._hit_count == 1
+        assert cache._miss_count == 0
+
+    def test_miss_count_increments_on_miss(self):
+        """get() 未命中应递增 miss_count。"""
+        cache = self._make_cache_no_redis()
+        result = cache.get("non_existent_key", role_mask=0, dept_mask=0)
+        assert result is None
+        assert cache._hit_count == 0
+        assert cache._miss_count == 1
+
+    def test_hit_rate_all_misses(self):
+        """全部未命中时 hit_rate 应为 0.0。"""
+        cache = self._make_cache_no_redis()
+        cache.get("key1", role_mask=0, dept_mask=0)
+        cache.get("key2", role_mask=0, dept_mask=0)
+        stats = cache.get_hit_stats()
+        assert stats["hit_rate"] == 0.0
+        assert stats["total_requests"] == 2
+
+    def test_hit_rate_mixed(self):
+        """3 命中 1 未命中时 hit_rate 应为 0.75。"""
+        cache = self._make_cache_no_redis()
+        cache._l1["k1"] = ("v1", time.time() + 300)
+        cache._l1["k2"] = ("v2", time.time() + 300)
+        cache._l1["k3"] = ("v3", time.time() + 300)
+        cache.get("k1", role_mask=0, dept_mask=0)
+        cache.get("k2", role_mask=0, dept_mask=0)
+        cache.get("k3", role_mask=0, dept_mask=0)
+        cache.get("k_miss", role_mask=0, dept_mask=0)
+        stats = cache.get_hit_stats()
+        assert stats["hit_rate"] == 0.75
+        assert stats["hit_count"] == 3
+        assert stats["miss_count"] == 1
+
+    def test_get_stats_includes_hit_stats(self):
+        """get_stats() 应包含命中统计字段。"""
+        cache = self._make_cache_no_redis()
+        stats = cache.get_stats()
+        assert "hit_count" in stats
+        assert "miss_count" in stats
+        assert "hit_rate" in stats
+        assert stats["hit_rate"] == 0.0
+
+    def test_l1_expired_key_counts_as_miss(self):
+        """L1 key 过期应算作 miss 而非 hit。"""
+        cache = self._make_cache_no_redis()
+        cache._l1["expired"] = ("val", time.time() - 1)  # 已过期
+        result = cache.get("expired", role_mask=0, dept_mask=0)
+        assert result is None
+        assert cache._hit_count == 0
+        assert cache._miss_count == 1

@@ -18,20 +18,17 @@ import time
 from collections import OrderedDict
 
 try:
-    from common.config import get_config as _get_config
-    _cfg = _get_config()
+    from common.config import get_config_dict
+    config = get_config_dict()
+except Exception:
     config = {
         "cache_config": {
             "l1_max_entries": 1000,
             "l1_ttl_seconds": 300,
             "l2_ttl_seconds": 3600,
         },
-        "redis": {"cache": {"host": _cfg.redis.host, "port": _cfg.redis.port, "db": 0}},
+        "redis": {"cache": {"host": "localhost", "port": 6379, "db": 0}},
     }
-except Exception:
-    _config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    with open(_config_path, encoding="utf-8") as f:
-        config = json.load(f)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +60,9 @@ class RedisCache:
         self.enabled = False
         self._degraded = False
         self._degraded_since = 0
+        # 缓存命中/未命中计数器
+        self._hit_count = 0
+        self._miss_count = 0
         self.l1_ttl = 300
         self.l2_ttl = 3600
         self._try_connect()
@@ -126,7 +126,7 @@ class RedisCache:
 
     def get(self, key: str, role_mask: int = 0, dept_mask: int = 0):
         """
-        查询缓存
+        查询缓存（含命中/未命中计数）
 
         L1: 仅公开文档 (role_mask=0, dept_mask=0)，线程安全
         L2: 所有权限组合
@@ -138,6 +138,7 @@ class RedisCache:
                     val, exp = self._l1[key]
                     if time.time() < exp:
                         self._l1.move_to_end(key)  # LRU: 标记为最近使用
+                        self._hit_count += 1
                         return val
                     else:
                         del self._l1[key]
@@ -147,11 +148,13 @@ class RedisCache:
             try:
                 raw = self.redis_client.get(f"rag:l2:{key}")
                 if raw:
+                    self._hit_count += 1
                     return json.loads(raw)
             except Exception as e:
                 logger.warning(f"Redis L2 读取异常: {e}")
                 self._maybe_enter_degraded()
 
+        self._miss_count += 1
         return None
 
     def set(self, key: str, val, role_mask: int = 0, dept_mask: int = 0, ttl: int = None):
@@ -203,18 +206,32 @@ class RedisCache:
             self._degraded_since = time.time()
             logger.warning("Redis 进入降级模式（仅使用 L1 内存缓存）")
 
+    def get_hit_stats(self) -> dict:
+        """获取缓存命中/未命中统计"""
+        total = self._hit_count + self._miss_count
+        return {
+            "hit_count": self._hit_count,
+            "miss_count": self._miss_count,
+            "total_requests": total,
+            "hit_rate": round(self._hit_count / total, 4) if total > 0 else 0.0,
+        }
+
     def get_stats(self) -> dict:
-        """获取缓存统计"""
+        """获取缓存统计（含命中率）"""
         degraded_duration = 0
         if self._degraded:
             degraded_duration = time.time() - self._degraded_since
         with self._l1_lock:
             l1_size = len(self._l1)
 
+        hit_stats = self.get_hit_stats()
         return {
             "l1_size": l1_size,
             "l1_max": self._l1_max,
             "l2_enabled": self.enabled,
             "l2_degraded": self._degraded,
             "l2_degraded_duration_s": round(degraded_duration, 1) if self._degraded else 0,
+            "hit_count": hit_stats["hit_count"],
+            "miss_count": hit_stats["miss_count"],
+            "hit_rate": hit_stats["hit_rate"],
         }
