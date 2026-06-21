@@ -124,6 +124,13 @@ class RedisCache:
         }
         return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
+    def _ensure_counters(self):
+        """确保 hit/miss 计数器存在（兼容部分初始化场景）。"""
+        if not hasattr(self, '_hit_count'):
+            self._hit_count = 0
+        if not hasattr(self, '_miss_count'):
+            self._miss_count = 0
+
     def get(self, key: str, role_mask: int = 0, dept_mask: int = 0):
         """
         查询缓存（含命中/未命中计数）
@@ -131,6 +138,7 @@ class RedisCache:
         L1: 仅公开文档 (role_mask=0, dept_mask=0)，线程安全
         L2: 所有权限组合
         """
+        self._ensure_counters()
         # L1 查询（公开文档）— LRU 淘汰
         if role_mask == 0 and dept_mask == 0:
             with self._l1_lock:
@@ -208,6 +216,7 @@ class RedisCache:
 
     def get_hit_stats(self) -> dict:
         """获取缓存命中/未命中统计"""
+        self._ensure_counters()
         total = self._hit_count + self._miss_count
         return {
             "hit_count": self._hit_count,

@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
 
 from common.config import get_config_dict
 
@@ -54,9 +53,9 @@ class MetricsCollector:
     """
 
     def __init__(self):
-        self._counters: Dict[str, int] = defaultdict(int)
-        self._gauges: Dict[str, float] = {}
-        self._histograms: Dict[str, List[float]] = defaultdict(list)
+        self._counters: dict[str, int] = defaultdict(int)
+        self._gauges: dict[str, float] = {}
+        self._histograms: dict[str, list[float]] = defaultdict(list)
         self._start_time = time.time()
         # ── PRD §12: 预初始化专用 gauge，确保 get_stats / prometheus 有初始值 ──
         self._gauges.setdefault("nli_contradiction_rate", 0.0)
@@ -145,7 +144,7 @@ class MetricsCollector:
         """
         self._gauges["rerank_batch_queue_latency_p99"] = round(latency_ms, 2)
 
-    def collect_rerank_batch_metrics(self) -> Dict[str, float]:
+    def collect_rerank_batch_metrics(self) -> dict[str, float]:
         """
         从 RerankBatchAggregator 采集 batch 指标。
 
@@ -347,9 +346,9 @@ class MetricsCollector:
             self.set_gauge("effective_concurrency", effective_concurrency)
 
         # ── Prefix Cache 命中/未命中 ───────────────────────────────
-        prefix_cache_hit = getattr(ctx, "prefix_cache_hit", None) or (
-            ctx.get("prefix_cache_hit") if isinstance(ctx, dict) else None
-        )
+        prefix_cache_hit = getattr(ctx, "prefix_cache_hit", None)
+        if isinstance(ctx, dict):
+            prefix_cache_hit = ctx.get("prefix_cache_hit")
         if prefix_cache_hit is True:
             self.increment("prefix_cache.hit")
         elif prefix_cache_hit is False:
@@ -446,7 +445,7 @@ class MetricsCollector:
         return "\n".join(lines) + "\n"
 
     @staticmethod
-    def _percentile(values: List[float], p: float) -> float:
+    def _percentile(values: list[float], p: float) -> float:
         if not values:
             return 0.0
         sorted_vals = sorted(values)

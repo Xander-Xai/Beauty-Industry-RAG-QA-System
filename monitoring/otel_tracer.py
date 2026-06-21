@@ -249,6 +249,15 @@ class MetricsCollector:
             if nli_score > 0.5:
                 self.increment("nli.contradiction_high")
 
+        # PRD §12: Prefix Cache 命中/未命中
+        prefix_cache_hit = getattr(ctx, "prefix_cache_hit", None)
+        if isinstance(ctx, dict):
+            prefix_cache_hit = ctx.get("prefix_cache_hit")
+        if prefix_cache_hit is True:
+            self.increment("prefix_cache.hit")
+        elif prefix_cache_hit is False:
+            self.increment("prefix_cache.miss")
+
         # PRD §12: Admission Control 拒绝/排队计数
         if hasattr(ctx, 'kv_pressure_at_entry'):
             self.increment("admission.total")
