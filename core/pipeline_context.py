@@ -10,11 +10,11 @@
 
 from __future__ import annotations
 
-import uuid
-import time
 import threading
+import time
+import uuid
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Optional
+from typing import ClassVar
 
 
 @dataclass
@@ -72,7 +72,7 @@ class GenerationResult:
     model_used: str                 # qwen3-4b / qwen3-14b
     max_tokens: int
     has_more: bool = False
-    session_id: Optional[str] = None
+    session_id: str | None = None
     answer_outline: list[str] = field(default_factory=list)
 
 
@@ -100,8 +100,8 @@ class RequestContext:
     # === 输入 ===
     request_id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
     user_input: str = ""
-    image_path: Optional[str] = None
-    session_id: Optional[str] = None
+    image_path: str | None = None
+    session_id: str | None = None
     timestamp: float = field(default_factory=time.time)
 
     # === 用户身份 ===
@@ -110,7 +110,7 @@ class RequestContext:
     user_dept_mask: int = 0
 
     # === Query Rewrite ===
-    rewrite_result: Optional[QueryRewriteResult] = None
+    rewrite_result: QueryRewriteResult | None = None
 
     # === 检索阶段 ===
     recall_results: list[RecallResult] = field(default_factory=list)
@@ -121,15 +121,15 @@ class RequestContext:
     rerank_results: list[RerankResult] = field(default_factory=list)
 
     # === Evidence Gate ===
-    evidence_result: Optional[EvidenceGateResult] = None
+    evidence_result: EvidenceGateResult | None = None
 
     # === 生成阶段 ===
-    generation_result: Optional[GenerationResult] = None
+    generation_result: GenerationResult | None = None
     max_output_tokens: int = 512
     evidence_locked_doc_ids: list[str] = field(default_factory=list)
 
     # === Answer Gate ===
-    answer_gate_result: Optional[AnswerGateResult] = None
+    answer_gate_result: AnswerGateResult | None = None
 
     # === 最终输出 ===
     final_response: str = ""
@@ -137,15 +137,17 @@ class RequestContext:
     # === 性能指标 ===
     stage_timings: dict[str, float] = field(default_factory=dict)
     kv_pressure_at_entry: float = 0.0
-    cache_hit_level: Optional[str] = None  # L1 / L2 / MISS
+    cache_hit_level: str | None = None  # L1 / L2 / MISS
+    prefix_cache_hit: bool | None = None  # vLLM Prefix Cache 命中标记
+    kv_cache_utilization: float = 0.0     # vLLM KV Cache 利用率（0.0~1.0）
 
     # === 降级标记 ===
     degraded: bool = False
-    fallback_reason: Optional[str] = None
+    fallback_reason: str | None = None
 
     # === A/B 实验（PRD §12.2） ===
-    ab_experiment: Optional[str] = None
-    ab_variant: Optional[str] = None
+    ab_experiment: str | None = None
+    ab_variant: str | None = None
 
     # === BLIP 在线触发（PRD §6） ===
     blip_triggered: bool = False
@@ -180,15 +182,15 @@ class SessionState:
     dialog_rounds: list[dict] = field(default_factory=list)  # [{user_input, response, rewrite}]
     max_rounds: int = 6                                      # readme 4.4: 最近6轮
     locked_doc_ids: list[str] = field(default_factory=list)  # 证据锁定
-    last_rewrite_result: Optional[QueryRewriteResult] = None
+    last_rewrite_result: QueryRewriteResult | None = None
     async_clip_results: list[RecallResult] = field(default_factory=list)  # 异步 CLIP 预热结果
     created_at: float = field(default_factory=time.time)
 
     # 会话级缓存（全局管理）
-    _sessions: ClassVar[dict[str, "SessionState"]] = {}
+    _sessions: ClassVar[dict[str, SessionState]] = {}
     _sessions_lock: ClassVar[threading.Lock] = threading.Lock()
 
-    def add_round(self, user_input: str, response: str, rewrite: Optional[QueryRewriteResult] = None):
+    def add_round(self, user_input: str, response: str, rewrite: QueryRewriteResult | None = None):
         """添加一轮对话"""
         self.dialog_rounds.append({
             "user_input": user_input,
@@ -213,7 +215,7 @@ class SessionState:
         self.async_clip_results = results
 
     @classmethod
-    def get_or_create(cls, session_id: str) -> "SessionState":
+    def get_or_create(cls, session_id: str) -> SessionState:
         """线程安全地获取或创建会话状态"""
         with cls._sessions_lock:
             if session_id not in cls._sessions:
