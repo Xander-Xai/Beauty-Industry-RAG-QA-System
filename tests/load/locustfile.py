@@ -103,8 +103,8 @@ class LatencyStats:
 
 # 全局统计收集器（跨所有 Locust worker）
 query_latencies = LatencyStats()
-cache_hits = 0
-cache_misses = 0
+cache_hits = 0        # 占位：未来逐请求缓存命中追踪
+cache_misses = 0      # 占位：未来逐请求缓存未命中追踪
 errors = 0
 
 
@@ -182,18 +182,19 @@ class RAGUser(HttpUser):
 # ─── 停止时生成报告 ────────────────────────────────────────────
 
 
-@events.quit.add_listener
-def generate_report(environment, **kwargs):
-    """压测结束时生成 JSON 报告（增强版：包含系统级缓存命中率 + 延迟分布）。"""
-    system_stats = collect_stats()
-
-    report = {
+def build_report(environment, system_stats) -> dict:
+    """构建基准测试报告字典。"""
+    total_errors = errors
+    successful = query_latencies.count
+    total_attempts = total_errors + successful
+    return {
         "benchmark": {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "duration_seconds": round(
                 environment.runner.stats.total.time if environment.runner else 0, 2
             ),
-            "total_requests": query_latencies.count,
+            "total_attempts": total_attempts,
+            "successful_requests": successful,
             "concurrent_users": (
                 environment.runner.target_user_count if environment.runner else 0
             ),
@@ -218,41 +219,55 @@ def generate_report(environment, **kwargs):
         "errors": {
             "total": errors,
             "error_rate_pct": round(
-                errors / max(query_latencies.count, 1) * 100, 2
+                total_errors / max(total_attempts, 1) * 100, 2
             ),
         },
     }
 
-    # 写入文件 — 带时间戳命名
+
+def write_report(report: dict) -> Path:
+    """将报告写入 JSON 文件，返回文件路径。"""
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORT_DIR / f"benchmark_{time.strftime('%Y%m%d_%H%M%S')}.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
+    return report_path
 
-    # 统计历史报告
+
+def aggregate_history() -> dict:
+    """统计 reports/benchmark/ 下所有历史报告的汇总数据。"""
     existing_reports = sorted(REPORT_DIR.glob("benchmark_*.json"))
-    report_count = len(existing_reports)
     total_reqs = 0
     total_errs = 0
     for rp in existing_reports:
         try:
             with open(rp, "r") as f:
                 data = json.load(f)
-            total_reqs += data.get("benchmark", {}).get("total_requests", 0)
+            total_reqs += data.get("benchmark", {}).get("total_attempts", 0)
             total_errs += data.get("errors", {}).get("total", 0)
         except Exception:
             pass
+    return {
+        "report_count": len(existing_reports),
+        "total_requests_historical": total_reqs,
+        "total_errors_historical": total_errs,
+    }
 
+
+def print_summary(report: dict, system_stats: dict, report_path: Path, history: dict):
+    """打印格式化的控制台摘要。"""
     print(f"\n{'=' * 60}")
     print(f"📊 Benchmark 报告已保存: {report_path}")
     print(f"{'=' * 60}")
+    bm = report["benchmark"]
     print(f"  运行参数:")
-    print(f"    并发用户数: {report['benchmark']['concurrent_users']}")
-    print(f"    运行时长: {report['benchmark']['duration_seconds']:.0f}s")
-    print(f"    总请求数: {report['benchmark']['total_requests']}")
+    print(f"    并发用户数: {bm['concurrent_users']}")
+    print(f"    运行时长: {bm['duration_seconds']:.0f}s")
+    print(f"    总请求: {bm['total_attempts']} (成功: {bm['successful_requests']}, 失败: {report['errors']['total']})")
     print(f"  延迟 (ms):")
-    print(f"    Avg: {report['latency_ms']['avg']} | P50: {report['latency_ms']['p50']} | "
-          f"P95: {report['latency_ms']['p95']} | P99: {report['latency_ms']['p99']}")
+    lat = report["latency_ms"]
+    print(f"    Avg: {lat['avg']} | P50: {lat['p50']} | "
+          f"P95: {lat['p95']} | P99: {lat['p99']}")
     print(f"  缓存:")
     cache_rates = system_stats.get("cache_hit_rate", {})
     l1 = cache_rates.get("L1", "N/A")
@@ -260,9 +275,19 @@ def generate_report(environment, **kwargs):
     prefix = system_stats.get("prefix_cache_hit_rate", "N/A")
     print(f"    系统 - L1: {l1} | L2: {l2}")
     print(f"    Prefix Cache 命中率: {prefix}")
-    print(f"  错误: {errors}/{query_latencies.count} "
-          f"({report['errors']['error_rate_pct']}%)")
+    print(f"  错误率: {report['errors']['error_rate_pct']}%")
     print(f"{'=' * 60}")
-    print(f"📁 历史报告: {REPORT_DIR} 下共有 {report_count} 份报告")
-    print(f"   累计请求: {total_reqs} | 累计错误: {total_errs}")
+    print(f"📁 历史报告: {REPORT_DIR} 下共有 {history['report_count']} 份报告")
+    print(f"   累计请求: {history['total_requests_historical']} | "
+          f"累计错误: {history['total_errors_historical']}")
     print(f"{'=' * 60}")
+
+
+@events.quit.add_listener
+def generate_report(environment, **kwargs):
+    """压测结束时生成 JSON 报告（增强版：包含系统级缓存命中率 + 延迟分布）。"""
+    system_stats = collect_stats()
+    report = build_report(environment, system_stats)
+    report_path = write_report(report)
+    history = aggregate_history()
+    print_summary(report, system_stats, report_path, history)
