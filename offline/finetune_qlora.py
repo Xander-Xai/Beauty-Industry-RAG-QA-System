@@ -91,20 +91,35 @@ class DataArguments:
 # ── 数据加载 ────────────────────────────────────────────────────────────
 
 
-def load_training_data(data_path: str) -> Dataset:
-    """加载 JSON 格式训练数据，格式化为 ChatML 消息文本。"""
+def load_training_data(data_path: str, tokenizer) -> Dataset:
+    """
+    加载 JSON 格式训练数据，使用 tokenizer.apply_chat_template 格式化。
+
+    每个 JSON 记录必须包含 instruction / input / output 三个字段。
+    缺失字段时抛出清晰的 KeyError。
+    """
     with open(data_path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
 
-    def format_example(example):
+    required_keys = {"instruction", "input", "output"}
+    formatted = []
+    for idx, example in enumerate(raw_data):
+        missing = required_keys - set(example.keys())
+        if missing:
+            raise KeyError(
+                f"Record {idx} is missing required keys: {missing}. "
+                f"Each record needs: instruction, input, output"
+            )
+
         messages = [
             {"role": "system", "content": example["instruction"]},
             {"role": "user", "content": example["input"]},
             {"role": "assistant", "content": example["output"]},
         ]
-        return {"text": json.dumps(messages, ensure_ascii=False)}
+        formatted.append({
+            "text": tokenizer.apply_chat_template(messages, tokenize=False),
+        })
 
-    formatted = [format_example(ex) for ex in raw_data]
     dataset = Dataset.from_list(formatted)
     logger.info("Loaded %d training examples from %s", len(dataset), data_path)
     return dataset
@@ -191,7 +206,7 @@ def main():
 
     # 5. 训练数据
     logger.info("Loading training data from %s...", data_args.data_path)
-    dataset = load_training_data(data_args.data_path)
+    dataset = load_training_data(data_args.data_path, tokenizer)
 
     # 6. Trainer
     training_args = TrainingArguments(
