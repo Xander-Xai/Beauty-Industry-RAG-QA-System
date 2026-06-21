@@ -15,9 +15,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
-from contextlib import contextmanager
 from collections import defaultdict
+from contextlib import contextmanager
 
 from common.config import get_config_dict
 
@@ -266,11 +265,11 @@ class MetricsCollector:
 
     def record_prefix_cache_hit(self):
         """PRD §12: Prefix Cache 命中"""
-        self.increment("prefix_cache.hits")
+        self.increment("prefix_cache.hit")
 
     def record_prefix_cache_miss(self):
         """PRD §12: Prefix Cache 未命中"""
-        self.increment("prefix_cache.misses")
+        self.increment("prefix_cache.miss")
 
     def record_cache_epoch_switch(self):
         """PRD §12: 缓存版本切换次数"""
@@ -306,8 +305,8 @@ class MetricsCollector:
                 self._counters.get("answer_gate.total", 1), 1
             ),
             # PRD §12: Prefix Caching 命中率
-            "prefix_cache_hit_rate": self._counters.get("prefix_cache.hits", 0) / max(
-                self._counters.get("prefix_cache.hits", 0) + self._counters.get("prefix_cache.misses", 0), 1
+            "prefix_cache_hit_rate": self._counters.get("prefix_cache.hit", 0) / max(
+                self._counters.get("prefix_cache.hit", 0) + self._counters.get("prefix_cache.miss", 0), 1
             ),
             # PRD §12: Redis 降级状态
             "redis_degraded": self._counters.get("redis.degraded_events", 0),
@@ -512,7 +511,7 @@ class AlertingManager:
                 if rule_name in self._alert_timestamps:
                     del self._alert_timestamps[rule_name]
 
-    def _get_metric_value(self, metric_name: str) -> Optional[float]:
+    def _get_metric_value(self, metric_name: str) -> float | None:
         """从 MetricsCollector 获取指标值"""
         # 优先从 gauges 读取
         if metric_name in self.metrics._gauges:
