@@ -47,8 +47,8 @@ class TestConfig:
     """验证配置系统正确加载。"""
 
     def test_deployment_mode_is_development(self):
-        from common.config import get_config, is_development_mode
-        cfg = get_config()
+        from common.config import get_config, is_development_mode, reload_config
+        cfg = reload_config()  # force fresh read to avoid singleton cache pollution
         assert cfg.deployment_mode == "development"
         assert is_development_mode() is True
 

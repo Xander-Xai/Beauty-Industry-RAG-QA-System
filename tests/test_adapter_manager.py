@@ -524,6 +524,145 @@ class TestAdapterManagerUnload:
             mgr.unload()
             assert mgr.current_adapter is None
 
+    def test_load_production_mode_peft_not_installed(self, base_model, adapter_config, monkeypatch):
+        """生产模式下 PEFT 未安装时应返回 False"""
+        from common.config import is_production_mode
+        from models.adapter_manager import AdapterManager
+
+        # 模拟生产模式：直接 mock common.config.is_production_mode
+        monkeypatch.setattr("common.config.is_production_mode", lambda: True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp) / "prod-lora"
+            d.mkdir()
+            with open(d / "adapter_config.json", "w", encoding="utf-8") as fh:
+                json.dump(adapter_config, fh)
+            (d / "adapter_model.safetensors").write_text("weights")
+
+            mgr = AdapterManager(
+                base_model_name=base_model,
+                adapter_dir=tmp,
+            )
+            mgr.discover()
+            # PEFT 未安装 → ImportError → 返回 False
+            result = mgr.load("prod-lora")
+            assert result is False
+            assert mgr.current_adapter is None
+
+    def test_switch_rollback_on_failure(self, base_model, adapter_config, monkeypatch):
+        """切换失败时应回滚到之前的 adapter"""
+        from models.adapter_manager import AdapterManager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # 创建两个 adapter
+            for name in ["lora-a", "lora-b"]:
+                d = Path(tmp) / name
+                d.mkdir()
+                cfg = dict(adapter_config)
+                with open(d / "adapter_config.json", "w", encoding="utf-8") as fh:
+                    json.dump(cfg, fh)
+                (d / "adapter_model.safetensors").write_text("weights")
+
+            mgr = AdapterManager(
+                base_model_name=base_model,
+                adapter_dir=tmp,
+            )
+            mgr.discover()
+
+            # 先加载第一个（非生产模式返回 None，但 current_adapter 被记录）
+            mgr.load("lora-a")
+            assert mgr.current_adapter == "lora-a"
+
+            # 切换到第二个（生产模式，PEFT 未安装 → 失败 → 回滚）
+            monkeypatch.setattr("common.config.is_production_mode", lambda: True)
+            result = mgr.switch("lora-b")
+            assert result is False
+            # 回滚到 lora-a（非生产模式加载的，所以 current_adapter 保持 lora-a）
+            assert mgr.current_adapter == "lora-a"
+
+    def test_get_peft_model_returns_none_when_not_loaded(self, base_model):
+        """_get_peft_model() 在未加载时应返回 None"""
+        from models.adapter_manager import AdapterManager
+
+        mgr = AdapterManager(base_model_name=base_model)
+        assert mgr._get_peft_model() is None
+
+    def test_load_production_mode_with_mock_peft(self, base_model, adapter_config, monkeypatch):
+        """生产模式下使用 mock PEFT 成功加载 adapter"""
+        from models.adapter_manager import AdapterManager
+
+        # 模拟生产模式
+        monkeypatch.setattr("common.config.is_production_mode", lambda: True)
+
+        # 创建 mock PEFT 模块
+        fake_peft = types.ModuleType("peft")
+
+        class MockPeftModel:
+            def __init__(self, base, path):
+                self.base_model = base
+                self.adapter_path = path
+
+            @classmethod
+            def from_pretrained(cls, base, path):
+                return cls(base, path)
+
+        fake_peft.PeftModel = MockPeftModel
+        sys.modules["peft"] = fake_peft
+
+        # 创建 mock transformers
+        fake_transformers = types.ModuleType("transformers")
+
+        class MockBaseModel:
+            pass
+
+        class MockAutoModel:
+            @classmethod
+            def from_pretrained(cls, name, **kwargs):
+                return MockBaseModel()
+
+        fake_transformers.AutoModelForCausalLM = MockAutoModel
+        sys.modules["transformers"] = fake_transformers
+
+        # 创建 mock torch
+        fake_torch = types.ModuleType("torch")
+        fake_torch.float16 = "float16"
+        sys.modules["torch"] = fake_torch
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp) / "mock-lora"
+                d.mkdir()
+                with open(d / "adapter_config.json", "w", encoding="utf-8") as fh:
+                    json.dump(adapter_config, fh)
+                (d / "adapter_model.safetensors").write_text("weights")
+
+                mgr = AdapterManager(
+                    base_model_name=base_model,
+                    adapter_dir=tmp,
+                )
+                mgr.discover()
+                result = mgr.load("mock-lora")
+                assert result is True
+                assert mgr.current_adapter == "mock-lora"
+                # 验证 PeftModel 被正确持有
+                assert mgr._get_peft_model() is not None
+                assert mgr._get_peft_model().adapter_path == str(d)
+        finally:
+            # 清理 mock 模块
+            for mod in ("peft", "transformers", "torch"):
+                if mod in sys.modules:
+                    del sys.modules[mod]
+
+    def test_validate_path_not_dir(self, base_model):
+        """验证路径不是目录时应返回错误"""
+        from models.adapter_manager import AdapterManager
+
+        with tempfile.NamedTemporaryFile() as f:
+            mgr = AdapterManager(base_model_name=base_model)
+            result = mgr.validate(f.name)
+            assert result.is_valid is False
+            assert any("不是目录" in e for e in result.errors)
+
 
 # ── 集成测试 ──
 

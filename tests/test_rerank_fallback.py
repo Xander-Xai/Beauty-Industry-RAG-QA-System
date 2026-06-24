@@ -3,10 +3,25 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Mock torch before importing the module under test
+# ── torch mock ──────────────────────────────────────────────────────────────
+# torch 不在该环境下安装，因此需要 mock 以通过 import。使用 pytest fixture
+# save/restore 确保测试执行期间 sys.modules["torch"] 一致且测试间不泄漏状态。
+# ---------------------------------------------------------------------------
 mock_torch = MagicMock()
 mock_torch.cuda.OutOfMemoryError = type("OutOfMemoryError", (RuntimeError,), {})
-sys.modules["torch"] = mock_torch
+
+
+@pytest.fixture(autouse=True)
+def _mock_torch():
+    """Mock torch module for all tests in this file (save/restore)."""
+    _orig = sys.modules.get("torch")
+    sys.modules["torch"] = mock_torch
+    yield
+    if _orig is not None:
+        sys.modules["torch"] = _orig
+    else:
+        sys.modules.pop("torch", None)
+
 
 from retrieval.rerank_batch_aggregator import RerankBatchAggregator
 

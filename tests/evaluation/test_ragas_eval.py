@@ -4,6 +4,7 @@ RAGAS 评估器单元测试
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -213,6 +214,116 @@ class TestRAGASEvaluatorCustomAnswerFn:
 
         evaluator.evaluate_with_custom_answer_fn(answer_fn)
         assert evaluator.dataset[0]["question"] == original_question
+
+
+    def test_evaluate_ragas_installed_path(self, jsonl_file: str, monkeypatch) -> None:
+        """模拟 RAGAS 已安装时的 evaluate() 执行路径"""
+        import types
+
+        # 创建 mock ragas 模块
+        mock_ragas = types.ModuleType("ragas")
+
+        class MockMetric:
+            pass
+
+        mock_ragas.evaluate = lambda dataset, metrics: type("Result", (), {
+            "faithfulness": 0.85,
+            "answer_relevancy": 0.92,
+            "context_precision": 0.78,
+            "context_recall": 0.88,
+        })()
+        sys.modules["ragas"] = mock_ragas
+
+        # 创建 mock ragas.metrics 模块
+        mock_metrics = types.ModuleType("ragas.metrics")
+        for name in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]:
+            setattr(mock_metrics, name, MockMetric())
+        sys.modules["ragas.metrics"] = mock_metrics
+
+        # 创建 mock datasets 模块
+        mock_datasets = types.ModuleType("datasets")
+
+        class MockDataset:
+            @classmethod
+            def from_dict(cls, data):
+                return data
+
+        mock_datasets.Dataset = MockDataset
+        sys.modules["datasets"] = mock_datasets
+
+        try:
+            from tests.evaluation.ragas_eval import RAGASEvaluator
+            evaluator = RAGASEvaluator(jsonl_file)
+            results = evaluator.evaluate()
+            # 由于 mock 的 ragas.evaluate 返回了固定值
+            assert "faithfulness" in results
+            assert results["faithfulness"] == 0.85
+        finally:
+            for mod in ["ragas", "ragas.metrics", "datasets"]:
+                if mod in sys.modules:
+                    del sys.modules[mod]
+
+    def test_main_cli(self, jsonl_file: str, monkeypatch, capsys) -> None:
+        """测试 CLI 入口 main() 函数"""
+        import argparse
+        from unittest.mock import patch
+
+        from tests.evaluation.ragas_eval import main
+
+        # 使用 patch 模拟 sys.argv
+        with patch("sys.argv", ["ragas_eval.py", "--dataset", jsonl_file]):
+            main()
+
+        captured = capsys.readouterr()
+        assert "faithfulness" in captured.out
+
+    def test_evaluate_with_custom_answer_fn_ragas_installed(self, jsonl_file: str, monkeypatch) -> None:
+        """RAGAS 已安装时使用自定义 answer_fn 评估"""
+        import types
+
+        # 创建 mock ragas 模块
+        mock_ragas = types.ModuleType("ragas")
+
+        class MockMetric:
+            pass
+
+        mock_ragas.evaluate = lambda dataset, metrics: type("Result", (), {
+            "faithfulness": 0.90,
+            "answer_relevancy": 0.95,
+            "context_precision": 0.80,
+            "context_recall": 0.85,
+        })()
+        sys.modules["ragas"] = mock_ragas
+
+        mock_metrics = types.ModuleType("ragas.metrics")
+        for name in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]:
+            setattr(mock_metrics, name, MockMetric())
+        sys.modules["ragas.metrics"] = mock_metrics
+
+        mock_datasets = types.ModuleType("datasets")
+
+        class MockDataset:
+            @classmethod
+            def from_dict(cls, data):
+                return data
+
+        mock_datasets.Dataset = MockDataset
+        sys.modules["datasets"] = mock_datasets
+
+        try:
+            from tests.evaluation.ragas_eval import RAGASEvaluator
+            evaluator = RAGASEvaluator(jsonl_file)
+
+            def answer_fn(question: str, contexts: list[str]) -> str:
+                return f"回答: {question}"
+
+            results = evaluator.evaluate_with_custom_answer_fn(answer_fn)
+            assert "faithfulness" in results
+            assert results["faithfulness"] == 0.90
+        finally:
+            for mod in ["ragas", "ragas.metrics", "datasets"]:
+                if mod in sys.modules:
+                    del sys.modules[mod]
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,16 @@ import tempfile
 from common.config import get_config, reload_config
 
 
+# ── 测试辅助：还原 config 单例 ───────────────────────────────────────────
+def _restore_config():
+    """从真实 config.json 重新加载并清除所有覆盖环境变量。"""
+    for key in ("CONFIG_PATH", "DEPLOYMENT_MODE", "AUTH_DEV_MODE"):
+        os.environ.pop(key, None)
+    from common.config import reload_config as _reload
+    _reload()
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def test_deployment_mode_default():
     """默认模式应为 development。"""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -21,8 +31,7 @@ def test_deployment_mode_default():
         assert cfg.deployment_mode == "development"
     finally:
         os.unlink(config_path)
-        if "CONFIG_PATH" in os.environ:
-            del os.environ["CONFIG_PATH"]
+        _restore_config()
 
 
 def test_production_mode_requires_dual_gpu():
@@ -42,8 +51,7 @@ def test_production_mode_requires_dual_gpu():
         assert cfg.system.dual_gpu is True
     finally:
         os.unlink(config_path)
-        if "CONFIG_PATH" in os.environ:
-            del os.environ["CONFIG_PATH"]
+        _restore_config()
 
 
 def test_development_mode_skips_gpu():
@@ -63,8 +71,7 @@ def test_development_mode_skips_gpu():
         assert is_testing_mode() is False
     finally:
         os.unlink(config_path)
-        if "CONFIG_PATH" in os.environ:
-            del os.environ["CONFIG_PATH"]
+        _restore_config()
 
 
 def test_env_overrides_deployment_mode_and_auth_dev_mode():
@@ -86,5 +93,4 @@ def test_env_overrides_deployment_mode_and_auth_dev_mode():
         assert cfg.auth.dev_mode is False
     finally:
         os.unlink(config_path)
-        for key in ("CONFIG_PATH", "DEPLOYMENT_MODE", "AUTH_DEV_MODE"):
-            os.environ.pop(key, None)
+        _restore_config()

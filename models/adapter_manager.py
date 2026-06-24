@@ -339,6 +339,10 @@ class AdapterManager:
                 pass
         return None
 
+    def _get_peft_model(self) -> Any | None:
+        """返回当前持有的 PeftModel 实例（内部调试用）。"""
+        return self._peft_model
+
     # ------------------------------------------------------------------
     # 热切换 (Hot-swap)
     # ------------------------------------------------------------------

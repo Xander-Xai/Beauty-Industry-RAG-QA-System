@@ -588,7 +588,14 @@ def get_config(reload: bool = False) -> AppConfig:
 
 
 def reload_config() -> AppConfig:
-    """Convenience wrapper: force-reload and return."""
+    """Convenience wrapper: force-reload and return.
+
+    Clears both ``_config_instance`` and ``_config_dict_instance``
+    so that subsequent calls to ``get_config()`` and ``get_config_dict()``
+    both see the fresh config.
+    """
+    global _config_dict_instance
+    _config_dict_instance = None
     return get_config(reload=True)
 
 

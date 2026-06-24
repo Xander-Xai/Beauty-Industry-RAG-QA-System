@@ -110,13 +110,24 @@ class TestQueryEndpoint:
 
     def test_query_unauthenticated_fails(self, client):
         """S-C1: 无认证请求返回 401（dev_mode=false 时生效）"""
-        from common.config import get_config
-        if get_config().auth.dev_mode:
-            pytest.skip("dev_mode=true 时无认证请求允许通过")
-        response = client.post("/api/query", json={
-            "query": "测试查询",
-        })
-        assert response.status_code == 401
+        from common.config import get_config, reload_config
+        # 临时禁用 dev_mode 以测试真实认证路径
+        _orig_auth_dev = os.environ.get("AUTH_DEV_MODE")
+        os.environ["AUTH_DEV_MODE"] = "false"
+        reload_config()
+        try:
+            if get_config().auth.dev_mode:
+                pytest.skip("dev_mode=true 时无认证请求允许通过")
+            response = client.post("/api/query", json={
+                "query": "测试查询",
+            })
+            assert response.status_code == 401
+        finally:
+            if _orig_auth_dev is not None:
+                os.environ["AUTH_DEV_MODE"] = _orig_auth_dev
+            else:
+                os.environ.pop("AUTH_DEV_MODE", None)
+            reload_config()
 
     def test_query_with_dev_headers(self, client, auth_header):
         """带 JWT token 的查询"""

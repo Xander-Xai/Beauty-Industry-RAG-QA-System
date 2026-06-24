@@ -253,7 +253,8 @@ class TestAgreementScore:
             ],
         }
         score = mgr._compute_agreement_score(path_results)
-        assert 0.2 < score < 0.9
+        # 下限 = 1-of-3 聚类分布（clustering_score → 0） + Jaccard 0.5 的 30% 贡献 = 0.15
+        assert 0.14 < score < 0.9
 
 
 # ===========================================================================
