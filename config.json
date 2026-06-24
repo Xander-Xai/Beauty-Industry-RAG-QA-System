@@ -1,7 +1,7 @@
 {
   "deployment_mode": "development",
   "system": {
-    "name": "化妆品企业级多模态RAG智能问答系统",
+    "name": "化妆品行业RAG问答系统",
     "version": "2.0.0",
     "dual_gpu": true
   },
@@ -9,7 +9,7 @@
     "role": "主生成推理",
     "models": {
       "gen_14b": {
-        "name": "Qwen3-14B+QLoRA",
+        "name": "Qwen3-14B (4-bit NF4, PEFT-ready)",
         "engine": "vllm",
         "port": 8100,
         "model_path": "./models/Qwen3-14B-Instruct",
@@ -120,19 +120,18 @@
       "collection": "rag_image_512"
     }
   },
-  "milvus": {
-    "host": "milvus",
-    "port": 19530,
+  "qdrant": {
+    "host": "qdrant",
+    "port": 6333,
+    "grpc_port": 6334,
     "collections": {
       "rag_text_768": {
         "dimension": 768,
-        "index_type": "IVF_FLAT",
-        "metric_type": "L2"
+        "distance": "Cosine"
       },
       "rag_image_512": {
         "dimension": 512,
-        "index_type": "IVF_FLAT",
-        "metric_type": "L2"
+        "distance": "Cosine"
       }
     }
   },
@@ -198,6 +197,35 @@
     "max_conversation_rounds": 6,
     "prompt_version": "v2.1",
     "answer_gate": { "nli_threshold": 0.6 }
+  },
+  "prompts": {
+    "system_prompt": "",
+    "system_prompt_by_business_type": {
+      "regulation": "",
+      "development": ""
+    },
+    "_comment": "system_prompt 为空时使用代码内置默认值（行业通用）。在 prompt 中使用 {business_type} 占位符"
+  },
+  "domain_keywords": {
+    "regulation": ["法规", "合规", "标准", "备案", "许可", "标准号", "GB", "禁用"],
+    "development": ["配方", "研发", "工艺", "制备", "合成", "开发"],
+    "ingredient": ["成分", "INCI", "功效", "浓度", "含量", "添加量"],
+    "product": ["产品", "品牌", "适用", "肤质", "包装"],
+    "visual": ["图片", "包装", "外观", "照片", "扫描", "标签", "成分表", "配方", "图像", "图像识别", "OCR", "说明书", "瓶身", "外盒"],
+    "_comment_visual": "visual 关键词用于 CLIP 图像检索触发判别"
+  },
+  "model_routing": {
+    "tiers": {
+      "complex":  { "endpoint": "gen_14b", "label": "复杂/高精度模型" },
+      "simple":   { "endpoint": "gen_4b",  "label": "简单/轻量模型" },
+      "rewrite":  { "endpoint": "vllm_rewrite", "label": "查询改写" }
+    },
+    "endpoint_map": {
+      "qwen3-4b": "gen_4b",
+      "qwen3-14b": "gen_14b",
+      "_comment": "上面两个键保持向后兼容。新代码应使用 model_routing.tiers 中的 tier 名"
+    },
+    "complexity_fallback": "simple"
   },
   "admission_control": {
     "safety_factor": 0.7,
@@ -277,8 +305,22 @@
     }
   },
   "auth": {
-    "dev_mode": false,
+    "dev_mode": true,
     "jwt_secret": "",
     "jwt_expiry_hours": 24
+  },
+  "ui": {
+    "app_title": "化妆品行业知识问答助手",
+    "subtitle": "面向化妆品行业知识库的检索增强问答助手",
+    "anonymous_user_id": "web-user",
+    "default_role": "public",
+    "role_options": [
+      { "key": "public", "label": "Public Visitor", "role_mask": 0, "dept_mask": 0 },
+      { "key": "admin", "label": "Administrator", "role_mask": 2147483647, "dept_mask": 0 },
+      { "key": "rd", "label": "Research and Development", "role_mask": 1, "dept_mask": 1 },
+      { "key": "quality", "label": "Quality Assurance", "role_mask": 2, "dept_mask": 2 },
+      { "key": "regulation", "label": "Regulatory Affairs", "role_mask": 4, "dept_mask": 4 },
+      { "key": "sales", "label": "Commercial Team", "role_mask": 8, "dept_mask": 8 }
+    ]
   }
 }
