@@ -626,6 +626,7 @@ class TestAdapterManagerUnload:
         # 创建 mock torch
         fake_torch = types.ModuleType("torch")
         fake_torch.float16 = "float16"
+        _orig_torch = sys.modules.get("torch")
         sys.modules["torch"] = fake_torch
 
         try:
@@ -648,10 +649,15 @@ class TestAdapterManagerUnload:
                 assert mgr._get_peft_model() is not None
                 assert mgr._get_peft_model().adapter_path == str(d)
         finally:
-            # 清理 mock 模块
-            for mod in ("peft", "transformers", "torch"):
-                if mod in sys.modules:
-                    del sys.modules[mod]
+            # 恢复原始 torch 模块（破坏性删除会导致后续 test_complexity_evaluator.py
+            # 中的 torch._TritonLibrary 初始化失败）
+            if _orig_torch is not None:
+                sys.modules["torch"] = _orig_torch
+            else:
+                sys.modules.pop("torch", None)
+            # 清理 mock 的 peft/transformers（这些模块不存在或无关紧要）
+            sys.modules.pop("peft", None)
+            sys.modules.pop("transformers", None)
 
     def test_validate_path_not_dir(self, base_model):
         """验证路径不是目录时应返回错误"""
