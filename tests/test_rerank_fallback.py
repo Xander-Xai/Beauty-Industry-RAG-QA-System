@@ -6,7 +6,7 @@ import pytest
 # Mock torch before importing the module under test
 mock_torch = MagicMock()
 mock_torch.cuda.OutOfMemoryError = type("OutOfMemoryError", (RuntimeError,), {})
-sys.modules.setdefault("torch", mock_torch)
+sys.modules["torch"] = mock_torch
 
 from retrieval.rerank_batch_aggregator import RerankBatchAggregator
 
