@@ -18,9 +18,6 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional
-
-import numpy as np
 
 from common.config import get_config_dict
 
@@ -155,7 +152,6 @@ class CrossEncoderEnsemble:
         Returns:
             list[RerankResult] 按 ce_score_ensemble 降序排列
         """
-        from core.pipeline_context import RerankResult
 
         if not candidates:
             return []

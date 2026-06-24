@@ -4,10 +4,9 @@ AlertingManager 规则触发/恢复/throughput QPS。
 """
 import os
 import sys
-import types
 import time
-import pytest
-from unittest.mock import MagicMock, patch
+import types
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["DEPLOYMENT_MODE"] = "development"
@@ -35,7 +34,7 @@ def _make_collector():
 
 
 def _make_alerting(metrics=None):
-    from monitoring.otel_tracer import AlertingManager, MetricsCollector
+    from monitoring.otel_tracer import AlertingManager
     if metrics is None:
         metrics = _make_collector()
     return AlertingManager(metrics)

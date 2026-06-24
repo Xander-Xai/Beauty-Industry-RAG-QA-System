@@ -16,21 +16,20 @@ API 端点（由 api.routes 提供）：
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import time
-import sys
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import router, get_pipeline, get_metrics
 from api.middleware import setup_middleware
+from api.routes import get_metrics, get_pipeline, router
+from common.config import get_config_dict
+from common.config import get_config as _get_sys_config
+
 # H-7: 显式导入 SessionState，避免延迟导入导致清理任务 NameError
 from core.pipeline_context import SessionState
-from common.config import get_config as _get_sys_config
 
 # ─── 日志配置 ──────────────────────────────────────────────
 
@@ -42,8 +41,7 @@ logger = logging.getLogger(__name__)
 
 # ─── 加载配置 ──────────────────────────────────────────────
 
-with open("config.json", encoding="utf-8", errors="replace") as f:
-    config = json.load(f)
+config = get_config_dict()
 
 _APP_VERSION = config.get("system", {}).get("version", "2.0.0")
 
@@ -56,8 +54,8 @@ def create_app() -> FastAPI:
         配置完成的 FastAPI 实例。
     """
     app = FastAPI(
-        title="化妆品企业级多模态 RAG 智能问答系统",
-        description="基于双 GPU、多模态检索增强生成（RAG）的企业级知识问答 API",
+        title=_get_sys_config().system.name,
+        description=f"基于双 GPU、多模态检索增强生成（RAG）的企业级知识问答 API — {_get_sys_config().system.name}",
         version=_APP_VERSION,
         # H-9: 生产模式下禁用 Swagger/ReDoc，避免暴露 API schema
         docs_url="/docs" if _get_sys_config().deployment_mode != "production" else None,
@@ -67,26 +65,22 @@ def create_app() -> FastAPI:
     # ── 中间件（CORS + 请求日志）──────────────────────────
     setup_middleware(app)
 
-    # ── 静态文件 & 首页 ───────────────────────────────────
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    if os.path.isdir(static_dir):
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-    @app.get("/", include_in_schema=False)
-    async def root():
-        from fastapi.responses import FileResponse
-        index_path = os.path.join(static_dir, "index.html")
-        if os.path.isfile(index_path):
-            return FileResponse(index_path)
-        return {"message": "化妆品 RAG 系统 API", "docs": "/docs"}
-
-    # ── 路由注册 ─────────────────────────────────────────
+    # ── 路由注册（必须在静态 mount 之前）─────────────────
     app.include_router(router)
 
     from api.routes_auth import router as auth_router
     app.include_router(auth_router)
 
-    # ── 全局异常处理器 ───────────────────────────────────
+    # ── 静态文件 & 首页（最后注册，避免拦截 API 路由）───
+    # 优先使用 ./static，其次 frontend/dist/（vite build 产物）
+    _project_root = os.path.dirname(os.path.abspath(__file__))
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if not os.path.isdir(static_dir):
+        static_dir = os.path.join(_project_root, "frontend", "dist")
+    if os.path.isdir(static_dir):
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+
+    # ── 首页（如果 static mount 没有 index.html）──
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
@@ -133,12 +127,13 @@ def create_app() -> FastAPI:
         asyncio.create_task(_cleanup_sessions())
         logger.info("SessionState 定期清理任务已启动（间隔 5 分钟）")
 
-        logger.info("系统启动完成，监听端口: %s", "8000")
+        logger.info("系统启动完成，监听端口: %s", os.environ.get("API_PORT", 8000))
 
     @app.on_event("startup")
     async def generate_jwt_keys():
         """Generate JWT key pair if not exists and JWT is configured."""
         import os
+
         from auth.jwt_auth import generate_keypair, get_jwt_config
         config = get_jwt_config()
         if config.enabled and config.private_key_path:
@@ -171,12 +166,12 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("启动化妆品企业级多模态 RAG 智能问答系统 (FastAPI)...")
+    logger.info("启动 %s (FastAPI)...", _get_sys_config().system.name)
 
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.environ.get("API_PORT", 8000)),
         reload=True,
         log_level="info",
     )

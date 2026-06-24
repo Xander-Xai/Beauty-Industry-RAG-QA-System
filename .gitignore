@@ -53,6 +53,10 @@ logs/
 # Claude Code worktrees
 .claude/worktrees/
 
+# Build artifacts (frontend)
+frontend/dist/
+static/
+
 # Claude Code internals (config, memory, transcripts)
 .claude/
 
@@ -70,3 +74,7 @@ keys/
 *.db
 *.sqlite
 *.sqlite3
+
+# Internal documents (not for public repo)
+PRD.md
+AUDIT_REPORT.md

@@ -12,7 +12,7 @@ torch>=2.4.0
 sentence-transformers>=2.7.0
 
 # === Vector Database ===
-pymilvus>=2.4.0
+qdrant-client>=1.18.0
 faiss-cpu>=1.8.0
 
 # === Search Engine ===
@@ -54,6 +54,12 @@ bcrypt>=4.0.0
 
 # Phase 5: 压测
 locust>=2.20.0
+
+# Phase 5: QLoRA 微调
+peft>=0.12.0
+bitsandbytes>=0.43.0
+datasets>=2.20.0
+accelerate>=0.30.0
 
 # Phase 1: ONNX Runtime (CPU fallback)
 onnxruntime>=1.17.0

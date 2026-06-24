@@ -2,7 +2,6 @@
 import os
 import sys
 import types
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["DEPLOYMENT_MODE"] = "development"
@@ -86,32 +85,29 @@ class TestParallelRecallHelpers:
                 deduped.append(r)
         assert deduped == []
 
-    def test_build_milvus_filter_basic(self):
-        """权限过滤表达式应包含 role_mask 和 dept_mask。"""
-        from common.auth import build_milvus_filter
-        filter_expr = build_milvus_filter(
+    def test_build_qdrant_filter_basic(self):
+        """build_qdrant_filter 应返回 Qdrant Filter 对象。"""
+        from common.auth import build_qdrant_filter
+        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+        qf = build_qdrant_filter(
             user_role_mask=5, user_dept_mask=3, knowledge_version_epoch="20260603_00",
         )
-        assert "role_mask" in filter_expr
-        assert "dept_mask" in filter_expr
-        assert "20260603_00" in filter_expr
-
-    def test_build_milvus_filter_public_user(self):
-        """公开用户（role_mask=0）过滤应允许所有公开文档。"""
-        from common.auth import build_milvus_filter
-        filter_expr = build_milvus_filter(
-            user_role_mask=0, user_dept_mask=0, knowledge_version_epoch="20260603_00",
+        assert isinstance(qf, Filter)
+        assert qf.must is not None
+        status_cond = any(
+            c.key == "status" and isinstance(c.match, MatchValue) and c.match.value == "active"
+            for c in qf.must
         )
-        assert "role_mask == 0" in filter_expr
+        assert status_cond, "Filter 应包含 status == active"
 
-    def test_build_milvus_filter_super_admin(self):
-        """超级管理员过滤不应包含角色限制。"""
-        from common.auth import build_milvus_filter
-        filter_expr = build_milvus_filter(
-            user_role_mask=0xFFFFFFFF, user_dept_mask=0, knowledge_version_epoch="20260603_00",
-        )
-        # 超管过滤中不应有 role_mask 的位运算限制
-        assert "0xFFFFFFFF" in filter_expr or "4294967295" in filter_expr
+    def test_build_qdrant_filter_validation(self):
+        """非法输入应抛出 ValueError（负 role_mask 或超长 mask）。"""
+        from common.auth import build_qdrant_filter
+
+        import pytest
+        with pytest.raises(ValueError):
+            build_qdrant_filter(-1, 3, "v1")
 
 
 class TestRRFFusion:

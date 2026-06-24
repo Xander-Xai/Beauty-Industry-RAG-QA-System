@@ -5,13 +5,12 @@ Embedding 服务模块
 - BGE-base-zh-v1.5: 768维文本向量（主检索路径）
 - CLIP Text Encoder: 512维文本向量（视觉语义路）
 
-所有向量存储在 Milvus 多 Collection 中（readme 3.4）
+所有向量存储在 Qdrant 多 Collection 中
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 
@@ -29,6 +28,7 @@ class EmbeddingService:
     职责：
     - BGE 文本编码（768d，用于 Dense 语义检索）
     - CLIP 文本编码（512d，用于视觉语义检索）
+    - Qdrant 向量检索封装
     - 统一接口封装，支持模型热切换
     """
 
@@ -37,53 +37,23 @@ class EmbeddingService:
         self._bge_tokenizer = None
         self._clip_model = None
         self._clip_processor = None
-        self._milvus_client = None
+        self._qdrant_client = None
         logger.info("EmbeddingService 初始化完成（模型懒加载）")
 
     @property
-    def bge_model(self):
-        if self._bge_model is None:
-            from transformers import AutoTokenizer, AutoModel
-            model_path = config["embedding"]["text"]["model_path"]
-            self._bge_tokenizer = AutoTokenizer.from_pretrained(model_path)
-            self._bge_model = AutoModel.from_pretrained(model_path)
-            logger.info(f"BGE 模型加载完成: {model_path}")
-        return self._bge_model
-
-    @property
-    def bge_tokenizer(self):
-        if self._bge_tokenizer is None:
-            _ = self.bge_model  # 触发加载
-        return self._bge_tokenizer
-
-    @property
-    def clip_model(self):
-        if self._clip_model is None:
-            from transformers import CLIPProcessor, CLIPModel
-            model_path = config["embedding"]["image_clip"]["model_path"]
-            self._clip_processor = CLIPProcessor.from_pretrained(model_path)
-            self._clip_model = CLIPModel.from_pretrained(model_path)
-            logger.info(f"CLIP 模型加载完成: {model_path}")
-        return self._clip_model
-
-    @property
-    def clip_processor(self):
-        if self._clip_processor is None:
-            _ = self.clip_model  # 触发加载
-        return self._clip_processor
-
-    @property
-    def milvus_client(self):
-        if self._milvus_client is None:
-            from pymilvus import connections
-            connections.connect(
-                alias="default",
-                host=config["milvus"]["host"],
-                port=config["milvus"]["port"],
+    def qdrant_client(self):
+        if self._qdrant_client is None:
+            from qdrant_client import QdrantClient
+            self._qdrant_client = QdrantClient(
+                host=config["qdrant"]["host"],
+                port=config["qdrant"]["port"],
+                grpc_port=config["qdrant"]["grpc_port"],
+                prefer_grpc=True,
             )
-            self._milvus_client = True
-            logger.info("Milvus 连接完成")
-        return self._milvus_client
+            logger.info(
+                f"Qdrant 连接完成: {config['qdrant']['host']}:{config['qdrant']['port']}"
+            )
+        return self._qdrant_client
 
     def encode_text(self, text: str) -> np.ndarray:
         """
@@ -159,30 +129,23 @@ class EmbeddingService:
         PRD §4.5: 获取图像库质心向量
 
         用于 CLIP 判别器的第三个分量: query_emb vs image_centroid_sim。
-        从 Milvus rag_image_512 采样向量计算质心。
+        从 Qdrant rag_image_512 采样向量计算质心。
         """
         try:
-            from pymilvus import MilvusClient
-            collection = config.get("milvus", {}).get("image_collection", "rag_image_512")
-            milvus_cfg = config.get("milvus", {})
-            host = milvus_cfg.get("host", "localhost")
-            port = milvus_cfg.get("port", 19530)
+            collection_name = config["embedding"]["image_clip"]["collection"]
 
-            client = MilvusClient(uri=f"http://{host}:{port}")
-
-            # 采样最多 100 条向量计算质心
-            import random
-            sample_ids = [str(i) for i in random.sample(range(1, 200), min(100, 199))]
-            results = client.get(
-                collection_name=collection,
-                ids=sample_ids,
-                output_fields=["embedding"],
+            # 从 Qdrant scroll 采样向量
+            records, _ = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                limit=100,
+                with_payload=False,
+                with_vectors=True,
             )
 
-            if not results:
+            if not records:
                 return None
 
-            embeddings = np.array([r["entity"]["embedding"] for r in results], dtype=np.float32)
+            embeddings = np.array([r.vector for r in records], dtype=np.float32)
             centroid = np.mean(embeddings, axis=0)
             # 归一化
             norm = np.linalg.norm(centroid)
@@ -193,99 +156,83 @@ class EmbeddingService:
             logger.debug(f"图像质心计算失败: {e}")
             return None
 
-    def search_milvus_text(
+    def search_qdrant_text(
         self,
         query_embedding: np.ndarray,
         collection_name: str = None,
         top_k: int = 50,
-        filter_expr: str = "",
+        qdrant_filter=None,
     ) -> list[dict]:
         """
-        Milvus Dense 语义检索
+        Qdrant Dense 语义检索
 
         Args:
-            query_embedding: 查询向量
+            query_embedding: 查询向量 (768d)
             collection_name: Collection 名称（默认 rag_text_768）
             top_k: 召回数量
-            filter_expr: 权限+版本过滤表达式
+            qdrant_filter: Qdrant Filter 对象（状态/版本过滤，不含 RBAC）
 
         Returns:
             [{"doc_id": str, "content": str, "score": float, "metadata": dict}]
         """
-        from pymilvus import Collection
-
         collection_name = collection_name or config["embedding"]["text"]["collection"]
-        collection = Collection(collection_name)
+        client = self.qdrant_client
 
-        search_params = {
-            "metric_type": config["milvus"]["collections"]["rag_text_768"]["metric_type"],
-            "params": {"nprobe": 16},
-        }
-
-        results = collection.search(
-            data=query_embedding.tolist(),
-            anns_field="embedding",
-            param=search_params,
+        results = client.search(
+            collection_name=collection_name,
+            query_vector=query_embedding.flatten().tolist(),
             limit=top_k,
-            expr=filter_expr if filter_expr else None,
-            output_fields=["doc_id", "content", "doc_type", "embedding_type"],
+            query_filter=qdrant_filter,
+            with_payload=["doc_id", "content", "doc_type", "embedding_type"],
         )
 
         hits = []
-        for hit in results[0]:
+        for point in results:
             hits.append({
-                "doc_id": str(hit.entity.get("doc_id")),
-                "content": hit.entity.get("content", ""),
-                "score": hit.score,
+                "doc_id": str(point.payload.get("doc_id", "")),
+                "content": point.payload.get("content", ""),
+                "score": point.score,
                 "metadata": {
-                    "doc_type": hit.entity.get("doc_type", ""),
-                    "embedding_type": hit.entity.get("embedding_type", ""),
+                    "doc_type": point.payload.get("doc_type", ""),
+                    "embedding_type": point.payload.get("embedding_type", ""),
                 },
             })
         return hits
 
-    def search_milvus_image(
+    def search_qdrant_image(
         self,
         query_embedding: np.ndarray,
         top_k: int = 20,
-        filter_expr: str = "",
+        qdrant_filter=None,
     ) -> list[dict]:
         """
-        Milvus CLIP 图像向量检索
+        Qdrant CLIP 图像向量检索
 
         Args:
             query_embedding: CLIP 文本向量（512d）
             top_k: 召回数量
-            filter_expr: 权限+版本过滤表达式
+            qdrant_filter: Qdrant Filter 对象（状态/版本过滤，不含 RBAC）
 
         Returns:
             [{"doc_id": str, "content": str, "image_uri": str, "score": float}]
         """
-        from pymilvus import Collection
-
         collection_name = config["embedding"]["image_clip"]["collection"]
-        collection = Collection(collection_name)
+        client = self.qdrant_client
 
-        search_params = {
-            "metric_type": config["milvus"]["collections"]["rag_image_512"]["metric_type"],
-            "params": {"nprobe": 16},
-        }
-
-        results = collection.search(
-            data=query_embedding.tolist(),
-            anns_field="embedding",
-            param=search_params,
+        results = client.search(
+            collection_name=collection_name,
+            query_vector=query_embedding.flatten().tolist(),
             limit=top_k,
-            expr=filter_expr if filter_expr else None,
-            output_fields=["doc_id", "content", "image_uri"],
+            query_filter=qdrant_filter,
+            with_payload=["doc_id", "content", "image_uri"],
         )
 
         hits = []
-        for hit in results[0]:
+        for point in results:
             hits.append({
-                "doc_id": str(hit.entity.get("doc_id")),
-                "content": hit.entity.get("content", ""),
-                "image_uri": hit.entity.get("image_uri", ""),
-                "score": hit.score,
+                "doc_id": str(point.payload.get("doc_id", "")),
+                "content": point.payload.get("content", ""),
+                "image_uri": point.payload.get("image_uri", ""),
+                "score": point.score,
             })
         return hits

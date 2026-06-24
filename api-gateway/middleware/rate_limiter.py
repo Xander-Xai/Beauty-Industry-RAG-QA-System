@@ -13,13 +13,11 @@ Redis 不可用时自动降级为内存级令牌桶（单实例部署）。
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,14 +29,14 @@ _GATEWAY_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _GATEWAY_DIR not in sys.path:
     sys.path.insert(0, _GATEWAY_DIR)
 
-from fastapi import Request, HTTPException, status
+from fastapi import HTTPException, Request, status
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 业务类型 -> QPS 上限映射（PRD §13: Regulation 60%, R&D 30%, Chat 10%）
 # ---------------------------------------------------------------------------
-BUSINESS_TYPE_LIMITS: Dict[str, float] = {
+BUSINESS_TYPE_LIMITS: dict[str, float] = {
     "regulation": 60.0,   # 法规类：最高优先级
     "research": 30.0,     # 研发类：中等优先级
     "general": 10.0,      # 通用类：低优先级
@@ -84,7 +82,7 @@ class TokenBucket:
     refill_rate: float
     last_refill: float = field(default_factory=time.monotonic)
 
-    def consume(self, now: Optional[float] = None) -> bool:
+    def consume(self, now: float | None = None) -> bool:
         if now is None:
             now = time.monotonic()
         elapsed = now - self.last_refill
@@ -106,14 +104,14 @@ class RateLimiter:
 
     def __init__(
         self,
-        limits: Optional[Dict[str, float]] = None,
+        limits: dict[str, float] | None = None,
         burst_multiplier: float = BURST_MULTIPLIER,
         cleanup_interval_s: float = 60.0,
     ) -> None:
         self._limits = limits or BUSINESS_TYPE_LIMITS
         self._burst_multiplier = burst_multiplier
         self._cleanup_interval = cleanup_interval_s
-        self._buckets: Dict[str, TokenBucket] = {}
+        self._buckets: dict[str, TokenBucket] = {}
         self._last_cleanup = time.monotonic()
         self._lock = asyncio.Lock()
         # Redis 连接（延迟初始化）
@@ -217,14 +215,14 @@ class RateLimiter:
             logger.info("限流器清理了 %d 个过期令牌桶", len(stale_keys))
 
     @property
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         return {"active_buckets": len(self._buckets), "redis_available": self._redis_available}
 
 
 # ---------------------------------------------------------------------------
 # 全局限流器实例（单例）
 # ---------------------------------------------------------------------------
-_rate_limiter_instance: Optional[RateLimiter] = None
+_rate_limiter_instance: RateLimiter | None = None
 
 
 def get_rate_limiter() -> RateLimiter:

@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 
@@ -38,12 +37,17 @@ class StatelessRouter:
     """
 
     def __init__(self):
+        # 端点 URL 从环境变量（Docker 部署）或 config.json（本地部署）读取
+        import os as _os
+        rewrite_port = config['gpu1']['models']['vllm_rewrite']['port']
+        gen_4b_port = config['gpu1']['models']['vllm_gen_4b']['port']
+        gen_14b_port = config['gpu0']['models']['gen_14b']['port']
         self.endpoints = {
-            "rewrite": f"http://localhost:{config['gpu1']['models']['vllm_rewrite']['port']}",
-            "gen_4b": f"http://localhost:{config['gpu1']['models']['vllm_gen_4b']['port']}",
-            "gen_14b": f"http://localhost:{config['gpu0']['models']['gen_14b']['port']}",
+            "rewrite": _os.environ.get("VLLM_REWRITE_URL", f"http://localhost:{rewrite_port}"),
+            "gen_4b": _os.environ.get("VLLM_GEN_4B_URL", f"http://localhost:{gen_4b_port}"),
+            "gen_14b": _os.environ.get("VLLM_GEN_14B_URL", f"http://localhost:{gen_14b_port}"),
         }
-        self.timeout_seconds = 10.0
+        self.timeout_seconds = float(_os.environ.get("VLLM_TIMEOUT_SECONDS", "10.0"))
         self._client = httpx.Client(timeout=self.timeout_seconds)
         logger.info("StatelessRouter 初始化完成")
 
@@ -53,7 +57,7 @@ class StatelessRouter:
         messages: list[dict],
         max_tokens: int = 512,
         temperature: float = 0.7,
-    ) -> str:
+    ) -> dict:
         """
         调用 vLLM OpenAI-compatible Chat Completions API
 
@@ -64,7 +68,9 @@ class StatelessRouter:
             temperature: 生成温度
 
         Returns:
-            生成的文本内容
+            {"content": str, "prefix_cache_hit": bool | None}
+            - content: 生成的文本内容
+            - prefix_cache_hit: vLLM Prefix Cache 命中状态（从响应头提取）
 
         Raises:
             连接失败/超时/非200状态码
@@ -84,8 +90,20 @@ class StatelessRouter:
         try:
             resp = self._client.post(url, json=payload)
             resp.raise_for_status()
+
+            # 提取 vLLM Prefix Cache 命中信息（响应头）
+            # vLLM 在启用 prefix caching 时会返回 x-prefix-cache-hit 头
+            prefix_cache_header = resp.headers.get("x-prefix-cache-hit")
+            prefix_cache_hit = None
+            if prefix_cache_header is not None:
+                prefix_cache_hit = prefix_cache_header.lower() in ("true", "1", "yes")
+
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            return {
+                "content": content,
+                "prefix_cache_hit": prefix_cache_hit,
+            }
         except httpx.TimeoutException:
             logger.error(f"vLLM 端点超时: {endpoint_key} ({self.timeout_seconds}s)")
             raise

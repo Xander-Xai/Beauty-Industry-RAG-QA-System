@@ -1,89 +1,112 @@
-# 化妆品 RAG 系统部署手册
+# 化妆品行业 RAG 问答系统部署手册
 
-## 1. 环境要求
+## 1. 当前推荐部署路径
 
-### 硬件
+当前仓库推荐先走 `app.py` 单体部署，再逐步补微服务。原因：
 
-| 组件 | 最低配置 | 推荐配置 |
-|------|----------|----------|
-| GPU | 单卡 (16GB+) | 双卡 (GPU0: 14B, GPU1: 4B+Rerank) |
-| 内存 | 32GB | 64GB |
-| 磁盘 | 100GB SSD | 500GB NVMe |
-| 网络 | 100Mbps | 1Gbps |
+- React 前端默认联调的是单体 `/api/*` 接口
+- `Dockerfile`、`docker-compose.yml`、`/api/health` 已对齐
+- 微服务目录仍在，但不是当前验证过的前端主线
 
-### 软件
+## 2. 部署前必须确认
 
-- Docker >= 24.0
-- Docker Compose >= 2.20
-- NVIDIA Container Toolkit (GPU 模式)
-- nvidia-driver >= 535
-
-## 2. 快速部署
+### 2.1 环境变量
 
 ```bash
-# 1. 克隆代码
-git clone <repo-url>
-cd Beauty-Industry-RAG-QA-System
-
-# 2. 配置环境变量
 cp .env.example .env
-# 编辑 .env 设置 DEPLOYMENT_MODE 和模型路径
-
-# 3. 一键启动
-DEPLOYMENT_MODE=testing ./scripts/start.sh
 ```
 
-## 3. 模型下载
+应用现在会自动加载项目根目录下的 `.env`，所以直接执行 `python3 app.py` 或 `python3 run_offline.py` 即可读取这份配置。
+
+生产环境至少明确设置：
+
+- `DEPLOYMENT_MODE=production`
+- `AUTH_DEV_MODE=false`
+- `CORS_ORIGINS=https://your-frontend.example.com`
+- `JWT_PRIVATE_KEY_PATH`
+- `JWT_PUBLIC_KEY_PATH`
+- `REDIS_PASSWORD`
+- `MINIO_ACCESS_KEY`
+- `MINIO_SECRET_KEY`
+- `SERVICE_AUTH_TOKEN`
+
+说明：
+
+- `common/config.py` 会优先读取 `.env` / 进程环境中的 `DEPLOYMENT_MODE` 和 `AUTH_DEV_MODE`。
+- 如果生产环境仍保留 `AUTH_DEV_MODE=true`，任意客户端都可伪造 `X-User-*` 头部，不符合真实上线要求。
+
+### 2.2 前端构建
 
 ```bash
-# 从 HuggingFace 下载
-mkdir -p models
-huggingface-cli download Qwen/Qwen3-14B-Instruct --local-dir models/qwen3-14b
-huggingface-cli download Qwen/Qwen3-4B-Instruct --local-dir models/qwen3-4b
-huggingface-cli download BAAI/bge-base-zh-v1.5 --local-dir models/bge-base-zh-v1.5
-
-# 或使用 ModelScope (国内加速)
-modelscope download --model Qwen/Qwen3-14B-Instruct --local_dir models/qwen3-14b
+cd frontend
+npm install
+npm run build
+cd ..
 ```
 
-## 4. 知识库初始化
+构建完成后，FastAPI 会从 `frontend/dist` 提供静态页面。
+
+### 2.3 JWT 密钥
 
 ```bash
-# 生成 Mock 数据
-python3 -m data.mock_generator data/mock_data
-
-# 导入向量库
-python3 -m offline.scheduler --mode incremental
+mkdir -p keys
+python3 -c "from auth.jwt_auth import generate_keypair; generate_keypair('./keys')"
 ```
 
-## 5. 部署模式
+## 3. 启动方式
 
-| 模式 | 命令 | GPU 要求 | 说明 |
-|------|------|----------|------|
-| production | `DEPLOYMENT_MODE=production ./scripts/start.sh` | 2x GPU | 双卡，14B+4B |
-| testing | `DEPLOYMENT_MODE=testing ./scripts/start.sh` | 1x GPU | 单卡，4B 复用 |
-| development | `./scripts/start.sh` | 无 | CPU 模拟 |
-
-## 6. HTTPS 配置
+### 3.1 本地单体
 
 ```bash
-# 生成自签名证书 (测试环境)
-mkdir -p nginx/ssl
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout nginx/ssl/key.pem -out nginx/ssl/cert.pem \
-    -subj "/CN=localhost"
+python3 app.py
 ```
 
-## 7. 常见问题
+### 3.2 Compose
 
-### GPU 不可用
-检查 `nvidia-smi` 输出。若 Docker 无法访问 GPU，确认 nvidia-container-toolkit 已安装。
+```bash
+docker compose up -d
+```
 
-### Milvus 启动失败
-检查 etcd 是否正常运行。Milvus 依赖 etcd 进行元数据存储。
+校验点：
 
-### Redis 连接超时
-确认 Redis 容器已启动且端口 6379 未被占用。
+- `http://localhost:8000/api/health`
+- `http://localhost:8000/docs`
+- `http://localhost:8000/api/auth/metadata`
+- `http://localhost:8000/`
 
-### vLLM 启动慢
-首次加载模型需要时间（30s-2min）。健康检查会在启动后自动等待。
+## 4. 知识库初始化现状
+
+当前仓库 `offline/` 包已包含完整离线管线实现（文档处理、图像 OCR、向量化、调度），`run_offline.py` 可直接执行增量更新/全量重建/创建索引等操作。
+
+首次部署时，根据数据集情况选择：
+
+1. **使用外部已有数据**：确认 `config.json` 中 Qdrant/ES 集合名与现网一致，直接启动在线服务。
+2. **使用本仓库离线管线**：先下载模型权重至 `models/` 目录（PaddleOCR、CLIP-ViT、BGE base zh v1.5 等），然后执行：
+   ```bash
+   python3 run_offline.py --mode create-index   # 创建 Qdrant Collection + ES 索引
+   python3 run_offline.py --mode incremental    # 导入 data/ 目录文档
+   ```
+
+## 5. 当前已对齐的前后端能力
+
+- 登录：`POST /api/auth/login`
+- 刷新 Token：`POST /api/auth/refresh`
+- 单轮查询：`POST /api/query`
+- 多轮问答：`POST /api/chat`
+- 会话历史：`GET /api/dialog_history`
+- 系统统计：`GET /api/stats`
+- 证据文档打开：`GET /api/media/{doc_id}`，由前端先取预签名链接再打开
+- 管理员用户管理：
+  - `GET /api/auth/users`
+  - `POST /api/auth/users`
+  - `PUT /api/auth/users/{user_id}/roles`
+
+## 6. 生产前额外检查
+
+- 将 `AUTH_DEV_MODE` 设为 `false`
+- 确认 `.env` 已被当前启动进程加载
+- 配置 `CORS_ORIGINS`
+- 构建前端并确认 `frontend/dist` 已生成
+- 使用管理员账号验证用户创建、角色更新、证据文件访问
+- 确认 `Dockerfile` 健康检查访问的是 `/api/health`
+- 审核 `docs/pre-launch-checklist.md` 中的 P0 阻塞项

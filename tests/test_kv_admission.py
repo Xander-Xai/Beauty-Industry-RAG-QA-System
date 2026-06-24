@@ -13,17 +13,17 @@ KV 准入控制测试 (admission/kv_admission.py)
 - 释放与状态查询
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 import threading
 from unittest.mock import patch
 
+import pytest
 
 from admission.kv_admission import KVAdmissionControl
-
 
 # ── 辅助 fixtures ──
 

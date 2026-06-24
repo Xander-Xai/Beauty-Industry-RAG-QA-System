@@ -23,8 +23,8 @@ import sys
 # ── Airflow 导入（不可用时跳过，仅供人工参考） ──────────────────────
 try:
     from airflow import DAG
-    from airflow.operators.python import PythonOperator
     from airflow.operators.bash import BashOperator
+    from airflow.operators.python import PythonOperator
     from airflow.utils.dates import days_ago
     AIRFLOW_AVAILABLE = True
 except ImportError:
@@ -77,13 +77,11 @@ def _task_bump_version_epoch():
 
 def _task_archive_expired(current_epoch: str = None):
     """过期文档归档"""
+    from common.config import get_config_dict
     from offline.scheduler import OfflineScheduler
-    import json as _json
 
     # 从 config.json 读取当前 epoch
-    config_path = os.path.join(_PROJECT_ROOT, "config.json")
-    with open(config_path, encoding="utf-8") as f:
-        cfg = _json.load(f)
+    cfg = get_config_dict()
     epoch = current_epoch or cfg.get("knowledge_version_epoch", "")
 
     scheduler = OfflineScheduler()

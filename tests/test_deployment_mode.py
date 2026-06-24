@@ -1,8 +1,8 @@
 import json
 import os
 import tempfile
-import pytest
-from common.config import AppConfig, get_config, reload_config
+
+from common.config import get_config, reload_config
 
 
 def test_deployment_mode_default():
@@ -48,7 +48,7 @@ def test_production_mode_requires_dual_gpu():
 
 def test_development_mode_skips_gpu():
     """开发模式下应能正确识别。"""
-    from common.config import is_production_mode, is_testing_mode, is_development_mode
+    from common.config import is_development_mode, is_production_mode, is_testing_mode
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         config_data = json.load(open("config.json"))
         config_data["deployment_mode"] = "development"
@@ -65,3 +65,26 @@ def test_development_mode_skips_gpu():
         os.unlink(config_path)
         if "CONFIG_PATH" in os.environ:
             del os.environ["CONFIG_PATH"]
+
+
+def test_env_overrides_deployment_mode_and_auth_dev_mode():
+    """Environment variables should override runtime mode and dev auth toggle."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        config_data = json.load(open("config.json"))
+        config_data["deployment_mode"] = "development"
+        config_data["auth"]["dev_mode"] = True
+        json.dump(config_data, f)
+        f.flush()
+        config_path = f.name
+    try:
+        os.environ["CONFIG_PATH"] = config_path
+        os.environ["DEPLOYMENT_MODE"] = "production"
+        os.environ["AUTH_DEV_MODE"] = "false"
+        reload_config()
+        cfg = get_config()
+        assert cfg.deployment_mode == "production"
+        assert cfg.auth.dev_mode is False
+    finally:
+        os.unlink(config_path)
+        for key in ("CONFIG_PATH", "DEPLOYMENT_MODE", "AUTH_DEV_MODE"):
+            os.environ.pop(key, None)

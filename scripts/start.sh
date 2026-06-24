@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/start.sh — 一键启动化妆品 RAG 系统
+# scripts/start.sh — 一键启动化妆品行业 RAG 问答系统
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +17,7 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
 echo "============================================"
-echo "  化妆品 RAG 系统 — 一键启动"
+echo "  化妆品行业 RAG 问答系统 — 一键启动"
 echo "  模式: $DEPLOYMENT_MODE"
 echo "============================================"
 echo ""

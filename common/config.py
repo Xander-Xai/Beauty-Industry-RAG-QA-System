@@ -15,7 +15,6 @@ import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +23,78 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DOTENV_LOADED = False
+
+
+def _load_project_dotenv() -> None:
+    """Best-effort `.env` loader for local and deployment parity.
+
+    The repo documentation instructs users to copy `.env.example` to `.env`.
+    Codex and plain `python3 app.py` runs do not load that file automatically,
+    so we hydrate unset environment variables here instead of requiring callers
+    to wrap every command with `dotenv run`.
+    """
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+
+    env_path = _PROJECT_ROOT / ".env"
+    if not env_path.is_file():
+        _DOTENV_LOADED = True
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        # Strip inline comments from unquoted values like `FOO=bar  # note`.
+        cleaned = value.strip()
+        if cleaned and cleaned[0] not in {'"', "'"} and " #" in cleaned:
+            cleaned = cleaned.split(" #", 1)[0].rstrip()
+        if (
+            len(cleaned) >= 2
+            and cleaned[0] == cleaned[-1]
+            and cleaned[0] in {'"', "'"}
+        ):
+            cleaned = cleaned[1:-1]
+        os.environ[key] = cleaned
+
+    _DOTENV_LOADED = True
+
+
+_load_project_dotenv()
+
+
+def _parse_bool_env(value: str | None) -> bool | None:
+    """Parse a boolean environment variable value."""
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _apply_env_overrides(raw: dict) -> dict:
+    """Return a copied config dict with supported environment overrides applied."""
+    raw = json.loads(json.dumps(raw))
+
+    env_deployment_mode = os.environ.get("DEPLOYMENT_MODE", "").strip().lower()
+    if env_deployment_mode in {"production", "testing", "development"}:
+        raw["deployment_mode"] = env_deployment_mode
+
+    auth_data = raw.setdefault("auth", {})
+    env_auth_dev_mode = _parse_bool_env(os.environ.get("AUTH_DEV_MODE"))
+    if env_auth_dev_mode is not None:
+        auth_data["dev_mode"] = env_auth_dev_mode
+
+    return raw
 
 
 def _resolve_config_path() -> Path:
@@ -56,7 +127,7 @@ class VllmModelConfig:
     max_tokens: int = 512
     gpu_memory_utilization: float = 0.85
     kv_cache_budget_gb: float = 8.0
-    max_output_tokens: Dict[str, int] = field(default_factory=dict)
+    max_output_tokens: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -70,17 +141,17 @@ class BertModelConfig:
 @dataclass(frozen=True)
 class GpuModelsConfig:
     """Holds the two possible model sub-sections under a GPU config."""
-    gen_14b: Optional[VllmModelConfig] = None
-    vllm_rewrite: Optional[VllmModelConfig] = None
-    vllm_gen_4b: Optional[VllmModelConfig] = None
-    bert_complexity: Optional[BertModelConfig] = None
-    cross_encoder_a: Optional[BertModelConfig] = None
-    cross_encoder_b: Optional[BertModelConfig] = None
-    nli_model: Optional[BertModelConfig] = None
-    bi_encoder: Optional[BertModelConfig] = None
-    clip_image_encoder: Optional[BertModelConfig] = None
-    clip_text_encoder: Optional[BertModelConfig] = None
-    blip: Optional[BertModelConfig] = None
+    gen_14b: VllmModelConfig | None = None
+    vllm_rewrite: VllmModelConfig | None = None
+    vllm_gen_4b: VllmModelConfig | None = None
+    bert_complexity: BertModelConfig | None = None
+    cross_encoder_a: BertModelConfig | None = None
+    cross_encoder_b: BertModelConfig | None = None
+    nli_model: BertModelConfig | None = None
+    bi_encoder: BertModelConfig | None = None
+    clip_image_encoder: BertModelConfig | None = None
+    clip_text_encoder: BertModelConfig | None = None
+    blip: BertModelConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -94,7 +165,7 @@ class RerankBatchAggregatorConfig:
 class GpuConfig:
     role: str = ""
     models: GpuModelsConfig = field(default_factory=GpuModelsConfig)
-    rerank_batch_aggregator: Optional[RerankBatchAggregatorConfig] = None
+    rerank_batch_aggregator: RerankBatchAggregatorConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -111,17 +182,17 @@ class EmbeddingConfig:
 
 
 @dataclass(frozen=True)
-class MilvusCollectionConfig:
+class QdrantCollectionConfig:
     dimension: int = 768
-    index_type: str = "IVF_FLAT"
-    metric_type: str = "L2"
+    distance: str = "Cosine"
 
 
 @dataclass(frozen=True)
-class MilvusConfig:
+class QdrantConfig:
     host: str = "localhost"
-    port: int = 19530
-    collections: Dict[str, MilvusCollectionConfig] = field(default_factory=dict)
+    port: int = 6333
+    grpc_port: int = 6334
+    collections: dict[str, QdrantCollectionConfig] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -178,7 +249,7 @@ class ParallelPathConfig:
 @dataclass(frozen=True)
 class RrfConfig:
     k: int = 60
-    weights: Dict[str, float] = field(default_factory=dict)
+    weights: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -210,7 +281,7 @@ class EvidenceGateConfig:
 
 @dataclass(frozen=True)
 class RetrievalConfig:
-    parallel_paths: Dict[str, ParallelPathConfig] = field(default_factory=dict)
+    parallel_paths: dict[str, ParallelPathConfig] = field(default_factory=dict)
     rrf: RrfConfig = field(default_factory=RrfConfig)
     cross_encoder: CrossEncoderRetrievalConfig = field(default_factory=CrossEncoderRetrievalConfig)
     evidence_gate: EvidenceGateConfig = field(default_factory=EvidenceGateConfig)
@@ -229,6 +300,42 @@ class GenerationConfig:
 
 
 @dataclass(frozen=True)
+class ModelTierConfig:
+    endpoint: str = ""
+    label: str = ""
+
+
+@dataclass(frozen=True)
+class ModelRoutingConfig:
+    tiers: dict[str, ModelTierConfig] = field(default_factory=dict)
+    endpoint_map: dict[str, str] = field(default_factory=dict)
+    complexity_fallback: str = "simple"
+
+
+def resolve_model_endpoint(tier_name: str, is_production: bool = True) -> str:
+    """
+    根据配置的模型路由表解析端点键名。
+
+    非 production 模式下 'complex' tier 自动降级为 'simple'（单卡场景）。
+    避免代码中硬编码模型名称（如 qwen3-4b / qwen3-14b）。
+
+    Args:
+        tier_name: 逻辑 tier 名（'complex' / 'simple' / 'rewrite'）
+        is_production: 是否为生产模式（决定是否允许复杂模型直连）
+
+    Returns:
+        端点键名（如 'gen_4b', 'gen_14b', 'vllm_rewrite'）
+    """
+    cfg = get_config().model_routing
+    if not is_production and tier_name == "complex":
+        tier_name = cfg.complexity_fallback
+    tier = cfg.tiers.get(tier_name)
+    if tier is None:
+        raise ValueError(f"未知模型 tier: {tier_name!r}，可用: {list(cfg.tiers.keys())}")
+    return tier.endpoint
+
+
+@dataclass(frozen=True)
 class AdmissionControlConfig:
     safety_factor: float = 0.75
     kv_utilization_threshold: float = 0.88
@@ -237,8 +344,8 @@ class AdmissionControlConfig:
 
 @dataclass(frozen=True)
 class RbacConfig:
-    roles: Dict[str, int] = field(default_factory=dict)
-    departments: Dict[str, int] = field(default_factory=dict)
+    roles: dict[str, int] = field(default_factory=dict)
+    departments: dict[str, int] = field(default_factory=dict)
     super_admin_mask: int = 4294967295
     public_mask: int = 0
 
@@ -248,6 +355,15 @@ class AuthConfig:
     dev_mode: bool = False
     jwt_secret: str = ""
     jwt_expiry_hours: int = 24
+
+
+@dataclass(frozen=True)
+class UiConfig:
+    app_title: str = "Knowledge RAG Assistant"
+    subtitle: str = "Retrieval-augmented knowledge assistant"
+    anonymous_user_id: str = "web-user"
+    default_role: str = ""
+    role_options: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -262,7 +378,7 @@ class AlertRule:
 
 @dataclass(frozen=True)
 class AlertingConfig:
-    rules: List[AlertRule] = field(default_factory=list)
+    rules: list[AlertRule] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -279,16 +395,18 @@ class AppConfig:
     gpu0: GpuConfig = field(default_factory=GpuConfig)
     gpu1: GpuConfig = field(default_factory=GpuConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
-    milvus: MilvusConfig = field(default_factory=MilvusConfig)
+    qdrant: QdrantConfig = field(default_factory=QdrantConfig)
     elasticsearch: ElasticsearchConfig = field(default_factory=ElasticsearchConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     knowledge_base: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)
     query_rewrite: QueryRewriteConfig = field(default_factory=QueryRewriteConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
+    model_routing: ModelRoutingConfig = field(default_factory=ModelRoutingConfig)
     admission_control: AdmissionControlConfig = field(default_factory=AdmissionControlConfig)
     rbac: RbacConfig = field(default_factory=RbacConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
+    ui: UiConfig = field(default_factory=UiConfig)
     alerting: AlertingConfig = field(default_factory=AlertingConfig)
     cache_config: CacheConfig = field(default_factory=CacheConfig)
     knowledge_version_epoch: str = "20260603_00"
@@ -380,6 +498,8 @@ def _parse_dict(cls, data: dict):
 
 def _parse_config_dict(raw: dict) -> AppConfig:
     """Parse a raw JSON dict into an AppConfig dataclass."""
+    raw = _apply_env_overrides(raw)
+
     # Handle nested models dict -> GpuModelsConfig
     for gpu_key in ("gpu0", "gpu1"):
         gpu_data = raw.get(gpu_key, {})
@@ -421,6 +541,15 @@ def _parse_config_dict(raw: dict) -> AppConfig:
             eg_data["thresholds"] = _parse_dict(EvidenceGateThresholds, t)
         retrieval_data["evidence_gate"] = _parse_dict(EvidenceGateConfig, eg_data)
 
+    # Handle model_routing.tiers (dict[str, ModelTierConfig])
+    mr_data = raw.get("model_routing", {})
+    tiers_raw = mr_data.get("tiers", {})
+    if isinstance(tiers_raw, dict):
+        parsed_tiers = {}
+        for k, v in tiers_raw.items():
+            parsed_tiers[k] = _parse_dict(ModelTierConfig, v) if isinstance(v, dict) else v
+        mr_data["tiers"] = parsed_tiers
+
     # Handle alerting rules
     alerting_data = raw.get("alerting", {})
     rules_raw = alerting_data.get("rules", [])
@@ -435,7 +564,7 @@ def _parse_config_dict(raw: dict) -> AppConfig:
 # ---------------------------------------------------------------------------
 
 _config_lock = threading.Lock()
-_config_instance: Optional[AppConfig] = None
+_config_instance: AppConfig | None = None
 
 
 def get_config(reload: bool = False) -> AppConfig:
@@ -464,7 +593,7 @@ def reload_config() -> AppConfig:
 
 
 # M-6: 兼容性函数 — 返回原始 dict，供需要 dict 访问模式的模块使用
-_config_dict_instance: Optional[dict] = None
+_config_dict_instance: dict | None = None
 
 
 def get_config_dict(reload: bool = False) -> dict:
@@ -477,5 +606,6 @@ def get_config_dict(reload: bool = False) -> dict:
             return _config_dict_instance
         path = _resolve_config_path()
         with open(path, encoding="utf-8") as fh:
-            _config_dict_instance = json.load(fh)
+            raw = json.load(fh)
+        _config_dict_instance = _apply_env_overrides(raw)
         return _config_dict_instance

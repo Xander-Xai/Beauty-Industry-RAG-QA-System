@@ -3,15 +3,19 @@ import logging
 import time
 from collections import defaultdict
 
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, field_validator
-from typing import List, Optional
 
 from auth.jwt_auth import (
-    create_token_pair, verify_token, extract_token_from_header,
-    TokenPair, get_jwt_config,
+    TokenPair,
+    create_token_pair,
+    extract_token_from_header,
+    get_jwt_config,
+    verify_token,
 )
 from auth.user_store import UserStore
+from common.auth import is_admin_role_mask
+from common.config import get_config
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -33,7 +37,7 @@ def _check_login_rate_limit(ip: str):
     _login_attempts[ip].append(now)
 
 # Lazy singleton
-_store: Optional[UserStore] = None
+_store: UserStore | None = None
 
 
 def get_store() -> UserStore:
@@ -41,6 +45,26 @@ def get_store() -> UserStore:
     if _store is None:
         _store = UserStore()
     return _store
+
+
+def _require_admin_payload(authorization: str | None) -> dict:
+    """Validate the bearer token and enforce configured admin access."""
+    config = get_jwt_config()
+    if not config.enabled:
+        raise HTTPException(status_code=503, detail="JWT 认证未配置，管理端点不可用")
+
+    token = extract_token_from_header(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="需要认证")
+
+    payload = verify_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token 无效或已过期")
+
+    if not is_admin_role_mask(payload.get("role_mask", 0)):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+    return payload
 
 
 class LoginRequest(BaseModel):
@@ -72,8 +96,8 @@ class CreateUserRequest(BaseModel):
     username: str
     password: str
     display_name: str
-    roles: List[str] = []
-    departments: List[str] = []
+    roles: list[str] = []
+    departments: list[str] = []
 
     @field_validator('password')
     @classmethod
@@ -93,8 +117,44 @@ class CreateUserRequest(BaseModel):
 
 
 class UpdateRolesRequest(BaseModel):
-    roles: List[str]
-    departments: List[str]
+    roles: list[str]
+    departments: list[str]
+
+
+@router.get("/metadata")
+async def auth_metadata():
+    """Public UI/auth metadata used by the browser client."""
+    cfg = get_config()
+    jwt_config = get_jwt_config()
+    role_options = cfg.ui.role_options or [
+        {
+            "key": name,
+            "label": name.replace("_", " ").title(),
+            "role_mask": mask,
+            "dept_mask": cfg.rbac.public_mask,
+        }
+        for name, mask in cfg.rbac.roles.items()
+    ]
+    return {
+        "app": {
+            "title": cfg.ui.app_title or cfg.system.name,
+            "subtitle": cfg.ui.subtitle,
+            "version": cfg.system.version,
+        },
+        "auth": {
+            "dev_mode": cfg.auth.dev_mode,
+            "auth_required": not cfg.auth.dev_mode,
+            "jwt_enabled": jwt_config.enabled,
+            "login_enabled": jwt_config.enabled,
+            "anonymous_user_id": cfg.ui.anonymous_user_id,
+        },
+        "rbac": {
+            "default_role": cfg.ui.default_role,
+            "roles": cfg.rbac.roles,
+            "departments": cfg.rbac.departments,
+            "role_options": role_options,
+        },
+    }
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -140,16 +200,7 @@ async def refresh(req: RefreshRequest):
 @router.get("/users")
 async def list_users(authorization: str = Header(None)):
     """列出所有用户（需要 admin 权限）。"""
-    # H-8: JWT 禁用时拒绝访问管理端点（不再完全开放）
-    config = get_jwt_config()
-    if not config.enabled:
-        raise HTTPException(status_code=503, detail="JWT 认证未配置，管理端点不可用")
-    token = extract_token_from_header(authorization)
-    if not token:
-        raise HTTPException(status_code=401, detail="需要认证")
-    payload = verify_token(token)
-    if not payload or (payload.get("role_mask", 0) & 0x01) == 0:
-        raise HTTPException(status_code=403, detail="需要管理员权限")
+    _require_admin_payload(authorization)
 
     store = get_store()
     users = store.list_users()
@@ -159,16 +210,7 @@ async def list_users(authorization: str = Header(None)):
 @router.post("/users")
 async def create_user(req: CreateUserRequest, authorization: str = Header(None)):
     """创建新用户。"""
-    # H-8: JWT 禁用时拒绝访问管理端点
-    config = get_jwt_config()
-    if not config.enabled:
-        raise HTTPException(status_code=503, detail="JWT 认证未配置，管理端点不可用")
-    token = extract_token_from_header(authorization)
-    if not token:
-        raise HTTPException(status_code=401, detail="需要认证")
-    payload = verify_token(token)
-    if not payload or (payload.get("role_mask", 0) & 0x01) == 0:
-        raise HTTPException(status_code=403, detail="需要管理员权限")
+    _require_admin_payload(authorization)
 
     store = get_store()
     try:
@@ -185,15 +227,7 @@ async def create_user(req: CreateUserRequest, authorization: str = Header(None))
 @router.put("/users/{user_id}/roles")
 async def update_user_roles(user_id: str, req: UpdateRolesRequest, authorization: str = Header(None)):
     """更新用户角色。"""
-    config = get_jwt_config()
-    if not config.enabled:
-        raise HTTPException(status_code=503, detail="JWT 认证未配置，管理端点不可用")
-    token = extract_token_from_header(authorization)
-    if not token:
-        raise HTTPException(status_code=401, detail="需要认证")
-    payload = verify_token(token)
-    if not payload or (payload.get("role_mask", 0) & 0x01) == 0:
-        raise HTTPException(status_code=403, detail="需要管理员权限")
+    _require_admin_payload(authorization)
 
     store = get_store()
     user = store.update_user_roles(user_id, req.roles, req.departments)

@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,7 +21,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -50,22 +50,22 @@ class ServiceHealth(BaseModel):
     url: str
     status: str = "unknown"  # "healthy" / "unhealthy" / "unknown"
     latency_ms: float = 0.0
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 class HealthResponse(BaseModel):
     """聚合健康检查响应。"""
     gateway: str = "healthy"
     overall: str = "healthy"     # "healthy" / "degraded" / "unhealthy"
-    services: List[ServiceHealth] = Field(default_factory=list)
+    services: list[ServiceHealth] = Field(default_factory=list)
     uptime_s: float = 0.0
 
 
 class MetricsResponse(BaseModel):
     """监控统计响应。"""
     success: bool = True
-    data: Dict[str, Any] = Field(default_factory=dict)
-    error: Optional[str] = None
+    data: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
 
 
 class AlertItem(BaseModel):
@@ -79,7 +79,7 @@ class AlertItem(BaseModel):
 class AlertsResponse(BaseModel):
     """告警列表响应。"""
     success: bool = True
-    alerts: List[AlertItem] = Field(default_factory=list)
+    alerts: list[AlertItem] = Field(default_factory=list)
     total: int = 0
 
 
@@ -89,7 +89,7 @@ class AlertsResponse(BaseModel):
 _START_TIME = time.monotonic()
 
 # 服务定义：名称 -> 健康检查 URL
-_SERVICES: Dict[str, str] = {
+_SERVICES: dict[str, str] = {
     "rewrite-service": REWRITE_SERVICE_URL,
     "retrieval-service": RETRIEVAL_SERVICE_URL,
     "generation-service": GENERATION_SERVICE_URL,
@@ -169,7 +169,7 @@ async def health_check():
     - 部分服务 unhealthy -> overall = "degraded"
     - 所有服务 unhealthy -> overall = "unhealthy"
     """
-    services: List[ServiceHealth] = []
+    services: list[ServiceHealth] = []
 
     async with httpx.AsyncClient() as client:
         # 并发检查所有下游服务

@@ -13,21 +13,18 @@ GPU batch processing, latency <= 25ms
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
-from typing import Optional, Tuple
-
-import numpy as np
 
 # Ensure project root on sys.path for config.json and shared modules
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +49,6 @@ class AnswerGate:
     def _try_load_nli(self):
         """Attempt to load NLI model (cross-encoder nli); fall back to text similarity."""
         try:
-            import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
             # NLI model config: cross-encoder/nli-deberta or similar
@@ -82,7 +78,7 @@ class AnswerGate:
         answer: str,
         top_doc=None,
         is_regulation: bool = False,
-    ) -> "AnswerGateResult":
+    ) -> AnswerGateResult:
         """
         Verify answer-evidence consistency.
 
@@ -169,7 +165,7 @@ class AnswerGate:
             for i, doc in enumerate(top_docs)
         ]
 
-    def _nli_inference(self, premise: str, hypothesis: str) -> Tuple[float, float]:
+    def _nli_inference(self, premise: str, hypothesis: str) -> tuple[float, float]:
         """
         NLI inference.
 
@@ -181,7 +177,7 @@ class AnswerGate:
         else:
             return self._nli_inference_with_similarity(premise, hypothesis)
 
-    def _batch_nli_inference(self, pairs: list) -> list[Tuple[float, float]]:
+    def _batch_nli_inference(self, pairs: list) -> list[tuple[float, float]]:
         """
         Batch NLI inference (shared model context).
 
@@ -196,7 +192,7 @@ class AnswerGate:
         else:
             return [self._nli_inference_with_similarity(p, h) for p, h in pairs]
 
-    def _nli_inference_with_model(self, premise: str, hypothesis: str) -> Tuple[float, float]:
+    def _nli_inference_with_model(self, premise: str, hypothesis: str) -> tuple[float, float]:
         """NLI inference with model."""
         import torch
 
@@ -217,7 +213,7 @@ class AnswerGate:
 
         return contradiction_score, entailment_score
 
-    def _batch_nli_with_model(self, pairs: list) -> list[Tuple[float, float]]:
+    def _batch_nli_with_model(self, pairs: list) -> list[tuple[float, float]]:
         """Batch NLI inference with model."""
         import torch
 
@@ -244,7 +240,7 @@ class AnswerGate:
 
         return results
 
-    def _nli_inference_with_similarity(self, premise: str, hypothesis: str) -> Tuple[float, float]:
+    def _nli_inference_with_similarity(self, premise: str, hypothesis: str) -> tuple[float, float]:
         """
         Text similarity fallback (when NLI model is unavailable).
 

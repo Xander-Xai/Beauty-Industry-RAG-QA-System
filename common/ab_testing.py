@@ -24,7 +24,6 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Optional
 
 from common.config import get_config_dict
 
@@ -81,7 +80,7 @@ class ABExperimentPlatform:
         """从文件加载实验配置"""
         if os.path.exists(EXPERIMENT_CONFIG_FILE):
             try:
-                with open(EXPERIMENT_CONFIG_FILE, "r", encoding="utf-8") as f:
+                with open(EXPERIMENT_CONFIG_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 for exp_id, exp_data in data.items():
                     variants = [
@@ -207,7 +206,7 @@ class ABExperimentPlatform:
 
     # ─── 流量分流 ────────────────────────────────────────────────
 
-    def assign_variant(self, user_id: str, experiment_id: str) -> Optional[ExperimentVariant]:
+    def assign_variant(self, user_id: str, experiment_id: str) -> ExperimentVariant | None:
         """
         根据 user_id 确定性地分配实验变体。
 
@@ -424,7 +423,7 @@ class ABExperimentPlatform:
 
 
 # ── 全局单例 ──────────────────────────────────────────────────────────
-_platform_instance: Optional[ABExperimentPlatform] = None
+_platform_instance: ABExperimentPlatform | None = None
 
 
 def get_ab_platform() -> ABExperimentPlatform:

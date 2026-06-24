@@ -1,10 +1,9 @@
 """降级路径测试 — 验证外部服务不可用时的降级行为。"""
 import os
 import sys
-import types
 import threading
+import types
 from collections import OrderedDict
-import pytest
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -62,8 +61,8 @@ class TestDegradationPaths:
 
     def test_bi_encoder_fallback_on_failure(self):
         """BiEncoder 重排失败时应降级返回原始候选。"""
-        from retrieval.bi_encoder import BiEncoderReranker
         from core.pipeline_context import RecallResult
+        from retrieval.bi_encoder import BiEncoderReranker
         reranker = BiEncoderReranker()
 
         mock_embedding = MagicMock()
@@ -81,8 +80,8 @@ class TestDegradationPaths:
 
     def test_cross_encoder_fallback_on_failure(self):
         """CrossEncoder 重排失败时应降级返回 BiEncoder 排序。"""
-        from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
         from core.pipeline_context import RerankResult
+        from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
         ensemble = CrossEncoderEnsemble()
 
         candidates = [
@@ -99,8 +98,8 @@ class TestDegradationPaths:
 
     def test_evidence_gate_single_doc(self):
         """单文档时 doc_consistency 应为 1.0。"""
-        from retrieval.evidence_gate import EvidenceEnsembleGate
         from core.pipeline_context import RerankResult
+        from retrieval.evidence_gate import EvidenceEnsembleGate
         gate = EvidenceEnsembleGate()
         docs = [RerankResult(doc_id="d1", content="only one doc", ce_score_ensemble=0.7)]
         result = gate.evaluate(

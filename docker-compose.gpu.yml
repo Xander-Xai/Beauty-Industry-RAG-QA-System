@@ -20,9 +20,11 @@ services:
       - CUDA_VISIBLE_DEVICES=0
     command: >
       --model /models/qwen3-14b
-      --max-model-len 4096
+      --max-model-len 8192
       --gpu-memory-utilization 0.85
       --port 8000
+      --enable-lora
+      --lora-modules QLoRA-adapter=/models/Qwen3-14B-QLoRA-adapter
     deploy:
       resources:
         reservations:

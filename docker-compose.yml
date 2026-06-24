@@ -18,7 +18,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      milvus:
+      qdrant:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
@@ -49,46 +49,18 @@ services:
     networks:
       - rag-network
 
-  # ── Infrastructure: Milvus ──────────────────────────────────────────────
-  milvus:
-    image: milvusdb/milvus:v2.3.3
+  # ── Infrastructure: Qdrant ──────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
     expose:
-      - "19530"
-      - "9091"
+      - "6333"
+      - "6334"
     volumes:
-      - milvus-data:/var/lib/milvus
-    command: ["milvus", "run", "standalone"]
-    depends_on:
-      - etcd
-      - minio
+      - qdrant-data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
       interval: 30s
       timeout: 10s
-      retries: 3
-    restart: unless-stopped
-    networks:
-      - rag-network
-
-  # ── Infrastructure: etcd ────────────────────────────────────────────────
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.5
-    environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
-    volumes:
-      - etcd-data:/etcd
-    command: >
-      etcd
-      --advertise-client-urls=http://127.0.0.1:2379
-      --listen-client-urls=http://0.0.0.0:2379
-      --data-dir=/etcd
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 30s
-      timeout: 20s
       retries: 3
     restart: unless-stopped
     networks:
@@ -137,8 +109,7 @@ services:
 # ── Volumes ──────────────────────────────────────────────────────────────
 volumes:
   redis-data:
-  milvus-data:
-  etcd-data:
+  qdrant-data:
   minio-data:
   es-data:
 

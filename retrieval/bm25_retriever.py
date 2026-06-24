@@ -12,7 +12,6 @@ BM25 关键词检索模块（readme 7.1 并行多路召回第 2 路）
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from common.config import get_config_dict
 
@@ -26,7 +25,7 @@ class BM25Retriever:
     BM25 关键词检索器
 
     ES Fallback 与稀疏权限兜底（readme 7.1）：
-    - Milvus 不可用或召回有效文档数 < 50 时自动切换
+    - 向量库不可用或召回有效文档数 < 50 时自动切换
     - 若 ES 版本不支持位运算脚本，使用预计算的 role_bucket 字段进行 terms 过滤
     """
 
@@ -209,9 +208,9 @@ class BM25Retriever:
 
     def fallback_search(self, query: str, top_k: int = 100) -> list[dict]:
         """
-        ES Fallback 检索（无权限过滤，用于 Milvus 不可用时的兜底）
+        ES Fallback 检索（无权限过滤，用于向量检索不可用时的兜底）
 
-        readme 7.1: 当 Milvus 不可用或召回有效文档数 < 50 时自动切换
+        readme 7.1: 当向量库不可用或召回有效文档数 < 50 时自动切换
         """
         if not self.enabled or self.es_client is None:
             return []

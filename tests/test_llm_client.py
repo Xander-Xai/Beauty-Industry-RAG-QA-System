@@ -2,7 +2,6 @@
 import os
 import sys
 import types
-import pytest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -36,8 +35,10 @@ class TestLLMClientGenerate:
     def _make_ctx(self, query="烟酰胺浓度", answer_text="烟酰胺浓度应为2-5%"):
         """创建模拟 RequestContext。"""
         from core.pipeline_context import (
-            RequestContext, QueryRewriteResult, RerankResult,
-            EvidenceGateResult, GenerationResult,
+            EvidenceGateResult,
+            QueryRewriteResult,
+            RequestContext,
+            RerankResult,
         )
         ctx = RequestContext(
             user_input=query,
@@ -67,7 +68,10 @@ class TestLLMClientGenerate:
     def test_generate_calls_router(self):
         """generate 应调用 router.route_chat 并返回 GenerationResult。"""
         client = self._make_client()
-        client.router.route_chat.return_value = "烟酰胺推荐浓度为2-5%，适合大多数肤质。"
+        client.router.route_chat.return_value = {
+            "content": "烟酰胺推荐浓度为2-5%，适合大多数肤质。",
+            "prefix_cache_hit": True,
+        }
 
         ctx = self._make_ctx()
         result = client.generate(ctx, target_model="qwen3-4b", max_tokens=512)
@@ -79,7 +83,10 @@ class TestLLMClientGenerate:
     def test_generate_with_14b_model(self):
         """14B 模型路由应使用 gen_14b 端点。"""
         client = self._make_client()
-        client.router.route_chat.return_value = "根据法规要求..."
+        client.router.route_chat.return_value = {
+            "content": "根据法规要求...",
+            "prefix_cache_hit": False,
+        }
 
         ctx = self._make_ctx(query="化妆品铅含量标准")
         with patch("common.config.is_production_mode", return_value=True):
@@ -94,7 +101,7 @@ class TestLLMClientGenerate:
 
         def capture_chat(endpoint, messages, **kwargs):
             captured_messages.extend(messages)
-            return "测试回答"
+            return {"content": "测试回答", "prefix_cache_hit": None}
 
         client.router.route_chat.side_effect = capture_chat
 
@@ -140,7 +147,7 @@ class TestLLMClientGenerate:
         """多轮对话时 messages 应包含历史轮次。"""
         from core.pipeline_context import SessionState
         client = self._make_client()
-        client.router.route_chat.return_value = "回答"
+        client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
 
         ctx = self._make_ctx()
         # 模拟会话历史

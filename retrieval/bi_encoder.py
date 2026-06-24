@@ -10,7 +10,6 @@ BiEncoder 宽保留重排模块（readme 7.3 Stage 1）
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 

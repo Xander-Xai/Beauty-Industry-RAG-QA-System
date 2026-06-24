@@ -1,111 +1,127 @@
-# 化妆品 RAG 系统 — 数据管理员手册
+# 化妆品行业 RAG 问答系统数据管理员手册
 
-## 1. 文档导入流程
+## 1. 当前仓库状态
 
-### 支持格式
+当前 checkout 中，在线查询链路完整，**离线建库管线也已完成实现**：
 
-| 格式 | 扩展名 | 处理方式 |
-|------|--------|----------|
-| PDF | .pdf | PyMuPDF 文本提取 |
-| Word | .docx | python-docx 解析 |
-| Excel | .xlsx | pandas 读取 |
-| 文本 | .txt | 直接读取 |
-| 图片 | .jpg/.png | PaddleOCR / OpenCV |
+- `run_offline.py` 是预期入口，支持 `incremental`/`full`/`create-index`/`feedback`/`rewrite-feedback` 五种模式
+- `offline/` 包包含完整实现：
+  - `document_processor.py` — PDF/Word/Excel/TXT 文档清洗、切块
+  - `image_processor.py` — 图像增强、PaddleOCR、CLIP 向量化
+  - `vectorizer.py` — BGE 文本向量化、CLIP 图像向量化、Qdrant/ES 写入
+  - `scheduler.py` — Airflow 风格调度（增量更新/全量重建/版本滚动/过期归档）
+  - `feedback_loop.py` — RRF 权重优化、Evidence Gate 阈值调整、A/B 实验分析
+  - `finetune_qlora.py` — 可选 QLoRA 微调管线
 
-### 导入步骤
+注意：首次部署需先下载模型权重（PaddleOCR、CLIP-ViT、BGE 等）至 `models/` 目录。
 
-```bash
-# 1. 将文档放入 data/documents/ 目录
-cp /path/to/docs/*.pdf data/documents/
+## 2. 当前可以确认的数据约束
 
-# 2. 设置文档权限 (在 metadata 中配置)
-# 每个文档需要指定: role_mask, dept_mask, doc_type
+### 2.1 向量与索引配置
 
-# 3. 运行离线处理
-python3 -m offline.scheduler --mode incremental
+`config.json` 中当前约定：
 
-# 4. 验证导入结果
-curl http://localhost:8000/api/stats | python3 -m json.tool
-```
+- 文本向量集合：`rag_text_768`
+- 图像向量集合：`rag_image_512`
+- Qdrant 主机：`qdrant:6333`
+- Elasticsearch 索引：`cosmetics_docs`
 
-### 文档分类
+### 2.2 权限模型
 
-| doc_type | 说明 | 示例 |
-|----------|------|------|
-| regulation | 法规标准 | GB/T, QB/T, NMPA 公告 |
-| ingredient | 成分数据 | INCI 名称、安全信息、限量 |
-| formula | 配方数据 | 护肤/彩妆/洗护配方 |
-| image | 图像数据 | 产品包装、标签 |
+后端使用 `role_mask + dept_mask` 控制文档访问。
 
-## 2. 权限配置
+默认角色：
 
-### 角色定义
+| 角色 | bit |
+|------|-----|
+| `admin` | `0x7FFFFFFF` |
+| `rd` | `0x01` |
+| `quality` | `0x02` |
+| `regulation` | `0x04` |
+| `sales` | `0x08` |
 
-| 角色 | bit | 可访问内容 |
-|------|-----|-----------|
-| admin | 0x01 | 所有文档 |
-| rd | 0x02 | 配方、成分、部分法规 |
-| quality | 0x04 | 检测标准、质量规范 |
-| regulation | 0x08 | 法规、标准、公告 |
-| sales | 0x10 | 产品信息、公开法规 |
-
-### 部门定义
+默认部门：
 
 | 部门 | bit |
 |------|-----|
-| 研发部 | 0x01 |
-| 品质部 | 0x02 |
-| 法规部 | 0x04 |
-| 销售部 | 0x08 |
-| 市场部 | 0x10 |
+| `rd_dept` | `0x01` |
+| `quality_dept` | `0x02` |
+| `regulation_dept` | `0x04` |
+| `sales_dept` | `0x08` |
 
-### 权限示例
+`config.json.permission_rules.rules` 仍然是当前仓库里最接近真实导入规则的来源。
 
-- 研发配方文档: `role_mask=0x02, dept_mask=0x01` (仅研发部)
-- 公开法规文档: `role_mask=0, dept_mask=0` (所有人)
-- 跨部门品质文档: `role_mask=0x04, dept_mask=0x06` (品质部+法规部)
+### 2.3 文档状态
 
-## 3. 版本管理
+媒体访问接口 `/api/media/{doc_id}` 当前会校验：
 
-### 文档版本 epoch
+- `doc_id`
+- `role_mask`
+- `dept_mask`
+- `status`
 
-系统使用 `doc_version_epoch` 管理文档生命周期：
+其中：
 
-- 新导入文档: `doc_version_epoch = 当前日期_批次`
-- 过期文档: 标记为 `status = "archived"`
-- 版本切换: 更新全局 epoch，旧版本缓存自动失效
+- `status=active` 才允许取预签名链接
+- `status=archived` 会被当作不可访问文档
+
+## 3. 当前可执行的离线导入动作
+
+以下命令对应离线管线入口，已通过 `run_offline.py` 和 `offline/` 模块实现：
+
+### 3.1 创建集合与索引（首次部署）
 
 ```bash
-# 查看当前版本
-grep knowledge_version_epoch config.json
-
-# 手动切换版本 (触发缓存失效)
-# 更新 config.json 中的 knowledge_version_epoch
+python3 run_offline.py --mode create-index
 ```
 
-### 文档更新流程
+此命令创建 Qdrant Collection（`rag_text_768`、`rag_image_512`）和 ES 索引（`cosmetics_docs`）。
 
-1. 将新版本文档放入 data/documents/
-2. 运行增量导入: `python3 -m offline.scheduler --mode incremental`
-3. 旧文档自动归档
-4. 缓存通过版本 epoch 切换自动失效
+### 3.2 增量更新
 
-## 4. 知识库维护
+```bash
+python3 run_offline.py --mode incremental
+```
 
-### 每日任务
+基于文件 mtime+size 指纹检测新增/修改的文档，仅处理发生变化的部分，支持 `--force-full` 强制全量处理。
 
-- 检查导入日志是否有错误
-- 验证新文档是否被正确索引
-- 检查 Milvus/ES 索引大小
+### 3.3 全量重建
 
-### 每周任务
+```bash
+python3 run_offline.py --mode full
+```
 
-- 审查低质量检索结果
-- 根据用户反馈调整 RRF 权重
-- 清理过期或无效文档
+清空现有 Collection 后重新处理所有文档，适用于月度重建。
 
-### 每月任务
+### 3.4 反馈闭环
 
-- 全量重建索引 (可选)
-- 评估检索质量指标
-- 更新法规文档（新规发布时）
+```bash
+python3 run_offline.py --mode feedback          # RRF 权重与 Evidence Gate 阈值优化
+python3 run_offline.py --mode rewrite-feedback  # Query Rewrite 反馈闭环
+```
+
+## 4. 如果现在要做数据管理
+
+### 方案 A：使用已存在的外部知识库
+
+适用场景：
+
+- 已经有可用的 Qdrant / Elasticsearch 数据
+- 当前目标是联调在线问答，而不是补离线管线
+
+建议动作：
+
+1. 确认 `config.json` 中集合名、索引名、主机地址与现网一致。
+2. 抽样验证 `doc_id / role_mask / dept_mask / status` 元数据是否齐全。
+3. 用管理员账号和不同角色账号分别验证文档访问边界。
+
+### 方案 B：使用本仓库离线管线
+
+本仓库已提供完整离线管线实现：
+
+1. 下载模型权重（PaddleOCR、CLIP-ViT、BGE 等）至 `models/` 目录
+2. 准备原始文档至 `data/` 目录
+3. `python3 run_offline.py --mode create-index`
+4. `python3 run_offline.py --mode incremental`
+
+注意：部分模型（PaddleOCR）依赖 `requirements.txt` 之外的可选依赖，需单独安装。图像处理管线需要 GPU 支持以加速 CLIP 向量化。

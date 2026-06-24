@@ -2,8 +2,6 @@
 import os
 import sys
 import types
-import pytest
-from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["DEPLOYMENT_MODE"] = "development"
@@ -27,8 +25,11 @@ class TestEndToEndPipeline:
     def test_full_pipeline_mock(self):
         """模拟完整管线: Context -> Rewrite -> Recall -> Rerank -> EvidenceGate -> Generate -> AnswerGate。"""
         from core.pipeline_context import (
-            RequestContext, QueryRewriteResult, RecallResult,
-            RerankResult, GenerationResult,
+            GenerationResult,
+            QueryRewriteResult,
+            RecallResult,
+            RequestContext,
+            RerankResult,
         )
 
         ctx = RequestContext(

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,7 @@ class MinioClient:
         except Exception as e:
             logger.warning(f"MinIO 初始化失败: {e}")
 
-    def get_presigned_url(self, doc_id: str, object_name: Optional[str] = None) -> str:
+    def get_presigned_url(self, doc_id: str, object_name: str | None = None) -> str:
         """
         生成 MinIO 临时签名 URL.
 
@@ -106,7 +105,7 @@ class MinioClient:
 
 
 # 全局单例
-_minio_client_instance: Optional[MinioClient] = None
+_minio_client_instance: MinioClient | None = None
 
 
 def get_minio_client() -> MinioClient:

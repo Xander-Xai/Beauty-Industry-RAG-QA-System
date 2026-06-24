@@ -11,9 +11,6 @@ GPU 批处理，延迟 ≤25ms
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
-
-import numpy as np
 
 from common.config import get_config_dict
 
@@ -41,7 +38,6 @@ class AnswerGate:
     def _try_load_nli(self):
         """尝试加载 NLI 模型（cross-encoder nli），失败则使用文本相似度兜底"""
         try:
-            import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
             # NLI 模型配置：使用 cross-encoder/nli-deberta 或类似模型
@@ -72,7 +68,7 @@ class AnswerGate:
         answer: str,
         top_doc=None,
         is_regulation: bool = False,
-    ) -> "AnswerGateResult":
+    ) -> AnswerGateResult:
         """
         验证答案与证据的一致性
 
@@ -198,7 +194,7 @@ class AnswerGate:
             return 0.0
         return len(a & b) / len(a | b)
 
-    def _nli_inference(self, premise: str, hypothesis: str) -> Tuple[float, float]:
+    def _nli_inference(self, premise: str, hypothesis: str) -> tuple[float, float]:
         """
         NLI 推理
 
@@ -210,7 +206,7 @@ class AnswerGate:
         else:
             return self._nli_inference_with_similarity(premise, hypothesis)
 
-    def _batch_nli_inference(self, pairs: list) -> list[Tuple[float, float]]:
+    def _batch_nli_inference(self, pairs: list) -> list[tuple[float, float]]:
         """
         批量 NLI 推理（通过 RerankBatchAggregator 聚合 — PRD §5.1）
 
@@ -237,7 +233,7 @@ class AnswerGate:
         # Fallback: 直接调用模型
         return self._batch_nli_with_model(pairs)
 
-    def _nli_inference_with_model(self, premise: str, hypothesis: str) -> Tuple[float, float]:
+    def _nli_inference_with_model(self, premise: str, hypothesis: str) -> tuple[float, float]:
         """使用 NLI 模型推理"""
         import torch
 
@@ -258,7 +254,7 @@ class AnswerGate:
 
         return contradiction_score, entailment_score
 
-    def _batch_nli_with_model(self, pairs: list) -> list[Tuple[float, float]]:
+    def _batch_nli_with_model(self, pairs: list) -> list[tuple[float, float]]:
         """批量 NLI 推理"""
         import torch
 
@@ -285,7 +281,7 @@ class AnswerGate:
 
         return results
 
-    def _nli_inference_with_similarity(self, premise: str, hypothesis: str) -> Tuple[float, float]:
+    def _nli_inference_with_similarity(self, premise: str, hypothesis: str) -> tuple[float, float]:
         """
         文本相似度兜底（NLI 模型不可用时）
 

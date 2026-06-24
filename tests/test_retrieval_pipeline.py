@@ -2,15 +2,12 @@
 test_retrieval_pipeline.py — 新增测试: ParallelRecallManager.execute(), agreement score,
 AnswerGate contradiction detection, CrossEncoderEnsemble reranking, CLIP timeout.
 
-侧重端到端流程与 mock 外部依赖（Milvus/ES/Redis/CLIP）。
+侧重端到端流程与 mock 外部依赖（Qdrant/ES/Redis/CLIP）。
 """
 import os
 import sys
 import types
-import time
-import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
-from concurrent.futures import TimeoutError as FuturesTimeout
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["DEPLOYMENT_MODE"] = "development"
@@ -28,7 +25,6 @@ except ImportError:
     sys.modules["torch.cuda"] = _fake_cuda
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,7 +69,7 @@ class TestParallelRecallExecute:
             "rewrite_variants": {"enabled": False, "top_k": 30},
         }
 
-    @patch("auth.bitmask_rbac.build_milvus_filter", return_value="filter_expr")
+    @patch("auth.bitmask_rbac.build_qdrant_filter", return_value=None)
     @patch("retrieval.parallel_recall.log_audit_event")
     @patch("retrieval.parallel_recall.get_config_dict")
     def test_execute_returns_merged_results(self, mock_config, mock_audit, mock_filter):
@@ -114,7 +110,7 @@ class TestParallelRecallExecute:
         assert isinstance(score, float)
         assert 0.0 <= score <= 1.0
 
-    @patch("auth.bitmask_rbac.build_milvus_filter", return_value="filter_expr")
+    @patch("auth.bitmask_rbac.build_qdrant_filter", return_value=None)
     @patch("retrieval.parallel_recall.log_audit_event")
     @patch("retrieval.parallel_recall.get_config_dict")
     def test_execute_graceful_on_retriever_failure(self, mock_config, mock_audit, mock_filter):
@@ -125,7 +121,7 @@ class TestParallelRecallExecute:
         }
 
         mgr = self._make_manager()
-        mgr._dense_retriever.search.side_effect = ConnectionError("Milvus 宕机")
+        mgr._dense_retriever.search.side_effect = ConnectionError("Qdrant 宕机")
         mgr._bm25_retriever.search.return_value = [
             {"doc_id": "d1", "content": "c1", "score": 0.9},
         ]
@@ -142,7 +138,7 @@ class TestParallelRecallExecute:
         # bm25 路应返回结果
         assert len(results) >= 1
 
-    @patch("auth.bitmask_rbac.build_milvus_filter", return_value="filter_expr")
+    @patch("auth.bitmask_rbac.build_qdrant_filter", return_value=None)
     @patch("retrieval.parallel_recall.log_audit_event")
     @patch("retrieval.parallel_recall.get_config_dict")
     def test_execute_clip_timeout_returns_empty(self, mock_config, mock_audit, mock_filter):
@@ -279,7 +275,6 @@ class TestAnswerGate:
     def test_verify_no_doc_returns_pass(self):
         """无文档时应直接通过。"""
         gate = self._make_gate()
-        from core.pipeline_context import RerankResult
         result = gate.verify(answer="测试答案", top_doc=None, is_regulation=False)
         assert result.passed is True
         assert result.nli_contradiction_score == 0.0

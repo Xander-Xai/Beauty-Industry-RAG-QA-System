@@ -1,10 +1,10 @@
 """Audit logging middleware for tracking user queries and access control."""
-import time
 import hashlib
 import json
 import logging
-from typing import Optional
-from dataclasses import dataclass, asdict
+import time
+from dataclasses import asdict, dataclass
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response

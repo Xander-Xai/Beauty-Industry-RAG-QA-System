@@ -135,7 +135,7 @@
 ### Added
 
 - **api/routes.py: 新增 `GET /api/media/{doc_id}` (GAP-16, P1)**
-  - Milvus 文档权限元数据查询 + RBAC 二次校验
+  - Qdrant 文档权限元数据查询 + RBAC 二次校验
   - MinIO 签名 URL 生成（60s 有效期）
   - 403/404/503 错误处理
   - 新增 `tests/test_media_route.py`（13 个测试）
@@ -151,7 +151,7 @@
 
 ### Changed
 
-- **offline/scheduler.py: Milvus 归档逻辑优化 (GAP-19, P2)**
+- **offline/scheduler.py: Qdrant 归档逻辑优化 (GAP-19, P2)**
   - 主路径使用 `upsert(status='archived')` 替代 delete
   - 降级兜底：upsert 失败时 delete + reinsert
   - 新增 `tests/test_archive_expired.py`（7 个测试）

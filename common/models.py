@@ -7,10 +7,9 @@ defaults so callers only need to supply what matters to them.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ── Query Rewrite ────────────────────────────────────────────────────────
 
@@ -22,7 +21,7 @@ class QueryRewriteResult(BaseModel):
     business_type: str = "general"
     intent: str = ""
     requires_context: bool = False
-    standardized_entities: List[str] = Field(default_factory=list)
+    standardized_entities: list[str] = Field(default_factory=list)
     confidence: float = 0.5
     fallback: bool = False
 
@@ -37,7 +36,7 @@ class RecallResult(BaseModel):
     content: str
     score: float
     source: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RerankResult(BaseModel):
@@ -45,6 +44,7 @@ class RerankResult(BaseModel):
 
     doc_id: str
     content: str
+    source: str = ""
     ce_score_a: float = 0.0
     ce_score_b: float = 0.0
     ce_score_ensemble: float = 0.0
@@ -61,8 +61,8 @@ class EvidenceGateResult(BaseModel):
     ce_top3_mean_score: float = 0.0
     retrieval_agreement_score: float = 0.0
     doc_consistency_score: float = 0.0
-    decision: str = "reject"  # "high_confidence" | "low_confidence" | "reject"
-    top_docs: List[Any] = Field(default_factory=list)
+    decision: str = "reject"  # "pass" | "enhanced_generate" | "reject"
+    top_docs: list[RerankResult] = Field(default_factory=list)
 
 
 # ── Generation ───────────────────────────────────────────────────────────
@@ -75,8 +75,8 @@ class GenerationResult(BaseModel):
     model_used: str = ""
     max_tokens: int = 0
     has_more: bool = False
-    session_id: Optional[str] = None
-    answer_outline: List[str] = Field(default_factory=list)
+    session_id: str | None = None
+    answer_outline: list[str] = Field(default_factory=list)
 
 
 class AnswerGateResult(BaseModel):
@@ -107,7 +107,7 @@ class CacheEntry(BaseModel):
     """A single cache entry (L2 / Redis)."""
 
     key: str
-    value: Dict[str, Any]
+    value: dict[str, Any]
     role_mask: int = 0
     dept_mask: int = 0
     ttl: int = 3600
@@ -121,9 +121,9 @@ class ServiceRequest(BaseModel):
 
     query: str = ""
     request_id: str = ""
-    session_id: Optional[str] = None
+    session_id: str | None = None
     user: UserIdentity = Field(default_factory=UserIdentity)
-    context: Dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ServiceResponse(BaseModel):
@@ -131,6 +131,6 @@ class ServiceResponse(BaseModel):
 
     success: bool = True
     request_id: str = ""
-    data: Dict[str, Any] = Field(default_factory=dict)
-    error: Optional[str] = None
+    data: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
     latency_ms: float = 0.0

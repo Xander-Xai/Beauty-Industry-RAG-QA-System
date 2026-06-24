@@ -8,12 +8,11 @@
 4. 审计日志持久化：Redis Stream + 文件 JSONL 双 Sink
 """
 import hashlib
-import logging
 import json
+import logging
 import os
 import threading
 import time
-from typing import List, Optional
 
 logger = logging.getLogger("audit")
 
@@ -37,7 +36,7 @@ def _init_sinks():
     try:
         import redis as _redis_lib
         cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
-        with open(cfg_path, "r", encoding="utf-8") as f:
+        with open(cfg_path, encoding="utf-8") as f:
             cfg = json.load(f)
         state_cfg = cfg.get("redis", {}).get("state", {})
         _redis_client = _redis_lib.Redis(
@@ -104,12 +103,12 @@ def _dispatch_to_sinks(event: dict):
 
 
 def query_audit_events(
-    start_time: Optional[float] = None,
-    end_time: Optional[float] = None,
-    user_id: Optional[str] = None,
-    event_type: Optional[str] = None,
+    start_time: float | None = None,
+    end_time: float | None = None,
+    user_id: str | None = None,
+    event_type: str | None = None,
     limit: int = 100,
-) -> List[dict]:
+) -> list[dict]:
     """
     查询已持久化的审计日志。
 
@@ -188,7 +187,7 @@ def query_audit_events(
             continue
         fpath = os.path.join(log_dir, fname)
         try:
-            with open(fpath, "r", encoding="utf-8") as f:
+            with open(fpath, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -216,10 +215,10 @@ def query_audit_events(
 
 
 def get_audit_events(
-    start_time: Optional[float] = None,
-    end_time: Optional[float] = None,
+    start_time: float | None = None,
+    end_time: float | None = None,
     limit: int = 100,
-) -> List[dict]:
+) -> list[dict]:
     """
     PRD §11: 查询审计事件（简化接口）。
 
@@ -270,7 +269,7 @@ def log_audit_event(
     business_type: str = "",
     filter_expr: str = "",
     reject_reason: str = "",
-    extra: Optional[dict] = None,
+    extra: dict | None = None,
 ):
     """
     记录审计事件。

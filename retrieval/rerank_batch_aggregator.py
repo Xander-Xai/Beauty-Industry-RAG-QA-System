@@ -16,14 +16,10 @@ Rerank Batch Aggregator（readme 5.1 节）
 from __future__ import annotations
 
 import logging
-import time
 import threading
-from typing import Callable, Optional
-from collections import deque
-from dataclasses import dataclass, field
+import time
 from concurrent.futures import Future
-
-import numpy as np
+from dataclasses import dataclass, field
 
 from common.config import get_config_dict
 
@@ -382,7 +378,6 @@ class RerankBatchAggregator:
 
     def _cpu_fallback_predict(self, model, pairs):
         """CPU fallback: move model to CPU and predict in small batches."""
-        import torch
         device_backup = None
         try:
             if hasattr(model, 'model') and hasattr(model.model, 'device'):

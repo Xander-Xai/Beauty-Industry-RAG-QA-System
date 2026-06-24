@@ -1,7 +1,7 @@
 {
   "annotations": { "list": [] },
   "editable": true,
-  "title": "化妆品 RAG 系统监控",
+  "title": "化妆品行业 RAG 问答系统监控",
   "uid": "rag-cosmetics-overview",
   "panels": [
     {

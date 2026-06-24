@@ -19,8 +19,9 @@ import logging
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any
 
 from common.config import get_config
 
@@ -53,7 +54,7 @@ class ServiceTracer:
     """
 
     def __init__(self, *, max_spans: int = 1000) -> None:
-        self._spans: List[Dict[str, Any]] = []
+        self._spans: list[dict[str, Any]] = []
         self._max_spans = max_spans
         self._use_otel = False
         self._otel_tracer: Any = None
@@ -81,15 +82,15 @@ class ServiceTracer:
     def trace(
         self,
         span_name: str,
-        attributes: Optional[Dict[str, Any]] = None,
-    ) -> Generator[Dict[str, Any], None, None]:
+        attributes: dict[str, Any] | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
         """Context manager that records a timed span."""
         if self._use_otel and self._otel_tracer is not None:
             yield from self._trace_otel(span_name, attributes or {})
         else:
             yield from self._trace_local(span_name, attributes or {})
 
-    def get_trace_summary(self, *, last_n: int = 100) -> List[Dict[str, Any]]:
+    def get_trace_summary(self, *, last_n: int = 100) -> list[dict[str, Any]]:
         """Return the most recent *last_n* spans."""
         with _global_lock:
             return list(self._spans[-last_n:])
@@ -99,9 +100,9 @@ class ServiceTracer:
     def _trace_local(
         self,
         span_name: str,
-        attributes: Dict[str, Any],
-    ) -> Generator[Dict[str, Any], None, None]:
-        span: Dict[str, Any] = {
+        attributes: dict[str, Any],
+    ) -> Generator[dict[str, Any], None, None]:
+        span: dict[str, Any] = {
             "name": span_name,
             "start_time": time.time(),
             "attributes": attributes,
@@ -124,12 +125,12 @@ class ServiceTracer:
     def _trace_otel(
         self,
         span_name: str,
-        attributes: Dict[str, Any],
-    ) -> Generator[Dict[str, Any], None, None]:
+        attributes: dict[str, Any],
+    ) -> Generator[dict[str, Any], None, None]:
         with self._otel_tracer.start_as_current_span(span_name) as otel_span:
             for k, v in attributes.items():
                 otel_span.set_attribute(k, str(v))
-            span: Dict[str, Any] = {
+            span: dict[str, Any] = {
                 "name": span_name,
                 "start_time": time.time(),
                 "attributes": attributes,
@@ -163,9 +164,9 @@ class MetricsCollector:
     """
 
     def __init__(self) -> None:
-        self._counters: Dict[str, int] = defaultdict(int)
-        self._gauges: Dict[str, float] = {}
-        self._histograms: Dict[str, List[float]] = defaultdict(list)
+        self._counters: dict[str, int] = defaultdict(int)
+        self._gauges: dict[str, float] = {}
+        self._histograms: dict[str, list[float]] = defaultdict(list)
         self._start_time = time.time()
         self._histogram_cap = 1000
         logger.info("MetricsCollector initialised")
@@ -201,14 +202,14 @@ class MetricsCollector:
     # -- queries -----------------------------------------------------------
 
     @staticmethod
-    def _percentile(values: List[float], p: float) -> float:
+    def _percentile(values: list[float], p: float) -> float:
         if not values:
             return 0.0
         s = sorted(values)
         idx = int(len(s) * p)
         return s[min(idx, len(s) - 1)]
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Return a snapshot of all collected metrics."""
         with _global_lock:
             counters = dict(self._counters)
@@ -220,7 +221,7 @@ class MetricsCollector:
             counters.get("rewrite.success", 0) + counters.get("rewrite.fail", 0)
         ) or 1
 
-        stats: Dict[str, Any] = {
+        stats: dict[str, Any] = {
             "uptime_seconds": round(time.time() - self._start_time, 1),
             "counters": counters,
             "gauges": gauges,
@@ -260,14 +261,14 @@ class AlertingManager:
     def __init__(self, metrics: MetricsCollector) -> None:
         self.metrics = metrics
         self._rules = self._load_rules()
-        self._active: Dict[str, Dict[str, Any]] = {}
-        self._first_violation: Dict[str, float] = {}
+        self._active: dict[str, dict[str, Any]] = {}
+        self._first_violation: dict[str, float] = {}
         logger.info("AlertingManager initialised (%d rules)", len(self._rules))
 
     # -- rule loading ------------------------------------------------------
 
     @staticmethod
-    def _load_rules() -> List[Dict[str, Any]]:
+    def _load_rules() -> list[dict[str, Any]]:
         defaults = [
             {"name": "kv_pressure_critical", "metric": "kv_pressure", "threshold": 0.9,
              "duration_s": 30, "severity": "critical", "comparison": "gt"},
@@ -300,7 +301,7 @@ class AlertingManager:
 
     # -- evaluation --------------------------------------------------------
 
-    def _resolve_metric(self, metric_name: str) -> Optional[float]:
+    def _resolve_metric(self, metric_name: str) -> float | None:
         """Resolve a metric value, supporting derived metrics."""
         # Direct gauge
         val = self.metrics.get_gauge(metric_name)
@@ -336,13 +337,13 @@ class AlertingManager:
         return None
 
     @staticmethod
-    def _p99(values: List[float]) -> float:
+    def _p99(values: list[float]) -> float:
         if not values:
             return 0.0
         s = sorted(values)
         return s[int(len(s) * 0.99)]
 
-    def check_alerts(self) -> List[Dict[str, Any]]:
+    def check_alerts(self) -> list[dict[str, Any]]:
         """
         Evaluate all rules and return a list of currently-active alerts.
 
@@ -398,7 +399,7 @@ class AlertingManager:
 
         return self.get_active_alerts()
 
-    def get_active_alerts(self) -> List[Dict[str, Any]]:
+    def get_active_alerts(self) -> list[dict[str, Any]]:
         """Return a snapshot of all currently-active alerts."""
         return list(self._active.values())
 
@@ -412,9 +413,9 @@ class AlertingManager:
 # Module-level singletons
 # ===================================================================
 
-_tracer_instance: Optional[ServiceTracer] = None
-_metrics_instance: Optional[MetricsCollector] = None
-_alerting_instance: Optional[AlertingManager] = None
+_tracer_instance: ServiceTracer | None = None
+_metrics_instance: MetricsCollector | None = None
+_alerting_instance: AlertingManager | None = None
 
 
 def get_tracer() -> ServiceTracer:

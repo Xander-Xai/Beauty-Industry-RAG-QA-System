@@ -79,13 +79,13 @@ class InfrastructureError(PipelineError):
     """
     基础设施故障 — HTTP 503
 
-    PRD §8: 系统仅在基础设施故障（Redis 连接断开、Milvus 超时、
+    PRD §8: 系统仅在基础设施故障（Redis 连接断开、Qdrant 超时、
     ES 不可用）或极端过载时返回 HTTP 503。
     业务逻辑（Rewrite 失败、证据不足）一律返回 HTTP 200。
     """
     def __init__(self, message: str = "Infrastructure failure", service: str = ""):
         super().__init__(message, stage="infrastructure", recoverable=False)
-        self.service = service  # redis / milvus / elasticsearch / vllm
+        self.service = service  # redis / qdrant / elasticsearch / vllm
 
 
 class FallbackTriggered(PipelineError):

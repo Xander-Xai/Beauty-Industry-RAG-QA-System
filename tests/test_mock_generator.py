@@ -1,7 +1,7 @@
-import os
 import json
+import os
 import tempfile
-import pytest
+
 from data.mock_generator import MockDataGenerator
 
 

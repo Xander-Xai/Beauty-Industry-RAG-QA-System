@@ -7,7 +7,7 @@ via these types.  The API gateway translates them into JSON error responses.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class ServiceError(Exception):
@@ -28,10 +28,10 @@ class ServiceError(Exception):
         self,
         message: str = "Internal service error",
         *,
-        status_code: Optional[int] = None,
-        detail: Optional[str] = None,
-        error_code: Optional[str] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        status_code: int | None = None,
+        detail: str | None = None,
+        error_code: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self.message = message
         self.detail = detail or message
@@ -42,9 +42,9 @@ class ServiceError(Exception):
         self.extra = extra or {}
         super().__init__(self.message)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-friendly dict."""
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "error_code": self.error_code,
             "message": self.message,
             "detail": self.detail,
@@ -220,7 +220,7 @@ class ValidationError(ServiceError):
         self,
         message: str = "Validation failed",
         *,
-        fields: Optional[Dict[str, str]] = None,
+        fields: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
         extra = kwargs.pop("extra", {})

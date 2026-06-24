@@ -6,9 +6,7 @@ Pydantic 请求/响应模型
 
 from __future__ import annotations
 
-from typing import Optional
 from pydantic import BaseModel, Field
-
 
 # ─── Request 模型 ──────────────────────────────────────────
 
@@ -17,10 +15,10 @@ class QueryRequest(BaseModel):
     """单轮查询请求"""
 
     query: str = Field(..., min_length=1, max_length=2000, description="用户查询文本")
-    session_id: Optional[str] = Field(None, max_length=64, description="会话 ID（可选）")
-    user_id: Optional[str] = Field(None, max_length=64, description="用户 ID（可选，优先使用 Header）")
+    session_id: str | None = Field(None, max_length=64, description="会话 ID（可选）")
+    user_id: str | None = Field(None, max_length=64, description="用户 ID（可选，优先使用 Header）")
     # PRD §6: 仅支持离线已向量化图像，不支持用户实时上传图片在线解析
-    image_path: Optional[str] = Field(None, max_length=512, description="已弃用：系统不支持实时图片上传")
+    image_path: str | None = Field(None, max_length=512, description="已弃用：系统不支持实时图片上传")
 
 
 class ChatRequest(BaseModel):
@@ -30,6 +28,13 @@ class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=64, description="会话 ID（必填）")
 
 
+class ContinuationRequest(BaseModel):
+    """长文续写请求"""
+
+    session_id: str = Field(..., max_length=64, description="会话 ID")
+    outline: list[str] = Field(default_factory=list, description="续写大纲")
+
+
 # ─── Response 模型 ─────────────────────────────────────────
 
 
@@ -37,9 +42,9 @@ class QueryResponse(BaseModel):
     """单轮查询响应"""
 
     answer: str = Field(..., description="RAG 生成的回答")
-    session_id: Optional[str] = Field(None, description="会话 ID")
-    business_type: Optional[str] = Field(None, description="业务类型: regulation/development/general/short")
-    intent: Optional[str] = Field(None, description="用户意图: compliance/formulation/ingredient/general")
+    session_id: str | None = Field(None, description="会话 ID")
+    business_type: str | None = Field(None, description="业务类型: regulation/development/general/short")
+    intent: str | None = Field(None, description="用户意图: compliance/formulation/ingredient/general")
     evidence_doc_ids: list[str] = Field(default_factory=list, description="Evidence Gate 锁定的文档 ID 列表")
     latency_ms: float = Field(..., description="端到端延迟（毫秒）")
     cache_hit: bool = Field(False, description="是否命中缓存（L1 或 L2）")
@@ -58,6 +63,11 @@ class ChatResponse(BaseModel):
     answer: str = Field(..., description="RAG 生成的回答")
     session_id: str = Field(..., description="会话 ID")
     history: list[ChatMessage] = Field(default_factory=list, description="完整对话历史（最近 6 轮）")
+    business_type: str | None = Field(None, description="业务类型: regulation/development/general/short")
+    intent: str | None = Field(None, description="用户意图: compliance/formulation/ingredient/general")
+    evidence_doc_ids: list[str] = Field(default_factory=list, description="Evidence Gate 锁定的文档 ID 列表")
+    latency_ms: float = Field(0.0, description="端到端延迟（毫秒）")
+    cache_hit: bool = Field(False, description="是否命中缓存（L1 或 L2）")
 
 
 class HealthResponse(BaseModel):
@@ -108,5 +118,5 @@ class ErrorResponse(BaseModel):
     """通用错误响应"""
 
     error: str = Field(..., description="错误类型或简要描述")
-    detail: Optional[str] = Field(None, description="详细错误信息")
-    code: Optional[int] = Field(None, description="业务错误码")
+    detail: str | None = Field(None, description="详细错误信息")
+    code: int | None = Field(None, description="业务错误码")

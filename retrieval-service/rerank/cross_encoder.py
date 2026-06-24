@@ -17,11 +17,9 @@ GPU batch architecture:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
-from typing import Optional
 
 # Ensure project root on sys.path for config.json and shared modules
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -91,7 +89,6 @@ class CrossEncoderEnsemble:
         Returns:
             list[RerankResult] sorted by ce_score_ensemble descending
         """
-        from common.models import RerankResult
 
         if not candidates:
             return []

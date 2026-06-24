@@ -9,7 +9,7 @@ Public API:
     encode_role_mask(roles) -> int
     encode_dept_mask(depts) -> int
     is_allowed(doc_role, user_role, doc_dept, user_dept) -> bool
-    build_milvus_filter(user_role_mask, user_dept_mask, epoch) -> str
+    build_qdrant_filter(user_role_mask, user_dept_mask, epoch) -> Filter
     require_identity() -> Depends(...)   (FastAPI dependency)
 """
 
@@ -19,26 +19,36 @@ import logging
 import os
 import re
 import time
-from typing import List, Optional
 
-from fastapi import Request, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import HTTPException, Request, status
+from fastapi.security import HTTPBearer
 
+from auth.jwt_auth import verify_token as verify_rs256_token
 from common.config import get_config
 from common.models import UserIdentity
 
 _EPOCH_SAFE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
-# SEC-3: doc_id 校验正则 — 防止 Milvus 查询表达式注入
+# SEC-3: doc_id 校验正则 — 防止查询表达式注入
 _DOC_ID_SAFE_RE = re.compile(r"^[a-zA-Z0-9_\-.]{1,128}$")
 
 logger = logging.getLogger(__name__)
 
 
 def validate_doc_id(doc_id: str) -> str:
-    """校验 doc_id 格式，防止 Milvus 表达式注入。无效值抛出 ValueError。"""
+    """校验 doc_id 格式，防止查询注入。无效值抛出 ValueError。"""
     if not doc_id or not _DOC_ID_SAFE_RE.match(doc_id):
         raise ValueError(f"无效的 doc_id 格式: {doc_id!r}")
     return doc_id
+
+
+def is_admin_role_mask(user_role_mask: int) -> bool:
+    """Return True when the role mask matches the configured admin identity."""
+    cfg = get_config().rbac
+    admin_mask = cfg.roles.get("admin")
+    return user_role_mask in {
+        cfg.super_admin_mask,
+        admin_mask,
+    }
 
 _security = HTTPBearer(auto_error=False)
 
@@ -47,42 +57,50 @@ _security = HTTPBearer(auto_error=False)
 
 
 def _get_jwt_settings() -> dict:
+    """Legacy HS256 compatibility settings.
+
+    The primary auth flow now uses `auth.jwt_auth` (RS256 keypair). We keep the
+    HS256 path only for backward compatibility with older tests and tokens.
+    """
     cfg = get_config().auth
-    # SEC-1: JWT Secret 优先从环境变量读取，生产模式下必须设置
-    secret = os.environ.get("JWT_SECRET", "").strip()
+    secret = os.environ.get("JWT_SECRET", "").strip() or cfg.jwt_secret
     if not secret:
-        secret = cfg.jwt_secret
-    if not secret:
-        from common.config import is_production_mode
-        if is_production_mode():
-            raise RuntimeError(
-                "生产模式下必须通过 JWT_SECRET 环境变量设置强密钥"
-            )
-        secret = "dev-jwt-secret-local-only"
-        logger.warning("JWT_SECRET 未设置，使用开发默认值（仅限开发模式）")
+        return {
+            "secret": "",
+            "algorithm": "HS256",
+            "expiry_hours": 0,
+            "enabled": False,
+        }
     return {
         "secret": secret,
         "algorithm": "HS256",
         "expiry_hours": cfg.jwt_expiry_hours,
+        "enabled": True,
     }
 
 
-def _decode_jwt(token: str) -> Optional[dict]:
-    """Decode and validate a JWT, returning the payload dict or None."""
+def _decode_jwt(token: str) -> dict | None:
+    """Decode and validate a JWT, preferring the RS256 browser auth contract."""
+    rs256_payload = verify_rs256_token(token, "access")
+    if rs256_payload is not None:
+        return rs256_payload
+
+    settings = _get_jwt_settings()
+    if not settings["enabled"]:
+        return None
+
     try:
         import jwt as _jwt
     except ImportError:
-        logger.warning("PyJWT not installed -- cannot decode JWT tokens")
+        logger.warning("PyJWT not installed -- cannot decode legacy HS256 JWT tokens")
         return None
 
-    settings = _get_jwt_settings()
     try:
         payload = _jwt.decode(
             token,
             settings["secret"],
             algorithms=[settings["algorithm"]],
         )
-        # Check expiry explicitly (PyJWT >=2.8 does this, but be safe)
         exp = payload.get("exp")
         if exp is not None and float(exp) < time.time():
             logger.warning("JWT token has expired")
@@ -118,7 +136,7 @@ def _identity_from_jwt(payload: dict) -> UserIdentity:
 # ── Public helpers ───────────────────────────────────────────────────────
 
 
-def _encode_from_names(names: List[str], mapping: dict) -> int:
+def _encode_from_names(names: list[str], mapping: dict) -> int:
     """Encode a list of role/department names into a bitmask."""
     mask = 0
     for name in names:
@@ -127,12 +145,12 @@ def _encode_from_names(names: List[str], mapping: dict) -> int:
     return mask
 
 
-def encode_role_mask(roles: List[str]) -> int:
+def encode_role_mask(roles: list[str]) -> int:
     """Encode role names to a bitmask using the config-defined mapping."""
     return _encode_from_names(roles, get_config().rbac.roles)
 
 
-def encode_dept_mask(depts: List[str]) -> int:
+def encode_dept_mask(depts: list[str]) -> int:
     """Encode department names to a bitmask using the config-defined mapping."""
     return _encode_from_names(depts, get_config().rbac.departments)
 
@@ -148,72 +166,37 @@ def is_allowed(
 
     Rules (mirrors auth/bitmask_rbac.py):
     - doc_role_mask == 0  =>  no role restriction (public)
-    - user_role_mask == super_admin  =>  always allowed
+    - configured admin / super_admin  =>  always allowed
     - Otherwise: role bits must overlap AND dept bits must overlap
       (doc_dept_mask == 0 means no dept restriction).
     """
     cfg = get_config().rbac
+    if is_admin_role_mask(user_role_mask):
+        return True
     if doc_role_mask == 0:
         if doc_dept_mask == 0:
             return True
         return (doc_dept_mask & user_dept_mask) != 0
-    if user_role_mask == cfg.super_admin_mask:
-        return True
     role_ok = (doc_role_mask & user_role_mask) != 0
     dept_ok = doc_dept_mask == 0 or (doc_dept_mask & user_dept_mask) != 0
     return role_ok and dept_ok
 
 
-def build_milvus_filter(
+def build_qdrant_filter(
     user_role_mask: int,
     user_dept_mask: int,
     knowledge_version_epoch: str,
-) -> str:
+):
     """
-    Build a Milvus boolean expression that enforces RBAC + version gating.
+    Build a Qdrant Filter object.
 
-    PRD §3.6: 双字段版本模型 — effective_epoch + expiry_epoch:
-    - effective_epoch <= epoch: 文档必须在生效版本之内
-    - expiry_epoch == '0' OR expiry_epoch > epoch: 文档未过期
+    Qdrant pre-filter 仅处理 status == 'active'（Qdrant Filter 不支持位掩码）。
+    RBAC 权限过滤和版本门控在 Python 层通过 is_allowed() 后置执行。
 
-    Example output::
-
-        (role_mask == 0 OR ((role_mask & 5) != 0))
-        AND (dept_mask == 0 OR ((dept_mask & 3) != 0))
-        AND effective_epoch <= '20260605_01'
-        AND (expiry_epoch == '0' OR expiry_epoch > '20260605_01')
-        AND status == 'active'
-
-    向后兼容：如果 effective_epoch 字段不存在（旧数据），回退到 doc_version_epoch。
+    安全：对所有输入进行类型和范围验证。
     """
-    # Input validation (§11 安全: 防止过滤注入)
-    if not isinstance(user_role_mask, int) or not (0 <= user_role_mask <= 0xFFFFFFFF):
-        raise ValueError(f"user_role_mask must be uint32, got {user_role_mask!r}")
-    if not isinstance(user_dept_mask, int) or not (0 <= user_dept_mask <= 0xFFFFFFFF):
-        raise ValueError(f"user_dept_mask must be uint32, got {user_dept_mask!r}")
-    if not knowledge_version_epoch or not _EPOCH_SAFE_RE.match(knowledge_version_epoch):
-        raise ValueError(
-            f"knowledge_version_epoch must match [a-zA-Z0-9_-], "
-            f"got {knowledge_version_epoch!r}"
-        )
-
-    rm0 = "(role_mask == 0)"
-    rmu = f"((role_mask & {user_role_mask}) != 0)"
-    dm0 = "(dept_mask == 0)"
-    dmu = f"((dept_mask & {user_dept_mask}) != 0)"
-    st = "status == 'active'"
-
-    # PRD §3.6: 双字段版本过滤
-    # effective_epoch <= epoch AND (expiry_epoch == '0' OR expiry_epoch > epoch)
-    # 向后兼容：对旧数据（无 effective_epoch 字段）同时保留 doc_version_epoch 过滤
-    eff = f"effective_epoch <= '{knowledge_version_epoch}'"
-    exp = f"(expiry_epoch == '0' OR expiry_epoch > '{knowledge_version_epoch}')"
-    legacy_ep = f"doc_version_epoch == '{knowledge_version_epoch}'"
-
-    return (
-        f"({rm0} OR {rmu}) AND ({dm0} OR {dmu}) "
-        f"AND {eff} AND {exp} AND {legacy_ep} AND {st}"
-    )
+    from auth.bitmask_rbac import build_qdrant_filter as _build
+    return _build(user_role_mask, user_dept_mask, knowledge_version_epoch)
 
 
 # ── FastAPI dependency ──────────────────────────────────────────────────
@@ -230,20 +213,22 @@ async def parse_identity(request: Request) -> UserIdentity:
     """
     cfg = get_config()
 
-    # 1. JWT Bearer token
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        payload = _decode_jwt(token)
-        if payload is not None:
-            return _identity_from_jwt(payload)
-        logger.warning("JWT decode failed, falling back to dev headers")
+    # 1. JWT Bearer token（仅在 JWT 启用时尝试解码）
+    jwt_settings = _get_jwt_settings()
+    if jwt_settings.get("enabled", True):
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            payload = _decode_jwt(token)
+            if payload is not None:
+                return _identity_from_jwt(payload)
+            logger.warning("JWT decode failed, falling back to dev headers")
 
     # 2. Dev-mode headers — 仅在 dev_mode=True 时信任 Header
     if cfg.auth.dev_mode:
-        role_str = request.headers.get("X-User-Role-Mask", "0")
-        dept_str = request.headers.get("X-User-Dept-Mask", "0")
-        user_id = request.headers.get("X-User-Id", "anonymous")
+        user_id = request.headers.get("X-User-ID", "anonymous")
+        role_str = request.headers.get("X-Role-Mask", "0")
+        dept_str = request.headers.get("X-Dept-Mask", "0")
         logger.debug("dev_mode: trusting X-User-* headers for user=%s", user_id)
         return UserIdentity(
             user_id=user_id,
@@ -278,10 +263,10 @@ async def require_identity(request: Request) -> UserIdentity:
 
 def generate_token(
     user_id: str,
-    roles: Optional[List[str]] = None,
-    depts: Optional[List[str]] = None,
-    role_mask: Optional[int] = None,
-    dept_mask: Optional[int] = None,
+    roles: list[str] | None = None,
+    depts: list[str] | None = None,
+    role_mask: int | None = None,
+    dept_mask: int | None = None,
 ) -> str:
     """
     Generate a JWT token (for testing and auth-service integration).

@@ -6,21 +6,20 @@ Bitmask RBAC 权限判定测试 (auth/bitmask_rbac.py)
 - 超级管理员 (0xFFFFFFFF) 绕过
 - 普通 RBAC 位与匹配
 - 部门掩码匹配
-- Milvus 过滤表达式生成
+- Qdrant Filter 生成
 - 编码函数 (encode_role_mask / encode_dept_mask)
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 
 
 # ── 使用 bitmask_rbac 模块（依赖 config.json 已在项目根目录） ──
 
-from auth.bitmask_rbac import is_allowed, encode_role_mask, encode_dept_mask, build_milvus_filter
-
+from auth.bitmask_rbac import build_qdrant_filter, encode_dept_mask, encode_role_mask, is_allowed
 
 # ── 公开文档访问控制 ──
 
@@ -159,42 +158,45 @@ class TestEncodeMasks:
         assert encode_dept_mask(["all"]) == 0
 
 
-# ── Milvus 过滤表达式生成 ──
+# ── Qdrant Filter 生成 ──
 
-class TestMilvusFilter:
-    """验证 Milvus 布尔过滤表达式的正确性"""
+class TestQdrantFilter:
+    """验证 build_qdrant_filter 返回 Qdrant Filter 对象"""
 
-    def test_filter_contains_role_check(self):
-        """过滤表达式包含 role_mask 检查"""
-        f = build_milvus_filter(ur=1, ue=2, ae="20260601")
-        assert "role_mask == 0" in f
-        assert "role_mask & 1" in f  # 新格式含空格
-
-    def test_filter_contains_dept_check(self):
-        """过滤表达式包含 dept_mask 检查"""
-        f = build_milvus_filter(ur=1, ue=2, ae="20260601")
-        assert "dept_mask == 0" in f
-        assert "dept_mask & 2" in f  # 新格式含空格
-
-    def test_filter_contains_epoch(self):
-        """过滤表达式包含版本 epoch"""
-        f = build_milvus_filter(ur=1, ue=0, ae="20260615_01")
-        assert "20260615_01" in f
+    def test_returns_filter_object(self):
+        """build_qdrant_filter 返回 Qdrant Filter 对象"""
+        from auth.bitmask_rbac import build_qdrant_filter
+        from qdrant_client.http.models import Filter
+        f = build_qdrant_filter(ur=1, ue=2, ae="20260601")
+        assert isinstance(f, Filter)
 
     def test_filter_contains_status_active(self):
-        """过滤表达式包含 status == active"""
-        f = build_milvus_filter(ur=1, ue=0, ae="v1")
-        assert "status == 'active'" in f
+        """Filter 包含 status == active 条件"""
+        from auth.bitmask_rbac import build_qdrant_filter
+        from qdrant_client.http.models import FieldCondition, MatchValue
+        f = build_qdrant_filter(ur=1, ue=0, ae="v1")
+        assert f.must is not None
+        status_cond = any(
+            c.key == "status" and isinstance(c.match, MatchValue) and c.match.value == "active"
+            for c in f.must
+        )
+        assert status_cond, "Filter 应包含 status == active"
 
-    def test_filter_uses_and_or_operators(self):
-        """过滤表达式使用 AND/OR 逻辑连接各条件"""
-        f = build_milvus_filter(ur=1, ue=1, ae="v1")
-        assert "OR" in f
-        assert "AND" in f
+    def test_filter_input_validation(self):
+        """非法输入应抛出 ValueError"""
+        from auth.bitmask_rbac import build_qdrant_filter
 
-    def test_filter_zero_masks(self):
-        """零掩码过滤表达式：公开文档 + 全部门"""
-        f = build_milvus_filter(ur=0, ue=0, ae="v1")
-        # role_mask=0 OR ((role_mask & 0) != 0) -> 公开文档路径
-        assert "role_mask & 0" in f  # 新格式含空格
-        assert "dept_mask & 0" in f
+        import pytest
+        with pytest.raises(ValueError):
+            build_qdrant_filter(ur=-1, ue=0, ae="v1")
+        with pytest.raises(ValueError):
+            build_qdrant_filter(ur=1, ue=0, ae="invalid/epoch")
+        with pytest.raises(ValueError):
+            build_qdrant_filter(ur="bad", ue=0, ae="v1")
+
+    def test_filter_validation_passes(self):
+        """合法输入不抛出异常"""
+        from auth.bitmask_rbac import build_qdrant_filter
+        from qdrant_client.http.models import Filter
+        f = build_qdrant_filter(ur=1, ue=1, ae="v1")
+        assert isinstance(f, Filter)

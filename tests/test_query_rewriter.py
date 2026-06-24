@@ -10,17 +10,18 @@ Query Rewrite 测试 (rewrite/query_rewriter.py)
 - rewrite 端到端流程（mock LLM）
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from rewrite.query_rewriter import QueryRewriter, REWRITE_SCHEMA
+import pytest
+
 from core.pipeline_context import QueryRewriteResult
-
+from rewrite.query_rewriter import REWRITE_SCHEMA, QueryRewriter
 
 # ── 模拟 Rewrite 测试 ──
 

@@ -14,7 +14,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,10 +22,8 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-
-from common.models import RecallResult, RerankResult, EvidenceGateResult
 
 logger = logging.getLogger(__name__)
 
@@ -53,23 +51,23 @@ class RecallRequest(BaseModel):
     user_role_mask: int = Field(default=0, description="用户角色位掩码")
     user_dept_mask: int = Field(default=0, description="用户部门位掩码")
     business_type: str = Field(default="general", description="业务类型")
-    context: Dict[str, Any] = Field(default_factory=dict, description="附加上下文")
+    context: dict[str, Any] = Field(default_factory=dict, description="附加上下文")
 
 
 class RerankRequest(BaseModel):
     """重排请求体。"""
     query: str = Field(..., description="检索查询文本")
-    candidates: List[Dict[str, Any]] = Field(default_factory=list, description="待重排的候选文档列表")
+    candidates: list[dict[str, Any]] = Field(default_factory=list, description="待重排的候选文档列表")
     top_k: int = Field(default=10, description="最终保留的文档数")
-    context: Dict[str, Any] = Field(default_factory=dict, description="附加上下文")
+    context: dict[str, Any] = Field(default_factory=dict, description="附加上下文")
 
 
 class EvidenceGateRequest(BaseModel):
     """证据门控请求体。"""
     query: str = Field(..., description="检索查询文本")
-    candidates: List[Dict[str, Any]] = Field(default_factory=list, description="重排后的候选文档")
+    candidates: list[dict[str, Any]] = Field(default_factory=list, description="重排后的候选文档")
     business_type: str = Field(default="general", description="业务类型")
-    context: Dict[str, Any] = Field(default_factory=dict, description="附加上下文")
+    context: dict[str, Any] = Field(default_factory=dict, description="附加上下文")
 
 
 # ---------------------------------------------------------------------------

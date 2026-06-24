@@ -49,8 +49,254 @@ body {
   font-size: 13px;
   background: var(--surface);
 }
-.ws-toggle { font-size: 12px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-.ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); display: inline-block; }
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.user-chip button {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+.user-chip button:hover { border-color: var(--primary); color: var(--primary); }
+.notice {
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  background: #fffbeb;
+}
+.notice-error {
+  background: #fef2f2;
+  color: var(--error);
+}
+.login-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.login-panel input {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.login-panel button {
+  padding: 9px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+.login-panel button:disabled { opacity: 0.5; cursor: not-allowed; }
+.login-error {
+  grid-column: 1 / -1;
+  color: var(--error);
+  font-size: 12px;
+}
+
+/* ── Admin Panel ── */
+.admin-panel {
+  padding: 12px 20px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  max-height: 320px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.admin-header h3 { font-size: 15px; font-weight: 600; }
+.admin-refresh-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+.admin-refresh-btn:hover { border-color: var(--primary); color: var(--primary); }
+.admin-refresh-btn:disabled { opacity: 0.5; }
+.admin-error {
+  color: var(--error);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.admin-section { margin-bottom: 10px; }
+.admin-section h4 { font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text-secondary); }
+.admin-create-form { display: flex; gap: 6px; flex-wrap: wrap; }
+.admin-matrix {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.admin-matrix label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.admin-create-form input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  flex: 1;
+  min-width: 100px;
+}
+.admin-create-form button {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--primary);
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+}
+.admin-create-form button:disabled { opacity: 0.5; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.admin-table th, .admin-table td {
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.admin-table th { font-weight: 600; color: var(--text-secondary); }
+.admin-table button {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+.admin-empty { text-align: center; color: var(--text-secondary); padding: 12px !important; }
+
+/* ── Utility Toolbar & Panels ── */
+.workspace-toolbar,
+.utility-panel {
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.workspace-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.toolbar-button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+.toolbar-button.active {
+  border-color: var(--primary);
+  background: #eef2ff;
+  color: var(--primary);
+}
+.utility-panel {
+  background: #f8fafc;
+  font-size: 13px;
+}
+.utility-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.utility-panel-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.utility-panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.utility-evidence {
+  margin-top: 2px;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.history-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.history-question,
+.history-answer,
+.history-empty {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.history-question {
+  font-weight: 600;
+}
+.history-empty {
+  color: var(--text-secondary);
+}
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.stats-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stats-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 /* ── Chat Area ── */
 .chat-area {
@@ -71,17 +317,6 @@ body {
   color: var(--text-secondary);
 }
 .empty-icon { font-size: 48px; margin-bottom: 12px; }
-.examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.example-btn {
-  padding: 8px 16px;
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  background: var(--surface);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-.example-btn:hover { border-color: var(--primary); color: var(--primary); }
 
 /* ── Messages ── */
 .message { display: flex; gap: 10px; max-width: 85%; }
@@ -118,11 +353,6 @@ body {
   color: var(--error);
   border: 1px solid #fecaca;
 }
-.message-image {
-  max-width: 200px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-}
 .message-content p { margin: 0 0 8px; }
 .message-content p:last-child { margin: 0; }
 .message-content code {
@@ -156,6 +386,13 @@ body {
   border-radius: 10px;
   font-size: 11px;
 }
+.evidence-link {
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.evidence-link:hover { opacity: 0.7; text-decoration: underline; }
 .meta-tag {
   background: #f3f4f6;
   color: var(--text-secondary);
@@ -188,36 +425,7 @@ body {
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
-.image-preview {
-  position: relative;
-  display: inline-block;
-  margin-bottom: 8px;
-}
-.image-preview img { max-height: 80px; border-radius: 8px; border: 1px solid var(--border); }
-.image-remove {
-  position: absolute;
-  top: -6px; right: -6px;
-  width: 20px; height: 20px;
-  border-radius: 50%;
-  background: var(--error);
-  color: white;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
-  display: flex; align-items: center; justify-content: center;
-}
 .input-row { display: flex; gap: 8px; align-items: flex-end; }
-.btn-icon {
-  width: 40px; height: 40px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  cursor: pointer;
-  font-size: 18px;
-  flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-}
-.btn-icon:hover { background: var(--bg); }
 .chat-input {
   flex: 1;
   padding: 10px 14px;
@@ -249,6 +457,8 @@ body {
 /* ── Responsive ── */
 @media (max-width: 640px) {
   .header { flex-direction: column; gap: 8px; }
+  .header-left { text-align: center; }
+  .login-panel { grid-template-columns: 1fr; }
+  .workspace-toolbar { flex-direction: column; align-items: stretch; }
   .message { max-width: 95%; }
-  .examples { flex-direction: column; }
 }

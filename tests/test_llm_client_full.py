@@ -5,8 +5,9 @@ fallback 逻辑、不同 business_type 的 max_output_tokens 差异。
 import os
 import sys
 import types
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["DEPLOYMENT_MODE"] = "development"
@@ -45,8 +46,10 @@ def _make_ctx(
     session_id="test_session",
 ):
     from core.pipeline_context import (
-        RequestContext, QueryRewriteResult, RerankResult,
         EvidenceGateResult,
+        QueryRewriteResult,
+        RequestContext,
+        RerankResult,
     )
     ctx = RequestContext(
         user_input=query,
@@ -85,7 +88,10 @@ class TestLLMClientSuccessfulGeneration:
     def test_generate_returns_generation_result(self):
         """generate 应返回 GenerationResult 并正确传递 answer。"""
         client = _make_client()
-        client.router.route_chat.return_value = "烟酰胺推荐浓度为2-5%。"
+        client.router.route_chat.return_value = {
+            "content": "烟酰胺推荐浓度为2-5%。",
+            "prefix_cache_hit": True,
+        }
 
         ctx = _make_ctx()
         result = client.generate(ctx, target_model="qwen3-4b", max_tokens=512)
@@ -97,7 +103,7 @@ class TestLLMClientSuccessfulGeneration:
     def test_generate_passes_correct_parameters(self):
         """generate 应向 router 传递正确的 messages 和参数。"""
         client = _make_client()
-        client.router.route_chat.return_value = "回答"
+        client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
 
         ctx = _make_ctx()
         client.generate(ctx, target_model="qwen3-4b", max_tokens=256, temperature=0.5)
@@ -113,7 +119,7 @@ class TestLLMClientSuccessfulGeneration:
         captured = []
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
-            return "回答"
+            return {"content": "回答", "prefix_cache_hit": None}
         client.router.route_chat.side_effect = capture
 
         ctx = _make_ctx()
@@ -131,7 +137,7 @@ class TestLLMClientSuccessfulGeneration:
         captured = []
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
-            return "回答"
+            return {"content": "回答", "prefix_cache_hit": None}
         client.router.route_chat.side_effect = capture
 
         ctx = _make_ctx()
@@ -148,7 +154,7 @@ class TestLLMClientSuccessfulGeneration:
         captured = []
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
-            return "回答"
+            return {"content": "回答", "prefix_cache_hit": None}
         client.router.route_chat.side_effect = capture
 
         ctx = _make_ctx(evidence_decision="enhanced_generate")
@@ -247,7 +253,7 @@ class TestLLMClientFallback:
             requires_context=True,
         )
         prompt = client._get_system_prompt(rewrite)
-        assert "配方" in prompt or "工艺" in prompt
+        assert "参数" in prompt or "建议" in prompt
 
     def test_get_system_prompt_general_type(self):
         """通用查询的系统提示不应包含特定业务指引。"""
@@ -260,7 +266,7 @@ class TestLLMClientFallback:
             requires_context=False,
         )
         prompt = client._get_system_prompt(rewrite)
-        assert "化妆品行业知识助手" in prompt
+        assert "化妆品行业RAG问答系统" in prompt
 
     def test_format_evidence_empty_rerank_results(self):
         """空 rerank 结果应返回无证据提示。"""
@@ -294,7 +300,7 @@ class TestLLMClientBusinessTypeTokens:
     def test_regulation_type_uses_higher_tokens(self):
         """法规类查询通常需要更长输出（通过 ctx.max_output_tokens 控制）。"""
         client = _make_client()
-        client.router.route_chat.return_value = "回答"
+        client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
 
         ctx = _make_ctx(business_type="regulation", intent="compliance")
         ctx.max_output_tokens = 2048  # 法规类使用更大 token 数
@@ -307,7 +313,7 @@ class TestLLMClientBusinessTypeTokens:
     def test_general_type_uses_standard_tokens(self):
         """通用查询使用标准 token 数。"""
         client = _make_client()
-        client.router.route_chat.return_value = "回答"
+        client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
 
         ctx = _make_ctx(business_type="general", intent="general")
         ctx.max_output_tokens = 512
@@ -320,7 +326,7 @@ class TestLLMClientBusinessTypeTokens:
     def test_development_type_uses_medium_tokens(self):
         """研发类查询使用中等 token 数。"""
         client = _make_client()
-        client.router.route_chat.return_value = "回答"
+        client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
 
         ctx = _make_ctx(business_type="development", intent="formulation")
         ctx.max_output_tokens = 1024
@@ -333,7 +339,7 @@ class TestLLMClientBusinessTypeTokens:
     def test_continuation_uses_deterministic_decoding(self):
         """续写应使用 temperature=0 确保一致性。"""
         client = _make_client()
-        client.router.route_chat.return_value = "续写内容"
+        client.router.route_chat.return_value = {"content": "续写内容", "prefix_cache_hit": None}
 
         ctx = _make_ctx()
         client.generate_continuation(
@@ -348,7 +354,7 @@ class TestLLMClientBusinessTypeTokens:
         from core.pipeline_context import SessionState
         client = _make_client()
         client.max_conversation_rounds = 3  # 限制为 3 轮
-        client.router.route_chat.return_value = "回答"
+        client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
 
         ctx = _make_ctx(session_id="test_hist_limit")
         session = SessionState.get_or_create("test_hist_limit")
@@ -361,7 +367,7 @@ class TestLLMClientBusinessTypeTokens:
         captured = []
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
-            return "回答"
+            return {"content": "回答", "prefix_cache_hit": None}
         client.router.route_chat.side_effect = capture
 
         client.generate(ctx)

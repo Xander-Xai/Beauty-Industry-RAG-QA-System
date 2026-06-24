@@ -10,7 +10,6 @@ import logging
 import os
 import sys
 import time
-from typing import List
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -18,11 +17,11 @@ from pydantic import BaseModel, Field
 # Ensure project root is importable for common models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from metrics_collector import MetricsCollector
+from rewriter import QueryRewriter
+
 from common.models import QueryRewriteResult
 from common.service_auth import verify_service_token
-
-from rewriter import QueryRewriter
-from metrics_collector import MetricsCollector
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,7 +40,7 @@ metrics = MetricsCollector()
 
 class RewriteRequest(BaseModel):
     query: str
-    recent_dialogs: List[str] = Field(default_factory=list)
+    recent_dialogs: list[str] = Field(default_factory=list)
 
 
 class VariantsRequest(BaseModel):
@@ -49,7 +48,7 @@ class VariantsRequest(BaseModel):
 
 
 class VariantsResponse(BaseModel):
-    variants: List[str] = Field(default_factory=list)
+    variants: list[str] = Field(default_factory=list)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────

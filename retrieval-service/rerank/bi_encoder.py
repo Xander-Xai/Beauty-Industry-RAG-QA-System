@@ -10,21 +10,20 @@ retains Top-150 candidates for Stage 2 CrossEncoder fine-ranking.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
-from typing import Optional
 
 import numpy as np
 
 # Ensure project root on sys.path for config.json and shared modules
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-with open("config.json", encoding="utf-8") as f:
-    config = json.load(f)
+from common.config import get_config_dict
+
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 

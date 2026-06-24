@@ -20,13 +20,12 @@ Generation 路由模块 — 主编排路由器.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import sys
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,19 +38,19 @@ if _GATEWAY_DIR not in sys.path:
     sys.path.insert(0, _GATEWAY_DIR)
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from middleware.auth_middleware import get_current_user, require_current_user
+from middleware.rate_limiter import rate_limit_dependency
 from pydantic import BaseModel, Field
 
 from common.models import (
-    UserIdentity,
-    QueryRewriteResult,
     EvidenceGateResult,
     GenerationResult,
-    AnswerGateResult,
+    QueryRewriteResult,
+    UserIdentity,
 )
-from middleware.auth_middleware import get_current_user, require_current_user
-from middleware.rate_limiter import rate_limit_dependency
+from common.config import get_config_dict
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +86,9 @@ _DEFAULT_MAX_OUTPUT_TOKENS = {
     "general": 512,
     "short": 256,
 }
-_MAX_OUTPUT_TOKENS_MAP: Dict[str, int] = _DEFAULT_MAX_OUTPUT_TOKENS.copy()
+_MAX_OUTPUT_TOKENS_MAP: dict[str, int] = _DEFAULT_MAX_OUTPUT_TOKENS.copy()
 try:
-    _CFG_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "config.json",
-    )
-    with open(_CFG_PATH, "r", encoding="utf-8") as _f:
-        _CFG = json.load(_f)
+    _CFG = get_config_dict()
     _MAX_OUTPUT_TOKENS_MAP = _CFG.get("gpu0", {}).get("models", {}).get(
         "gen_14b", {}
     ).get("max_output_tokens", _DEFAULT_MAX_OUTPUT_TOKENS)
@@ -113,9 +107,9 @@ def _get_max_output_tokens(business_type: str) -> int:
 class GenerateRequest(BaseModel):
     """主生成请求体。"""
     query: str = Field(..., description="用户查询")
-    session_id: Optional[str] = Field(default=None, description="会话 ID（用于多轮对话）")
-    recent_dialogs: List[str] = Field(default_factory=list, description="近期对话历史")
-    context: Dict[str, Any] = Field(default_factory=dict, description="附加上下文")
+    session_id: str | None = Field(default=None, description="会话 ID（用于多轮对话）")
+    recent_dialogs: list[str] = Field(default_factory=list, description="近期对话历史")
+    context: dict[str, Any] = Field(default_factory=dict, description="附加上下文")
 
 
 class GenerateResponse(BaseModel):
@@ -129,11 +123,11 @@ class GenerateResponse(BaseModel):
     evidence_decision: str = "high_confidence"
     model_used: str = ""
     has_more: bool = False
-    session_id: Optional[str] = None
-    answer_outline: List[str] = Field(default_factory=list)
+    session_id: str | None = None
+    answer_outline: list[str] = Field(default_factory=list)
     from_cache: bool = False
     latency_ms: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ContinuationRequest(BaseModel):
@@ -147,7 +141,53 @@ class MediaResponse(BaseModel):
     doc_id: str
     media_type: str = ""
     url: str = ""
-    error: Optional[str] = None
+    error: str | None = None
+
+
+# ── Frontend-facing API models (map to /api/query and /api/chat) ─────
+
+
+class QueryRequest(BaseModel):
+    """单轮查询请求（前端 → 网关）."""
+    query: str = Field(..., min_length=1, max_length=2000, description="用户查询文本")
+    session_id: str | None = Field(None, max_length=64, description="会话 ID（可选）")
+    user_id: str | None = Field(None, max_length=64, description="用户 ID（可选）")
+    image_path: str | None = Field(None, max_length=512, description="已弃用")
+
+
+class QueryResponse(BaseModel):
+    """单轮查询响应（网关 → 前端）."""
+    answer: str = ""
+    session_id: str | None = None
+    business_type: str | None = None
+    intent: str | None = None
+    evidence_doc_ids: list[str] = Field(default_factory=list)
+    latency_ms: float = 0.0
+    cache_hit: bool = False
+
+
+class ChatRequest(BaseModel):
+    """多轮对话请求（前端 → 网关）."""
+    message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
+    session_id: str = Field(..., min_length=1, max_length=64, description="会话 ID")
+
+
+class ChatMessage(BaseModel):
+    """对话历史中的单条消息."""
+    role: str = Field(..., description="user 或 assistant")
+    content: str = Field(..., description="消息内容")
+
+
+class ChatResponse(BaseModel):
+    """多轮对话响应（网关 → 前端）."""
+    answer: str = ""
+    session_id: str = ""
+    history: list[ChatMessage] = Field(default_factory=list)
+    business_type: str | None = None
+    intent: str | None = None
+    evidence_doc_ids: list[str] = Field(default_factory=list)
+    latency_ms: float = 0.0
+    cache_hit: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +199,7 @@ async def _call_service(
     url: str,
     *,
     json_body: Any = None,
-    params: Optional[Dict[str, Any]] = None,
+    params: dict[str, Any] | None = None,
     timeout: float = 5.0,
 ) -> httpx.Response:
     """
@@ -337,7 +377,7 @@ async def generate(
         max_output_tokens = _get_max_output_tokens(business_type)
 
         # ── 步骤 2: 准入控制检查（在改写和复杂度评估之后，确保变量已赋值）──
-        admission_request_id: Optional[str] = None
+        admission_request_id: str | None = None
         try:
             input_tokens = _estimate_tokens(body.query)
             resp = await _call_service(
@@ -410,7 +450,7 @@ async def generate(
                 logger.debug("[%s] Session-scoped 缓存未命中", request_id)
 
         # ── 步骤 4: 多路召回 ─────────────────────────────────────────────
-        recall_candidates: List[Dict[str, Any]] = []
+        recall_candidates: list[dict[str, Any]] = []
         try:
             resp = await _call_service(
                 client, "POST",
@@ -441,7 +481,7 @@ async def generate(
             )
 
         # ── 步骤 5: 重排 ────────────────────────────────────────────────
-        reranked_candidates: List[Dict[str, Any]] = recall_candidates
+        reranked_candidates: list[dict[str, Any]] = recall_candidates
         try:
             resp = await _call_service(
                 client, "POST",
@@ -597,7 +637,7 @@ async def _generate_without_context(
     user: UserIdentity,
     pipeline_start: float,
     rewrite_result: QueryRewriteResult,
-    admission_request_id: Optional[str],
+    admission_request_id: str | None,
     target_model: str = "qwen3-4b",
     max_output_tokens: int = 512,
     business_type: str = "general",
@@ -751,43 +791,52 @@ async def media_access(
     """
     媒体文件访问端点（PRD §10 资源访问安全）.
 
-    1. Milvus 文档权限二次校验（查文档 role_mask/dept_mask，与用户权限比对）
+    1. Qdrant 文档权限二次校验（查文档 role_mask/dept_mask，与用户权限比对）
     2. RBAC 权限校验（通过 generation-service 代理）
     3. 生成 MinIO 临时签名 URL（60s TTL）
     """
     try:
-        # SEC-3: 校验 doc_id 格式，防止 Milvus 表达式注入
+        # SEC-3: 校验 doc_id 格式，防止查询注入
         from common.auth import validate_doc_id
         validate_doc_id(doc_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"error": "invalid_doc_id", "detail": "doc_id 格式不合法"})
 
     try:
-        # ① Milvus 文档权限二次校验（PRD §6 / §10）
+        # ① Qdrant 文档权限二次校验（PRD §6 / §10）
         try:
             from auth.bitmask_rbac import is_allowed
-            from models.embedding_service import EmbeddingService
-            embedding_svc = EmbeddingService()
-            # 查询 Milvus 获取文档的权限掩码
-            results = embedding_svc.milvus_client.query(
-                collection_name="rag_text_768",
-                filter=f'doc_id == "{doc_id}"',
-                output_fields=["role_mask", "dept_mask", "status"],
-                limit=1,
+            from qdrant_client import QdrantClient
+            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            from common.config import get_config_dict
+            _cfg = get_config_dict()
+
+            _qc = QdrantClient(
+                host=_cfg["qdrant"]["host"],
+                port=_cfg["qdrant"]["port"],
             )
-            if results:
-                doc = results[0]
-                doc_status = doc.get("status", "active")
+
+            records, _ = _qc.scroll(
+                collection_name="rag_text_768",
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+                ),
+                limit=1,
+                with_payload=["role_mask", "dept_mask", "status"],
+            )
+            if records:
+                payload = records[0].payload or {}
+                doc_status = payload.get("status", "active")
                 if doc_status != "archived":
-                    doc_role = doc.get("role_mask", 0)
-                    doc_dept = doc.get("dept_mask", 0)
+                    doc_role = payload.get("role_mask", 0)
+                    doc_dept = payload.get("dept_mask", 0)
                     if not is_allowed(doc_role, user.user_role_mask, doc_dept, user.user_dept_mask):
                         return JSONResponse(
                             status_code=403,
                             content={"error": "无权访问该媒体文件（权限校验失败）", "doc_id": doc_id},
                         )
         except Exception as e:
-            logger.debug(f"Milvus 权限校验跳过（降级到 generation-service 校验）: {e}")
+            logger.debug(f"Qdrant 权限校验跳过（降级到 generation-service 校验）: {e}")
 
         # ② RBAC 权限校验（通过 generation-service 代理）
         async with httpx.AsyncClient() as client:
@@ -823,3 +872,102 @@ async def media_access(
     except Exception as exc:
         logger.exception("媒体访问失败: %s", exc)
         raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
+
+
+# ===========================================================================
+# POST /api/query — 单轮 RAG 查询（前端接口）
+# ===========================================================================
+@router.post("/api/query", response_model=QueryResponse)
+async def query_handler(
+    body: QueryRequest,
+    user: UserIdentity = Depends(get_current_user),
+):
+    """
+    单轮 RAG 查询（前端兼容接口）。
+
+    将 QueryRequest 映射为 GenerateRequest，调用内部 /v1/generate 管线，
+    返回前端期望的 QueryResponse 格式。
+    """
+    from httpx import ASGITransport, AsyncClient
+    from api_gateway.main import app as gateway_app
+
+    transport = ASGITransport(app=gateway_app)
+    async with AsyncClient(transport=transport, base_url="http://gateway") as client:
+        resp = await client.post(
+            "/v1/generate",
+            json={
+                "query": body.query,
+                "session_id": body.session_id or "",
+                "recent_dialogs": [],
+            },
+            headers={
+                "Authorization": f"Bearer {user.user_id}",
+                "X-User-ID": user.user_id,
+                "X-Role-Mask": str(user.user_role_mask),
+                "X-Dept-Mask": str(user.user_dept_mask),
+            },
+            timeout=120.0,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail="Pipeline processing failed")
+        data = resp.json()
+
+    cache_hit = data.get("from_cache", False)
+    return QueryResponse(
+        answer=data.get("answer", ""),
+        session_id=data.get("session_id") or body.session_id,
+        business_type=data.get("business_type"),
+        intent=None,
+        latency_ms=data.get("latency_ms", 0.0),
+        cache_hit=cache_hit,
+    )
+
+
+# ===========================================================================
+# POST /api/chat — 多轮对话（前端接口）
+# ===========================================================================
+@router.post("/api/chat", response_model=ChatResponse)
+async def chat_handler(
+    body: ChatRequest,
+    user: UserIdentity = Depends(get_current_user),
+):
+    """
+    多轮对话（前端兼容接口）。
+
+    将 ChatRequest 映射为 GenerateRequest，调用内部 /v1/generate 管线，
+    返回前端期望的 ChatResponse 格式。
+    """
+    from httpx import ASGITransport, AsyncClient
+    from api_gateway.main import app as gateway_app
+
+    transport = ASGITransport(app=gateway_app)
+    async with AsyncClient(transport=transport, base_url="http://gateway") as client:
+        resp = await client.post(
+            "/v1/generate",
+            json={
+                "query": body.message,
+                "session_id": body.session_id,
+                "recent_dialogs": [],
+            },
+            headers={
+                "Authorization": f"Bearer {user.user_id}",
+                "X-User-ID": user.user_id,
+                "X-Role-Mask": str(user.user_role_mask),
+                "X-Dept-Mask": str(user.user_dept_mask),
+            },
+            timeout=120.0,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail="Pipeline processing failed")
+        data = resp.json()
+
+    cache_hit = data.get("from_cache", False)
+    return ChatResponse(
+        answer=data.get("answer", ""),
+        session_id=body.session_id,
+        history=[],
+        business_type=data.get("business_type"),
+        intent=None,
+        latency_ms=data.get("latency_ms", 0.0),
+        cache_hit=cache_hit,
+    )

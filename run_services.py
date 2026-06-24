@@ -12,14 +12,12 @@
 """
 
 import argparse
-import json
 import logging
 import os
 import signal
 import subprocess
 import sys
 import time
-from typing import Optional
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,7 +49,9 @@ def start_vllm_service(
     max_model_len: int = 4096,
     gpu_memory_utilization: float = 0.85,
     tensor_parallel_size: int = 1,
-) -> subprocess.Popen:
+    lora_adapter_path: str | None = None,
+    lora_modules: dict[str, str] | None = None,
+) -> subprocess.Popen | None:
     """
     启动 vLLM 服务
 
@@ -62,9 +62,11 @@ def start_vllm_service(
         max_model_len: 最大模型长度
         gpu_memory_utilization: GPU 显存利用率
         tensor_parallel_size: 张量并行数（多卡时 > 1）
+        lora_adapter_path: LoRA adapter 路径（启用 QLoRA 时传入）
+        lora_modules: LoRA 模块映射 {名称: 路径}（vLLM --lora-modules 格式）
 
     Returns:
-        subprocess.Popen 对象
+        subprocess.Popen 对象，模型路径不存在时返回 None
     """
     if not os.path.exists(model_path):
         logger.warning(f"模型路径不存在: {model_path}，跳过启动")
@@ -81,6 +83,21 @@ def start_vllm_service(
 
     if tensor_parallel_size > 1:
         cmd.extend(["--tensor-parallel-size", str(tensor_parallel_size)])
+
+    # PRD §9: QLoRA adapter 加载 — 启用 vLLM LoRA 支持
+    if lora_adapter_path and os.path.exists(lora_adapter_path):
+        cmd.append("--enable-lora")
+        # vLLM --lora-modules 格式: name=path
+        module_name = "qlora-adapter"
+        if lora_modules:
+            # 使用传入的模块映射
+            for mod_name, mod_path in lora_modules.items():
+                cmd.extend(["--lora-modules", f"{mod_name}={mod_path}"])
+        else:
+            cmd.extend(["--lora-modules", f"{module_name}={lora_adapter_path}"])
+        logger.info(f"QLoRA adapter 已配置: {lora_adapter_path}")
+    elif lora_adapter_path:
+        logger.warning(f"QLoRA adapter 路径不存在: {lora_adapter_path}，跳过加载")
 
     # 分离模式：子进程不继承父进程 stdin/stdout
     env = os.environ.copy()
@@ -328,8 +345,9 @@ def main():
         # 生产模式才启动 14B；单卡模式跳过（由 llm_client._resolve_endpoint 降级到 4B）
         if is_production:
             gen_14b = config["gpu0"]["models"]["gen_14b"]
+            lora_path = gen_14b.get("lora_adapter_path")
             if args.dry_run:
-                logger.info(f"[DRY RUN] vllm-gen-14b: port={gen_14b['port']}")
+                logger.info(f"[DRY RUN] vllm-gen-14b: port={gen_14b['port']}, lora={lora_path}")
             else:
                 gpu_mem = gen_14b.get("gpu_memory_utilization", 0.85)
                 start_vllm_service(
@@ -338,6 +356,7 @@ def main():
                     gen_14b["model_path"],
                     gen_14b["max_model_len"],
                     gpu_memory_utilization=gpu_mem,
+                    lora_adapter_path=lora_path,
                 )
                 launched.append("vllm-gen-14b")
         else:

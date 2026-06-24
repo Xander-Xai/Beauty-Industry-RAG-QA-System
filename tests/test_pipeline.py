@@ -2,13 +2,15 @@
 管线单元测试
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 import json
 from unittest.mock import patch
+
+import pytest
 
 
 class TestConfig:
@@ -19,13 +21,13 @@ class TestConfig:
         assert "system" in config
         assert "gpu0" in config
         assert "rbac" in config
-        assert config["system"]["name"] == "化妆品企业级多模态RAG智能问答系统"
+        assert config["system"]["name"] == "化妆品行业RAG问答系统"
 
     def test_config_has_all_required_sections(self):
         """config.json 包含所有必要字段"""
         with open("config.json", encoding="utf-8") as f:
             config = json.load(f)
-        required = ["system", "gpu0", "gpu1", "embedding", "milvus",
+        required = ["system", "gpu0", "gpu1", "embedding", "qdrant",
                     "elasticsearch", "redis", "knowledge_base", "rbac"]
         for section in required:
             assert section in config, f"Missing section: {section}"

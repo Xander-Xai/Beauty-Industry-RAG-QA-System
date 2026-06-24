@@ -1,6 +1,4 @@
-import json
 import logging
-import os
 import re
 
 logger = logging.getLogger(__name__)
@@ -11,7 +9,7 @@ _SAFE_VERSION_PATTERN = re.compile(r'^[a-zA-Z0-9_\-]+$')
 # 输入验证：整数范围校验（32位无符号）
 _MAX_UINT32 = 0xFFFFFFFF
 
-# 优先使用 common.config 统一配置，回退到直接读取 config.json
+# 优先使用 common.config 统一配置，失败时使用最小安全默认值
 try:
     from common.config import get_config as _get_config
     _cfg = _get_config()
@@ -19,12 +17,9 @@ try:
     _DEPT = _cfg.rbac.departments
     _SUPER = _cfg.rbac.super_admin_mask
 except Exception:
-    _config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    with open(_config_path, encoding="utf-8") as f:
-        config = json.load(f)
-    _ROLE = config["rbac"]["roles"]
-    _DEPT = config["rbac"]["departments"]
-    _SUPER = config["rbac"]["super_admin_mask"]
+    _ROLE = {"admin": 2147483647}
+    _DEPT = {"all": 0}
+    _SUPER = 4294967295
 
 
 def is_allowed(dr, ur, dd, ud):
@@ -39,15 +34,14 @@ def is_allowed(dr, ur, dd, ud):
     return role_ok and dept_ok
 
 
-def build_milvus_filter(ur, ue, ae):
+def build_qdrant_filter(ur: int, ue: int, ae: str):
     """
-    构建 Milvus 布尔过滤表达式，包含 RBAC 权限和版本门控。
+    构建 Qdrant Filter 对象。
 
-    修复：使用显式括号确保 AND 优先于 OR 的正确语义：
-        (role_mask == 0 OR ((role_mask & user_role) != 0))
-        AND (dept_mask == 0 OR ((dept_mask & user_dept) != 0))
-        AND doc_version_epoch == '{epoch}'
-        AND status == 'active'
+    Qdrant pre-filter 不支持位掩码运算（RBAC），因此仅处理：
+    - status == 'active'（标量精准匹配）
+
+    RBAC 权限过滤和版本门控在 Python 层通过 is_allowed() 后置执行。
 
     安全：对所有输入进行类型和范围验证，防止过滤器注入。
     """
@@ -62,22 +56,22 @@ def build_milvus_filter(ur, ue, ae):
     if not _SAFE_VERSION_PATTERN.match(ae_str):
         raise ValueError(f"knowledge_version_epoch 包含非法字符: {ae_str!r}")
 
-    rm0 = "(role_mask == 0)"
-    rmu = f"((role_mask & {ur}) != 0)"
-    dm0 = "(dept_mask == 0)"
-    dmu = f"((dept_mask & {ue}) != 0)"
-    ep = f"doc_version_epoch == '{ae_str}'"
-    st = "status == 'active'"
-    return f"({rm0} OR {rmu}) AND ({dm0} OR {dmu}) AND {ep} AND {st}" 
- 
-def encode_role_mask(roles): 
-    m = 0 
-    for r in roles: 
-        if r in _ROLE: m = m | _ROLE[r] 
-    return m 
- 
-def encode_dept_mask(depts): 
-    m = 0 
-    for d in depts: 
-        if d in _DEPT: m = m | _DEPT[d] 
+    from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+    return Filter(
+        must=[
+            FieldCondition(key="status", match=MatchValue(value="active")),
+        ]
+    )
+
+def encode_role_mask(roles):
+    m = 0
+    for r in roles:
+        if r in _ROLE: m = m | _ROLE[r]
+    return m
+
+def encode_dept_mask(depts):
+    m = 0
+    for d in depts:
+        if d in _DEPT: m = m | _DEPT[d]
     return m

@@ -10,13 +10,12 @@ Query → 用户身份解析 → 二级缓存（L1/L2）
 
 from __future__ import annotations
 
-import json
-import time
-import logging
-import hashlib
-import contextlib
 import concurrent.futures
-from typing import Optional
+import contextlib
+import hashlib
+import json
+import logging
+import time
 
 from common.audit import log_audit_event
 from common.config import get_config_dict
@@ -304,10 +303,21 @@ class OnlineRAGPipeline:
 
                 # ⑤ 确定输出长度与模型路由
                 business_type = ctx.rewrite_result.business_type
-                ctx.max_output_tokens = config["gpu0"]["models"]["gen_14b"]["max_output_tokens"].get(
-                    business_type, 512
+                # 从 model_routing 确定端点名，再取对应模型的 max_output_tokens
+                from common.config import resolve_model_endpoint
+                target_tier = "complex" if is_complex else "simple"
+                target_endpoint = resolve_model_endpoint(target_tier)
+                # 在 gpu0/gpu1 配置中查找对应端点的 max_output_tokens
+                _max_tokens_cfg = (
+                    config.get("gpu0", {}).get("models", {}).get(target_endpoint, {})
+                    .get("max_output_tokens")
                 )
-                target_model = "qwen3-14b" if is_complex else "qwen3-4b"
+                if _max_tokens_cfg is None:
+                    _max_tokens_cfg = (
+                        config.get("gpu1", {}).get("models", {}).get(target_endpoint, {})
+                        .get("max_output_tokens", {})
+                    )
+                ctx.max_output_tokens = _max_tokens_cfg.get(business_type, 512)
 
                 # PRD §4.4 保守执行策略：Rewrite 降级时强制提升检索量、禁用缓存、收缩输出
                 is_fallback = ctx.rewrite_result.fallback
@@ -370,13 +380,13 @@ class OnlineRAGPipeline:
                 if clip_use:
                     try:
                         session_state_for_clip = SessionState.get_or_create(ctx.session_id or "default")
-                        clip_filter_expr = self._build_clip_filter(ctx)
+                        clip_qdrant_filter = self._build_clip_filter(ctx)
                         # M-5: 使用共享线程池
                         clip_pool = self._clip_pool
                         clip_future = clip_pool.submit(
                             self.parallel_recall.recall_async_clip,
                             query=ctx.rewrite_result.rewritten_query,
-                            filter_expr=clip_filter_expr,
+                            qdrant_filter=clip_qdrant_filter,
                             session=session_state_for_clip,
                         )
                         # 不阻塞主流程：设置超时后放弃
@@ -498,7 +508,7 @@ class OnlineRAGPipeline:
                         ctx.max_output_tokens, admission_reason
                     )
                     force_downgrade = self.admission.should_force_downgrade(admission_reason)
-                    effective_model = "qwen3-4b" if force_downgrade else target_model
+                    effective_model = "simple" if force_downgrade else target_tier
 
                     ctx.generation_result = self.llm_client.generate(
                         ctx=ctx,
@@ -602,7 +612,8 @@ class OnlineRAGPipeline:
         schema_version，确保 API 结构变更时缓存自动隔离。
         """
         import hashlib as _hl
-        from api.models import QueryResponse, ChatResponse
+
+        from api.models import ChatResponse, QueryResponse
         rewrite_q = ctx.rewrite_result.rewritten_query if ctx.rewrite_result else ctx.user_input
 
         # PRD §10.2: schema fingerprint — 基于 response model 字段哈希
@@ -633,11 +644,11 @@ class OnlineRAGPipeline:
         scoped = {"base": cache_key, "sid": session_id}
         return hashlib.sha256(json.dumps(scoped, sort_keys=True).encode()).hexdigest()
 
-    def _build_clip_filter(self, ctx) -> str:
-        """构建 CLIP 异步召回的 Milvus 过滤表达式"""
-        from auth.bitmask_rbac import build_milvus_filter
+    def _build_clip_filter(self, ctx):
+        """构建 CLIP 异步召回的 Qdrant Filter"""
+        from auth.bitmask_rbac import build_qdrant_filter
         active_epoch = config.get("knowledge_version_epoch", "default")
-        return build_milvus_filter(ctx.user_role_mask, ctx.user_dept_mask, active_epoch)
+        return build_qdrant_filter(ctx.user_role_mask, ctx.user_dept_mask, active_epoch)
 
     def _check_admission(self, ctx) -> tuple[bool, str, str]:
         """KV 准入控制检查 — 返回 (admitted, reason, priority)"""
@@ -701,6 +712,12 @@ class OnlineRAGPipeline:
         """Query Rewrite 失败降级（readme 4.4）- BERT 意图分类 + 增强规则分类"""
         from core.pipeline_context import QueryRewriteResult
 
+        # 从 config.json 读取领域关键词
+        _domain_kw = config.get("domain_keywords", {})
+        regulation_keywords = _domain_kw.get("regulation", ["法规", "合规", "标准", "备案", "许可", "标准号", "GB", "禁用"])
+        development_keywords = _domain_kw.get("development", ["配方", "研发", "工艺", "制备", "合成"])
+        ingredient_keywords = _domain_kw.get("ingredient", ["成分", "INCI", "功效", "浓度", "含量", "添加量"])
+
         business_type = "general"
         intent = "general"
 
@@ -713,7 +730,6 @@ class OnlineRAGPipeline:
             is_complex = evaluator.evaluate(user_input)
             if is_complex:
                 # 复杂查询进一步用关键词细化
-                regulation_keywords = ["法规", "合规", "标准", "备案", "许可", "标准号", "GB", "禁用"]
                 if any(kw in user_input for kw in regulation_keywords):
                     business_type = "regulation"
                     intent = "compliance"
@@ -726,10 +742,6 @@ class OnlineRAGPipeline:
 
         # PRD §4.4: BERT 分类未命中时降级为关键词规则
         if bert_score == 0:
-            regulation_keywords = ["法规", "合规", "标准", "备案", "许可", "标准号", "GB", "禁用"]
-            development_keywords = ["配方", "研发", "工艺", "制备", "合成"]
-            ingredient_keywords = ["成分", "INCI", "功效", "浓度", "含量", "添加量"]
-
             regulation_score = sum(1 for kw in regulation_keywords if kw in user_input)
             development_score = sum(1 for kw in development_keywords if kw in user_input)
             ingredient_score = sum(1 for kw in ingredient_keywords if kw in user_input)
@@ -768,11 +780,12 @@ class OnlineRAGPipeline:
             0.3 <= score < 0.6 → (True, 20)  低成本同步
             score < 0.3 → (False, 0)  跳过
         """
-        visual_keywords = {
+        # 从 config.json 读取视觉关键词
+        visual_keywords = set(config.get("domain_keywords", {}).get("visual", [
             "图片", "包装", "外观", "照片", "扫描", "标签",
             "成分表", "配方", "图像", "图像识别", "OCR",
             "说明书", "瓶身", "外盒",
-        }
+        ]))
         query_text = rewrite_result.rewritten_query if rewrite_result else ""
         keyword_hits = sum(1 for kw in visual_keywords if kw in query_text)
         keyword_score = min(keyword_hits * 0.3, 1.0)

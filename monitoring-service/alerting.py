@@ -13,11 +13,10 @@ AlertingManager -- 告警规则引擎
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 sys_path_done = False
 try:
@@ -28,12 +27,9 @@ except Exception:
     pass
 
 from metrics_collector import MetricsCollector
+from common.config import get_config_dict
 
-with open(
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json"),
-    encoding="utf-8",
-) as f:
-    config = json.load(f)
+config = get_config_dict()
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +52,8 @@ class AlertingManager:
     def __init__(self, metrics: MetricsCollector):
         self.metrics = metrics
         self._alert_rules = self._load_alert_rules()
-        self._active_alerts: Dict[str, Dict[str, Any]] = {}
-        self._alert_timestamps: Dict[str, float] = {}  # 记录告警首次触发时间
+        self._active_alerts: dict[str, dict[str, Any]] = {}
+        self._alert_timestamps: dict[str, float] = {}  # 记录告警首次触发时间
         self._notification_channels = self._load_notification_channels()
         self._notified_alerts: set = set()  # 已通知的告警（避免重复通知）
         logger.info(
@@ -101,7 +97,7 @@ class AlertingManager:
 
         return default_rules
 
-    def check_alerts(self) -> List[Dict[str, Any]]:
+    def check_alerts(self) -> list[dict[str, Any]]:
         """
         检查所有告警条件
 
@@ -178,7 +174,7 @@ class AlertingManager:
 
         return self.get_active_alerts()
 
-    def _get_metric_value(self, metric_name: str) -> Optional[float]:
+    def _get_metric_value(self, metric_name: str) -> float | None:
         """从 MetricsCollector 获取指标值"""
         # 优先从 gauges 读取
         if metric_name in self.metrics._gauges:
@@ -226,7 +222,7 @@ class AlertingManager:
 
         return None
 
-    def get_active_alerts(self) -> List[Dict[str, Any]]:
+    def get_active_alerts(self) -> list[dict[str, Any]]:
         """获取当前活跃告警"""
         return list(self._active_alerts.values())
 
@@ -348,7 +344,7 @@ class AlertingManager:
             f"持续时间: {alert.get('duration_s', 0)}s\n"
             f"详细信息: {alert.get('message', '')}\n"
             f"\n---\n"
-            f"化妆品 RAG 智能问答系统自动告警"
+            f"{config.get('system', {}).get('name', 'RAG System')} 自动告警"
         )
 
         msg = MIMEText(body, "plain", "utf-8")

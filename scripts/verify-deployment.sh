@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================================
-# 部署验证脚本 — 化妆品 RAG 智能问答系统
+# 部署验证脚本 — 化妆品行业 RAG 问答系统
 # ============================================================================
 # 用法: ./scripts/verify-deployment.sh [BASE_URL]
-# 默认 BASE_URL: http://localhost
+# 默认 BASE_URL: http://localhost:8000
 # ============================================================================
 
 set -euo pipefail
 
-BASE_URL="${1:-http://localhost}"
+BASE_URL="${1:-http://localhost:8000}"
 PASS=0
 FAIL=0
 WARN=0
@@ -55,11 +55,11 @@ fi
 # ── 3. Prometheus 指标端点 ─────────────────────────────
 echo ""
 echo "▸ Prometheus 指标"
-METRICS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/metrics" 2>/dev/null || echo "000")
+METRICS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/api/metrics" 2>/dev/null || echo "000")
 if [ "$METRICS_CODE" = "200" ]; then
-    pass "/metrics 端点可用"
+    pass "/api/metrics 端点可用"
     # 检查关键指标是否存在
-    METRICS_BODY=$(curl -s "${BASE_URL}/metrics" 2>/dev/null || echo "")
+    METRICS_BODY=$(curl -s "${BASE_URL}/api/metrics" 2>/dev/null || echo "")
     for metric in "rag_uptime_seconds" "rag_cache" "rag_rewrite"; do
         if echo "$METRICS_BODY" | grep -q "$metric"; then
             pass "指标 ${metric} 存在"
@@ -68,10 +68,20 @@ if [ "$METRICS_CODE" = "200" ]; then
         fi
     done
 else
-    fail "/metrics 端点响应 ${METRICS_CODE}"
+    fail "/api/metrics 端点响应 ${METRICS_CODE}"
 fi
 
-# ── 4. Stats 端点 ──────────────────────────────────────
+# ── 4b. Auth Metadata 端点 ──────────────────────────────
+echo ""
+echo "▸ Auth Metadata 端点"
+METADATA_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/api/auth/metadata" 2>/dev/null || echo "000")
+if [ "$METADATA_CODE" = "200" ]; then
+    pass "/api/auth/metadata 响应 200"
+else
+    fail "/api/auth/metadata 响应 ${METADATA_CODE}"
+fi
+
+# ── 5. Stats 端点 ──────────────────────────────────────
 echo ""
 echo "▸ Stats 端点"
 STATS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/api/stats" 2>/dev/null || echo "000")
@@ -81,7 +91,7 @@ else
     fail "/api/stats 响应 ${STATS_CODE}"
 fi
 
-# ── 5. 安全头检查 ──────────────────────────────────────
+# ── 6. 安全头检查 ──────────────────────────────────────
 echo ""
 echo "▸ 安全头检查"
 HEADERS=$(curl -sI "${BASE_URL}/" 2>/dev/null || echo "")
@@ -93,7 +103,7 @@ for header in "X-Content-Type-Options" "X-Frame-Options" "X-XSS-Protection"; do
     fi
 done
 
-# ── 6. 基础查询功能 ────────────────────────────────────
+# ── 7. 基础查询功能 ────────────────────────────────────
 echo ""
 echo "▸ 基础查询功能"
 QUERY_RESULT=$(curl -s -X POST "${BASE_URL}/api/query" \
@@ -106,7 +116,7 @@ else
     warn "查询接口未返回预期结果（可能需要认证）"
 fi
 
-# ── 7. Grafana ─────────────────────────────────────────
+# ── 8. Grafana ─────────────────────────────────────────
 echo ""
 echo "▸ Grafana 监控"
 GRAFANA_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}:3000/api/health" 2>/dev/null || echo "000")

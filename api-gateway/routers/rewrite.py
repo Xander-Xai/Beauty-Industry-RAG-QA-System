@@ -11,7 +11,6 @@ import logging
 import os
 import sys
 import time
-from typing import List, Optional
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,7 +18,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from common.models import QueryRewriteResult
@@ -43,7 +42,7 @@ REWRITE_TIMEOUT_MS = int(os.environ.get("REWRITE_TIMEOUT_MS", "2000"))
 class RewriteRequest(BaseModel):
     """查询改写请求体。"""
     query: str = Field(..., description="用户原始查询")
-    recent_dialogs: List[str] = Field(default_factory=list, description="近期对话历史")
+    recent_dialogs: list[str] = Field(default_factory=list, description="近期对话历史")
 
 
 class RewriteResponse(BaseModel):
@@ -52,7 +51,7 @@ class RewriteResponse(BaseModel):
     business_type: str = "general"
     intent: str = ""
     requires_context: bool = False
-    standardized_entities: List[str] = Field(default_factory=list)
+    standardized_entities: list[str] = Field(default_factory=list)
     confidence: float = 0.5
     fallback: bool = False
 

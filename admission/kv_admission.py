@@ -21,19 +21,18 @@ Prefix Caching protection (PRD §9):
   ``max_tokens`` parameter, which would invalidate the Prefix Cache key
   hash and trigger a Prefill storm.
 """
-import time, json, threading
+import threading
+
 from common.audit import log_audit_event
+from common.config import get_config_dict
+
 try:
-    from common.config import get_config as _get_config
-    _cfg = _get_config()
-    _config = {
-        "gpu0": {"models": {"gen_14b": {"kv_cache_budget_gb": _cfg.gpu.kv_cache_budget_gb}}},
-        "admission_control": {"safety_factor": _cfg.admission.safety_factor},
-    }
+    _config = get_config_dict()
 except Exception:
-    _config_path = __import__("os").path.join(__import__("os").path.dirname(__file__), "..", "config.json")
-    with open(_config_path, encoding="utf-8") as f:
-        _config = json.load(f)
+    _config = {
+        "gpu0": {"models": {"gen_14b": {"kv_cache_budget_gb": 8.0}}},
+        "admission_control": {"safety_factor": 0.7},
+    }
 
 
 class KVAdmissionControl:

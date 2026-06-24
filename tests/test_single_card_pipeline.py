@@ -7,10 +7,9 @@ test_degradation_paths.py。
 """
 import os
 import sys
-import json
 import types
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -102,14 +101,19 @@ class TestRBAC:
         assert is_allowed(0x08, super_mask, 0x08, 0x01) is True
         assert is_allowed(0x02, super_mask, 0x02, 0x01) is True
 
-    def test_milvus_filter_generation(self):
-        """build_milvus_filter 应生成包含权限和版本的过滤表达式。"""
-        from auth.bitmask_rbac import build_milvus_filter
-        filter_expr = build_milvus_filter(0x02, 0x01, "20260601_01")
-        assert "role_mask" in filter_expr
-        assert "dept_mask" in filter_expr
-        assert "20260601_01" in filter_expr
-        assert "active" in filter_expr
+    def test_qdrant_filter_generation(self):
+        """build_qdrant_filter 应返回 Qdrant Filter 对象。"""
+        from auth.bitmask_rbac import build_qdrant_filter
+        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+        qf = build_qdrant_filter(0x02, 0x01, "20260601_01")
+        assert isinstance(qf, Filter)
+        assert qf.must is not None
+        has_status = any(
+            c.key == "status" and isinstance(c.match, MatchValue) and c.match.value == "active"
+            for c in qf.must
+        )
+        assert has_status
 
     def test_public_doc_dept_restricted(self):
         """公开文档但有部门限制：需要部门匹配。"""
@@ -120,7 +124,7 @@ class TestRBAC:
 
     def test_encode_role_and_dept_mask(self):
         """encode_role_mask / encode_dept_mask 应正确计算位掩码。"""
-        from auth.bitmask_rbac import encode_role_mask, encode_dept_mask
+        from auth.bitmask_rbac import encode_dept_mask, encode_role_mask
         mask = encode_role_mask(["rd", "quality"])
         assert mask == 0x03
         mask = encode_dept_mask(["rd_dept", "sales_dept"])
@@ -224,13 +228,14 @@ class TestCacheLayer:
 
     def test_l1_cache_operations_without_redis(self):
         """L1 内存缓存可在无 Redis 环境下工作。"""
-        from cache.redis_cache import RedisCache
         from collections import OrderedDict
+
+        from cache.redis_cache import RedisCache
         cache = RedisCache.__new__(RedisCache)
         cache._l1 = OrderedDict()
         cache._l1_max = 100
         cache._l1_ttl = 300
-        import threading, time
+        import threading
         cache._l1_lock = threading.Lock()
         cache.enabled = False
         cache._degraded = False
@@ -247,8 +252,9 @@ class TestCacheLayer:
 
     def test_l1_only_for_public_docs(self):
         """L1 缓存仅存储公开文档。"""
-        from cache.redis_cache import RedisCache
         from collections import OrderedDict
+
+        from cache.redis_cache import RedisCache
         cache = RedisCache.__new__(RedisCache)
         cache._l1 = OrderedDict()
         cache._l1_max = 100
@@ -270,8 +276,9 @@ class TestCacheLayer:
 
     def test_cache_stats(self):
         """get_stats 应返回有效的统计信息。"""
-        from cache.redis_cache import RedisCache
         from collections import OrderedDict
+
+        from cache.redis_cache import RedisCache
         cache = RedisCache.__new__(RedisCache)
         cache._l1 = OrderedDict()
         cache._l1_max = 100
@@ -503,7 +510,7 @@ class TestPipelineContextStructures:
         assert result.decision == "pass"
 
     def test_session_state_operations(self):
-        from core.pipeline_context import SessionState, QueryRewriteResult
+        from core.pipeline_context import QueryRewriteResult, SessionState
         state = SessionState.get_or_create("test_session")
         state.add_round(
             user_input="烟酰胺浓度？", response="一般不超过5%",

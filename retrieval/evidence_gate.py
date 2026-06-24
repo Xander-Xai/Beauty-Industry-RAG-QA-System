@@ -19,7 +19,6 @@ Evidence Score =
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from common.config import get_config_dict
 
@@ -59,7 +58,7 @@ class EvidenceEnsembleGate:
         weights_override: dict = None,
         thresholds_override: dict = None,
         conservative_mode: bool = False,
-    ) -> "EvidenceGateResult":
+    ) -> EvidenceGateResult:
         """
         评估证据综合置信度
 
@@ -74,7 +73,7 @@ class EvidenceEnsembleGate:
         Returns:
             EvidenceGateResult 含决策结果
         """
-        from core.pipeline_context import EvidenceGateResult, RerankResult
+        from core.pipeline_context import EvidenceGateResult
 
         if not rerank_results:
             return EvidenceGateResult(

@@ -1,10 +1,14 @@
 import os
 import tempfile
+
 import pytest
-from unittest.mock import patch
+
 from auth.jwt_auth import (
-    generate_keypair, create_token_pair, create_access_token, verify_token,
-    extract_token_from_header, JWTConfig, get_jwt_config,
+    create_access_token,
+    create_token_pair,
+    extract_token_from_header,
+    generate_keypair,
+    verify_token,
 )
 
 

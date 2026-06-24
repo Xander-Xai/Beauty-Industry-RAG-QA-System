@@ -5,24 +5,21 @@ GAP-15: 核心管线变量排序修复测试
 1) is_complex 在使用前已赋值（无 NameError）
 2) 复杂度评估失败时降级为简单模型
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from unittest.mock import patch, MagicMock
-import pytest
+from unittest.mock import MagicMock, patch
 
 from core.pipeline import OnlineRAGPipeline
 from core.pipeline_context import (
-    RequestContext,
-    QueryRewriteResult,
+    AnswerGateResult,
     EvidenceGateResult,
     GenerationResult,
-    AnswerGateResult,
-    RerankResult,
+    QueryRewriteResult,
+    RequestContext,
 )
-
 
 # ── helpers ──────────────────────────────────────────────────
 
@@ -132,10 +129,10 @@ class TestPipelineVariableOrdering:
         ctx = _make_ctx()
         pipeline.process(ctx)
 
-        # 复杂查询 → 14B
+        # 复杂查询 → complex tier
         gen = pipeline._llm_client.generate
         assert gen.call_count == 1
-        assert gen.call_args.kwargs.get("target_model") == "qwen3-14b"
+        assert gen.call_args.kwargs.get("target_model") == "complex"
         assert ctx.degraded is False
         assert "complexity_eval_fallback" not in (ctx.fallback_reason or "")
 
@@ -155,7 +152,7 @@ class TestPipelineVariableOrdering:
 
         gen = pipeline._llm_client.generate
         assert gen.call_count == 1
-        assert gen.call_args.kwargs.get("target_model") == "qwen3-4b"
+        assert gen.call_args.kwargs.get("target_model") == "simple"
         assert ctx.degraded is True
         assert "complexity_eval_fallback" in ctx.fallback_reason
         assert "BERT model load failed" in ctx.fallback_reason

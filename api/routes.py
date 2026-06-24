@@ -3,7 +3,7 @@ FastAPI 路由处理器
 
 POST /query  - 单轮 RAG 查询
 POST /chat   - 多轮对话（带会话管理）
-GET  /health - 健康检查（Redis/Milvus/ES 连通性）
+GET  /health - 健康检查（Redis/Qdrant/ES 连通性）
 GET  /stats  - 系统指标
 GET  /media/{doc_id} - 文档媒体预签名 URL（权限二次校验）
 GET  /metrics - Prometheus 文本格式指标
@@ -11,28 +11,31 @@ GET  /metrics - Prometheus 文本格式指标
 
 from __future__ import annotations
 
-import json
 import logging
-import time
 import threading
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
 from api.models import (
-    QueryRequest,
-    QueryResponse,
+    CacheHitRate,
+    ChatMessage,
     ChatRequest,
     ChatResponse,
-    ChatMessage,
-    HealthResponse,
-    StatsResponse,
+    ContinuationRequest,
     ErrorResponse,
-    CacheHitRate,
+    HealthResponse,
     LatencyPercentiles,
+    QueryRequest,
+    QueryResponse,
+    StatsResponse,
 )
 from common.auth import require_identity
+from common.auth import validate_doc_id
+from common.config import get_config_dict
 from common.models import UserIdentity
 from core.pipeline import OnlineRAGPipeline
 from core.pipeline_context import RequestContext, SessionState
@@ -43,14 +46,13 @@ router = APIRouter(prefix="/api", tags=["rag"])
 
 # ─── 全局组件（延迟初始化，由 app.py 的 startup 事件注入）──
 
-_pipeline: Optional[OnlineRAGPipeline] = None
+_pipeline: OnlineRAGPipeline | None = None
 _metrics = None
 _active_requests = 0
 _active_requests_lock = threading.Lock()
 
 # 配置（与原有行为保持一致）
-with open("config.json", encoding="utf-8", errors="replace") as _f:
-    _config = json.load(_f)
+_config = get_config_dict()
 
 
 def get_pipeline() -> OnlineRAGPipeline:
@@ -182,11 +184,67 @@ def chat_handler(
         history.append(ChatMessage(role="user", content=round_data["user_input"]))
         history.append(ChatMessage(role="assistant", content=round_data["response"]))
 
+    cache_hit = ctx.cache_hit_level in ("L1", "L2")
+
     return ChatResponse(
         answer=ctx.final_response,
         session_id=req.session_id,
         history=history,
+        business_type=(
+            ctx.rewrite_result.business_type if ctx.rewrite_result else None
+        ),
+        intent=ctx.rewrite_result.intent if ctx.rewrite_result else None,
+        evidence_doc_ids=ctx.evidence_locked_doc_ids or [],
+        latency_ms=round(ctx.get_total_latency_ms(), 2),
+        cache_hit=cache_hit,
     )
+
+
+# ─── POST /api/continuation ──────────────────────────────────
+
+
+@router.post(
+    "/continuation",
+    summary="长文续写（单块模式简化版）",
+)
+def continuation_handler(
+    req: ContinuationRequest,
+    identity: UserIdentity = Depends(require_identity),
+):
+    """
+    长文续写入口（单块模式简化版）。
+
+    完整续写逻辑需要微服务架构支持，此处返回空桩响应。
+    """
+    session = SessionState.get_or_create(req.session_id)
+    return {
+        "answer": "",
+        "has_more": False,
+        "session_id": req.session_id,
+        "outline": req.outline or [],
+    }
+
+
+# ─── GET /api/dialog_history ─────────────────────────────────
+
+
+@router.get(
+    "/dialog_history",
+    summary="对话历史查询（单块模式简化版）",
+)
+def dialog_history_handler(
+    session_id: str = Query(...),
+    identity: UserIdentity = Depends(require_identity),
+):
+    """
+    对话历史查询入口（单块模式简化版）。
+    """
+    session = SessionState.get_or_create(session_id)
+    return {
+        "session_id": session_id,
+        "rounds": session.dialog_rounds,
+        "locked_doc_ids": session.locked_doc_ids,
+    }
 
 
 # ─── GET /api/health ────────────────────────────────────────
@@ -201,12 +259,12 @@ def health_handler():
     """
     健康检查端点。
 
-    检查 Redis、Milvus、Elasticsearch 连通性。
+    检查 Redis、Qdrant、Elasticsearch 连通性。
     任何依赖连接失败时整体状态为 "degraded"，但端点本身不会抛出异常。
     """
     checks: dict[str, bool] = {
         "redis": False,
-        "milvus": False,
+        "qdrant": False,
         "elasticsearch": False,
     }
 
@@ -218,13 +276,17 @@ def health_handler():
     except Exception as e:
         logger.debug(f"Redis health check failed: {e}")
 
-    # Milvus (via EmbeddingService)
+    # Qdrant
     try:
-        from models.embedding_service import EmbeddingService
-        _es = EmbeddingService()
-        checks["milvus"] = True
+        from common.config import get_config_dict
+        _cfg = get_config_dict()
+        _qc = QdrantClient(
+            host=_cfg["qdrant"]["host"],
+            port=_cfg["qdrant"]["port"],
+        )
+        checks["qdrant"] = _qc.healthcheck()
     except Exception as e:
-        logger.debug(f"Milvus health check failed: {e}")
+        logger.debug(f"Qdrant health check failed: {e}")
 
     # Elasticsearch
     try:
@@ -309,39 +371,55 @@ def media_handler(
     PRD §10: 资源访问安全
 
     流程：
-    1. 通过 Milvus 查询 doc_id 的元数据（role_mask, dept_mask, status）
+    1. 通过 Qdrant 查询 doc_id 的元数据（role_mask, dept_mask, status）
     2. 使用 common/auth.is_allowed 进行权限二次校验
     3. 通过 common/minio_client 生成 60s 有效 presigned URL
     4. 返回 {doc_id, url, expires_in_seconds}
     """
-    # ── 1. 查询 Milvus 获取文档元数据 ──
+    try:
+        doc_id = validate_doc_id(doc_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_doc_id", "detail": str(exc)},
+        ) from exc
+
+    # ── 1. 查询 Qdrant 获取文档元数据 ──
     doc_role_mask = 0
     doc_dept_mask = 0
     doc_status = "active"
     found = False
 
     try:
-        from pymilvus import Collection
+        qdrant_cfg = _config.get("qdrant", {})
 
+        client = QdrantClient(
+            host=qdrant_cfg.get("host", "localhost"),
+            port=qdrant_cfg.get("port", 6333),
+        )
         collection_name = _config.get("embedding", {}).get("text", {}).get(
             "collection", "rag_text_768"
         )
-        collection = Collection(collection_name)
 
-        results = collection.query(
-            expr=f'doc_id == "{doc_id}"',
-            output_fields=["role_mask", "dept_mask", "status"],
+        # 使用 scroll 按 doc_id 过滤
+        records, _ = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+            ),
             limit=1,
+            with_payload=["role_mask", "dept_mask", "status"],
         )
 
-        if results:
+        if records:
             found = True
-            doc_role_mask = results[0].get("role_mask", 0)
-            doc_dept_mask = results[0].get("dept_mask", 0)
-            doc_status = results[0].get("status", "active")
+            payload = records[0].payload or {}
+            doc_role_mask = payload.get("role_mask", 0)
+            doc_dept_mask = payload.get("dept_mask", 0)
+            doc_status = payload.get("status", "active")
 
     except Exception as e:
-        logger.warning(f"Milvus 查询 doc_id={doc_id} 失败: {e}")
+        logger.warning(f"Qdrant 查询 doc_id={doc_id} 失败: {e}")
 
     # ── 2. 检查文档是否存在 / 是否已归档 ──
     if not found:
@@ -380,7 +458,7 @@ def media_handler(
         )
 
     # ── 4. 生成 MinIO presigned URL ──
-    from common.minio_client import get_minio_client, MINIO_URL_TTL
+    from common.minio_client import MINIO_URL_TTL, get_minio_client
 
     minio = get_minio_client()
 

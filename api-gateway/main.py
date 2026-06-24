@@ -1,7 +1,7 @@
 """
 API Gateway 主入口模块.
 
-FastAPI 应用程序，作为化妆品企业级多模态 RAG 智能问答系统的统一入口网关。
+FastAPI 应用程序，作为 RAG QA 系统的统一入口网关。
 负责路由分发、鉴权、限流和请求编排。
 """
 
@@ -26,9 +26,9 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from routers import auth, generation, retrieval, rewrite, system  # noqa: F401
 
 from common.config import get_config
-from routers import rewrite, retrieval, generation, system  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # 日志配置
@@ -43,12 +43,11 @@ logger = logging.getLogger("api-gateway")
 # 应用实例
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="化妆品企业级多模态 RAG 智能问答系统 API Gateway",
+    title=os.environ.get("API_GATEWAY_TITLE", f"{get_config().system.name} API Gateway"),
     description=(
-        "统一 API 网关，聚合 rewrite、retrieval、generation、cache、monitoring 等微服务，"
-        "对外提供化妆品行业知识问答能力。"
+        "统一 API 网关，聚合 rewrite、retrieval、generation、cache、monitoring 等微服务。"
     ),
-    version="2.0.0",
+    version=get_config().system.version,
 )
 
 # ---------------------------------------------------------------------------
@@ -129,6 +128,8 @@ app.include_router(rewrite.router, prefix="/v1", tags=["rewrite"])
 app.include_router(retrieval.router, prefix="/v1", tags=["retrieval"])
 app.include_router(generation.router, prefix="/v1", tags=["generation"])
 app.include_router(system.router, prefix="/v1", tags=["system"])
+# auth 路由已有 /api/auth 前缀，无需额外 prefix
+app.include_router(auth.router, tags=["auth"])
 
 # 已挂载完毕：/v1/rewrite, /v1/recall, /v1/rerank, /v1/evidence-gate,
 # /v1/generate, /api/continuation, /api/dialog_history, /api/media/{doc_id},
@@ -142,7 +143,7 @@ async def on_startup():
     """应用启动时打印各下游服务地址，便于运维排查。"""
     cfg = get_config()
     logger.info("=" * 60)
-    logger.info("化妆品企业级多模态 RAG 智能问答系统 API Gateway 启动中...")
+    logger.info("%s API Gateway 启动中...", cfg.system.name)
     logger.info("系统名称: %s", cfg.system.name)
     logger.info("系统版本: %s", cfg.system.version)
     logger.info("知识版本: %s", cfg.knowledge_version_epoch)
@@ -167,7 +168,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "api-gateway.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.environ.get("API_GATEWAY_PORT", 8000)),
         reload=True,
         log_level="info",
     )

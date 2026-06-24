@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Optional
 
 from common.config import get_config_dict
 
@@ -83,9 +82,9 @@ class UserIdentity:
         # H-2 修复: 默认角色掩码改为 0（零权限），不再默认 super_admin
         if self.dev_mode:
             return {
-                "user_id": request.headers.get("X-User-Id", "anonymous"),
-                "user_role_mask": int(request.headers.get("X-User-Role-Mask", 0)),
-                "user_dept_mask": int(request.headers.get("X-User-Dept-Mask", 0)),
+                "user_id": request.headers.get("X-User-ID", "anonymous"),
+                "user_role_mask": int(request.headers.get("X-Role-Mask", 0)),
+                "user_dept_mask": int(request.headers.get("X-Dept-Mask", 0)),
             }
 
         # 非开发模式且无有效认证 → 拒绝
@@ -95,7 +94,7 @@ class UserIdentity:
             "user_dept_mask": 0,
         }
 
-    def parse_from_token(self, token: str) -> Optional[dict]:
+    def parse_from_token(self, token: str) -> dict | None:
         """
         从 JWT Token 解析用户身份（PRD §11 — 统一 RS256 验证）
 

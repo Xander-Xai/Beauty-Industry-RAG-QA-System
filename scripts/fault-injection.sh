@@ -45,19 +45,19 @@ case "$SCENARIO" in
         check_api && log "Redis 恢复正常" || warn "Redis 恢复中..."
         ;;
 
-    milvus-down)
-        echo "=== 故障注入: Milvus 不可用 ==="
-        warn "Stopping Milvus..."
-        docker compose stop milvus-standalone 2>/dev/null || docker compose stop milvus 2>/dev/null || true
+    qdrant-down)
+        echo "=== 故障注入: Qdrant 不可用 ==="
+        warn "Stopping Qdrant..."
+        docker compose stop qdrant 2>/dev/null || true
         echo "等待 5 秒..."
         sleep 5
         echo "验证 API 仍可访问 (ES Fallback)..."
-        check_api && log "Milvus down 演练通过 — ES Fallback 生效" || fail "API 不可用"
+        check_api && log "Qdrant down 演练通过 — ES Fallback 生效" || fail "API 不可用"
         echo ""
-        echo "恢复 Milvus..."
-        docker compose start milvus-standalone 2>/dev/null || docker compose start milvus 2>/dev/null || true
+        echo "恢复 Qdrant..."
+        docker compose start qdrant 2>/dev/null || true
         sleep 5
-        check_api && log "Milvus 恢复正常" || warn "Milvus 恢复中..."
+        check_api && log "Qdrant 恢复正常" || warn "Qdrant 恢复中..."
         ;;
 
     es-down)
@@ -98,7 +98,7 @@ case "$SCENARIO" in
         echo ""
         "$0" redis-down
         echo ""
-        "$0" milvus-down
+        "$0" qdrant-down
         echo ""
         "$0" es-down
         echo ""
@@ -108,13 +108,13 @@ case "$SCENARIO" in
         ;;
 
     help|*)
-        echo "化妆品 RAG 系统 — 故障演练脚本"
+        echo "化妆品行业 RAG 问答系统 — 故障演练脚本"
         echo ""
         echo "用法: $0 <scenario>"
         echo ""
         echo "可用场景:"
         echo "  redis-down     Redis 宕机演练"
-        echo "  milvus-down    Milvus 不可用演练"
+        echo "  qdrant-down    Qdrant 不可用演练"
         echo "  es-down        Elasticsearch 不可用演练"
         echo "  query-test     功能验证测试"
         echo "  all            运行所有演练"

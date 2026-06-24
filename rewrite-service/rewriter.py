@@ -13,7 +13,6 @@ import logging
 import os
 import re
 import sys
-from typing import Dict, List, Optional
 
 import httpx
 
@@ -100,8 +99,8 @@ class QueryRewriter:
     # ── public API ──────────────────────────────────────────────────
 
     def rewrite(
-        self, query: str, recent_dialogs: Optional[List[str]] = None
-    ) -> Dict:
+        self, query: str, recent_dialogs: list[str] | None = None
+    ) -> dict:
         """
         Rewrite *query* using conversation context.
 
@@ -144,7 +143,7 @@ class QueryRewriter:
 
         return result
 
-    def generate_variants(self, rewritten_query: str) -> List[str]:
+    def generate_variants(self, rewritten_query: str) -> list[str]:
         """
         Generate 2-3 synonymous variant queries for recall expansion.
         """
@@ -184,7 +183,7 @@ class QueryRewriter:
 
     # ── Response parsing ────────────────────────────────────────────
 
-    def _parse_response(self, text: str, original_query: str) -> Optional[Dict]:
+    def _parse_response(self, text: str, original_query: str) -> dict | None:
         """Extract structured JSON dict from LLM output."""
         try:
             match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -208,7 +207,7 @@ class QueryRewriter:
     # ── Keyword-based fallback ──────────────────────────────────────
 
     @staticmethod
-    def _keyword_fallback(query: str) -> Dict:
+    def _keyword_fallback(query: str) -> dict:
         """
         Classify query using simple keyword rules when the LLM is
         completely unavailable.

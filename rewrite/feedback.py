@@ -10,14 +10,13 @@ Query Rewrite 反馈闭环模块（PRD §16）
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import os
 import random
 import time
 from datetime import datetime
-from typing import Any, Optional
 
 from common.config import get_config_dict
 
@@ -85,7 +84,7 @@ class RewriteFeedback:
                 continue
             fpath = os.path.join(log_dir, fname)
             try:
-                with open(fpath, "r", encoding="utf-8") as f:
+                with open(fpath, encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if not line:
@@ -205,7 +204,7 @@ class RewriteFeedback:
             }
         """
         annotations = []
-        with open(task_path, "r", encoding="utf-8") as f:
+        with open(task_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -455,7 +454,7 @@ class RewriteFeedback:
                 continue
             fpath = os.path.join(PROMPT_VERSIONS_DIR, fname)
             try:
-                with open(fpath, "r", encoding="utf-8") as f:
+                with open(fpath, encoding="utf-8") as f:
                     data = json.load(f)
                 if data.get("status") == "active":
                     data["status"] = "completed"
@@ -465,7 +464,7 @@ class RewriteFeedback:
                 continue
 
         # 激活目标版本
-        with open(target_path, "r", encoding="utf-8") as f:
+        with open(target_path, encoding="utf-8") as f:
             data = json.load(f)
         data["status"] = "active"
         with open(target_path, "w", encoding="utf-8") as f:
@@ -483,7 +482,7 @@ class RewriteFeedback:
             os.path.dirname(os.path.dirname(__file__)), "config.json"
         )
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 cfg = json.load(f)
             cfg.setdefault("generation", {})["prompt_version"] = version_tag
             with open(config_path, "w", encoding="utf-8") as f:
@@ -503,14 +502,14 @@ class RewriteFeedback:
                 versions.append(tag)
         return sorted(versions)
 
-    def get_active_prompt_version(self) -> Optional[dict]:
+    def get_active_prompt_version(self) -> dict | None:
         """获取当前活跃的 Prompt 版本"""
         for fname in sorted(os.listdir(PROMPT_VERSIONS_DIR), reverse=True):
             if not fname.startswith("rewrite_prompt_") or not fname.endswith(".json"):
                 continue
             fpath = os.path.join(PROMPT_VERSIONS_DIR, fname)
             try:
-                with open(fpath, "r", encoding="utf-8") as f:
+                with open(fpath, encoding="utf-8") as f:
                     data = json.load(f)
                 if data.get("status") == "active":
                     return data
@@ -555,7 +554,7 @@ class RewriteFeedback:
                 accuracy_result = result
                 # 收集所有标注数据用于 Prompt 分析
                 try:
-                    with open(os.path.join(self.output_dir, af), "r", encoding="utf-8") as f:
+                    with open(os.path.join(self.output_dir, af), encoding="utf-8") as f:
                         for line in f:
                             line = line.strip()
                             if line:

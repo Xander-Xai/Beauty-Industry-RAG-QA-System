@@ -10,16 +10,15 @@ Covers:
   5. Model inference failure returns 500.
 """
 
-import sys
-import os
 import math
+import os
+import sys
 import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
-from unittest.mock import MagicMock, patch
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Lightweight torch mock (enough for softmax + tensor slicing)

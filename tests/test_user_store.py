@@ -1,7 +1,9 @@
 import os
 import tempfile
+
 import pytest
-from auth.user_store import UserStore, User, ROLES, DEPARTMENTS
+
+from auth.user_store import DEPARTMENTS, ROLES, UserStore
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path and is the CWD so that all modules
@@ -27,6 +27,7 @@ os.chdir(PROJECT_ROOT)
 
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException
+from monitoring_service.metrics_collector import MetricsCollector
 from pydantic import BaseModel, Field
 
 from common.models import (
@@ -36,7 +37,6 @@ from common.models import (
     RerankResult,
 )
 from common.service_auth import verify_service_token
-from monitoring_service.metrics_collector import MetricsCollector
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -130,36 +130,36 @@ def _get_embedding_service():
 
 class RecallRequest(BaseModel):
     query: str
-    query_embedding: Optional[List[float]] = None
+    query_embedding: list[float] | None = None
     user_role_mask: int = 0
     user_dept_mask: int = 0
     use_clip: bool = True
-    top_k_per_path: Dict[str, Any] = Field(default_factory=dict)
+    top_k_per_path: dict[str, Any] = Field(default_factory=dict)
 
 
 class RecallResponse(BaseModel):
-    results: List[RecallResult]
+    results: list[RecallResult]
 
 
 class RerankRequest(BaseModel):
     query: str
-    candidates: List[RecallResult]
+    candidates: list[RecallResult]
     top_k: int = 10
 
 
 class RerankResponse(BaseModel):
-    results: List[RerankResult]
+    results: list[RerankResult]
 
 
 class EvidenceGateRequest(BaseModel):
     query: str
-    rerank_results: List[RerankResult]
+    rerank_results: list[RerankResult]
     retrieval_agreement_score: float = 0.0
 
 
 class AnswerGateRequest(BaseModel):
     answer: str
-    top_doc: Optional[RerankResult] = None
+    top_doc: RerankResult | None = None
     is_regulation: bool = False
 
 
@@ -201,7 +201,7 @@ async def api_recall(req: RecallRequest, _auth: None = Depends(verify_service_to
 
         manager = _get_recall_manager()
 
-        results: List[RecallResult] = manager.execute(
+        results: list[RecallResult] = manager.execute(
             query=req.query,
             query_embedding=query_embedding,
             user_role_mask=req.user_role_mask,
@@ -241,14 +241,14 @@ async def api_rerank(req: RerankRequest, _auth: None = Depends(verify_service_to
         cross_encoder = _get_cross_encoder()
 
         # Stage 1: BiEncoder wide-preservation
-        bi_results: List[RerankResult] = bi_encoder.rerank(
+        bi_results: list[RerankResult] = bi_encoder.rerank(
             query=req.query,
             candidates=req.candidates,
             top_k=min(150, len(req.candidates)),
         )
 
         # Stage 2: CrossEncoder ensemble fine-ranking
-        ce_results: List[RerankResult] = cross_encoder.rerank(
+        ce_results: list[RerankResult] = cross_encoder.rerank(
             query=req.query,
             candidates=bi_results,
             top_k=req.top_k,
@@ -356,7 +356,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8200,
+        port=int(os.environ.get("RETRIEVAL_SERVICE_PORT", 8200)),
         reload=False,
         log_level="info",
     )

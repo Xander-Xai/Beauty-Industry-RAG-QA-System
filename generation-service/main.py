@@ -13,28 +13,26 @@ import logging
 import os
 import sys
 import time
-import threading
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Ensure project root is on sys.path for common.* imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from complexity_evaluator import ComplexityEvaluator
 from fastapi import Depends, FastAPI, HTTPException
+from kv_admission import KVAdmissionControl
+from llm_client import LLMClient
+from monitoring_service.metrics_collector import MetricsCollector
 from pydantic import BaseModel, Field
 
-from llm_client import LLMClient
-from kv_admission import KVAdmissionControl
-from complexity_evaluator import ComplexityEvaluator
 from common.models import (
     EvidenceGateResult,
-    GenerationResult,
     QueryRewriteResult,
     RerankResult,
 )
 from common.service_auth import verify_service_token
-from monitoring_service.metrics_collector import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +50,7 @@ metrics = MetricsCollector()
 class GenerateRequest(BaseModel):
     """POST /api/generate input."""
 
-    ctx: Dict[str, Any] = Field(
+    ctx: dict[str, Any] = Field(
         default_factory=dict,
         description=(
             "Request context dict containing: user_input, rewrite_result, "
@@ -65,7 +63,7 @@ class GenerateRequest(BaseModel):
 class ContinuationRequest(BaseModel):
     """POST /api/continuation input."""
 
-    ctx: Dict[str, Any] = Field(default_factory=dict)
+    ctx: dict[str, Any] = Field(default_factory=dict)
     already_generated: str = ""
 
 
@@ -103,7 +101,7 @@ class ComplexityResponse(BaseModel):
 # -- helpers ----------------------------------------------------------------
 
 
-def _rebuild_context(raw: Dict[str, Any]):
+def _rebuild_context(raw: dict[str, Any]):
     """
     Reconstruct domain objects from the raw ctx dict.
 

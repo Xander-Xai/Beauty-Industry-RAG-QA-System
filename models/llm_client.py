@@ -28,13 +28,60 @@ class LLMClient:
     - Prompt 构造（含 Rewrite 结果 + 证据 + 对话历史）
     - 长文本一致性保障（readme 4.6）
     - 动态输出长度控制（readme 4.7）
+    - PEFT Adapter 管理（AdapterManager，可选加载 LoRA 适配器）
     """
 
     def __init__(self):
         self._router = None
         self.max_conversation_rounds = config["generation"]["max_conversation_rounds"]
         self.prompt_version = config["generation"]["prompt_version"]
+        # ── AdapterManager 初始化（PEFT adapter 管理） ──
+        self.adapter_manager = self._init_adapter_manager()
         logger.info("LLMClient 初始化完成")
+
+    def _init_adapter_manager(self):
+        """
+        初始化 PEFT AdapterManager。
+
+        从 gpu0.models.gen_14b 配置读取：
+        - lora_adapter_path: adapter 目录
+        - peft_config: PEFT 配置（auto_discover, validation）
+
+        配置缺失时优雅降级：返回 None，记录 info 日志。
+        """
+        try:
+            from models.adapter_manager import AdapterManager
+
+            model_cfg = config.get("gpu0", {}).get("models", {}).get("gen_14b", {})
+            adapter_path = model_cfg.get("lora_adapter_path")
+            peft_cfg = model_cfg.get("peft_config", {})
+
+            if not adapter_path:
+                logger.info("No lora_adapter_path configured, skipping AdapterManager")
+                return None
+
+            model_name = model_cfg.get("name", "Qwen3-14B")
+            import os as _os
+            adapter_name = _os.path.basename(adapter_path) if adapter_path else None
+
+            mgr = AdapterManager(
+                base_model_name=model_name,
+                adapter_dir=adapter_path,
+                default_adapter=adapter_name,
+            )
+
+            # Auto-discover and load default in production
+            if peft_cfg.get("auto_discover", True):
+                found = mgr.discover()
+                logger.info(f"AdapterManager auto-discover: {len(found)} adapter(s) found")
+                if found and adapter_name:
+                    mgr.load(adapter_name)
+
+            return mgr
+
+        except Exception as e:
+            logger.warning(f"AdapterManager init failed (graceful degradation): {e}")
+            return None
 
     def _resolve_endpoint(self, target_model: str) -> str:
         """根据模型名解析目标 endpoint，优先从 config.json 读取。

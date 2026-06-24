@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/stop.sh — 停止化妆品 RAG 系统
+# scripts/stop.sh — 停止化妆品行业 RAG 问答系统
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

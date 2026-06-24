@@ -2,12 +2,17 @@
 API 端点测试
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+
+from auth.jwt_auth import create_access_token, generate_keypair
+from common.auth import require_identity
 
 
 @pytest.fixture(scope="module")
@@ -24,8 +29,9 @@ def auth_header():
     S-C1 修复后，/api/query 等端点需要 JWT 认证。
     使用 PyJWT 直接生成 HS256 token，与 common/auth._decode_jwt 兼容。
     """
-    import jwt as _jwt
     import time
+
+    import jwt as _jwt
     os.environ["JWT_SECRET"] = "test-secret-for-unit-tests-only"
     payload = {
         "sub": "test_user",
@@ -37,6 +43,30 @@ def auth_header():
     }
     token = _jwt.encode(payload, "test-secret-for-unit-tests-only", algorithm="HS256")
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def rs256_auth_header(tmp_path):
+    """Generate an RS256 auth header matching the login/refresh contract."""
+    private_path, public_path = generate_keypair(str(tmp_path))
+    env = {
+        "JWT_PRIVATE_KEY_PATH": private_path,
+        "JWT_PUBLIC_KEY_PATH": public_path,
+        "JWT_ALGORITHM": "RS256",
+        "JWT_ACCESS_TOKEN_EXPIRE_MINUTES": "15",
+        "JWT_REFRESH_TOKEN_EXPIRE_DAYS": "7",
+    }
+    previous = {key: os.environ.get(key) for key in env}
+    os.environ.update(env)
+    try:
+        token = create_access_token("rs256_user", role_mask=0x01, dept_mask=0x01)
+        yield {"Authorization": f"Bearer {token}"}
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 class TestHealthEndpoint:
@@ -79,7 +109,10 @@ class TestQueryEndpoint:
         assert response.status_code == 422
 
     def test_query_unauthenticated_fails(self, client):
-        """S-C1: 无认证请求返回 401"""
+        """S-C1: 无认证请求返回 401（dev_mode=false 时生效）"""
+        from common.config import get_config
+        if get_config().auth.dev_mode:
+            pytest.skip("dev_mode=true 时无认证请求允许通过")
         response = client.post("/api/query", json={
             "query": "测试查询",
         })
@@ -91,6 +124,26 @@ class TestQueryEndpoint:
             "query": "维生素C的稳定性？",
         }, headers=auth_header)
         assert response.status_code == 200
+
+    def test_require_identity_accepts_rs256_login_tokens(self, rs256_auth_header):
+        """业务鉴权依赖应接受登录端点签发的 RS256 access token。"""
+        app = FastAPI()
+
+        @app.get("/protected")
+        async def protected(identity=Depends(require_identity)):
+            return {
+                "user_id": identity.user_id,
+                "role_mask": identity.user_role_mask,
+                "dept_mask": identity.user_dept_mask,
+            }
+
+        client = TestClient(app)
+        response = client.get("/protected", headers=rs256_auth_header)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_id"] == "rs256_user"
+        assert data["role_mask"] == 0x01
+        assert data["dept_mask"] == 0x01
 
 
 class TestStatsEndpoint:

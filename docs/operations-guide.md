@@ -1,118 +1,89 @@
-# 化妆品 RAG 系统运维手册
+# 化妆品行业 RAG 问答系统运维手册
 
-## 1. 监控指标
+## 1. 先明确当前运维范围
 
-### 系统指标
+当前仓库已经能确认的在线运维对象是单体 FastAPI 应用：
 
-| 指标 | 说明 | 告警阈值 |
-|------|------|----------|
-| QPS | 每秒查询数 | - |
-| P95 延迟 | 95% 请求延迟 | > 4s 持续 5min |
-| P99 延迟 | 99% 请求延迟 | > 6s 持续 5min |
-| 活跃请求数 | 当前并发 | > 30 |
-| 错误率 | HTTP 5xx 比例 | > 5% 持续 3min |
+- 入口：`app.py`
+- 健康检查：`GET /api/health`
+- 统计：`GET /api/stats`
+- 指标：`GET /api/metrics`
 
-### KV Cache 指标
+微服务目录仍在仓库中，但不应默认按“已完成整套线上运维验证”处理。
 
-| 指标 | 说明 | 告警阈值 |
-|------|------|----------|
-| KV Pressure | KV 缓存使用率 | > 0.9 持续 30s |
-| Prefix Cache 命中率 | 系统级缓存效率 | 突降 > 50% |
-| Admission 拒绝数 | 被准入控制拒绝的请求 | 持续增长 |
+## 2. 当前值得盯的指标
 
-### 检索指标
+### 应用可用性
 
-| 指标 | 说明 | 告警阈值 |
-|------|------|----------|
-| L1 命中率 | 内存缓存命中 | 突降 > 30% |
-| L2 命中率 | Redis 缓存命中 | 突降 > 30% |
-| Evidence Gate 分数 | 证据质量 | 均值 < 0.5 |
-| NLI 矛盾比例 | 答案矛盾率 | > 10% |
-| Rewrite 降级率 | 规则兜底比例 | > 10% |
+- `/api/health`
+- `/api/stats`
+- `/api/metrics`
+- `/api/auth/metadata`
 
-### 资源指标
+### 认证与权限
 
-| 指标 | 说明 | 告警阈值 |
-|------|------|----------|
-| GPU0 显存 | 14B 模型显存 | > 90% |
-| GPU1 显存 | 4B + Rerank 显存 | > 90% |
-| Redis 内存 | 缓存内存 | > 80% |
-| ES 索引大小 | 全文检索索引 | > 10GB |
+- 登录成功率
+- Token 刷新成功率
+- `/api/auth/users` 管理接口返回码
+- `/api/media/{doc_id}` 的 401 / 403 / 404 比例
 
-## 2. 告警处理
+### 依赖健康
 
-### KV Pressure > 0.9
+- Redis 可连通性
+- Qdrant 可连通性
+- Elasticsearch 可连通性
+- MinIO 可用性
 
-1. 检查是否有大批量并发请求
-2. 检查是否有异常长序列请求
-3. 若持续 > 0.95，系统自动降级 P1/P2 请求
-4. 必要时手动重启 vLLM 实例释放 KV Cache
+## 3. 当前已知运维风险
 
-### P95 延迟 > 4s
+- **离线建库模型依赖**：离线管线代码已实现，但需额外下载 PaddleOCR、CLIP、BGE 等模型权重至 `models/` 目录后方可完整运行。
+- **单体与微服务并存**：排障时必须先确认当前请求到底走的是 `app.py` 还是单独网关/微服务。
+- **开发身份开关**：如果生产环境误保留 `AUTH_DEV_MODE=true`，会形成身份伪造风险。
+- **运行配置来源**：服务现在会自动读取项目根目录 `.env`；排障时要同时检查 `.env` 与进程环境。
 
-1. 检查 vLLM 实例状态
-2. 检查 Milvus/ES 查询延迟
-3. 检查网络连通性
-4. 检查 GPU 利用率是否打满
+## 4. 生产巡检建议
 
-### Redis 降级 > 5 分钟
+### 每次部署后
 
-1. 检查 Redis 容器状态: `docker compose logs redis`
-2. 检查 Redis 内存使用
-3. 若无法恢复，系统自动切换到 L1 内存缓存模式
-4. 重启 Redis: `docker compose restart redis`
+1. 访问 `GET /api/health`
+2. 访问 `GET /api/auth/metadata`
+3. 使用管理员账号登录
+4. 验证管理员创建用户、更新角色/部门
+5. 用不同角色验证证据文档访问权限
+6. 打开首页，确认构建后的前端已被静态挂载
+7. 打开 `Session` / `Stats` 面板，确认它们分别命中 `/api/dialog_history` 和 `/api/stats`
 
-### Milvus 不可用
+### 每日
 
-1. 检查 Milvus 容器: `docker compose logs milvus`
-2. 检查 etcd 状态（Milvus 依赖）
-3. 系统自动切换到 ES Fallback 模式
-4. 必要时重建 Milvus: `docker compose restart milvus-standalone`
+1. 检查 Redis / Qdrant / Elasticsearch / MinIO 容器状态
+2. 抽样检查 `/api/stats`
+3. 检查错误日志中的 401 / 403 / 500
 
-## 3. 故障演练
+## 5. 常见故障定位
 
-### 演练清单
+### 首页能访问但问答失败
 
-| 场景 | 命令 | 预期行为 |
-|------|------|----------|
-| Redis 宕机 | `docker compose stop redis` | L1 缓存接管，无 503 |
-| Milvus 超时 | `docker compose stop milvus` | ES Fallback 路径 |
-| GPU0 OOM | 模拟显存耗尽 | 14B → 4B 降级 |
-| vLLM-Rewrite 不可用 | `docker compose stop vllm-rewrite` | 规则兜底路径 |
-| ES 不可用 | `docker compose stop elasticsearch` | 纯向量检索 |
-| KV 极端压力 | 并发 80+ 请求 | 分级降级策略 |
+- 检查 `/api/chat`
+- 检查页面当前是否切到了 `Single Query` 模式
+- 检查 JWT 或开发身份配置
+- 检查 Redis / Qdrant / Elasticsearch 健康状态
 
-### 恢复验证
+### 证据文档打不开
 
-每次故障注入后，验证：
-1. API 端点仍可响应（可能降级）
-2. 日志中有对应的降级记录
-3. 恢复服务后系统自动恢复
-4. 无数据丢失
+- 检查 `/api/media/{doc_id}` 是否返回 401 / 403 / 404 / 503
+- 检查文档元数据中的 `status`
+- 检查 MinIO 是否可用
 
-## 4. 扩容指南
+### 管理员面板报权限错误
 
-### 水平扩容
+- 检查登录账号是否真的是 `admin` 角色
+- 检查 JWT 是否过期
+- 检查生产环境是否混入旧的前端缓存
 
-当前架构为单实例设计。扩容建议：
+## 6. 备份建议
 
-1. **API 层**: 增加 app 实例 + Nginx 负载均衡
-2. **检索层**: Milvus 支持分布式部署（需改配置）
-3. **缓存层**: Redis Cluster
-4. **推理层**: 多 vLLM 实例 + 路由层修改
-
-### 垂直扩容
-
-1. **GPU 升级**: 从 4B 升级到更大模型
-2. **内存增加**: 提升 Redis 容量增加缓存命中率
-3. **SSD**: 提升 Milvus/ES 的 I/O 性能
-
-## 5. 备份策略
-
-| 组件 | 备份方式 | 频率 | 保留 |
-|------|----------|------|------|
-| Milvus | 数据目录快照 | 每日 | 7 天 |
-| Redis | AOF 持久化 | 实时 | 3 天 |
-| MinIO | 对象存储快照 | 每周 | 4 周 |
-| SQLite (用户) | 文件复制 | 每日 | 7 天 |
-| 配置文件 | Git 版本控制 | 永久 | - |
+- SQLite 用户库：每日备份
+- Redis：保留 AOF / RDB
+- Qdrant：目录快照
+- MinIO：对象存储快照
+- `config.json` / `.env`：版本化与密钥分离管理

@@ -1,6 +1,7 @@
 import sys
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 # Mock torch before importing the module under test
 mock_torch = MagicMock()

@@ -12,20 +12,19 @@ from __future__ import annotations
 import logging
 import os
 import sys
-import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Ensure project root is on sys.path for common.* imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from alerting import AlertingManager
 from fastapi import Depends, FastAPI, HTTPException, Response
+from metrics_collector import MetricsCollector
 from pydantic import BaseModel, Field
 
-from metrics_collector import MetricsCollector
-from alerting import AlertingManager
 from common.service_auth import verify_service_token
 
 logger = logging.getLogger(__name__)
@@ -43,12 +42,12 @@ class RecordMetricsRequest(BaseModel):
     """POST /api/metrics/record input."""
 
     request_id: str = ""
-    cache_hit_level: Optional[str] = None
-    rewrite_result: Optional[Dict[str, Any]] = None
-    evidence_result: Optional[Dict[str, Any]] = None
+    cache_hit_level: str | None = None
+    rewrite_result: dict[str, Any] | None = None
+    evidence_result: dict[str, Any] | None = None
     degraded: bool = False
     kv_pressure_at_entry: float = 0.0
-    stage_timings: Dict[str, float] = Field(default_factory=dict)
+    stage_timings: dict[str, float] = Field(default_factory=dict)
 
 
 class AlertClearResponse(BaseModel):

@@ -1,11 +1,9 @@
 """User store -- SQLite-backed user management with RBAC roles."""
-import os
-import sqlite3
-import logging
 import hashlib
-import json
+import logging
+import os
 import secrets
-from typing import Optional, List
+import sqlite3
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -31,29 +29,8 @@ try:
     ROLES = dict(_cfg.rbac.roles)
     DEPARTMENTS = dict(_cfg.rbac.departments)
 except Exception:
-    # Fallback: 直接读取 config.json
-    _config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
-    try:
-        with open(_config_path, encoding="utf-8") as f:
-            _config = json.load(f)
-        ROLES = dict(_config["rbac"]["roles"])
-        DEPARTMENTS = dict(_config["rbac"]["departments"])
-    except Exception:
-        # 最终 fallback：与 config.json 对齐的默认值
-        ROLES = {
-            "admin": 2147483647,
-            "rd": 1,
-            "quality": 2,
-            "regulation": 4,
-            "sales": 8,
-        }
-        DEPARTMENTS = {
-            "all": 0,
-            "rd_dept": 1,
-            "quality_dept": 2,
-            "regulation_dept": 4,
-            "sales_dept": 8,
-        }
+    ROLES = {"admin": 2147483647}
+    DEPARTMENTS = {"all": 0}
 
 
 @dataclass
@@ -64,8 +41,8 @@ class User:
     role_mask: int
     dept_mask: int
     is_active: bool = True
-    roles: List[str] = None
-    departments: List[str] = None
+    roles: list[str] = None
+    departments: list[str] = None
 
     def to_dict(self):
         return {
@@ -161,8 +138,8 @@ class UserStore:
         return self._hash_password(password, salt) == stored_hash
 
     def create_user(self, user_id: str, username: str, password: str,
-                    display_name: str, role_names: List[str] = None,
-                    dept_names: List[str] = None) -> User:
+                    display_name: str, role_names: list[str] = None,
+                    dept_names: list[str] = None) -> User:
         """Create a new user."""
         role_mask = 0
         for r in (role_names or []):
@@ -188,7 +165,7 @@ class UserStore:
                     role_mask=role_mask, dept_mask=dept_mask,
                     roles=role_names or [], departments=dept_names or [])
 
-    def authenticate(self, username: str, password: str) -> Optional[User]:
+    def authenticate(self, username: str, password: str) -> User | None:
         """Authenticate user by username/password. Returns User or None."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -211,7 +188,7 @@ class UserStore:
                 roles=roles, departments=depts,
             )
 
-    def get_user(self, user_id: str) -> Optional[User]:
+    def get_user(self, user_id: str) -> User | None:
         """Get user by ID."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -227,14 +204,14 @@ class UserStore:
                 roles=roles, departments=depts,
             )
 
-    def list_users(self) -> List[User]:
+    def list_users(self) -> list[User]:
         """List all users."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT user_id FROM users ORDER BY created_at").fetchall()
             return [self.get_user(r["user_id"]) for r in rows]
 
-    def update_user_roles(self, user_id: str, role_names: List[str], dept_names: List[str]) -> Optional[User]:
+    def update_user_roles(self, user_id: str, role_names: list[str], dept_names: list[str]) -> User | None:
         """Update user's roles and departments."""
         role_mask = 0
         for r in role_names:

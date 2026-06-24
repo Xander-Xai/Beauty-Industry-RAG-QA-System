@@ -2,19 +2,18 @@
 
 Covers 20+ scenarios across login, refresh, user CRUD, and security edge cases.
 All tests use a temporary SQLite database and auto-generated RSA keypair.
-No external services (Redis, Milvus, ES) required.
+No external services (Redis, Qdrant, ES) required.
 """
 import os
 import time
-import tempfile
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from auth.jwt_auth import generate_keypair, create_access_token, create_token_pair
-from auth.user_store import UserStore, ROLES
+from auth.jwt_auth import generate_keypair
+from auth.user_store import ROLES, UserStore
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -281,6 +280,13 @@ class TestListUsers:
         resp = client.get("/api/auth/users", headers=_auth_header(access_token))
         assert resp.status_code == 403
 
+    def test_list_users_rd_role_is_not_treated_as_admin(self, client, tmp_store):
+        """RD role (mask=0x01) must not inherit admin-only endpoints."""
+        tmp_store.create_user("rd-1", "rduser", "RdUserPass1", "RD User", ["rd"], ["rd_dept"])
+        access_token, _ = _login_and_get_tokens(client, "rduser", "RdUserPass1")
+        resp = client.get("/api/auth/users", headers=_auth_header(access_token))
+        assert resp.status_code == 403
+
     def test_list_users_jwt_disabled(self, client, tmp_store, tmp_path):
         """When JWT is disabled, list users should return 503."""
         with patch.dict(os.environ, {}, clear=False):
@@ -441,9 +447,8 @@ class TestSecurity:
     def test_expired_access_token(self, client, admin_user, jwt_env):
         """Expired access token should be rejected.
 
-        verify_token returns None for expired tokens. The endpoint then
-        evaluates ``if not payload or ...`` which raises 403 (not 401)
-        because the falsy-payload branch is grouped with the admin check.
+        Expired/invalid access tokens should fail authentication before
+        the admin permission check runs.
         """
         import jwt as pyjwt
 
@@ -462,6 +467,4 @@ class TestSecurity:
         expired_token = pyjwt.encode(expired_payload, private_key, algorithm="RS256")
 
         resp = client.get("/api/auth/users", headers=_auth_header(expired_token))
-        # Endpoint returns 403 when verify_token returns None (expired),
-        # because the falsy-payload check is combined with the admin check.
-        assert resp.status_code == 403
+        assert resp.status_code == 401

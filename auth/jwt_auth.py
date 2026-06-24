@@ -1,9 +1,7 @@
 """JWT Authentication module — RS256 signature with access/refresh tokens."""
+import logging
 import os
 import time
-import hashlib
-import logging
-from typing import Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -51,7 +49,7 @@ def _load_key(path: str) -> str:
     """Load PEM key from file."""
     if not path or not os.path.isfile(path):
         return ""
-    with open(path, "r") as f:
+    with open(path) as f:
         return f.read()
 
 
@@ -61,9 +59,9 @@ def generate_keypair(output_dir: str = "./keys"):
         raise RuntimeError("PyJWT not installed")
 
     os.makedirs(output_dir, exist_ok=True)
+    from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.hazmat.backends import default_backend
 
     private_key = rsa.generate_private_key(
         public_exponent=65537,
@@ -147,7 +145,7 @@ def create_token_pair(user_id: str, role_mask: int, dept_mask: int,
     )
 
 
-def verify_token(token: str, token_type: str = "access") -> Optional[dict]:
+def verify_token(token: str, token_type: str = "access") -> dict | None:
     """Verify and decode a JWT token. Returns payload or None."""
     if not HAS_JWT:
         return None
@@ -169,7 +167,7 @@ def verify_token(token: str, token_type: str = "access") -> Optional[dict]:
         return None
 
 
-def extract_token_from_header(auth_header: str) -> Optional[str]:
+def extract_token_from_header(auth_header: str) -> str | None:
     """Extract Bearer token from Authorization header."""
     if not auth_header or not auth_header.startswith("Bearer "):
         return None

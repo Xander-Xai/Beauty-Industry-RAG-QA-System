@@ -2,16 +2,18 @@
 离线管线入口脚本
 
 用法：
-    python run_offline.py --mode incremental    # 增量更新
-    python run_offline.py --mode full           # 全量重建
-    python run_offline.py --mode create-index   # 创建 Milvus Collection
-    python run_offline.py --mode feedback       # 离线反馈闭环（日志采样 + 参数更新）
-    python run_offline.py --mode rewrite-feedback  # Query Rewrite 反馈闭环
+    python3 run_offline.py --mode incremental      # 增量更新
+    python3 run_offline.py --mode full             # 全量重建
+    python3 run_offline.py --mode create-index     # 创建 Qdrant Collection
+    python3 run_offline.py --mode feedback         # 离线反馈闭环（日志采样 + 参数更新）
+    python3 run_offline.py --mode rewrite-feedback # Query Rewrite 反馈闭环
 """
 
 import argparse
 import json
 import logging
+
+from common.config import get_config_dict
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,8 +31,7 @@ def main():
     parser.add_argument("--force-full", action="store_true", help="强制全量更新（增量模式下忽略增量状态）")
     args = parser.parse_args()
 
-    with open("config.json", encoding="utf-8") as f:
-        config = json.load(f)
+    config = get_config_dict().copy()
 
     if args.data_dir:
         config["knowledge_base"]["data_dir"] = args.data_dir
@@ -38,8 +39,8 @@ def main():
     if args.mode == "create-index":
         from offline.vectorizer import Vectorizer
         vectorizer = Vectorizer()
-        vectorizer.create_milvus_collections()
-        logger.info("Milvus Collection 创建完成")
+        vectorizer.create_qdrant_collections()
+        logger.info("Qdrant Collection 创建完成")
 
     elif args.mode == "incremental":
         from offline.scheduler import OfflineScheduler

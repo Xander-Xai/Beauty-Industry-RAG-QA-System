@@ -12,7 +12,6 @@ import logging
 import os
 import sys
 import time
-from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -20,10 +19,9 @@ from pydantic import BaseModel, Field
 # Ensure project root is importable for common models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from common.models import CacheEntry
-from common.service_auth import verify_service_token
-
 from redis_cache import RedisCache
+
+from common.service_auth import verify_service_token
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,7 +44,7 @@ class CacheWriteRequest(BaseModel):
     dept_mask: int = 0
     ttl: int = 3600
     # GAP-25: PRD §10.6 — session-scoped caching for requires_context queries
-    session_id: Optional[str] = None
+    session_id: str | None = None
     requires_context: bool = False
 
 

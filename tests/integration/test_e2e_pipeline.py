@@ -1,5 +1,7 @@
 import pytest
-from core.pipeline_context import RequestContext, QueryRewriteResult
+
+from core.pipeline_context import QueryRewriteResult, RequestContext
+
 
 @pytest.mark.integration
 def test_pipeline_rejects_empty_query():

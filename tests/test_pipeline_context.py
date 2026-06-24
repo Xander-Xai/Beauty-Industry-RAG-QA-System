@@ -10,23 +10,22 @@ Pipeline Context 核心数据结构测试 (core/pipeline_context.py)
 - SessionState.cleanup_expired 过期清理
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 import time
+
 from core.pipeline_context import (
-    RequestContext,
-    SessionState,
+    AnswerGateResult,
+    GenerationResult,
     QueryRewriteResult,
     RecallResult,
+    RequestContext,
     RerankResult,
-    EvidenceGateResult,
-    GenerationResult,
-    AnswerGateResult,
+    SessionState,
 )
-
 
 # ── RequestContext 测试 ──
 
@@ -189,8 +188,8 @@ class TestSessionStateDialogRounds:
     def test_last_rewrite_updated(self):
         """last_rewrite_result 跟随最新一轮更新"""
         state = SessionState(session_id="s1")
-        rewrite1 = QueryRewriteResult("q1", "general", "general", True)
-        rewrite2 = QueryRewriteResult("q2", "regulation", "compliance", True)
+        rewrite1 = QueryRewriteResult(rewritten_query="q1", business_type="general", intent="general", requires_context=True)
+        rewrite2 = QueryRewriteResult(rewritten_query="q2", business_type="regulation", intent="compliance", requires_context=True)
         state.add_round("问题1", "回答1", rewrite=rewrite1)
         assert state.last_rewrite_result is rewrite1
         state.add_round("问题2", "回答2", rewrite=rewrite2)

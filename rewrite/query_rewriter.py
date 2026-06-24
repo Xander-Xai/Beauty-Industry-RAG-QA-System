@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Optional
 
 from common.config import get_config_dict
 
@@ -139,7 +138,7 @@ class QueryRewriter:
         self._prompt_template = None
         logger.info("Prompt 模板已重置，下次 rewrite 将重新加载")
 
-    def rewrite(self, query: str, recent_dialogs: list[str] = None) -> "QueryRewriteResult":
+    def rewrite(self, query: str, recent_dialogs: list[str] = None) -> QueryRewriteResult:
         """
         执行 Query Rewrite
 
@@ -153,7 +152,6 @@ class QueryRewriter:
         Raises:
             Exception: JSON 解析失败两次后抛出（调用方降级）
         """
-        from core.pipeline_context import QueryRewriteResult
 
         # 构造对话历史
         dialog_text = ""
@@ -228,7 +226,7 @@ class QueryRewriter:
             logger.error(f"vLLM-Rewrite 调用失败: {e}")
             raise
 
-    def _parse_response(self, text: str, original_query: str) -> Optional["QueryRewriteResult"]:
+    def _parse_response(self, text: str, original_query: str) -> QueryRewriteResult | None:
         """解析 vLLM 输出为 QueryRewriteResult"""
         from core.pipeline_context import QueryRewriteResult
         try:
@@ -253,18 +251,25 @@ class QueryRewriter:
 
     def _simulate_rewrite(self, query: str) -> str:
         """模拟 Rewrite（开发/测试用）"""
+        # 从 config.json 读取领域关键词
+        _domain_kw = config.get("domain_keywords", {})
+        regulation_kw = _domain_kw.get("regulation", ["法规", "合规", "标准", "备案", "许可", "禁用"])
+        development_kw = _domain_kw.get("development", ["配方", "研发", "工艺", "制备", "开发"])
+        ingredient_kw = _domain_kw.get("ingredient", ["成分", "INCI", "功效", "浓度"])
+        product_kw = _domain_kw.get("product", ["产品", "品牌", "适用", "肤质", "包装"])
+
         biz_type = "general"
         intent = "general"
-        if any(kw in query for kw in ["法规", "合规", "标准", "备案", "许可", "禁用", "安全技术规范"]):
+        if any(kw in query for kw in regulation_kw):
             biz_type = "regulation"
             intent = "compliance"
-        elif any(kw in query for kw in ["配方", "研发", "工艺", "制备", "开发"]):
+        elif any(kw in query for kw in development_kw):
             biz_type = "development"
             intent = "formulation"
-        elif any(kw in query for kw in ["成分", "INCI", "功效", "浓度", "烟酰胺", "玻色因", "神经酰胺", "A醇"]):
+        elif any(kw in query for kw in ingredient_kw):
             biz_type = "ingredient"
             intent = "ingredient"
-        elif any(kw in query for kw in ["产品", "品牌", "适用", "肤质", "包装"]):
+        elif any(kw in query for kw in product_kw):
             biz_type = "product"
             intent = "product"
 

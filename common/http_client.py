@@ -18,12 +18,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 
-from common.config import get_config
 from common.service_auth import get_service_headers
 
 logger = logging.getLogger(__name__)
@@ -32,7 +30,7 @@ logger = logging.getLogger(__name__)
 # Default service URL mapping (overridable via env or constructor)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_REGISTRY: Dict[str, str] = {
+_DEFAULT_REGISTRY: dict[str, str] = {
     "api-gateway": "http://api-gateway:8080",
     "rewrite-service": "http://rewrite-service:8081",
     "retrieval-service": "http://retrieval-service:8082",
@@ -52,8 +50,8 @@ class ServiceRegistry:
     3. Hard-coded defaults above
     """
 
-    def __init__(self, overrides: Optional[Dict[str, str]] = None) -> None:
-        self._urls: Dict[str, str] = {}
+    def __init__(self, overrides: dict[str, str] | None = None) -> None:
+        self._urls: dict[str, str] = {}
 
         # 1. Defaults
         for name, url in _DEFAULT_REGISTRY.items():
@@ -81,7 +79,7 @@ class ServiceRegistry:
         self._urls[service_name] = base_url.rstrip("/")
 
     @property
-    def services(self) -> Dict[str, str]:
+    def services(self) -> dict[str, str]:
         """Return a copy of all registered URLs."""
         return dict(self._urls)
 
@@ -98,13 +96,13 @@ class ServiceClient:
 
     def __init__(
         self,
-        registry: Optional[ServiceRegistry] = None,
+        registry: ServiceRegistry | None = None,
         *,
         default_timeout: float = 30.0,
         max_retries: int = 3,
         retry_base_delay: float = 0.5,
         retry_max_delay: float = 10.0,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._registry = registry or ServiceRegistry()
         self._default_timeout = default_timeout
@@ -112,11 +110,11 @@ class ServiceClient:
         self._retry_base_delay = retry_base_delay
         self._retry_max_delay = retry_max_delay
         self._extra_headers = headers or {}
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     # -- lifecycle ----------------------------------------------------------
 
-    async def __aenter__(self) -> "ServiceClient":
+    async def __aenter__(self) -> ServiceClient:
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(self._default_timeout),
             limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
@@ -146,9 +144,9 @@ class ServiceClient:
         path: str,
         *,
         json_body: Any = None,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: Optional[float] = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         """
         Send an HTTP request with automatic retry on transient failures.
@@ -163,7 +161,7 @@ class ServiceClient:
             merged_headers.update(headers)
 
         request_timeout = timeout or self._default_timeout
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
 
         for attempt in range(1, self._max_retries + 1):
             try:
@@ -216,9 +214,9 @@ class ServiceClient:
         path: str,
         body: Any = None,
         *,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: Optional[float] = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         """POST JSON and return the raw httpx.Response."""
         return await self._request(
@@ -236,9 +234,9 @@ class ServiceClient:
         service_name: str,
         path: str,
         *,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: Optional[float] = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         """GET with optional query params and return the raw httpx.Response."""
         return await self._request(

@@ -2,7 +2,6 @@
 import os
 import sys
 import types
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["DEPLOYMENT_MODE"] = "development"
@@ -63,7 +62,9 @@ class TestMetricsCollector:
         """record_request 应从 RequestContext 中提取指标。"""
         mc = self._make_collector()
         from core.pipeline_context import (
-            RequestContext, QueryRewriteResult, EvidenceGateResult,
+            EvidenceGateResult,
+            QueryRewriteResult,
+            RequestContext,
         )
         ctx = RequestContext(
             user_input="测试查询",

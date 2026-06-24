@@ -6,6 +6,8 @@
 - 会话状态（对话历史、证据锁定）
 - Query Rewrite 结果
 - 各阶段中间产物（检索结果、Rerank 分数、Evidence 分数等）
+
+模型定义统一由 common.models 提供，此处 re-export 保持向后兼容。
 """
 
 from __future__ import annotations
@@ -16,74 +18,25 @@ import uuid
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+from common.models import (
+    AnswerGateResult,
+    EvidenceGateResult,
+    GenerationResult,
+    QueryRewriteResult,
+    RecallResult,
+    RerankResult,
+)
 
-@dataclass
-class QueryRewriteResult:
-    """Query Rewrite 输出结构（对应 readme 4.4 节）"""
-    rewritten_query: str
-    business_type: str              # regulation / development / general / short
-    intent: str                     # compliance / formulation / ingredient / general
-    requires_context: bool
-    standardized_entities: list[str] = field(default_factory=list)
-    confidence: float = 0.5
-    fallback: bool = False
-
-
-@dataclass
-class RecallResult:
-    """单路召回结果"""
-    doc_id: str
-    content: str
-    score: float
-    source: str                     # dense_bge / bm25_es / clip_visual / rewrite_variant
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class RerankResult:
-    """Rerank 阶段结果"""
-    doc_id: str
-    content: str
-    source: str = ""                 # 来源标记（从 RecallResult 继承: dense_bge/bm25_es/clip_visual 等）
-    ce_score_a: float = 0.0        # CrossEncoder-A (法规/成分) 分数
-    ce_score_b: float = 0.0        # CrossEncoder-B (通用) 分数
-    ce_score_ensemble: float = 0.0  # 两模型均分
-    bi_score: float = 0.0           # BiEncoder 分数
-    nli_score: float = 0.0          # NLI 蕴含分数
-    final_score: float = 0.0        # Evidence Gate 综合分数
-
-
-@dataclass
-class EvidenceGateResult:
-    """Evidence Ensemble Gate 输出（对应 readme 7.4 节）"""
-    evidence_score: float
-    ce_top1_score: float
-    ce_top3_mean_score: float
-    retrieval_agreement_score: float
-    doc_consistency_score: float
-    decision: str                   # pass / enhanced_generate / reject
-    top_docs: list[RerankResult] = field(default_factory=list)
-
-
-@dataclass
-class GenerationResult:
-    """LLM 生成结果"""
-    answer: str
-    model_used: str                 # qwen3-4b / qwen3-14b
-    max_tokens: int
-    has_more: bool = False
-    session_id: str | None = None
-    answer_outline: list[str] = field(default_factory=list)
-
-
-@dataclass
-class AnswerGateResult:
-    """Answer Gate（NLI 校验）输出"""
-    nli_contradiction_score: float
-    nli_entailment_score: float
-    passed: bool
-    warning: bool = False           # contradiction > 0.5 标记警告
-    is_regulation: bool = False     # 法规类强制拒答标记
+__all__ = [
+    "AnswerGateResult",
+    "EvidenceGateResult",
+    "GenerationResult",
+    "QueryRewriteResult",
+    "RecallResult",
+    "RerankResult",
+    "RequestContext",
+    "SessionState",
+]
 
 
 @dataclass

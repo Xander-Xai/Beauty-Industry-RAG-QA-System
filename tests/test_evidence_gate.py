@@ -12,16 +12,17 @@ Evidence Ensemble Gate 测试 (retrieval/evidence_gate.py)
 注意：所有外部模型调用（AnswerGate._nli_inference）均通过 mock 隔离。
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
-from core.pipeline_context import RerankResult, EvidenceGateResult
+from core.pipeline_context import RerankResult
 from retrieval.evidence_gate import EvidenceEnsembleGate
-
 
 # ── 辅助工厂 ──
 

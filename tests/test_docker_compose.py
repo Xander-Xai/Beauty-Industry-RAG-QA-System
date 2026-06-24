@@ -1,6 +1,7 @@
-import yaml
 import os
+
 import pytest
+import yaml
 
 
 def test_base_compose_has_infrastructure():

@@ -19,9 +19,8 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 import threading
-from typing import Optional
+import time
 
 from common.config import get_config_dict
 
@@ -123,8 +122,7 @@ class BLIPTargetDetector:
     def _try_load_bert(self) -> bool:
         """尝试加载 BERT 意图分类模型"""
         try:
-            import torch
-            from transformers import AutoTokenizer, AutoModelForSequenceClassification
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
             bert_cfg = config.get("gpu1", {}).get("models", {}).get(
                 "bert_blip_intent", {}
@@ -226,7 +224,7 @@ class BLIPInferenceService:
     def _try_load_model(self):
         """尝试加载 BLIP 模型"""
         try:
-            from transformers import BlipProcessor, BlipForConditionalGeneration
+            from transformers import BlipForConditionalGeneration, BlipProcessor
 
             model_path = config.get("gpu1", {}).get("models", {}).get(
                 "blip", {}
@@ -255,7 +253,7 @@ class BLIPInferenceService:
         image_uri: str,
         query: str = "",
         max_length: int = 128,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         为单张图像生成描述。
 
@@ -357,7 +355,6 @@ class BLIPInferenceService:
         image_uris = uncached_uris
 
         # PRD §6: BLIP 推理超时保护（120ms）
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
         blip_timeout_ms = config.get("gpu1", {}).get("models", {}).get("blip", {}).get("timeout_ms", 120)
 
         results = {}
@@ -453,7 +450,7 @@ class BLIPInferenceService:
             self._caption_cache[uri] = (caption, time.time())
         return all_captions
 
-    def _get_from_cache(self, image_uri: str) -> Optional[str]:
+    def _get_from_cache(self, image_uri: str) -> str | None:
         """从缓存获取"""
         with self._cache_lock:
             if image_uri in self._cache:
