@@ -20,6 +20,7 @@ import numpy as np
 
 from common.audit import log_audit_event
 from common.config import get_config_dict
+from retrieval_service.rerank.rrf_fusion import rrf_fusion
 
 config = get_config_dict()
 
@@ -150,16 +151,32 @@ class ParallelRecallManager:
                     top_k_per_path["rewrite_variants"].get("top_k", 30)
                 )] = "rewrite_variant"
 
-            # 收集结果
+            # 收集结果（各路独立存储，用于 RRF 融合）
             for future in as_completed(futures):
                 path_name = futures[future]
                 try:
                     results = future.result()
-                    all_results.extend(results)
                     path_results[path_name] = results
+                    all_results.extend(results)
                     logger.info(f"召回路 [{path_name}] 返回 {len(results)} 条结果")
                 except Exception as e:
                     logger.error(f"召回路 [{path_name}] 失败: {e}")
+
+        # RRF 融合 — 替代简单拼接
+        try:
+            rrf_config = config["retrieval"]["rrf"]
+            fused_results = rrf_fusion(
+                path_results,
+                k=rrf_config.get("k", 60),
+                weights=rrf_config.get("weights", None),
+            )
+            all_results = fused_results
+            logger.info(
+                f"RRF 融合完成: {sum(len(v) for v in path_results.values())} "
+                f"输入 → {len(all_results)} 条融合结果"
+            )
+        except Exception as e:
+            logger.warning(f"RRF 融合失败，回退到简单合并: {e}")
 
         # 计算 Retrieval Agreement Score（PRD §7.2）
         agreement_score = self._compute_agreement_score(path_results)
