@@ -72,3 +72,7 @@ sqlalchemy>=2.0.0
 
 # Phase 11: MinIO 签名 URL (PRD §10)
 minio>=7.2.0
+
+# RAGAS evaluation framework
+ragas>=0.2.0
+datasets>=2.20.0
