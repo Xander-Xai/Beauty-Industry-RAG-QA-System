@@ -3,7 +3,7 @@ LLM 客户端模块
 
 支持双 vLLM 实例调用：
 - vLLM-Gen-4B (GPU1): 简单查询
-- vLLM-Gen-14B+QLoRA (GPU0): 复杂查询（法规/研发）
+- vLLM-Gen-14B (GPU0): 复杂查询（法规/研发，PEFT adapter optional）
 
 通过 StatelessRouter 分发请求
 """
@@ -11,8 +11,6 @@ LLM 客户端模块
 from __future__ import annotations
 
 import logging
-import re
-from typing import Optional
 
 from common.config import get_config_dict
 
@@ -39,15 +37,31 @@ class LLMClient:
         logger.info("LLMClient 初始化完成")
 
     def _resolve_endpoint(self, target_model: str) -> str:
-        """根据部署模式解析目标 endpoint。
+        """根据模型名解析目标 endpoint，优先从 config.json 读取。
 
-        单卡 (testing/development) 模式下，14B 降级到 4B。
-        生产模式下，按原始路由。
+        查找顺序：
+        1. model_routing.endpoint_map 中直接匹配
+        2. model_routing.tiers 中匹配 tier 名
+        3. 应用 deployment 降级（非 production 的 complex tier → simple）
+        4. 回退到 gen_4b（轻量模型）
         """
-        from common.config import is_production_mode
-        if target_model == "qwen3-14b" and not is_production_mode():
-            return "gen_4b"
-        return "gen_14b" if target_model == "qwen3-14b" else "gen_4b"
+        from common.config import get_config_dict, is_production_mode
+        _cfg = get_config_dict()
+        mr = _cfg.get("model_routing", {})
+        # 方法1: endpoint_map 直接查找
+        ep_map = mr.get("endpoint_map", {})
+        if target_model in ep_map:
+            key = ep_map[target_model]
+        elif target_model in mr.get("tiers", {}):
+            key = mr["tiers"][target_model]["endpoint"]
+        else:
+            key = "gen_4b"
+        # 方法2: 部署降级 — 非 production 模式 complex tier → simple
+        if key == "gen_14b" and not is_production_mode():
+            fallback_tier = mr.get("complexity_fallback", "simple")
+            fallback = mr.get("tiers", {}).get(fallback_tier, {})
+            key = fallback.get("endpoint", "gen_4b")
+        return key
 
     @property
     def router(self):
@@ -62,7 +76,7 @@ class LLMClient:
         target_model: str = "qwen3-4b",
         max_tokens: int = 512,
         temperature: float = 0.7,
-    ) -> "GenerationResult":
+    ) -> GenerationResult:
         """
         生成回答
 
@@ -75,7 +89,7 @@ class LLMClient:
         Returns:
             GenerationResult
         """
-        from core.pipeline_context import GenerationResult, SessionState
+        from core.pipeline_context import GenerationResult
 
         # 构造 Prompt
         messages = self._build_messages(ctx)
@@ -85,12 +99,16 @@ class LLMClient:
 
         # 调用 vLLM
         try:
-            answer = self.router.route_chat(
+            router_result = self.router.route_chat(
                 endpoint_key,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+            answer = router_result["content"]
+
+            # PRD §9: 提取 Prefix Cache 命中状态并写入 RequestContext
+            ctx.prefix_cache_hit = router_result.get("prefix_cache_hit")
 
             # 检查是否需要续写（readme 4.6）
             has_more = self._check_truncation(answer, max_tokens, ctx.rewrite_result)
@@ -114,7 +132,7 @@ class LLMClient:
         already_generated: str,
         target_model: str = "qwen3-14b",
         max_tokens: int = 1024,
-    ) -> "GenerationResult":
+    ) -> GenerationResult:
         """
         长文本续写（readme 4.6）
 
@@ -152,12 +170,16 @@ class LLMClient:
         endpoint_key = self._resolve_endpoint(target_model)
 
         try:
-            answer = self.router.route_chat(
+            router_result = self.router.route_chat(
                 endpoint_key,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0.0,  # 确定性解码保证一致性
             )
+            answer = router_result["content"]
+
+            # PRD §9: 提取 Prefix Cache 命中状态并写入 RequestContext
+            ctx.prefix_cache_hit = router_result.get("prefix_cache_hit")
 
             return GenerationResult(
                 answer=answer,
@@ -217,21 +239,43 @@ class LLMClient:
         return messages
 
     def _get_system_prompt(self, rewrite_result=None) -> str:
-        """获取系统提示"""
+        """获取系统提示词，优先从 config.json prompts 读取。
+
+        可通过 config.json 的 prompts.system_prompt 字段自定义，
+        空值时回退到通用默认值。
+        """
         business_type = rewrite_result.business_type if rewrite_result else "general"
 
+        # 尝试从 config.json 读取自定义 prompt
+        from common.config import get_config_dict
+        _cfg = get_config_dict()
+        prompts_cfg = _cfg.get("prompts", {})
+        custom_prompt = prompts_cfg.get("system_prompt", "")
+
+        if custom_prompt:
+            # 允许在 prompt 中使用 {business_type} 占位符
+            return custom_prompt.format(business_type=business_type)
+
+        # 行业特定 Prompt 覆盖
+        biz_prompts = prompts_cfg.get("system_prompt_by_business_type", {})
+        biz_custom = biz_prompts.get(business_type, "")
+        if biz_custom:
+            return biz_custom
+
+        # 回退到通用默认值
+        system_name = _cfg.get("system", {}).get("name", "RAG assistant")
         base_prompt = (
-            "你是一个专业的化妆品行业知识助手。请基于提供的证据准确回答用户问题。\n"
+            f"你是 {system_name} 的专业检索增强问答助手。请基于提供的证据准确回答用户问题。\n"
             "要求：\n"
             "1. 回答必须基于提供的证据，不编造信息\n"
-            "2. 引用具体法规条款或成分数据时请标注来源\n"
+            "2. 引用具体法规条款或数据时请标注来源\n"
             "3. 不确定的内容请明确说明\n"
         )
 
         if business_type == "regulation":
-            base_prompt += "4. 法规类问题请特别注意引用的准确性，不准确的法规引用可能导致合规风险\n"
+            base_prompt += "4. 法规类问题请特别注意引用的准确性\n"
         elif business_type == "development":
-            base_prompt += "4. 研发类问题请提供具体的配方参数和工艺建议\n"
+            base_prompt += "4. 研发类问题请提供具体的参数和建议\n"
 
         return base_prompt
 

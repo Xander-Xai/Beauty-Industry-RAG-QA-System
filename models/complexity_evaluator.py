@@ -1,8 +1,8 @@
 """
 BERT 复杂度评估器（readme 4.3 节）
 
-模型：BERT 0.3B，二分类，准确率 97.2%，P99 ≤ 12ms
-功能：判断查询复杂度 → 简单问题路由到 vLLM-Gen-4B，复杂问题路由到 Qwen3-14B+QLoRA
+模型：BERT 0.3B，二分类。准确率 97.2% / P99 ≤ 12ms 为设计目标，生产环境当前使用规则兜底。
+功能：判断查询复杂度 → 简单问题路由到 vLLM-Gen-4B，复杂问题路由到 Qwen3-14B (4-bit NF4, PEFT-ready)
 
 模型不存在时自动降级为增强规则评估
 """
@@ -25,7 +25,7 @@ class ComplexityEvaluator:
 
     二分类模型：
     - 0: 简单查询 → 路由到 vLLM-Gen-4B
-    - 1: 复杂查询 → 路由到 Qwen3-14B+QLoRA
+    - 1: 复杂查询 → 路由到 Qwen3-14B (4-bit NF4, PEFT-ready)
 
     复杂查询特征：
     - 法规条文引用、多条件合规判断
@@ -52,7 +52,6 @@ class ComplexityEvaluator:
     def _try_load_model(self):
         """尝试加载 BERT 复杂度分类模型，失败则使用规则兜底"""
         try:
-            import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
             model_path = config["gpu1"]["models"]["bert_complexity"]["model_path"]
