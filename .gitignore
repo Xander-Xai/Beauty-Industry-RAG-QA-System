@@ -78,3 +78,5 @@ keys/
 # Internal documents (not for public repo)
 PRD.md
 AUDIT_REPORT.md
+.coverage
+__pycache__/
