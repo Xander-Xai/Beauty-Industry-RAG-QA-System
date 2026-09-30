@@ -46,8 +46,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Pin to a maintained major release instead of a floating branch.
+      # Pin to a published release tag instead of a floating branch.
       - name: TruffleHog secret scan (merge gate)
-        uses: trufflesecurity/trufflehog@v3
+        uses: trufflesecurity/trufflehog@v3.97.9
         with:
           extra_args: --only-verified
