@@ -214,8 +214,9 @@ class ABExperimentPlatform:
         if not exp or exp.status != "running":
             return None
 
-        # 确定性 hash 分流
-        hash_val = int(hashlib.sha256(f"{user_id}:{experiment_id}".encode()).hexdigest(), 16)
+        # Keep the historical bucket algorithm stable for running experiments.
+        # This digest is only used for deterministic bucketing, not security.
+        hash_val = int(hashlib.md5(f"{user_id}:{experiment_id}".encode(), usedforsecurity=False).hexdigest(), 16)
         bucket = (hash_val % 10000) / 10000.0  # 0.0 - 1.0
 
         cumulative = 0.0
