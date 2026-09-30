@@ -10,7 +10,7 @@
 | Airflow ingestion | Planned | Design reference only; no end-to-end production ingestion is established |
 | RRF | Implemented in code | Fusion implementation exists; production relevance/quality is not implied |
 | BiEncoder | Partial | Reranker and pipeline integration exist; model assets and evaluation are separate |
-| RAGAS | Partial | Evaluation harness and data exist; the harness alone certifies no quality threshold |
+| RAGAS | Partial | Harness source and data exist; package is excluded from default dependencies pending an upstream security fix; no quality threshold is certified |
 | QLoRA | Partial | Training utility and example data exist; trained output and reproducible result are not included |
 | AdapterManager | Partial | PEFT lifecycle code integrates with `LLMClient`; actual loading requires configuration, dependencies and adapter assets |
 | RBAC | Partial | Runtime auth/RBAC code exists; deployment policy and end-to-end access still require verification |

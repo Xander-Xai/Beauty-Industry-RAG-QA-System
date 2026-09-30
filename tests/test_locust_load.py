@@ -9,19 +9,18 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
-# ── Mock locust module for environments where locust is not installed ──
-try:
-    import locust  # noqa: F401
-except ImportError:
-    _locust_mod = types.ModuleType("locust")
-    _locust_mod.HttpUser = type("HttpUser", (), {})
-    _locust_mod.between = lambda a, b: None
-    _locust_mod.events = types.ModuleType("locust.events")
-    _locust_mod.events.request = type("EventHook", (), {"add_listener": lambda *a, **kw: None})()
-    _locust_mod.events.quit = type("EventHook", (), {"add_listener": lambda *a, **kw: None})()
-    _locust_mod.task = lambda *a, **kw: (lambda f: f) if a and callable(a[0]) else (lambda f: None)
-    _locust_mod.__file__ = "<mock>"
-    sys.modules["locust"] = _locust_mod
+# These tests inspect the locustfile's static data and helpers. Always stub
+# Locust here so importing it cannot install gevent monkey patches during
+# pytest collection; runtime load tests still use the real Locust executable.
+_locust_mod = types.ModuleType("locust")
+_locust_mod.HttpUser = type("HttpUser", (), {})
+_locust_mod.between = lambda a, b: None
+_locust_mod.events = types.ModuleType("locust.events")
+_locust_mod.events.request = type("EventHook", (), {"add_listener": lambda *a, **kw: None})()
+_locust_mod.events.quit = type("EventHook", (), {"add_listener": lambda *a, **kw: None})()
+_locust_mod.task = lambda *a, **kw: (lambda f: f) if a and callable(a[0]) else (lambda f: None)
+_locust_mod.__file__ = "<mock>"
+sys.modules["locust"] = _locust_mod
 
 
 @pytest.mark.unit
