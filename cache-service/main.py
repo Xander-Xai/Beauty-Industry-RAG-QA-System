@@ -105,9 +105,7 @@ async def cache_set(req: CacheWriteRequest, _auth: None = Depends(verify_service
     # GAP-25: session-scoped caching
     if req.requires_context and req.session_id:
         scoped_data = {"base": req.key, "sid": req.session_id}
-        effective_key = hashlib.sha256(
-            json.dumps(scoped_data, sort_keys=True).encode()
-        ).hexdigest()
+        effective_key = hashlib.sha256(json.dumps(scoped_data, sort_keys=True).encode()).hexdigest()
 
     cache.set(
         effective_key,
@@ -116,9 +114,13 @@ async def cache_set(req: CacheWriteRequest, _auth: None = Depends(verify_service
         dept_mask=req.dept_mask,
         ttl=req.ttl,
     )
-    logger.info("cache_set OK key=%s role_mask=%d dept_mask=%d session_scoped=%s",
-                effective_key[:12], req.role_mask, req.dept_mask,
-                bool(req.requires_context and req.session_id))
+    logger.info(
+        "cache_set OK key=%s role_mask=%d dept_mask=%d session_scoped=%s",
+        effective_key[:12],
+        req.role_mask,
+        req.dept_mask,
+        bool(req.requires_context and req.session_id),
+    )
     return CacheWriteResponse(stored=True)
 
 
@@ -151,4 +153,4 @@ async def cache_stats(_auth: None = Depends(verify_service_token)):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8300)
+    uvicorn.run(app, host="0.0.0.0", port=8300)  # noqa: S104 -- container service intentionally binds all interfaces

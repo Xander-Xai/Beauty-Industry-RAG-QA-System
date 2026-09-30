@@ -32,13 +32,13 @@ LOCUSTFILE = Path(__file__).resolve().parent / "locustfile.py"
 
 def run_benchmark(host: str, users: int, spawn_rate: int, run_time: str, token: str = "") -> dict | None:
     """运行 Locust 压测并返回结果。"""
-    print(f"\n{'='*60}")
-    print(f"🚀 开始压测")
+    print(f"\n{'=' * 60}")
+    print("🚀 开始压测")
     print(f"   目标: {host}")
     print(f"   并发用户: {users}")
     print(f"   启动速率: {spawn_rate}/秒")
     print(f"   持续时间: {run_time}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     env = {
         "BENCHMARK_API_BASE": host,
@@ -47,15 +47,23 @@ def run_benchmark(host: str, users: int, spawn_rate: int, run_time: str, token: 
     }
 
     cmd = [
-        sys.executable, "-m", "locust",
-        "-f", str(LOCUSTFILE),
+        sys.executable,
+        "-m",
+        "locust",
+        "-f",
+        str(LOCUSTFILE),
         "--headless",
-        "-u", str(users),
-        "-r", str(spawn_rate),
-        "-t", run_time,
-        "--host", host,
+        "-u",
+        str(users),
+        "-r",
+        str(spawn_rate),
+        "-t",
+        run_time,
+        "--host",
+        host,
         "--print-stats",
-        "--stop-timeout", "10",
+        "--stop-timeout",
+        "10",
     ]
 
     result = subprocess.run(cmd, env={**__import__("os").environ, **env}, cwd=str(REPORT_DIR.parent.parent.parent))
@@ -113,43 +121,43 @@ def generate_html_report(data: dict) -> str:
 </head>
 <body>
 <h1>📊 RAG 系统基准测试报告</h1>
-<p class="timestamp">生成时间: {bm.get('timestamp', 'N/A')} | 总请求数: {lat.get('count', 0)}</p>
+<p class="timestamp">生成时间: {bm.get("timestamp", "N/A")} | 总请求数: {lat.get("count", 0)}</p>
 
 <h2>📋 测试配置</h2>
 <table>
   <tr><th>参数</th><th>值</th></tr>
-  <tr><td>并发用户数</td><td>{bm.get('concurrent_users', 'N/A')}</td></tr>
-  <tr><td>测试时长</td><td>{bm.get('duration_seconds', 0):.1f} 秒</td></tr>
-  <tr><td>总请求数</td><td>{bm.get('total_requests', 0)}</td></tr>
+  <tr><td>并发用户数</td><td>{bm.get("concurrent_users", "N/A")}</td></tr>
+  <tr><td>测试时长</td><td>{bm.get("duration_seconds", 0):.1f} 秒</td></tr>
+  <tr><td>总请求数</td><td>{bm.get("total_requests", 0)}</td></tr>
 </table>
 
 <h2>⏱ 延迟分布</h2>
 <div class="summary">
   <div class="card">
     <div class="label">平均延迟</div>
-    <div class="value blue">{lat.get('avg', 0):.1f} <small>ms</small></div>
+    <div class="value blue">{lat.get("avg", 0):.1f} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">P50（中位数）</div>
-    <div class="value green">{lat.get('p50', 0):.1f} <small>ms</small></div>
+    <div class="value green">{lat.get("p50", 0):.1f} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">P95</div>
-    <div class="value orange">{lat.get('p95', 0):.1f} <small>ms</small></div>
+    <div class="value orange">{lat.get("p95", 0):.1f} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">P99</div>
-    <div class="value red">{lat.get('p99', 0):.1f} <small>ms</small></div>
+    <div class="value red">{lat.get("p99", 0):.1f} <small>ms</small></div>
   </div>
 </div>
 <div class="summary" style="margin-top: 0.5rem;">
   <div class="card">
     <div class="label">最低延迟</div>
-    <div class="value green">{lat.get('min', 0):.1f} <small>ms</small></div>
+    <div class="value green">{lat.get("min", 0):.1f} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">最高延迟</div>
-    <div class="value red">{lat.get('max', 0):.1f} <small>ms</small></div>
+    <div class="value red">{lat.get("max", 0):.1f} <small>ms</small></div>
   </div>
 </div>
 
@@ -157,25 +165,25 @@ def generate_html_report(data: dict) -> str:
 <div class="summary">
   <div class="card">
     <div class="label">客户端缓存命中率</div>
-    <div class="value blue">{cache.get('client_cache_hit_rate_pct', 0):.1f}%</div>
+    <div class="value blue">{cache.get("client_cache_hit_rate_pct", 0):.1f}%</div>
   </div>
   <div class="card">
     <div class="label">L1 命中率（系统级）</div>
-    <div class="value green">{sys_cache.get('L1', 0)*100:.1f}%</div>
+    <div class="value green">{sys_cache.get("L1", 0) * 100:.1f}%</div>
   </div>
   <div class="card">
     <div class="label">L2 命中率（系统级）</div>
-    <div class="value orange">{sys_cache.get('L2', 0)*100:.1f}%</div>
+    <div class="value orange">{sys_cache.get("L2", 0) * 100:.1f}%</div>
   </div>
 </div>
 <div class="summary" style="margin-top: 0.5rem;">
   <div class="card">
     <div class="label">缓存命中次数</div>
-    <div class="value">{cache.get('client_cache_hits', 0)}</div>
+    <div class="value">{cache.get("client_cache_hits", 0)}</div>
   </div>
   <div class="card">
     <div class="label">缓存未命中次数</div>
-    <div class="value">{cache.get('client_cache_misses', 0)}</div>
+    <div class="value">{cache.get("client_cache_misses", 0)}</div>
   </div>
 </div>
 
@@ -183,19 +191,19 @@ def generate_html_report(data: dict) -> str:
 <div class="summary">
   <div class="card">
     <div class="label">总错误数</div>
-    <div class="value red">{err.get('total', 0)}</div>
+    <div class="value red">{err.get("total", 0)}</div>
   </div>
   <div class="card">
     <div class="label">错误率</div>
-    <div class="value {'green' if err.get('error_rate_pct', 0) < 1 else 'orange' if err.get('error_rate_pct', 0) < 5 else 'red'}">{err.get('error_rate_pct', 0):.2f}%</div>
+    <div class="value {"green" if err.get("error_rate_pct", 0) < 1 else "orange" if err.get("error_rate_pct", 0) < 5 else "red"}">{err.get("error_rate_pct", 0):.2f}%</div>
   </div>
 </div>
 
 <h2>📈 结论</h2>
 <ul>
-<li><strong>延迟:</strong> P50={lat.get('p50', 0):.1f}ms，P99={lat.get('p99', 0):.1f}ms</li>
-<li><strong>缓存效率:</strong> 客户端命中率 {cache.get('client_cache_hit_rate_pct', 0):.1f}%</li>
-<li><strong>系统稳定性:</strong> 错误率 {err.get('error_rate_pct', 0):.2f}%</li>
+<li><strong>延迟:</strong> P50={lat.get("p50", 0):.1f}ms，P99={lat.get("p99", 0):.1f}ms</li>
+<li><strong>缓存效率:</strong> 客户端命中率 {cache.get("client_cache_hit_rate_pct", 0):.1f}%</li>
+<li><strong>系统稳定性:</strong> 错误率 {err.get("error_rate_pct", 0):.2f}%</li>
 </ul>
 </body>
 </html>"""
@@ -224,11 +232,11 @@ def compare_runs(path1: str, path2: str):
     cache1 = data1.get("cache", {})
     cache2 = data2.get("cache", {})
 
-    print(f"\n{'='*60}")
-    print(f"📊 基准测试对比")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("📊 基准测试对比")
+    print(f"{'=' * 60}")
     print(f"{'指标':<30} {'运行 1':<15} {'运行 2':<15} {'变化':<15}")
-    print(f"{'-'*75}")
+    print(f"{'-' * 75}")
     for key in ["avg", "p50", "p95", "p99"]:
         v1 = lat1.get(key, 0)
         v2 = lat2.get(key, 0)
@@ -238,7 +246,7 @@ def compare_runs(path1: str, path2: str):
     hr2 = cache2.get("client_cache_hit_rate_pct", 0)
     hr_change = f"{hr2 - hr1:+.1f}pct"
     print(f"{'缓存命中率 (%)':<30} {hr1:<15.1f} {hr2:<15.1f} {hr_change:<15}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def main():
@@ -276,7 +284,7 @@ def main():
         with open(report_path.with_suffix(".json"), "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         html_path = save_html_report(result, report_path.with_suffix(".json"))
-        print(f"\n✅ 基准测试完成")
+        print("\n✅ 基准测试完成")
         print(f"   JSON 报告: {report_path}.json")
         print(f"   HTML 报告: {html_path}")
     else:

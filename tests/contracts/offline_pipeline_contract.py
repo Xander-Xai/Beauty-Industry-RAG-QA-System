@@ -1,7 +1,10 @@
+"""Planned contract examples for a future offline ingestion implementation.
+
+This is deliberately outside pytest's ``test_*.py`` discovery pattern. The
+referenced production modules do not currently exist; these examples preserve
+acceptance ideas and are not regression tests or implementation evidence.
 """
-test_offline_pipeline.py — 新增测试: DocumentProcessor 文本切块、
-IncrementalStateManager 增量检测、OfflineScheduler 权限注入、OCR 流程。
-"""
+
 import os
 import sys
 import tempfile
@@ -28,11 +31,13 @@ except ImportError:
 # 1. DocumentProcessor — Text Chunking
 # ===========================================================================
 
+
 class TestDocumentProcessorChunking:
     """DocumentProcessor._chunk_text() 文本切块测试。"""
 
     def _make_processor(self, chunk_size=500, overlap_ratio=0.1):
         from offline.document_processor import DocumentProcessor
+
         proc = DocumentProcessor.__new__(DocumentProcessor)
         proc.chunk_size = chunk_size
         proc.chunk_overlap = int(chunk_size * overlap_ratio)
@@ -132,13 +137,17 @@ class TestDocumentProcessorChunking:
 # 2. IncrementalStateManager — mtime + content_hash Detection
 # ===========================================================================
 
+
 class TestIncrementalStateManager:
     """IncrementalStateManager 增量更新差异检测测试。"""
 
     def _make_manager(self, state_file=None):
         from offline.document_processor import IncrementalStateManager
+
         if state_file is None:
-            state_file = tempfile.mktemp(suffix=".json")
+            handle = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+            state_file = handle.name
+            handle.close()
         mgr = IncrementalStateManager.__new__(IncrementalStateManager)
         mgr._state_file = state_file
         mgr._state = {}
@@ -177,6 +186,7 @@ class TestIncrementalStateManager:
             mgr.mark_processed(fpath)
             # 修改文件内容
             import time
+
             time.sleep(0.01)  # 确保 mtime 不同
             with open(fpath, "w", encoding="utf-8") as f2:
                 f2.write("新内容")
@@ -206,8 +216,10 @@ class TestIncrementalStateManager:
         mgr = self._make_manager()
         fpath = "/tmp/test_doc.txt"
         mgr._state[fpath] = {
-            "path": fpath, "mtime": 1000.0,
-            "content_hash": "abc123", "status": "active",
+            "path": fpath,
+            "mtime": 1000.0,
+            "content_hash": "abc123",
+            "status": "active",
         }
         mgr.mark_deleted(fpath)
         assert mgr._state[fpath]["status"] == "archived"
@@ -216,12 +228,16 @@ class TestIncrementalStateManager:
         """detect_deleted_files 应识别已删除的文件。"""
         mgr = self._make_manager()
         mgr._state["/tmp/existing.txt"] = {
-            "path": "/tmp/existing.txt", "mtime": 1000.0,
-            "content_hash": "abc", "status": "active",
+            "path": "/tmp/existing.txt",
+            "mtime": 1000.0,
+            "content_hash": "abc",
+            "status": "active",
         }
         mgr._state["/tmp/deleted.txt"] = {
-            "path": "/tmp/deleted.txt", "mtime": 1000.0,
-            "content_hash": "def", "status": "active",
+            "path": "/tmp/deleted.txt",
+            "mtime": 1000.0,
+            "content_hash": "def",
+            "status": "active",
         }
         current = {"/tmp/existing.txt"}
         deleted = mgr.detect_deleted_files(current)
@@ -246,6 +262,7 @@ class TestIncrementalStateManager:
     def test_compute_content_hash_consistent(self):
         """同一文件多次计算 content_hash 应一致。"""
         from offline.document_processor import IncrementalStateManager
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("测试内容用于哈希计算")
             fpath = f.name
@@ -262,8 +279,10 @@ class TestIncrementalStateManager:
         mgr = self._make_manager()
         fpath = "/tmp/resurface.txt"
         mgr._state[fpath] = {
-            "path": fpath, "mtime": 1000.0,
-            "content_hash": "abc", "status": "archived",
+            "path": fpath,
+            "mtime": 1000.0,
+            "content_hash": "abc",
+            "status": "archived",
         }
         # 即使文件不存在，archived 状态也应触发更新
         # （实际上 needs_update 先获取 mtime，如 mtime=0 与旧值不同会走 hash 路径）
@@ -274,11 +293,13 @@ class TestIncrementalStateManager:
 # 3. OfflineScheduler — Permission Injection
 # ===========================================================================
 
+
 class TestOfflineSchedulerPermission:
     """OfflineScheduler._resolve_permission() 权限注入测试。"""
 
     def _make_scheduler(self):
         from offline.scheduler import OfflineScheduler
+
         scheduler = OfflineScheduler.__new__(OfflineScheduler)
         scheduler.data_dir = "/tmp/test_data"
         scheduler._doc_processor = None
@@ -288,31 +309,39 @@ class TestOfflineSchedulerPermission:
         scheduler._fingerprints = {}
         return scheduler
 
-    @patch("offline.scheduler.config", {
-        "permission_rules": {
-            "rules": [
-                {"path_pattern": "regulations", "role_mask": 0xFF, "dept_mask": 0x01},
-            ],
-            "default_role_mask": 0x01,
-            "default_dept_mask": 0x00,
+    @patch(
+        "offline.scheduler.config",
+        {
+            "permission_rules": {
+                "rules": [
+                    {"path_pattern": "regulations", "role_mask": 0xFF, "dept_mask": 0x01},
+                ],
+                "default_role_mask": 0x01,
+                "default_dept_mask": 0x00,
+            },
         },
-    })
-    def test_permission_from_path_pattern(self, ):
+    )
+    def test_permission_from_path_pattern(
+        self,
+    ):
         """路径匹配规则应返回正确的 role_mask, dept_mask。"""
         scheduler = self._make_scheduler()
         role, dept = scheduler._resolve_permission("/tmp/test_data/regulations/法规.docx")
         assert role == 0xFF
         assert dept == 0x01
 
-    @patch("offline.scheduler.config", {
-        "permission_rules": {
-            "rules": [
-                {"path_pattern": "regulations", "role_mask": 0xFF, "dept_mask": 0x01},
-            ],
-            "default_role_mask": 0x02,
-            "default_dept_mask": 0x04,
+    @patch(
+        "offline.scheduler.config",
+        {
+            "permission_rules": {
+                "rules": [
+                    {"path_pattern": "regulations", "role_mask": 0xFF, "dept_mask": 0x01},
+                ],
+                "default_role_mask": 0x02,
+                "default_dept_mask": 0x04,
+            },
         },
-    })
+    )
     def test_permission_default_fallback(self):
         """无匹配规则时应返回默认权限。"""
         scheduler = self._make_scheduler()
@@ -320,16 +349,19 @@ class TestOfflineSchedulerPermission:
         assert role == 0x02
         assert dept == 0x04
 
-    @patch("offline.scheduler.config", {
-        "permission_rules": {
-            "rules": [
-                {"path_pattern": "confidential", "role_mask": 0xFF, "dept_mask": 0xFF},
-                {"path_pattern": "confidential", "role_mask": 0x01, "dept_mask": 0x01},
-            ],
-            "default_role_mask": 0x00,
-            "default_dept_mask": 0x00,
+    @patch(
+        "offline.scheduler.config",
+        {
+            "permission_rules": {
+                "rules": [
+                    {"path_pattern": "confidential", "role_mask": 0xFF, "dept_mask": 0xFF},
+                    {"path_pattern": "confidential", "role_mask": 0x01, "dept_mask": 0x01},
+                ],
+                "default_role_mask": 0x00,
+                "default_dept_mask": 0x00,
+            },
         },
-    })
+    )
     def test_permission_first_match_wins(self):
         """多条规则匹配时应使用第一条命中规则。"""
         scheduler = self._make_scheduler()
@@ -337,9 +369,12 @@ class TestOfflineSchedulerPermission:
         assert role == 0xFF
         assert dept == 0xFF
 
-    @patch("offline.scheduler.config", {
-        "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
-    })
+    @patch(
+        "offline.scheduler.config",
+        {
+            "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
+        },
+    )
     def test_fingerprint_computation(self):
         """文件指纹应包含 mtime 和 size 信息。"""
         scheduler = self._make_scheduler()
@@ -355,17 +390,23 @@ class TestOfflineSchedulerPermission:
         finally:
             os.unlink(fpath)
 
-    @patch("offline.scheduler.config", {
-        "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
-    })
+    @patch(
+        "offline.scheduler.config",
+        {
+            "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
+        },
+    )
     def test_has_file_changed_first_time(self):
         """首次检测（无指纹缓存）应判定为已变更。"""
         scheduler = self._make_scheduler()
         assert scheduler._has_file_changed("/tmp/nonexistent.txt") is True
 
-    @patch("offline.scheduler.config", {
-        "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
-    })
+    @patch(
+        "offline.scheduler.config",
+        {
+            "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
+        },
+    )
     def test_has_file_changed_unchanged(self):
         """已处理且未修改的文件应判定为未变更。"""
         scheduler = self._make_scheduler()
@@ -384,6 +425,7 @@ class TestOfflineSchedulerPermission:
         scheduler = self._make_scheduler()
         epoch = scheduler._generate_epoch()
         import re
+
         assert re.match(r"\d{8}_\d{2}", epoch) is not None
 
 
@@ -391,16 +433,21 @@ class TestOfflineSchedulerPermission:
 # 4. OCR Image Preprocessing Pipeline (mock)
 # ===========================================================================
 
+
 class TestOCRPreprocessingPipeline:
     """OCR 图片预处理管线测试（mock ImageProcessor）。"""
 
-    @patch("offline.scheduler.config", {
-        "knowledge_base": {"data_dir": "/tmp/test_images"},
-        "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
-    })
+    @patch(
+        "offline.scheduler.config",
+        {
+            "knowledge_base": {"data_dir": "/tmp/test_images"},
+            "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
+        },
+    )
     def test_incremental_update_processes_images(self):
         """增量更新应处理图片文件并调用 vectorizer。"""
         from offline.scheduler import OfflineScheduler
+
         scheduler = OfflineScheduler.__new__(OfflineScheduler)
         scheduler.data_dir = "/tmp/test_images"
         scheduler._fingerprints = {}
@@ -438,13 +485,17 @@ class TestOCRPreprocessingPipeline:
             assert mock_vectorizer.vectorize_and_store_text.call_count >= 1
             assert result["processed_images"] >= 1
 
-    @patch("offline.scheduler.config", {
-        "knowledge_base": {"data_dir": "/tmp/test_skip"},
-        "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
-    })
+    @patch(
+        "offline.scheduler.config",
+        {
+            "knowledge_base": {"data_dir": "/tmp/test_skip"},
+            "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
+        },
+    )
     def test_incremental_update_skips_unchanged_files(self):
         """增量更新应跳过未变更的文件。"""
         from offline.scheduler import OfflineScheduler
+
         scheduler = OfflineScheduler.__new__(OfflineScheduler)
         scheduler._fingerprints = {}
         scheduler.config_path = "config.json"

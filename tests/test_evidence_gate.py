@@ -26,6 +26,7 @@ from retrieval.evidence_gate import EvidenceEnsembleGate
 
 # ── 辅助工厂 ──
 
+
 def make_rerank_result(doc_id: str, ce_score_ensemble: float) -> RerankResult:
     """构造一个 RerankResult 的快捷方法"""
     return RerankResult(
@@ -36,6 +37,7 @@ def make_rerank_result(doc_id: str, ce_score_ensemble: float) -> RerankResult:
 
 
 # ── 空输入边界 ──
+
 
 class TestEmptyInput:
     """空输入时应安全降级"""
@@ -50,6 +52,7 @@ class TestEmptyInput:
 
 
 # ── 高置信度放行 ──
+
 
 class TestHighConfidencePass:
     """高置信度 (>= 0.70) 应放行"""
@@ -84,6 +87,7 @@ class TestHighConfidencePass:
 
 # ── 多证据增强 ──
 
+
 class TestEnhancedGenerate:
     """中等置信度 (0.55 ~ 0.75) 应触发增强生成"""
 
@@ -101,6 +105,7 @@ class TestEnhancedGenerate:
 
 
 # ── 拒答 ──
+
 
 class TestReject:
     """低置信度 (< 0.40) 应拒答"""
@@ -127,6 +132,7 @@ class TestReject:
 
 # ── 综合得分计算验证 ──
 
+
 class TestScoreCalculation:
     """验证综合得分的加权计算正确性"""
 
@@ -150,10 +156,10 @@ class TestScoreCalculation:
         ce_top1 = 0.8
         ce_top3_mean = (0.8 + 0.6 + 0.4) / 3
         expected = (
-            weights["w1"] * ce_top1 +
-            weights["w2"] * ce_top3_mean +
-            weights["w3"] * retrieval_agreement +
-            weights["w4"] * doc_consistency
+            weights["w1"] * ce_top1
+            + weights["w2"] * ce_top3_mean
+            + weights["w3"] * retrieval_agreement
+            + weights["w4"] * doc_consistency
         )
         assert result.evidence_score == pytest.approx(expected, abs=1e-6)
 
@@ -186,6 +192,7 @@ class TestScoreCalculation:
 
 
 # ── 文档一致性计算 ──
+
 
 class TestDocConsistency:
     """测试 NLI 文档一致性计算"""
@@ -261,9 +268,9 @@ class TestDocConsistency:
         mock_gate._batch_nli_inference.side_effect = AttributeError("no batch")
         # 3 对文档：第 1 对一致，第 2 对矛盾，第 3 对一致
         mock_gate._nli_inference.side_effect = [
-            (0.1, 0.8),   # d1 vs d2: 一致
-            (0.8, 0.1),   # d1 vs d3: 矛盾
-            (0.2, 0.7),   # d2 vs d3: 一致
+            (0.1, 0.8),  # d1 vs d2: 一致
+            (0.8, 0.1),  # d1 vs d3: 矛盾
+            (0.2, 0.7),  # d2 vs d3: 一致
         ]
         g._answer_gate = mock_gate
 
@@ -278,6 +285,7 @@ class TestDocConsistency:
 
 
 # ── 阈值边界测试 ──
+
 
 class TestThresholdBoundaries:
     """验证决策阈值的精确边界"""

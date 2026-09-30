@@ -50,6 +50,7 @@ def is_admin_role_mask(user_role_mask: int) -> bool:
         admin_mask,
     }
 
+
 _security = HTTPBearer(auto_error=False)
 
 
@@ -170,7 +171,6 @@ def is_allowed(
     - Otherwise: role bits must overlap AND dept bits must overlap
       (doc_dept_mask == 0 means no dept restriction).
     """
-    cfg = get_config().rbac
     if is_admin_role_mask(user_role_mask):
         return True
     if doc_role_mask == 0:
@@ -196,6 +196,7 @@ def build_qdrant_filter(
     安全：对所有输入进行类型和范围验证。
     """
     from auth.bitmask_rbac import build_qdrant_filter as _build
+
     return _build(user_role_mask, user_dept_mask, knowledge_version_epoch)
 
 
@@ -275,8 +276,8 @@ def generate_token(
     """
     try:
         import jwt as _jwt
-    except ImportError:
-        raise RuntimeError("PyJWT is not installed -- cannot generate tokens")
+    except ImportError as _exc_ruf:
+        raise RuntimeError("PyJWT is not installed -- cannot generate tokens") from _exc_ruf
 
     cfg = get_config()
     now = int(time.time())

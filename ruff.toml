@@ -24,8 +24,23 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]
 "**/__init__.py" = ["F401"]
+# These standalone microservice modules deliberately adjust sys.path before
+# importing shared packages or sibling modules. Keep E402 active elsewhere.
+"api-gateway/**/*.py" = ["E402"]
+"cache-service/**/*.py" = ["E402"]
+"generation-service/**/*.py" = ["E402"]
+"monitoring-service/**/*.py" = ["E402"]
+"retrieval-service/**/*.py" = ["E402"]
+"common/minio_client.py" = ["E402"]
+# FastAPI's Depends is designed for dependency injection in parameter defaults.
+"api/**/*.py" = ["B008"]
+"api-gateway/routers/generation.py" = ["B008"]
+"tests/test_api.py" = ["B008"]
+"tests/test_llm_client_adapter_integration.py" = ["E402"]
+"tests/test_rerank_fallback.py" = ["E402"]
+# Test fixtures use /tmp strings as fake paths; they don't create insecure files.
+"tests/**" = ["S101", "S105", "S106", "S108"]
 
 [format]
 quote-style = "double"

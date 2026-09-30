@@ -1,4 +1,5 @@
 """Auth API routes -- login, refresh, user management."""
+
 import logging
 import time
 from collections import defaultdict
@@ -36,6 +37,7 @@ def _check_login_rate_limit(ip: str):
         raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后重试")
     _login_attempts[ip].append(now)
 
+
 # Lazy singleton
 _store: UserStore | None = None
 
@@ -71,18 +73,18 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
-    @field_validator('username', 'password')
+    @field_validator("username", "password")
     @classmethod
     def validate_not_empty(cls, v):
         if not v or not v.strip():
-            raise ValueError('不能为空')
+            raise ValueError("不能为空")
         return v.strip()
 
 
 class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: str = "Bearer"
+    token_type: str = "Bearer"  # noqa: S105 -- protocol constant, not a credential
     expires_in: int
     user: dict
 
@@ -99,20 +101,20 @@ class CreateUserRequest(BaseModel):
     roles: list[str] = []
     departments: list[str] = []
 
-    @field_validator('password')
+    @field_validator("password")
     @classmethod
     def validate_password(cls, v):
         if len(v) < 8:
-            raise ValueError('密码长度至少为 8 个字符')
+            raise ValueError("密码长度至少为 8 个字符")
         if len(v) > 128:
-            raise ValueError('密码长度不能超过 128 个字符')
+            raise ValueError("密码长度不能超过 128 个字符")
         return v
 
-    @field_validator('user_id', 'username')
+    @field_validator("user_id", "username")
     @classmethod
     def validate_not_empty(cls, v):
         if not v or not v.strip():
-            raise ValueError('不能为空')
+            raise ValueError("不能为空")
         return v.strip()
 
 
@@ -215,13 +217,17 @@ async def create_user(req: CreateUserRequest, authorization: str = Header(None))
     store = get_store()
     try:
         user = store.create_user(
-            req.user_id, req.username, req.password,
-            req.display_name, req.roles, req.departments,
+            req.user_id,
+            req.username,
+            req.password,
+            req.display_name,
+            req.roles,
+            req.departments,
         )
         return user.to_dict()
     except Exception as e:
         logger.error("创建用户失败: %s", e)
-        raise HTTPException(status_code=400, detail="创建用户失败，请检查参数后重试")
+        raise HTTPException(status_code=400, detail="创建用户失败，请检查参数后重试") from e
 
 
 @router.put("/users/{user_id}/roles")

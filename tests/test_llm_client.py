@@ -1,4 +1,5 @@
 """LLM Client 测试 — prompt 构建、模型路由、续写检查、generate 方法。"""
+
 import os
 import sys
 import types
@@ -26,6 +27,7 @@ class TestLLMClientGenerate:
     def _make_client(self):
         """创建已 mock router 的 LLMClient。"""
         from models.llm_client import LLMClient
+
         client = LLMClient.__new__(LLMClient)
         client._router = MagicMock()
         client.max_conversation_rounds = 6
@@ -40,6 +42,7 @@ class TestLLMClientGenerate:
             RequestContext,
             RerankResult,
         )
+
         ctx = RequestContext(
             user_input=query,
             session_id="test_session",
@@ -56,9 +59,13 @@ class TestLLMClientGenerate:
             RerankResult(doc_id="doc_2", content="透明质酸保湿配方", final_score=0.80),
         ]
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_score=0.9,
-            decision="pass", top_docs=ctx.rerank_results,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_score=0.9,
+            decision="pass",
+            top_docs=ctx.rerank_results,
         )
         ctx.user_role_mask = 0
         ctx.user_dept_mask = 0
@@ -146,6 +153,7 @@ class TestLLMClientGenerate:
     def test_generate_includes_dialog_history(self):
         """多轮对话时 messages 应包含历史轮次。"""
         from core.pipeline_context import SessionState
+
         client = self._make_client()
         client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
 
@@ -167,6 +175,7 @@ class TestLLMClientTruncation:
 
     def _make_client(self):
         from models.llm_client import LLMClient
+
         client = LLMClient.__new__(LLMClient)
         client._router = MagicMock()
         client.max_conversation_rounds = 6
@@ -177,7 +186,10 @@ class TestLLMClientTruncation:
         """短回答不应触发续写。"""
         client = self._make_client()
         from core.pipeline_context import QueryRewriteResult
-        rewrite = QueryRewriteResult(rewritten_query="test", requires_context=False, business_type="general", intent="general")
+
+        rewrite = QueryRewriteResult(
+            rewritten_query="test", requires_context=False, business_type="general", intent="general"
+        )
         result = client._check_truncation("简短回答", max_tokens=512, rewrite_result=rewrite)
         assert result is False
 
@@ -185,7 +197,10 @@ class TestLLMClientTruncation:
         """以句号结尾的回答不应触发续写。"""
         client = self._make_client()
         from core.pipeline_context import QueryRewriteResult
-        rewrite = QueryRewriteResult(rewritten_query="test", requires_context=False, business_type="general", intent="general")
+
+        rewrite = QueryRewriteResult(
+            rewritten_query="test", requires_context=False, business_type="general", intent="general"
+        )
         result = client._check_truncation("这是完整回答。", max_tokens=512, rewrite_result=rewrite)
         assert result is False
 
@@ -193,7 +208,10 @@ class TestLLMClientTruncation:
         """法规类回答应进行更严格的截断检查。"""
         client = self._make_client()
         from core.pipeline_context import QueryRewriteResult
-        rewrite = QueryRewriteResult(rewritten_query="test", requires_context=False, business_type="regulation", intent="compliance")
+
+        rewrite = QueryRewriteResult(
+            rewritten_query="test", requires_context=False, business_type="regulation", intent="compliance"
+        )
         # 法规类回答不应以逗号结尾
         result = client._check_truncation("根据GB标准，铅含量限值为", max_tokens=1024, rewrite_result=rewrite)
         # 截断检测逻辑（回答不完整）

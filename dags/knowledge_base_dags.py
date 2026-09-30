@@ -1,17 +1,13 @@
-"""
-Apache Airflow DAG — 离线知识库构建调度（PRD §3.7）
+"""Planned Airflow DAG contract for offline ingestion (PRD §3.7).
 
 调度策略：
 - 每周日 02:00 执行增量更新（weekly_incremental）
 - 每月 1 日 03:00 执行全量重建（monthly_full_rebuild）
 - 每次构建完成后自动版本滚动 + 过期文档归档
 
-使用方式：
-1. 将本文件放入 Airflow DAGs 目录（或通过 airflow.cfg 指定 dags_folder）
-2. 确保 AIRFLOW_HOME 环境变量指向 airflow 安装目录
-3. airflow scheduler 自动按 cron 调度
-
-如未安装 Airflow，可通过 run_offline.py 手动执行等效操作。
+The production ingestion modules referenced below are not currently included.
+No active DAG is registered until those modules are available. Follow-up scope:
+https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2
 """
 
 from __future__ import annotations
@@ -19,16 +15,28 @@ from __future__ import annotations
 import json
 import os
 import sys
+from importlib.util import find_spec
 
 # ── Airflow 导入（不可用时跳过，仅供人工参考） ──────────────────────
 try:
     from airflow import DAG
-    from airflow.operators.bash import BashOperator
     from airflow.operators.python import PythonOperator
     from airflow.utils.dates import days_ago
+
     AIRFLOW_AVAILABLE = True
 except ImportError:
     AIRFLOW_AVAILABLE = False
+
+INGESTION_AVAILABLE = all(
+    find_spec(module) is not None
+    for module in (
+        "offline.document_processor",
+        "offline.image_processor",
+        "offline.vectorizer",
+        "offline.scheduler",
+        "offline.feedback_loop",
+    )
+)
 
 # ── 项目根目录 ─────────────────────────────────────────────────────────
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,6 +59,7 @@ DEFAULT_ARGS = {
 def _task_incremental_update():
     """每周增量更新"""
     from offline.scheduler import OfflineScheduler
+
     scheduler = OfflineScheduler()
     result = scheduler.run_incremental_update()
     print(f"增量更新完成: {json.dumps(result, ensure_ascii=False)}")
@@ -60,6 +69,7 @@ def _task_incremental_update():
 def _task_full_rebuild():
     """每月全量重建"""
     from offline.scheduler import OfflineScheduler
+
     scheduler = OfflineScheduler()
     result = scheduler.run_full_rebuild()
     print(f"全量重建完成: {json.dumps(result, ensure_ascii=False)}")
@@ -69,6 +79,7 @@ def _task_full_rebuild():
 def _task_bump_version_epoch():
     """版本滚动"""
     from offline.scheduler import OfflineScheduler
+
     scheduler = OfflineScheduler()
     new_epoch = scheduler.bump_version_epoch()
     print(f"版本滚动完成: {new_epoch}")
@@ -77,8 +88,9 @@ def _task_bump_version_epoch():
 
 def _task_archive_expired(current_epoch: str = None):
     """过期文档归档"""
-    from common.config import get_config_dict
     from offline.scheduler import OfflineScheduler
+
+    from common.config import get_config_dict
 
     # 从 config.json 读取当前 epoch
     cfg = get_config_dict()
@@ -92,40 +104,20 @@ def _task_archive_expired(current_epoch: str = None):
 def _task_feedback_loop():
     """离线反馈闭环 — 参数更新"""
     from offline.feedback_loop import FeedbackLoop
+
     loop = FeedbackLoop()
     result = loop.run_full_feedback_cycle()
     print(f"反馈闭环完成: {json.dumps(result, ensure_ascii=False)}")
     return result
 
 
-# ── 如果 Airflow 不可用，生成参考配置 ─────────────────────────────────
-if not AIRFLOW_AVAILABLE:
-    # 打印 cron 调度信息供人工参考
-    print("=" * 70)
-    print("Apache Airflow 未安装，以下为调度参考配置：")
-    print("=" * 70)
-    print()
-    print("每周增量更新 (每周日 02:00):")
-    print("  cron: 0 2 * * 0")
-    print("  命令: python run_offline.py --mode incremental")
-    print("  然后: python -c 'from offline.scheduler import OfflineScheduler; ...'")
-    print()
-    print("每月全量重建 (每月 1 日 03:00):")
-    print("  cron: 0 3 1 * *")
-    print("  命令: python run_offline.py --mode full")
-    print()
-    print("每周反馈闭环 (每周一 04:00):")
-    print("  cron: 0 4 * * 1")
-    print("  命令: python -c 'from offline.feedback_loop import FeedbackLoop; ...'")
-    print()
-    print("安装 Airflow: pip install apache-airflow>=2.8.0")
-    print("然后将本文件放入 DAGs 目录即可自动调度。")
-    print("=" * 70)
+# ── Missing dependencies: do not register unusable DAGs ───────────────
+if not AIRFLOW_AVAILABLE or not INGESTION_AVAILABLE:
+    print("Offline ingestion modules are not available; no active Airflow DAGs are registered.")
 
 
 # ── DAG 定义（仅在 Airflow 可用时生效） ────────────────────────────────
-if AIRFLOW_AVAILABLE:
-
+if AIRFLOW_AVAILABLE and INGESTION_AVAILABLE:
     # DAG 1: 每周增量更新
     weekly_incremental_dag = DAG(
         dag_id="weekly_knowledge_incremental",

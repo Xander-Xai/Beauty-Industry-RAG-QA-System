@@ -6,12 +6,14 @@
 - 通过 record_request(ctx) 集成时 ctx.prefix_cache_hit 的处理
 - Prometheus 文本输出包含 prefix cache 指标
 """
+
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
+
 from monitoring.otel_tracer import MetricsCollector
 
 
@@ -69,6 +71,7 @@ class TestMetricsCollectorPrefixCache:
     def test_request_context_prefix_cache_hit(self, metrics):
         """record_request(ctx.prefix_cache_hit=True) 应记录命中。"""
         from core.pipeline_context import RequestContext
+
         ctx = RequestContext(user_input="test")
         ctx.prefix_cache_hit = True
         metrics.record_request(ctx)
@@ -78,6 +81,7 @@ class TestMetricsCollectorPrefixCache:
     def test_request_context_prefix_cache_miss(self, metrics):
         """record_request(ctx.prefix_cache_hit=False) 应记录未命中。"""
         from core.pipeline_context import RequestContext
+
         ctx = RequestContext(user_input="test")
         ctx.prefix_cache_hit = False
         metrics.record_request(ctx)
@@ -87,6 +91,7 @@ class TestMetricsCollectorPrefixCache:
     def test_request_context_prefix_cache_none(self, metrics):
         """ctx.prefix_cache_hit=None 应跳过（不计数 → 0.0）。"""
         from core.pipeline_context import RequestContext
+
         ctx = RequestContext(user_input="test")
         ctx.prefix_cache_hit = None  # 未设置
         metrics.record_request(ctx)
@@ -97,6 +102,7 @@ class TestMetricsCollectorPrefixCache:
     def test_request_context_stacked_hits_and_misses(self, metrics):
         """多次 record_request 应累积 prefix cache 指标。"""
         from core.pipeline_context import RequestContext
+
         for _ in range(3):
             ctx = RequestContext(user_input="q1")
             ctx.prefix_cache_hit = True

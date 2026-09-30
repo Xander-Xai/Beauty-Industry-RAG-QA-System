@@ -19,6 +19,7 @@ from common.auth import require_identity
 def client():
     """创建测试客户端"""
     from app import app
+
     return TestClient(app)
 
 
@@ -32,6 +33,7 @@ def auth_header():
     import time
 
     import jwt as _jwt
+
     os.environ["JWT_SECRET"] = "test-secret-for-unit-tests-only"
     payload = {
         "sub": "test_user",
@@ -87,17 +89,25 @@ class TestHealthEndpoint:
 class TestQueryEndpoint:
     def test_query_returns_200(self, client, auth_header):
         """POST /api/query 返回 200"""
-        response = client.post("/api/query", json={
-            "query": "烟酰胺的安全浓度是多少？",
-        }, headers=auth_header)
+        response = client.post(
+            "/api/query",
+            json={
+                "query": "烟酰胺的安全浓度是多少？",
+            },
+            headers=auth_header,
+        )
         assert response.status_code == 200
 
     def test_query_with_session(self, client, auth_header):
         """带 session_id 的查询"""
-        response = client.post("/api/query", json={
-            "query": "玻色因的功效？",
-            "session_id": "test_session_001",
-        }, headers=auth_header)
+        response = client.post(
+            "/api/query",
+            json={
+                "query": "玻色因的功效？",
+                "session_id": "test_session_001",
+            },
+            headers=auth_header,
+        )
         assert response.status_code == 200
         data = response.json()
         assert "answer" in data
@@ -111,6 +121,7 @@ class TestQueryEndpoint:
     def test_query_unauthenticated_fails(self, client):
         """S-C1: 无认证请求返回 401（dev_mode=false 时生效）"""
         from common.config import get_config, reload_config
+
         # 临时禁用 dev_mode 以测试真实认证路径
         _orig_auth_dev = os.environ.get("AUTH_DEV_MODE")
         os.environ["AUTH_DEV_MODE"] = "false"
@@ -118,9 +129,12 @@ class TestQueryEndpoint:
         try:
             if get_config().auth.dev_mode:
                 pytest.skip("dev_mode=true 时无认证请求允许通过")
-            response = client.post("/api/query", json={
-                "query": "测试查询",
-            })
+            response = client.post(
+                "/api/query",
+                json={
+                    "query": "测试查询",
+                },
+            )
             assert response.status_code == 401
         finally:
             if _orig_auth_dev is not None:
@@ -131,9 +145,13 @@ class TestQueryEndpoint:
 
     def test_query_with_dev_headers(self, client, auth_header):
         """带 JWT token 的查询"""
-        response = client.post("/api/query", json={
-            "query": "维生素C的稳定性？",
-        }, headers=auth_header)
+        response = client.post(
+            "/api/query",
+            json={
+                "query": "维生素C的稳定性？",
+            },
+            headers=auth_header,
+        )
         assert response.status_code == 200
 
     def test_require_identity_accepts_rs256_login_tokens(self, rs256_auth_header):

@@ -1,4 +1,5 @@
 """User store -- SQLite-backed user management with RBAC roles."""
+
 import hashlib
 import logging
 import os
@@ -11,11 +12,13 @@ logger = logging.getLogger(__name__)
 # bcrypt 依赖 — 生产模式下必须可用
 try:
     import bcrypt
+
     _HAS_BCRYPT = True
 except ImportError:
     _HAS_BCRYPT = False
     try:
         from common.config import is_production_mode
+
         if is_production_mode():
             raise RuntimeError("生产模式下 bcrypt 为硬依赖，请安装: pip install bcrypt")
     except ImportError:
@@ -25,6 +28,7 @@ except ImportError:
 # 从 config.json 读取 RBAC 角色和部门定义（与系统其他部分保持一致）
 try:
     from common.config import get_config
+
     _cfg = get_config()
     ROLES = dict(_cfg.rbac.roles)
     DEPARTMENTS = dict(_cfg.rbac.departments)
@@ -65,7 +69,7 @@ class UserStore:
             db_path = os.environ.get("DATABASE_URL", "sqlite:///./data/users.db")
             # Strip sqlite:/// prefix
             if db_path.startswith("sqlite:///"):
-                db_path = db_path[len("sqlite:///"):]
+                db_path = db_path[len("sqlite:///") :]
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
         self._init_db()
@@ -137,15 +141,21 @@ class UserStore:
             return False
         return self._hash_password(password, salt) == stored_hash
 
-    def create_user(self, user_id: str, username: str, password: str,
-                    display_name: str, role_names: list[str] = None,
-                    dept_names: list[str] = None) -> User:
+    def create_user(
+        self,
+        user_id: str,
+        username: str,
+        password: str,
+        display_name: str,
+        role_names: list[str] = None,
+        dept_names: list[str] = None,
+    ) -> User:
         """Create a new user."""
         role_mask = 0
-        for r in (role_names or []):
+        for r in role_names or []:
             role_mask |= ROLES.get(r, 0)
         dept_mask = 0
-        for d in (dept_names or []):
+        for d in dept_names or []:
             dept_mask |= DEPARTMENTS.get(d, 0)
 
         password_hash = self._hash_password(password)
@@ -155,23 +165,27 @@ class UserStore:
                 "INSERT INTO users (user_id, username, password_hash, display_name, role_mask, dept_mask) VALUES (?, ?, ?, ?, ?, ?)",
                 (user_id, username, password_hash, display_name, role_mask, dept_mask),
             )
-            for r in (role_names or []):
+            for r in role_names or []:
                 conn.execute("INSERT INTO user_roles (user_id, role_name) VALUES (?, ?)", (user_id, r))
-            for d in (dept_names or []):
+            for d in dept_names or []:
                 conn.execute("INSERT INTO user_depts (user_id, dept_name) VALUES (?, ?)", (user_id, d))
             conn.commit()
 
-        return User(user_id=user_id, username=username, display_name=display_name,
-                    role_mask=role_mask, dept_mask=dept_mask,
-                    roles=role_names or [], departments=dept_names or [])
+        return User(
+            user_id=user_id,
+            username=username,
+            display_name=display_name,
+            role_mask=role_mask,
+            dept_mask=dept_mask,
+            roles=role_names or [],
+            departments=dept_names or [],
+        )
 
     def authenticate(self, username: str, password: str) -> User | None:
         """Authenticate user by username/password. Returns User or None."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM users WHERE username = ? AND is_active = 1", (username,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM users WHERE username = ? AND is_active = 1", (username,)).fetchone()
             if not row:
                 # H-5: 不存在用户也执行 dummy bcrypt，防止时序侧信道枚举
                 if _HAS_BCRYPT:
@@ -179,13 +193,27 @@ class UserStore:
                 return None
             if not self._verify_password(password, row["password_hash"]):
                 return None
-            roles = [r[0] for r in conn.execute("SELECT role_name FROM user_roles WHERE user_id = ?", (row["user_id"],)).fetchall()]
-            depts = [d[0] for d in conn.execute("SELECT dept_name FROM user_depts WHERE user_id = ?", (row["user_id"],)).fetchall()]
+            roles = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT role_name FROM user_roles WHERE user_id = ?", (row["user_id"],)
+                ).fetchall()
+            ]
+            depts = [
+                d[0]
+                for d in conn.execute(
+                    "SELECT dept_name FROM user_depts WHERE user_id = ?", (row["user_id"],)
+                ).fetchall()
+            ]
             return User(
-                user_id=row["user_id"], username=row["username"],
-                display_name=row["display_name"], role_mask=row["role_mask"],
-                dept_mask=row["dept_mask"], is_active=bool(row["is_active"]),
-                roles=roles, departments=depts,
+                user_id=row["user_id"],
+                username=row["username"],
+                display_name=row["display_name"],
+                role_mask=row["role_mask"],
+                dept_mask=row["dept_mask"],
+                is_active=bool(row["is_active"]),
+                roles=roles,
+                departments=depts,
             )
 
     def get_user(self, user_id: str) -> User | None:
@@ -195,13 +223,21 @@ class UserStore:
             row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
             if not row:
                 return None
-            roles = [r[0] for r in conn.execute("SELECT role_name FROM user_roles WHERE user_id = ?", (user_id,)).fetchall()]
-            depts = [d[0] for d in conn.execute("SELECT dept_name FROM user_depts WHERE user_id = ?", (user_id,)).fetchall()]
+            roles = [
+                r[0] for r in conn.execute("SELECT role_name FROM user_roles WHERE user_id = ?", (user_id,)).fetchall()
+            ]
+            depts = [
+                d[0] for d in conn.execute("SELECT dept_name FROM user_depts WHERE user_id = ?", (user_id,)).fetchall()
+            ]
             return User(
-                user_id=row["user_id"], username=row["username"],
-                display_name=row["display_name"], role_mask=row["role_mask"],
-                dept_mask=row["dept_mask"], is_active=bool(row["is_active"]),
-                roles=roles, departments=depts,
+                user_id=row["user_id"],
+                username=row["username"],
+                display_name=row["display_name"],
+                role_mask=row["role_mask"],
+                dept_mask=row["dept_mask"],
+                is_active=bool(row["is_active"]),
+                roles=roles,
+                departments=depts,
             )
 
     def list_users(self) -> list[User]:
@@ -220,8 +256,9 @@ class UserStore:
         for d in dept_names:
             dept_mask |= DEPARTMENTS.get(d, 0)
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("UPDATE users SET role_mask = ?, dept_mask = ? WHERE user_id = ?",
-                        (role_mask, dept_mask, user_id))
+            conn.execute(
+                "UPDATE users SET role_mask = ?, dept_mask = ? WHERE user_id = ?", (role_mask, dept_mask, user_id)
+            )
             conn.execute("DELETE FROM user_roles WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM user_depts WHERE user_id = ?", (user_id,))
             for r in role_names:

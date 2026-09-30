@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchStats:
     """批处理统计（PRD §12: 含 GPU 利用率追踪）"""
+
     total_batches: int = 0
     total_pairs: int = 0
     total_inference_time_ms: float = 0.0
@@ -101,6 +102,7 @@ class BatchStats:
 @dataclass
 class _PendingItem:
     """异步模式下待批处理的单个请求"""
+
     pairs: list
     future: Future
     submit_time: float
@@ -134,9 +136,7 @@ class RerankBatchAggregator:
         self._pending: list[_PendingItem] = []
         self._flush_event = threading.Event()
         self._running = True
-        self._worker_thread = threading.Thread(
-            target=self._batch_worker_loop, daemon=True, name="rerank-batch-worker"
-        )
+        self._worker_thread = threading.Thread(target=self._batch_worker_loop, daemon=True, name="rerank-batch-worker")
         self._worker_thread.start()
 
         logger.info(
@@ -219,7 +219,7 @@ class RerankBatchAggregator:
 
             # 将结果分发回各 Future
             for item, start, count in mapping:
-                item_scores = scores[start:start + count]
+                item_scores = scores[start : start + count]
                 item.future.set_result(item_scores)
 
     def _execute_batch_sync(self, pairs: list[tuple[str, str]], submit_time: float = 0.0) -> list[float]:
@@ -229,16 +229,17 @@ class RerankBatchAggregator:
 
         all_scores = []
         for i in range(0, len(pairs), self.max_batch_size):
-            batch = pairs[i:i + self.max_batch_size]
+            batch = pairs[i : i + self.max_batch_size]
             try:
                 from sentence_transformers import CrossEncoder
+
                 # 使用缓存的模型实例（避免重复加载）
-                if not hasattr(self, '_ce_model'):
+                if not hasattr(self, "_ce_model"):
                     model_path = config["gpu1"]["models"].get("cross_encoder_a", {}).get("model_path", "")
                     self._ce_model = CrossEncoder(model_path) if model_path else None
                 if self._ce_model:
                     batch_scores = self._ce_model.predict(batch, batch_size=min(len(batch), self.max_batch_size))
-                    if hasattr(batch_scores, 'tolist'):
+                    if hasattr(batch_scores, "tolist"):
                         all_scores.extend(batch_scores.tolist())
                     else:
                         all_scores.extend(list(batch_scores))
@@ -300,12 +301,12 @@ class RerankBatchAggregator:
             # 按 max_batch_size 分块批量推理
             all_scores = []
             for i in range(0, len(pairs), self.max_batch_size):
-                batch = pairs[i:i + self.max_batch_size]
+                batch = pairs[i : i + self.max_batch_size]
                 batch_scores = model.predict(
                     batch,
                     batch_size=min(len(batch), self.max_batch_size),
                 )
-                if hasattr(batch_scores, 'tolist'):
+                if hasattr(batch_scores, "tolist"):
                     all_scores.extend(batch_scores.tolist())
                 else:
                     all_scores.extend(list(batch_scores))
@@ -349,9 +350,9 @@ class RerankBatchAggregator:
         try:
             all_results = []
             for i in range(0, len(pairs), self.max_batch_size):
-                batch = pairs[i:i + self.max_batch_size]
+                batch = pairs[i : i + self.max_batch_size]
                 batch_results = model.predict(batch)
-                if hasattr(batch_results, 'tolist'):
+                if hasattr(batch_results, "tolist"):
                     all_results.extend(batch_results.tolist())
                 else:
                     all_results.extend(list(batch_results))
@@ -368,6 +369,7 @@ class RerankBatchAggregator:
     def batch_predict_with_fallback(self, model, pairs, use_cpu_fallback=False):
         """Batch predict with optional CPU fallback on GPU failure."""
         import torch
+
         try:
             return self.batch_predict(model, pairs)
         except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
@@ -380,18 +382,18 @@ class RerankBatchAggregator:
         """CPU fallback: move model to CPU and predict in small batches."""
         device_backup = None
         try:
-            if hasattr(model, 'model') and hasattr(model.model, 'device'):
+            if hasattr(model, "model") and hasattr(model.model, "device"):
                 device_backup = model.model.device
                 model.model.cpu()
             batch_size = min(8, len(pairs))
             results = []
             for i in range(0, len(pairs), batch_size):
-                batch = pairs[i:i + batch_size]
+                batch = pairs[i : i + batch_size]
                 scores = model.predict(batch)
-                results.extend(scores.tolist() if hasattr(scores, 'tolist') else list(scores))
+                results.extend(scores.tolist() if hasattr(scores, "tolist") else list(scores))
             return results
         finally:
-            if device_backup is not None and hasattr(model, 'model'):
+            if device_backup is not None and hasattr(model, "model"):
                 model.model.to(device_backup)
 
     def get_stats(self) -> dict:
@@ -418,8 +420,6 @@ class RerankBatchAggregator:
                 "total_batches": self._stats.total_batches,
                 "total_pairs": self._stats.total_pairs,
                 "avg_pairs_per_batch": round(self._stats.get_avg_pairs_per_batch(), 1),
-                "avg_inference_ms": round(
-                    self._stats.total_inference_time_ms / max(self._stats.total_batches, 1), 2
-                ),
+                "avg_inference_ms": round(self._stats.total_inference_time_ms / max(self._stats.total_batches, 1), 2),
                 "pending_count": pending_count,
             }

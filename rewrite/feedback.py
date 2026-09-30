@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 
 # ── Rewrite 反馈配置 ──────────────────────────────────────────────────
 REWRITE_FEEDBACK_CONFIG = {
-    "sample_size": 500,                # 每周采样数
-    "min_samples_for_update": 200,     # 触发 Prompt 更新的最少标注数
-    "accuracy_threshold": 0.85,        # 准确率低于此值触发 Prompt 优化
+    "sample_size": 500,  # 每周采样数
+    "min_samples_for_update": 200,  # 触发 Prompt 更新的最少标注数
+    "accuracy_threshold": 0.85,  # 准确率低于此值触发 Prompt 优化
     "output_dir": "./data/feedback/rewrite",
 }
 
@@ -146,7 +146,7 @@ class RewriteFeedback:
         """分层采样 N 条 Rewrite 结果用于人工标注"""
         n = n or REWRITE_FEEDBACK_CONFIG["sample_size"]
 
-        unannotated = [l for l in logs if l.get("user_feedback", -1) == -1]
+        unannotated = [entry for entry in logs if entry.get("user_feedback", -1) == -1]
         pool = unannotated if unannotated else logs
 
         if len(pool) <= n:
@@ -159,11 +159,11 @@ class RewriteFeedback:
             by_type.setdefault(bt, []).append(log)
 
         samples = []
-        for bt, bt_logs in by_type.items():
+        for _, bt_logs in by_type.items():
             type_n = max(1, int(n * len(bt_logs) / len(pool)))
             samples.extend(random.sample(bt_logs, min(type_n, len(bt_logs))))
 
-        remaining = [l for l in pool if l not in samples]
+        remaining = [entry for entry in pool if entry not in samples]
         if len(samples) < n and remaining:
             samples.extend(random.sample(remaining, min(n - len(samples), len(remaining))))
 
@@ -220,17 +220,11 @@ class RewriteFeedback:
             return {"imported": 0, "intent_accuracy": 0.0, "business_type_accuracy": 0.0, "overall_accuracy": 0.0}
 
         # 计算 intent 准确率
-        intent_correct = sum(
-            1 for a in annotations
-            if a.get("annotation_intent") == a.get("intent")
-        )
+        intent_correct = sum(1 for a in annotations if a.get("annotation_intent") == a.get("intent"))
         intent_accuracy = intent_correct / len(annotations)
 
         # 计算 business_type 准确率
-        bt_correct = sum(
-            1 for a in annotations
-            if a.get("annotation_business_type") == a.get("business_type")
-        )
+        bt_correct = sum(1 for a in annotations if a.get("annotation_business_type") == a.get("business_type"))
         bt_accuracy = bt_correct / len(annotations)
 
         overall = (intent_accuracy + bt_accuracy) / 2
@@ -245,8 +239,7 @@ class RewriteFeedback:
                 f.write(json.dumps(a, ensure_ascii=False) + "\n")
 
         logger.info(
-            f"Rewrite 标注导入: intent={intent_accuracy:.2%}, "
-            f"business_type={bt_accuracy:.2%}, overall={overall:.2%}"
+            f"Rewrite 标注导入: intent={intent_accuracy:.2%}, business_type={bt_accuracy:.2%}, overall={overall:.2%}"
         )
         return {
             "imported": len(annotations),
@@ -312,8 +305,7 @@ class RewriteFeedback:
             )
         if any("compliance→" in p or "→compliance" in p for p in error_patterns):
             suggested_additions.append(
-                "注意：compliance（合规）类查询必须明确涉及法规条款、标准编号或合规要求，"
-                "不能仅凭关键词判断。"
+                "注意：compliance（合规）类查询必须明确涉及法规条款、标准编号或合规要求，不能仅凭关键词判断。"
             )
         if any("ingredient→" in p for p in error_patterns):
             suggested_additions.append(
@@ -327,9 +319,7 @@ class RewriteFeedback:
             )
 
         if not suggested_additions:
-            suggested_additions.append(
-                "请更准确地理解查询意图，参考上述错误模式进行分类。"
-            )
+            suggested_additions.append("请更准确地理解查询意图，参考上述错误模式进行分类。")
 
         # 生成新 Prompt 草稿（增补版本）
         current_version = self.get_active_prompt_version()
@@ -341,7 +331,8 @@ class RewriteFeedback:
 
         # 计算当前准确率
         correct = sum(
-            1 for a in annotations
+            1
+            for a in annotations
             if a.get("annotation_intent") == a.get("intent")
             and a.get("annotation_business_type") == a.get("business_type")
         )
@@ -375,9 +366,7 @@ class RewriteFeedback:
         suggestion = self.generate_prompt_suggestion(annotations)
 
         if not self.should_update_prompt(suggestion["current_accuracy"]):
-            logger.info(
-                f"准确率 {suggestion['current_accuracy']:.2%} ≥ 阈值，无需更新 Prompt"
-            )
+            logger.info(f"准确率 {suggestion['current_accuracy']:.2%} ≥ 阈值，无需更新 Prompt")
             return {
                 "triggered": False,
                 "accuracy": suggestion["current_accuracy"],
@@ -460,7 +449,8 @@ class RewriteFeedback:
                     data["status"] = "completed"
                     with open(fpath, "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Could not update prompt artifact %s: %s", fpath, exc)
                 continue
 
         # 激活目标版本
@@ -478,9 +468,7 @@ class RewriteFeedback:
 
     def _update_config_prompt_version(self, version_tag: str):
         """更新 config.json 中的 generation.prompt_version"""
-        config_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "config.json"
-        )
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
         try:
             with open(config_path, encoding="utf-8") as f:
                 cfg = json.load(f)
@@ -498,7 +486,7 @@ class RewriteFeedback:
             return versions
         for fname in os.listdir(PROMPT_VERSIONS_DIR):
             if fname.startswith("rewrite_prompt_") and fname.endswith(".json"):
-                tag = fname[len("rewrite_prompt_"):-len(".json")]
+                tag = fname[len("rewrite_prompt_") : -len(".json")]
                 versions.append(tag)
         return sorted(versions)
 
@@ -513,7 +501,8 @@ class RewriteFeedback:
                     data = json.load(f)
                 if data.get("status") == "active":
                     return data
-            except Exception:
+            except Exception as exc:
+                logger.debug("Could not read prompt version %s: %s", fpath, exc)
                 continue
         return None
 
@@ -542,8 +531,7 @@ class RewriteFeedback:
 
         # 检查已有标注结果
         annotated_files = [
-            f for f in os.listdir(self.output_dir)
-            if f.startswith("rewrite_annotated_") and f.endswith(".jsonl")
+            f for f in os.listdir(self.output_dir) if f.startswith("rewrite_annotated_") and f.endswith(".jsonl")
         ]
 
         accuracy_result = {"intent_accuracy": 0.0, "business_type_accuracy": 0.0, "overall_accuracy": 0.0}
@@ -564,8 +552,8 @@ class RewriteFeedback:
                                         all_annotations.append(data)
                                 except json.JSONDecodeError:
                                     continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Ignoring invalid annotation row: %s", exc)
                 break
 
         should_update = self.should_update_prompt(accuracy_result.get("overall_accuracy", 0.0))

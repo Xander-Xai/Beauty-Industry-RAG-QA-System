@@ -65,15 +65,9 @@ REWRITE_PROMPT_TEMPLATE = """你是一个化妆品行业知识问答系统的查
 
 # ── Keyword-based fallback rules ───────────────────────────────────────
 
-_REGULATION_KEYWORDS = re.compile(
-    r"(备案|注册|法规|标准|GB|合规|许可|公告|安全技术规范|化妆品监督)", re.IGNORECASE
-)
-_INGREDIENT_KEYWORDS = re.compile(
-    r"(成分|原料|INCI|功效|活性|配方|浓度|添加量)", re.IGNORECASE
-)
-_FORMULATION_KEYWORDS = re.compile(
-    r"(配方|工艺|制备|生产|乳化|稳定性|质地|剂型)", re.IGNORECASE
-)
+_REGULATION_KEYWORDS = re.compile(r"(备案|注册|法规|标准|GB|合规|许可|公告|安全技术规范|化妆品监督)", re.IGNORECASE)
+_INGREDIENT_KEYWORDS = re.compile(r"(成分|原料|INCI|功效|活性|配方|浓度|添加量)", re.IGNORECASE)
+_FORMULATION_KEYWORDS = re.compile(r"(配方|工艺|制备|生产|乳化|稳定性|质地|剂型)", re.IGNORECASE)
 
 
 class QueryRewriter:
@@ -98,9 +92,7 @@ class QueryRewriter:
 
     # ── public API ──────────────────────────────────────────────────
 
-    def rewrite(
-        self, query: str, recent_dialogs: list[str] | None = None
-    ) -> dict:
+    def rewrite(self, query: str, recent_dialogs: list[str] | None = None) -> dict:
         """
         Rewrite *query* using conversation context.
 
@@ -109,9 +101,7 @@ class QueryRewriter:
         """
         dialog_text = ""
         if recent_dialogs:
-            for idx, d in enumerate(
-                recent_dialogs[-self._dialog_rounds :], start=1
-            ):
+            for idx, d in enumerate(recent_dialogs[-self._dialog_rounds :], start=1):
                 dialog_text += f"第{idx}轮: {d}\n"
 
         prompt = REWRITE_PROMPT_TEMPLATE.format(
@@ -155,9 +145,7 @@ class QueryRewriter:
         )
         try:
             response = self._call_llm(variant_prompt, temperature=0.7)
-            variants = [
-                line.strip() for line in response.strip().split("\n") if line.strip()
-            ]
+            variants = [line.strip() for line in response.strip().split("\n") if line.strip()]
             # Strip leading numbering like "1. ", "2) ", "3、"
             variants = [re.sub(r"^\d+[\.\)、]\s*", "", v) for v in variants]
             variants = [v for v in variants if v and v != rewritten_query]

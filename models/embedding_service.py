@@ -44,15 +44,14 @@ class EmbeddingService:
     def qdrant_client(self):
         if self._qdrant_client is None:
             from qdrant_client import QdrantClient
+
             self._qdrant_client = QdrantClient(
                 host=config["qdrant"]["host"],
                 port=config["qdrant"]["port"],
                 grpc_port=config["qdrant"]["grpc_port"],
                 prefer_grpc=True,
             )
-            logger.info(
-                f"Qdrant 连接完成: {config['qdrant']['host']}:{config['qdrant']['port']}"
-            )
+            logger.info(f"Qdrant 连接完成: {config['qdrant']['host']}:{config['qdrant']['port']}")
         return self._qdrant_client
 
     def encode_text(self, text: str) -> np.ndarray:
@@ -66,6 +65,7 @@ class EmbeddingService:
             768维向量 (1, 768)
         """
         import torch
+
         inputs = self.bge_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
         with torch.no_grad():
             outputs = self.bge_model(**inputs)
@@ -84,6 +84,7 @@ class EmbeddingService:
             (N, 768) 向量矩阵
         """
         import torch
+
         inputs = self.bge_tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
         with torch.no_grad():
             outputs = self.bge_model(**inputs)
@@ -101,6 +102,7 @@ class EmbeddingService:
             512维向量
         """
         import torch
+
         inputs = self.clip_processor(text=[text], return_tensors="pt", padding=True)
         with torch.no_grad():
             text_features = self.clip_model.get_text_features(**inputs)
@@ -117,6 +119,7 @@ class EmbeddingService:
             (N, 512) 向量矩阵
         """
         import torch
+
         inputs = self.clip_processor(text=texts, return_tensors="pt", padding=True, truncation=True)
         with torch.no_grad():
             text_features = self.clip_model.get_text_features(**inputs)
@@ -188,15 +191,17 @@ class EmbeddingService:
 
         hits = []
         for point in results:
-            hits.append({
-                "doc_id": str(point.payload.get("doc_id", "")),
-                "content": point.payload.get("content", ""),
-                "score": point.score,
-                "metadata": {
-                    "doc_type": point.payload.get("doc_type", ""),
-                    "embedding_type": point.payload.get("embedding_type", ""),
-                },
-            })
+            hits.append(
+                {
+                    "doc_id": str(point.payload.get("doc_id", "")),
+                    "content": point.payload.get("content", ""),
+                    "score": point.score,
+                    "metadata": {
+                        "doc_type": point.payload.get("doc_type", ""),
+                        "embedding_type": point.payload.get("embedding_type", ""),
+                    },
+                }
+            )
         return hits
 
     def search_qdrant_image(
@@ -229,10 +234,12 @@ class EmbeddingService:
 
         hits = []
         for point in results:
-            hits.append({
-                "doc_id": str(point.payload.get("doc_id", "")),
-                "content": point.payload.get("content", ""),
-                "image_uri": point.payload.get("image_uri", ""),
-                "score": point.score,
-            })
+            hits.append(
+                {
+                    "doc_id": str(point.payload.get("doc_id", "")),
+                    "content": point.payload.get("content", ""),
+                    "image_uri": point.payload.get("image_uri", ""),
+                    "score": point.score,
+                }
+            )
         return hits

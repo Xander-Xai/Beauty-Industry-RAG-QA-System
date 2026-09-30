@@ -79,6 +79,7 @@ def _get_recall_manager():
     global _recall_manager
     if _recall_manager is None:
         from retrieval_service.parallel_recall import ParallelRecallManager
+
         _recall_manager = ParallelRecallManager()
     return _recall_manager
 
@@ -87,6 +88,7 @@ def _get_bi_encoder():
     global _bi_encoder
     if _bi_encoder is None:
         from retrieval_service.rerank.bi_encoder import BiEncoderReranker
+
         _bi_encoder = BiEncoderReranker()
     return _bi_encoder
 
@@ -95,6 +97,7 @@ def _get_cross_encoder():
     global _cross_encoder
     if _cross_encoder is None:
         from retrieval_service.rerank.cross_encoder import CrossEncoderEnsemble
+
         _cross_encoder = CrossEncoderEnsemble()
     return _cross_encoder
 
@@ -103,6 +106,7 @@ def _get_evidence_gate():
     global _evidence_gate
     if _evidence_gate is None:
         from retrieval_service.rerank.evidence_gate import EvidenceEnsembleGate
+
         _evidence_gate = EvidenceEnsembleGate()
     return _evidence_gate
 
@@ -111,6 +115,7 @@ def _get_answer_gate():
     global _answer_gate
     if _answer_gate is None:
         from retrieval_service.rerank.answer_gate import AnswerGate
+
         _answer_gate = AnswerGate()
     return _answer_gate
 
@@ -119,6 +124,7 @@ def _get_embedding_service():
     global _embedding_service
     if _embedding_service is None:
         from models.embedding_service import EmbeddingService
+
         _embedding_service = EmbeddingService()
     return _embedding_service
 
@@ -214,15 +220,13 @@ async def api_recall(req: RecallRequest, _auth: None = Depends(verify_service_to
         m.observe_histogram("recall.latency_ms", elapsed_ms)
         m.set_gauge("recall.result_count", len(results))
         m.increment("recall.success")
-        logger.info(
-            f"POST /api/recall -> {len(results)} results in {elapsed_ms:.1f} ms"
-        )
+        logger.info(f"POST /api/recall -> {len(results)} results in {elapsed_ms:.1f} ms")
         return RecallResponse(results=results)
 
     except Exception as e:
         m.increment("recall.errors")
         logger.error(f"/api/recall failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/rerank", response_model=RerankResponse)
@@ -257,15 +261,13 @@ async def api_rerank(req: RerankRequest, _auth: None = Depends(verify_service_to
         elapsed_ms = (time.time() - t0) * 1000
         m.observe_histogram("rerank.latency_ms", elapsed_ms)
         m.increment("rerank.success")
-        logger.info(
-            f"POST /api/rerank -> {len(ce_results)} results in {elapsed_ms:.1f} ms"
-        )
+        logger.info(f"POST /api/rerank -> {len(ce_results)} results in {elapsed_ms:.1f} ms")
         return RerankResponse(results=ce_results)
 
     except Exception as e:
         m.increment("rerank.errors")
         logger.error(f"/api/rerank failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/evidence-gate", response_model=EvidenceGateResult)
@@ -301,7 +303,7 @@ async def api_evidence_gate(req: EvidenceGateRequest, _auth: None = Depends(veri
     except Exception as e:
         m.increment("evidence_gate.errors")
         logger.error(f"/api/evidence-gate failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/answer-gate", response_model=AnswerGateResult)
@@ -337,7 +339,7 @@ async def api_answer_gate(req: AnswerGateRequest, _auth: None = Depends(verify_s
     except Exception as e:
         m.increment("answer_gate.errors")
         logger.error(f"/api/answer-gate failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/metrics")
@@ -355,7 +357,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host="0.0.0.0",  # noqa: S104 -- container service intentionally binds all interfaces
         port=int(os.environ.get("RETRIEVAL_SERVICE_PORT", 8200)),
         reload=False,
         log_level="info",

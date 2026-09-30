@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchStats:
     """Batch processing statistics."""
+
     total_batches: int = 0
     total_pairs: int = 0
     total_inference_time_ms: float = 0.0
@@ -102,8 +103,7 @@ class RerankBatchAggregator:
         self._lock = threading.Lock()
         self._stats = BatchStats()
         logger.info(
-            f"RerankBatchAggregator initialised: "
-            f"time_window={self.time_window_ms}ms, max_batch={self.max_batch_size}"
+            f"RerankBatchAggregator initialised: time_window={self.time_window_ms}ms, max_batch={self.max_batch_size}"
         )
 
     def batch_predict(self, model, pairs: list[tuple[str, str]]) -> list[float]:
@@ -128,12 +128,12 @@ class RerankBatchAggregator:
             # Split by max_batch_size for batch inference
             all_scores = []
             for i in range(0, len(pairs), self.max_batch_size):
-                batch = pairs[i:i + self.max_batch_size]
+                batch = pairs[i : i + self.max_batch_size]
                 batch_scores = model.predict(
                     batch,
                     batch_size=min(len(batch), self.max_batch_size),
                 )
-                if hasattr(batch_scores, 'tolist'):
+                if hasattr(batch_scores, "tolist"):
                     all_scores.extend(batch_scores.tolist())
                 else:
                     all_scores.extend(list(batch_scores))
@@ -174,9 +174,9 @@ class RerankBatchAggregator:
         try:
             all_results = []
             for i in range(0, len(pairs), self.max_batch_size):
-                batch = pairs[i:i + self.max_batch_size]
+                batch = pairs[i : i + self.max_batch_size]
                 batch_results = model.predict(batch)
-                if hasattr(batch_results, 'tolist'):
+                if hasattr(batch_results, "tolist"):
                     all_results.extend(batch_results.tolist())
                 else:
                     all_results.extend(list(batch_results))
@@ -208,8 +208,6 @@ class RerankBatchAggregator:
                 "total_batches": self._stats.total_batches,
                 "total_pairs": self._stats.total_pairs,
                 "avg_pairs_per_batch": round(self._stats.get_avg_pairs_per_batch(), 1),
-                "avg_inference_ms": round(
-                    self._stats.total_inference_time_ms / max(self._stats.total_batches, 1), 2
-                ),
+                "avg_inference_ms": round(self._stats.total_inference_time_ms / max(self._stats.total_batches, 1), 2),
                 "pending_count": 0,  # synchronous mode: no pending
             }

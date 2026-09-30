@@ -4,6 +4,7 @@ Covers 20+ scenarios across login, refresh, user CRUD, and security edge cases.
 All tests use a temporary SQLite database and auto-generated RSA keypair.
 No external services (Redis, Qdrant, ES) required.
 """
+
 import os
 import time
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,7 @@ from auth.user_store import ROLES, UserStore
 def _clear_rate_limit():
     """Reset the module-level rate limit dict before every test."""
     import api.routes_auth as auth_module
+
     auth_module._login_attempts.clear()
     yield
     auth_module._login_attempts.clear()
@@ -73,8 +75,12 @@ def client(app):
 def admin_user(tmp_store):
     """Pre-create an admin user and return its credentials."""
     tmp_store.create_user(
-        "admin-1", "admin", "AdminPass123", "Administrator",
-        ["admin"], [],
+        "admin-1",
+        "admin",
+        "AdminPass123",
+        "Administrator",
+        ["admin"],
+        [],
     )
     return {"username": "admin", "password": "AdminPass123"}
 
@@ -87,8 +93,12 @@ def normal_user(tmp_store):
     ``(role_mask & 0x01) == 0`` correctly rejects this user.
     """
     tmp_store.create_user(
-        "user-1", "regular", "RegularPass1", "Regular User",
-        ["quality"], ["quality_dept"],
+        "user-1",
+        "regular",
+        "RegularPass1",
+        "Regular User",
+        ["quality"],
+        ["quality_dept"],
     )
     return {"username": "regular", "password": "RegularPass1"}
 
@@ -153,7 +163,7 @@ class TestLogin:
         mock_request_client.host = test_ip
 
         success_count = 0
-        for i in range(6):
+        for _i in range(6):
             # We need to simulate requests from the same IP.
             # Patch the request's client object at the endpoint level.
             with patch(
@@ -209,9 +219,7 @@ class TestRefresh:
 
     def test_refresh_success(self, client, admin_user):
         """Valid refresh token should return a new token pair."""
-        _, refresh_token = _login_and_get_tokens(
-            client, admin_user["username"], admin_user["password"]
-        )
+        _, refresh_token = _login_and_get_tokens(client, admin_user["username"], admin_user["password"])
         resp = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
         assert resp.status_code == 200
         data = resp.json()
@@ -245,9 +253,7 @@ class TestRefresh:
 
     def test_refresh_with_access_token(self, client, admin_user):
         """Using an access token as a refresh token should return 401."""
-        access_token, _ = _login_and_get_tokens(
-            client, admin_user["username"], admin_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, admin_user["username"], admin_user["password"])
         resp = client.post("/api/auth/refresh", json={"refresh_token": access_token})
         assert resp.status_code == 401
 
@@ -263,9 +269,7 @@ class TestListUsers:
     def test_list_users_success(self, client, admin_user, tmp_store):
         """Admin should see all users."""
         tmp_store.create_user("u-extra", "extra", "ExtraPass1", "Extra", ["sales"], [])
-        access_token, _ = _login_and_get_tokens(
-            client, admin_user["username"], admin_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, admin_user["username"], admin_user["password"])
         resp = client.get("/api/auth/users", headers=_auth_header(access_token))
         assert resp.status_code == 200
         data = resp.json()
@@ -274,9 +278,7 @@ class TestListUsers:
 
     def test_list_users_requires_admin(self, client, normal_user):
         """Non-admin user should get 403."""
-        access_token, _ = _login_and_get_tokens(
-            client, normal_user["username"], normal_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, normal_user["username"], normal_user["password"])
         resp = client.get("/api/auth/users", headers=_auth_header(access_token))
         assert resp.status_code == 403
 
@@ -300,9 +302,7 @@ class TestCreateUser:
 
     def test_create_user_success(self, client, admin_user, tmp_store):
         """Admin should be able to create a new user."""
-        access_token, _ = _login_and_get_tokens(
-            client, admin_user["username"], admin_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, admin_user["username"], admin_user["password"])
         resp = client.post(
             "/api/auth/users",
             json={
@@ -322,9 +322,7 @@ class TestCreateUser:
 
     def test_create_user_requires_admin(self, client, normal_user):
         """Non-admin should get 403 when creating a user."""
-        access_token, _ = _login_and_get_tokens(
-            client, normal_user["username"], normal_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, normal_user["username"], normal_user["password"])
         resp = client.post(
             "/api/auth/users",
             json={
@@ -354,9 +352,7 @@ class TestCreateUser:
 
     def test_create_user_weak_password(self, client, admin_user):
         """Password shorter than 8 characters should be rejected (S-H4 fix)."""
-        access_token, _ = _login_and_get_tokens(
-            client, admin_user["username"], admin_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, admin_user["username"], admin_user["password"])
         resp = client.post(
             "/api/auth/users",
             json={
@@ -375,9 +371,7 @@ class TestUpdateRoles:
 
     def test_update_roles_success(self, client, admin_user, normal_user, tmp_store):
         """Admin should be able to update user roles."""
-        access_token, _ = _login_and_get_tokens(
-            client, admin_user["username"], admin_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, admin_user["username"], admin_user["password"])
         resp = client.put(
             "/api/auth/users/user-1/roles",
             json={"roles": ["rd", "sales"], "departments": ["rd_dept", "sales_dept"]},
@@ -406,9 +400,7 @@ class TestUpdateRoles:
     def test_update_roles_requires_admin(self, client, normal_user, tmp_store):
         """Non-admin should get 403 when updating roles."""
         tmp_store.create_user("u-tgt", "target", "TargetPass1", "Target", ["rd"], [])
-        access_token, _ = _login_and_get_tokens(
-            client, normal_user["username"], normal_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, normal_user["username"], normal_user["password"])
         resp = client.put(
             "/api/auth/users/u-tgt/roles",
             json={"roles": ["admin"], "departments": []},
@@ -418,9 +410,7 @@ class TestUpdateRoles:
 
     def test_update_roles_user_not_found(self, client, admin_user):
         """Updating roles for a nonexistent user should return 404."""
-        access_token, _ = _login_and_get_tokens(
-            client, admin_user["username"], admin_user["password"]
-        )
+        access_token, _ = _login_and_get_tokens(client, admin_user["username"], admin_user["password"])
         resp = client.put(
             "/api/auth/users/nonexistent-user/roles",
             json={"roles": ["rd"], "departments": []},

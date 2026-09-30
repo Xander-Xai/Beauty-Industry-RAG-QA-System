@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 from common.config import get_config_dict
+from common.models import GenerationResult
 
 config = get_config_dict()
 
@@ -62,6 +63,7 @@ class LLMClient:
 
             model_name = model_cfg.get("name", "Qwen3-14B")
             import os as _os
+
             adapter_name = _os.path.basename(adapter_path) if adapter_path else None
 
             mgr = AdapterManager(
@@ -93,6 +95,7 @@ class LLMClient:
         4. 回退到 gen_4b（轻量模型）
         """
         from common.config import get_config_dict, is_production_mode
+
         _cfg = get_config_dict()
         mr = _cfg.get("model_routing", {})
         # 方法1: endpoint_map 直接查找
@@ -114,6 +117,7 @@ class LLMClient:
     def router(self):
         if self._router is None:
             from router.stateless_router import StatelessRouter
+
             self._router = StatelessRouter()
         return self._router
 
@@ -197,22 +201,26 @@ class LLMClient:
 
         # 重建 messages，追加约束前缀
         messages = self._build_messages(ctx)
-        messages.append({
-            "role": "assistant",
-            "content": already_generated,
-        })
-        messages.append({
-            "role": "user",
-            "content": (
-                "请继续补充后续内容。要求：\n"
-                "1. 保持与已有回答的语义、语气、结构完全一致\n"
-                "2. 不重复已输出的内容\n"
-                "3. 仅补充后续部分\n"
-                "4. 如有结构化大纲，请仅补充尚未覆盖的章节\n"
-                "5. 引用的证据来源必须与前文一致，不得引入新的证据来源\n"
-                "6. 保持与前文相同的格式风格（标题层级、列表缩进等）"
-            ),
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": already_generated,
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "请继续补充后续内容。要求：\n"
+                    "1. 保持与已有回答的语义、语气、结构完全一致\n"
+                    "2. 不重复已输出的内容\n"
+                    "3. 仅补充后续部分\n"
+                    "4. 如有结构化大纲，请仅补充尚未覆盖的章节\n"
+                    "5. 引用的证据来源必须与前文一致，不得引入新的证据来源\n"
+                    "6. 保持与前文相同的格式风格（标题层级、列表缩进等）"
+                ),
+            }
+        )
 
         endpoint_key = self._resolve_endpoint(target_model)
 
@@ -256,7 +264,7 @@ class LLMClient:
         # ② 对话历史
         if ctx.session_id:
             session = SessionState.get_or_create(ctx.session_id)
-            history = session.dialog_rounds[-self.max_conversation_rounds:]
+            history = session.dialog_rounds[-self.max_conversation_rounds :]
             for round in history:
                 if "user_input" in round:
                     messages.append({"role": "user", "content": round["user_input"]})
@@ -267,10 +275,7 @@ class LLMClient:
         evidence_text = self._format_evidence(ctx)
         evidence_gate_note = ""
         if ctx.evidence_result and ctx.evidence_result.decision == "enhanced_generate":
-            evidence_gate_note = (
-                "\n【注意】系统置信度中等，请基于以下多个证据源综合回答，"
-                "如有矛盾请指出并不确定性。\n"
-            )
+            evidence_gate_note = "\n【注意】系统置信度中等，请基于以下多个证据源综合回答，如有矛盾请指出并不确定性。\n"
 
         # ④ 当前用户问题（含证据）
         user_content = f"""{evidence_gate_note}
@@ -295,6 +300,7 @@ class LLMClient:
 
         # 尝试从 config.json 读取自定义 prompt
         from common.config import get_config_dict
+
         _cfg = get_config_dict()
         prompts_cfg = _cfg.get("prompts", {})
         custom_prompt = prompts_cfg.get("system_prompt", "")

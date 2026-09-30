@@ -102,8 +102,9 @@ class CrossEncoderEnsemble:
             return ""
         try:
             tokenizer = self.ce_a.tokenizer
-            encoded = tokenizer(text, truncation=True, max_length=max_tokens,
-                                return_tensors="pt", add_special_tokens=True)
+            encoded = tokenizer(
+                text, truncation=True, max_length=max_tokens, return_tensors="pt", add_special_tokens=True
+            )
             return tokenizer.decode(encoded["input_ids"][0], skip_special_tokens=True)
         except Exception:
             # 回退：中文保守估计 1.5 token/char，使用更短的字符截断
@@ -114,6 +115,7 @@ class CrossEncoderEnsemble:
     def ce_a(self):
         if self._ce_a is None:
             from sentence_transformers import CrossEncoder
+
             model_path = config["gpu1"]["models"]["cross_encoder_a"]["model_path"]
             self._ce_a = CrossEncoder(model_path)
             logger.info(f"CrossEncoder-A 加载完成: {model_path}")
@@ -123,6 +125,7 @@ class CrossEncoderEnsemble:
     def ce_b(self):
         if self._ce_b is None:
             from sentence_transformers import CrossEncoder
+
             model_path = config["gpu1"]["models"]["cross_encoder_b"]["model_path"]
             self._ce_b = CrossEncoder(model_path)
             logger.info(f"CrossEncoder-B 加载完成: {model_path}")
@@ -132,6 +135,7 @@ class CrossEncoderEnsemble:
     def batch_aggregator(self):
         if self._batch_aggregator is None:
             from retrieval.rerank_batch_aggregator import RerankBatchAggregator
+
             self._batch_aggregator = RerankBatchAggregator()
         return self._batch_aggregator
 
@@ -188,13 +192,15 @@ class CrossEncoderEnsemble:
             results = candidates[:top_k]
 
             # PRD §12.2 / GAP-20: 记录 CLIP 来源文档在 Rerank Top-K 中的贡献度
-            clip_in_top = sum(1 for r in results if r.source and 'clip' in r.source)
+            clip_in_top = sum(1 for r in results if r.source and "clip" in r.source)
             clip_contribution = clip_in_top / len(results) if results else 0.0
             # 将贡献度附加到每条结果，供 pipeline 传递给 metrics_collector
             for r in results:
                 r._clip_contribution_ratio = clip_contribution
             if clip_in_top > 0:
-                logger.info(f"CLIP 贡献度: {clip_in_top}/{len(results)} 条 Top-K 来自 CLIP 路径 (ratio={clip_contribution:.2f})")
+                logger.info(
+                    f"CLIP 贡献度: {clip_in_top}/{len(results)} 条 Top-K 来自 CLIP 路径 (ratio={clip_contribution:.2f})"
+                )
 
             logger.info(f"CrossEncoder Ensemble 重排完成: {len(candidates)} → {len(results)}")
             return results

@@ -45,6 +45,7 @@ class MinioClient:
         """尝试初始化 MinIO 客户端"""
         try:
             from minio import Minio
+
             # endpoint 不含 scheme
             endpoint = MINIO_ENDPOINT.replace("http://", "").replace("https://", "")
             secure = MINIO_ENDPOINT.startswith("https")

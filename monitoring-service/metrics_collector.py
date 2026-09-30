@@ -91,19 +91,13 @@ class MetricsCollector:
         """
         # nli_contradiction_rate
         nli_total = max(self._counters.get("nli.total", 0), 1)
-        self._gauges["nli_contradiction_rate"] = round(
-            self._counters.get("nli.contradiction_high", 0) / nli_total, 6
-        )
+        self._gauges["nli_contradiction_rate"] = round(self._counters.get("nli.contradiction_high", 0) / nli_total, 6)
         # blip_trigger_rate
         blip_total = max(self._counters.get("blip.total", 0), 1)
-        self._gauges["blip_trigger_rate"] = round(
-            self._counters.get("blip.triggered", 0) / blip_total, 6
-        )
+        self._gauges["blip_trigger_rate"] = round(self._counters.get("blip.triggered", 0) / blip_total, 6)
         # clip_sync_timeout_rate
         clip_sync_total = max(self._counters.get("clip.total_sync", 0), 1)
-        self._gauges["clip_sync_timeout_rate"] = round(
-            self._counters.get("clip.sync_timeout", 0) / clip_sync_total, 6
-        )
+        self._gauges["clip_sync_timeout_rate"] = round(self._counters.get("clip.sync_timeout", 0) / clip_sync_total, 6)
 
     def set_redis_degraded_mode(self, degraded: bool):
         """
@@ -121,9 +115,7 @@ class MetricsCollector:
         需要从 cache-service 的 epoch/version 切换逻辑 hook 调用。
         """
         self.increment("cache.epoch_switches")
-        self._gauges["cache_version_switch_count"] = float(
-            self._counters.get("cache.epoch_switches", 0)
-        )
+        self._gauges["cache_version_switch_count"] = float(self._counters.get("cache.epoch_switches", 0))
 
     def set_rerank_batch_fill_rate(self, fill_rate: float):
         """
@@ -153,6 +145,7 @@ class MetricsCollector:
         """
         try:
             from retrieval.rerank_batch_aggregator import RerankBatchAggregator
+
             aggregator = RerankBatchAggregator()
             stats = aggregator.get_stats()
             fill_rate = stats.get("batch_fill_rate", 0.0)
@@ -219,9 +212,7 @@ class MetricsCollector:
         if rewrite_result:
             self.increment("rewrite.success")
             fallback = getattr(rewrite_result, "fallback", None) or (
-                rewrite_result.get("fallback")
-                if isinstance(rewrite_result, dict)
-                else None
+                rewrite_result.get("fallback") if isinstance(rewrite_result, dict) else None
             )
             if fallback:
                 self.increment("rewrite.fallback")
@@ -240,16 +231,12 @@ class MetricsCollector:
         )
         if evidence_result:
             ev_score = getattr(evidence_result, "evidence_score", None) or (
-                evidence_result.get("evidence_score")
-                if isinstance(evidence_result, dict)
-                else None
+                evidence_result.get("evidence_score") if isinstance(evidence_result, dict) else None
             )
             if ev_score is not None:
                 self.observe_histogram("evidence.score", ev_score)
             decision = getattr(evidence_result, "decision", None) or (
-                evidence_result.get("decision")
-                if isinstance(evidence_result, dict)
-                else None
+                evidence_result.get("decision") if isinstance(evidence_result, dict) else None
             )
             if decision:
                 self.increment(f"evidence.decision.{decision}")
@@ -260,9 +247,7 @@ class MetricsCollector:
         )
         if answer_gate:
             nli_contra = getattr(answer_gate, "nli_contradiction_score", None) or (
-                answer_gate.get("nli_contradiction_score")
-                if isinstance(answer_gate, dict)
-                else None
+                answer_gate.get("nli_contradiction_score") if isinstance(answer_gate, dict) else None
             )
             if nli_contra is not None:
                 self.observe_histogram("nli.contradiction_score", nli_contra)
@@ -279,9 +264,7 @@ class MetricsCollector:
             self.increment("blip.triggered")
 
         # ── CLIP 同步超时率 / 异步补充命中率（PRD §12）──────────────
-        clip_use = getattr(ctx, "clip_use", None) or (
-            ctx.get("clip_use") if isinstance(ctx, dict) else None
-        )
+        clip_use = getattr(ctx, "clip_use", None) or (ctx.get("clip_use") if isinstance(ctx, dict) else None)
         self.increment("clip.total_queries")
         if clip_use:
             self.increment("clip.image_queries")  # 图像 query 计数（用于 image_query_ratio）
@@ -315,9 +298,7 @@ class MetricsCollector:
             self.observe_histogram("retrieval.agreement_score", agreement_score)
 
         # ── 降级 ────────────────────────────────────────────────────
-        degraded = getattr(ctx, "degraded", None) or (
-            ctx.get("degraded") if isinstance(ctx, dict) else None
-        )
+        degraded = getattr(ctx, "degraded", None) or (ctx.get("degraded") if isinstance(ctx, dict) else None)
         if degraded:
             self.increment("degradation.total")
 
@@ -398,6 +379,7 @@ class MetricsCollector:
         """
         try:
             from admission.kv_admission import KVAdmissionControl
+
             adm = KVAdmissionControl()
             m = adm.get_metrics()
         except Exception as e:
@@ -408,39 +390,39 @@ class MetricsCollector:
 
         lines.append("# HELP rag_admission_effective_concurrency Current active request count")
         lines.append("# TYPE rag_admission_effective_concurrency gauge")
-        lines.append(f'rag_admission_effective_concurrency {m["effective_concurrency"]}')
+        lines.append(f"rag_admission_effective_concurrency {m['effective_concurrency']}")
 
         lines.append("# HELP rag_admission_max_num_seqs Dynamically computed max_num_seqs")
         lines.append("# TYPE rag_admission_max_num_seqs gauge")
-        lines.append(f'rag_admission_max_num_seqs {m["max_num_seqs"]}')
+        lines.append(f"rag_admission_max_num_seqs {m['max_num_seqs']}")
 
         lines.append("# HELP rag_admission_kv_pressure KV cache pressure ratio")
         lines.append("# TYPE rag_admission_kv_pressure gauge")
-        lines.append(f'rag_admission_kv_pressure {m["kv_pressure"]}')
+        lines.append(f"rag_admission_kv_pressure {m['kv_pressure']}")
 
         lines.append("# HELP rag_admission_kv_budget_bytes KV cache budget in bytes")
         lines.append("# TYPE rag_admission_kv_budget_bytes gauge")
-        lines.append(f'rag_admission_kv_budget_bytes {m["kv_budget_bytes"]}')
+        lines.append(f"rag_admission_kv_budget_bytes {m['kv_budget_bytes']}")
 
         lines.append("# HELP rag_admission_kv_used_bytes Currently used KV cache in bytes")
         lines.append("# TYPE rag_admission_kv_used_bytes gauge")
-        lines.append(f'rag_admission_kv_used_bytes {m["kv_used_bytes"]}')
+        lines.append(f"rag_admission_kv_used_bytes {m['kv_used_bytes']}")
 
         lines.append("# HELP rag_admission_throughput_qps Estimated throughput QPS")
         lines.append("# TYPE rag_admission_throughput_qps gauge")
-        lines.append(f'rag_admission_throughput_qps {m["throughput_qps"]}')
+        lines.append(f"rag_admission_throughput_qps {m['throughput_qps']}")
 
         lines.append("# HELP rag_admission_total_total Total admission control decisions")
         lines.append("# TYPE rag_admission_total_total counter")
-        lines.append(f'rag_admission_total_total {m["admission_total"]}')
+        lines.append(f"rag_admission_total_total {m['admission_total']}")
 
         lines.append("# HELP rag_admission_rejected_total Total admission rejections")
         lines.append("# TYPE rag_admission_rejected_total counter")
-        lines.append(f'rag_admission_rejected_total {m["admission_rejected"]}')
+        lines.append(f"rag_admission_rejected_total {m['admission_rejected']}")
 
         lines.append("# HELP rag_admission_queued_total Total admission queue events")
         lines.append("# TYPE rag_admission_queued_total counter")
-        lines.append(f'rag_admission_queued_total {m["admission_queued"]}')
+        lines.append(f"rag_admission_queued_total {m['admission_queued']}")
 
         return "\n".join(lines) + "\n"
 
@@ -456,15 +438,13 @@ class MetricsCollector:
         """获取统计摘要（对齐 PRD §12 全部指标）"""
         total_req = max(self._counters.get("cache.total", 1), 1)
         rewrite_total = max(
-            self._counters.get("rewrite.success", 0)
-            + self._counters.get("rewrite.fail", 0),
+            self._counters.get("rewrite.success", 0) + self._counters.get("rewrite.fail", 0),
             1,
         )
         nli_total = max(self._counters.get("nli.total", 1), 1)
         blip_total = max(self._counters.get("blip.total", 1), 1)
         prefix_total = max(
-            self._counters.get("prefix_cache.hit", 0)
-            + self._counters.get("prefix_cache.miss", 0),
+            self._counters.get("prefix_cache.hit", 0) + self._counters.get("prefix_cache.miss", 0),
             1,
         )
         admission_total = max(self._counters.get("admission.total", 1), 1)
@@ -480,21 +460,21 @@ class MetricsCollector:
                 "L2_SESSION": self._counters.get("cache.hit.L2_SESSION", 0) / total_req,
             },
             # PRD §12: Rewrite 指标
-            "rewrite_fallback_rate": self._counters.get("rewrite.fallback", 0)
-            / rewrite_total,
+            "rewrite_fallback_rate": self._counters.get("rewrite.fallback", 0) / rewrite_total,
             # PRD §12: NLI 矛盾比例
-            "nli_contradiction_rate": self._counters.get("nli.contradiction_high", 0)
-            / nli_total,
+            "nli_contradiction_rate": self._counters.get("nli.contradiction_high", 0) / nli_total,
             # PRD §12: BLIP 触发率
             "blip_trigger_rate": self._counters.get("blip.triggered", 0) / blip_total,
             # PRD §12: CLIP 同步超时率
-            "clip_sync_timeout_rate": self._counters.get("clip.sync_timeout", 0) / max(self._counters.get("clip.total_sync", 1), 1),
-            "clip_async_hit_rate": self._counters.get("clip.async_hit", 0) / max(self._counters.get("clip.total_async", 1), 1),
+            "clip_sync_timeout_rate": self._counters.get("clip.sync_timeout", 0)
+            / max(self._counters.get("clip.total_sync", 1), 1),
+            "clip_async_hit_rate": self._counters.get("clip.async_hit", 0)
+            / max(self._counters.get("clip.total_async", 1), 1),
             # PRD §4.5: 图像 query 占比（image query ratio）
-            "image_query_ratio": self._counters.get("clip.image_queries", 0) / max(self._counters.get("clip.total_queries", 1), 1),
+            "image_query_ratio": self._counters.get("clip.image_queries", 0)
+            / max(self._counters.get("clip.total_queries", 1), 1),
             # PRD §12: Prefix Cache 命中率
-            "prefix_cache_hit_rate": self._counters.get("prefix_cache.hit", 0)
-            / prefix_total,
+            "prefix_cache_hit_rate": self._counters.get("prefix_cache.hit", 0) / prefix_total,
             # PRD §12: Admission Control
             "admission": {
                 "total": self._counters.get("admission.total", 0),
@@ -549,97 +529,93 @@ class MetricsCollector:
 
         lines.append("# HELP rag_rewrite_fallback_rate Rewrite fallback rate")
         lines.append("# TYPE rag_rewrite_fallback_rate gauge")
-        rewrite_total = max(
-            self._counters.get("rewrite.success", 0)
-            + self._counters.get("rewrite.fail", 0), 1
-        )
-        lines.append(f'rag_rewrite_fallback_rate {self._counters.get("rewrite.fallback", 0) / rewrite_total:.6f}')
+        rewrite_total = max(self._counters.get("rewrite.success", 0) + self._counters.get("rewrite.fail", 0), 1)
+        lines.append(f"rag_rewrite_fallback_rate {self._counters.get('rewrite.fallback', 0) / rewrite_total:.6f}")
 
         lines.append("# HELP rag_kv_pressure KV cache pressure gauge")
         lines.append("# TYPE rag_kv_pressure gauge")
-        lines.append(f'rag_kv_pressure {self._gauges.get("kv_pressure", 0.0):.6f}')
+        lines.append(f"rag_kv_pressure {self._gauges.get('kv_pressure', 0.0):.6f}")
 
         lines.append("# HELP rag_effective_concurrency Current effective concurrency")
         lines.append("# TYPE rag_effective_concurrency gauge")
-        lines.append(f'rag_effective_concurrency {self._gauges.get("effective_concurrency", 0.0):.1f}')
+        lines.append(f"rag_effective_concurrency {self._gauges.get('effective_concurrency', 0.0):.1f}")
 
         lines.append("# HELP rag_nli_contradiction_rate NLI contradiction rate")
         lines.append("# TYPE rag_nli_contradiction_rate gauge")
         nli_total = max(self._counters.get("nli.total", 1), 1)
-        lines.append(f'rag_nli_contradiction_rate {self._counters.get("nli.contradiction_high", 0) / nli_total:.6f}')
+        lines.append(f"rag_nli_contradiction_rate {self._counters.get('nli.contradiction_high', 0) / nli_total:.6f}")
 
         lines.append("# HELP rag_blip_trigger_rate BLIP trigger rate")
         lines.append("# TYPE rag_blip_trigger_rate gauge")
         blip_total = max(self._counters.get("blip.total", 1), 1)
-        lines.append(f'rag_blip_trigger_rate {self._counters.get("blip.triggered", 0) / blip_total:.6f}')
+        lines.append(f"rag_blip_trigger_rate {self._counters.get('blip.triggered', 0) / blip_total:.6f}")
 
         lines.append("# HELP rag_clip_sync_timeout_rate CLIP sync timeout rate")
         lines.append("# TYPE rag_clip_sync_timeout_rate gauge")
         clip_sync_total = max(self._counters.get("clip.total_sync", 1), 1)
-        lines.append(f'rag_clip_sync_timeout_rate {self._counters.get("clip.sync_timeout", 0) / clip_sync_total:.6f}')
+        lines.append(f"rag_clip_sync_timeout_rate {self._counters.get('clip.sync_timeout', 0) / clip_sync_total:.6f}")
 
         lines.append("# HELP rag_clip_async_hit_rate CLIP async supplement hit rate")
         lines.append("# TYPE rag_clip_async_hit_rate gauge")
         clip_async_total = max(self._counters.get("clip.total_async", 1), 1)
-        lines.append(f'rag_clip_async_hit_rate {self._counters.get("clip.async_hit", 0) / clip_async_total:.6f}')
+        lines.append(f"rag_clip_async_hit_rate {self._counters.get('clip.async_hit', 0) / clip_async_total:.6f}")
 
         lines.append("# HELP rag_image_query_ratio Image query ratio (queries activated CLIP / total queries)")
         lines.append("# TYPE rag_image_query_ratio gauge")
         clip_query_total = max(self._counters.get("clip.total_queries", 1), 1)
-        lines.append(f'rag_image_query_ratio {self._counters.get("clip.image_queries", 0) / clip_query_total:.6f}')
+        lines.append(f"rag_image_query_ratio {self._counters.get('clip.image_queries', 0) / clip_query_total:.6f}")
 
         lines.append("# HELP rag_prefix_cache_hit_rate Prefix cache hit rate")
         lines.append("# TYPE rag_prefix_cache_hit_rate gauge")
-        prefix_total = max(
-            self._counters.get("prefix_cache.hit", 0)
-            + self._counters.get("prefix_cache.miss", 0), 1
-        )
-        lines.append(f'rag_prefix_cache_hit_rate {self._counters.get("prefix_cache.hit", 0) / prefix_total:.6f}')
+        prefix_total = max(self._counters.get("prefix_cache.hit", 0) + self._counters.get("prefix_cache.miss", 0), 1)
+        lines.append(f"rag_prefix_cache_hit_rate {self._counters.get('prefix_cache.hit', 0) / prefix_total:.6f}")
 
         lines.append("# HELP rag_admission_rejected_total Admission control rejections")
         lines.append("# TYPE rag_admission_rejected_total counter")
-        lines.append(f'rag_admission_rejected_total {self._counters.get("admission.rejected", 0)}')
+        lines.append(f"rag_admission_rejected_total {self._counters.get('admission.rejected', 0)}")
 
         lines.append("# HELP rag_redis_degradation_total Redis degradation events")
         lines.append("# TYPE rag_redis_degradation_total counter")
-        lines.append(f'rag_redis_degradation_total {self._counters.get("redis.degraded_events", 0)}')
+        lines.append(f"rag_redis_degradation_total {self._counters.get('redis.degraded_events', 0)}")
 
         lines.append("# HELP rag_cache_epoch_switches Cache version epoch switch count")
         lines.append("# TYPE rag_cache_epoch_switches counter")
-        lines.append(f'rag_cache_epoch_switches {self._counters.get("cache.epoch_switches", 0)}')
+        lines.append(f"rag_cache_epoch_switches {self._counters.get('cache.epoch_switches', 0)}")
 
         lines.append("# HELP rag_degradation_total Degradation trigger count")
         lines.append("# TYPE rag_degradation_total counter")
-        lines.append(f'rag_degradation_total {self._counters.get("degradation.total", 0)}')
+        lines.append(f"rag_degradation_total {self._counters.get('degradation.total', 0)}")
 
         # ── PRD §12: 新增专用 gauge 指标 ──────────────────────────
         lines.append("# HELP rag_nli_contradiction_rate_gauge NLI contradiction rate (dedicated gauge)")
         lines.append("# TYPE rag_nli_contradiction_rate_gauge gauge")
-        lines.append(f'rag_nli_contradiction_rate_gauge {self._gauges.get("nli_contradiction_rate", 0.0):.6f}')
+        lines.append(f"rag_nli_contradiction_rate_gauge {self._gauges.get('nli_contradiction_rate', 0.0):.6f}")
 
         lines.append("# HELP rag_blip_trigger_rate_gauge BLIP trigger rate (dedicated gauge)")
         lines.append("# TYPE rag_blip_trigger_rate_gauge gauge")
-        lines.append(f'rag_blip_trigger_rate_gauge {self._gauges.get("blip_trigger_rate", 0.0):.6f}')
+        lines.append(f"rag_blip_trigger_rate_gauge {self._gauges.get('blip_trigger_rate', 0.0):.6f}")
 
         lines.append("# HELP rag_clip_sync_timeout_rate_gauge CLIP sync timeout rate (dedicated gauge)")
         lines.append("# TYPE rag_clip_sync_timeout_rate_gauge gauge")
-        lines.append(f'rag_clip_sync_timeout_rate_gauge {self._gauges.get("clip_sync_timeout_rate", 0.0):.6f}')
+        lines.append(f"rag_clip_sync_timeout_rate_gauge {self._gauges.get('clip_sync_timeout_rate', 0.0):.6f}")
 
         lines.append("# HELP rag_redis_degraded_mode Redis degraded mode status (0=normal, 1=degraded)")
         lines.append("# TYPE rag_redis_degraded_mode gauge")
-        lines.append(f'rag_redis_degraded_mode {self._gauges.get("redis_degraded_mode", 0.0):.1f}')
+        lines.append(f"rag_redis_degraded_mode {self._gauges.get('redis_degraded_mode', 0.0):.1f}")
 
         lines.append("# HELP rag_cache_version_switch_count Cache version epoch switch count (dedicated gauge)")
         lines.append("# TYPE rag_cache_version_switch_count gauge")
-        lines.append(f'rag_cache_version_switch_count {self._gauges.get("cache_version_switch_count", 0.0):.1f}')
+        lines.append(f"rag_cache_version_switch_count {self._gauges.get('cache_version_switch_count', 0.0):.1f}")
 
         lines.append("# HELP rag_rerank_batch_fill_rate Rerank batch fill rate (0.0~1.0)")
         lines.append("# TYPE rag_rerank_batch_fill_rate gauge")
-        lines.append(f'rag_rerank_batch_fill_rate {self._gauges.get("rerank_batch_fill_rate", 0.0):.6f}')
+        lines.append(f"rag_rerank_batch_fill_rate {self._gauges.get('rerank_batch_fill_rate', 0.0):.6f}")
 
         lines.append("# HELP rag_rerank_batch_queue_latency_p99 Rerank batch queue latency P99 in ms")
         lines.append("# TYPE rag_rerank_batch_queue_latency_p99 gauge")
-        lines.append(f'rag_rerank_batch_queue_latency_p99 {self._gauges.get("rerank_batch_queue_latency_p99", 0.0):.2f}')
+        lines.append(
+            f"rag_rerank_batch_queue_latency_p99 {self._gauges.get('rerank_batch_queue_latency_p99', 0.0):.2f}"
+        )
 
         # ── PRD §12 + §5.2.6: Admission Control 实时指标 ──────────
         admission_block = self.collect_admission_metrics()

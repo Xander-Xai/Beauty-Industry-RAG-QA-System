@@ -4,7 +4,7 @@ import re
 logger = logging.getLogger(__name__)
 
 # 输入验证正则：仅允许字母、数字、下划线、连字符（用于 knowledge_version_epoch）
-_SAFE_VERSION_PATTERN = re.compile(r'^[a-zA-Z0-9_\-]+$')
+_SAFE_VERSION_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 # 输入验证：整数范围校验（32位无符号）
 _MAX_UINT32 = 0xFFFFFFFF
@@ -12,6 +12,7 @@ _MAX_UINT32 = 0xFFFFFFFF
 # 优先使用 common.config 统一配置，失败时使用最小安全默认值
 try:
     from common.config import get_config as _get_config
+
     _cfg = _get_config()
     _ROLE = _cfg.rbac.roles
     _DEPT = _cfg.rbac.departments
@@ -56,7 +57,7 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
     if not _SAFE_VERSION_PATTERN.match(ae_str):
         raise ValueError(f"knowledge_version_epoch 包含非法字符: {ae_str!r}")
 
-    from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
 
     return Filter(
         must=[
@@ -64,14 +65,18 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
         ]
     )
 
+
 def encode_role_mask(roles):
     m = 0
     for r in roles:
-        if r in _ROLE: m = m | _ROLE[r]
+        if r in _ROLE:
+            m = m | _ROLE[r]
     return m
+
 
 def encode_dept_mask(depts):
     m = 0
     for d in depts:
-        if d in _DEPT: m = m | _DEPT[d]
+        if d in _DEPT:
+            m = m | _DEPT[d]
     return m

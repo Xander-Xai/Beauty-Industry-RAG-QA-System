@@ -1,4 +1,5 @@
 """降级路径测试 — 验证外部服务不可用时的降级行为。"""
+
 import os
 import sys
 import threading
@@ -28,6 +29,7 @@ class TestDegradationPaths:
     def test_cache_degrades_without_redis(self):
         """Redis 不可用时缓存应降级到 L1。"""
         from cache.redis_cache import RedisCache
+
         cache = RedisCache.__new__(RedisCache)
         cache._l1 = OrderedDict()
         cache._l1_max = 100
@@ -49,13 +51,12 @@ class TestDegradationPaths:
     def test_answer_gate_with_no_nli_model(self):
         """NLI 模型不可用时应使用文本相似度兜底。"""
         from retrieval.answer_gate import AnswerGate
+
         gate = AnswerGate()
         if not gate._use_nli:
             doc = MagicMock()
             doc.content = "烟酰胺安全浓度≤5%在化妆品中使用"
-            contradiction, entailment = gate._nli_inference(
-                doc.content, "烟酰胺在化妆品中的浓度不超过5%"
-            )
+            contradiction, entailment = gate._nli_inference(doc.content, "烟酰胺在化妆品中的浓度不超过5%")
             assert isinstance(contradiction, float)
             assert isinstance(entailment, float)
 
@@ -63,6 +64,7 @@ class TestDegradationPaths:
         """BiEncoder 重排失败时应降级返回原始候选。"""
         from core.pipeline_context import RecallResult
         from retrieval.bi_encoder import BiEncoderReranker
+
         reranker = BiEncoderReranker()
 
         mock_embedding = MagicMock()
@@ -82,6 +84,7 @@ class TestDegradationPaths:
         """CrossEncoder 重排失败时应降级返回 BiEncoder 排序。"""
         from core.pipeline_context import RerankResult
         from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
+
         ensemble = CrossEncoderEnsemble()
 
         candidates = [
@@ -100,9 +103,12 @@ class TestDegradationPaths:
         """单文档时 doc_consistency 应为 1.0。"""
         from core.pipeline_context import RerankResult
         from retrieval.evidence_gate import EvidenceEnsembleGate
+
         gate = EvidenceEnsembleGate()
         docs = [RerankResult(doc_id="d1", content="only one doc", ce_score_ensemble=0.7)]
         result = gate.evaluate(
-            query="test", rerank_results=docs, retrieval_agreement_score=0.5,
+            query="test",
+            rerank_results=docs,
+            retrieval_agreement_score=0.5,
         )
         assert result.doc_consistency_score == 1.0

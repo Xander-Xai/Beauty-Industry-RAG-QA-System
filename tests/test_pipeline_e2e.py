@@ -1,4 +1,5 @@
 """端到端管线集成测试 — Mock LLM + 真实组件逻辑。"""
+
 import os
 import sys
 import types
@@ -52,12 +53,9 @@ class TestEndToEndPipeline:
         assert ctx.rewrite_result.business_type == "ingredient"
 
         recall_results = [
-            RecallResult(doc_id="ing_0001", content="烟酰胺(Nicotinamide)安全浓度≤5%",
-                         score=0.92, source="dense_bge"),
-            RecallResult(doc_id="reg_0001", content="GB/T 中规定烟酰胺限量",
-                         score=0.88, source="dense_bge"),
-            RecallResult(doc_id="ing_0002", content="烟酰胺浓度限制在化妆品中的应用",
-                         score=0.85, source="bm25_es"),
+            RecallResult(doc_id="ing_0001", content="烟酰胺(Nicotinamide)安全浓度≤5%", score=0.92, source="dense_bge"),
+            RecallResult(doc_id="reg_0001", content="GB/T 中规定烟酰胺限量", score=0.88, source="dense_bge"),
+            RecallResult(doc_id="ing_0002", content="烟酰胺浓度限制在化妆品中的应用", score=0.85, source="bm25_es"),
         ]
         ctx.recall_results = recall_results
 
@@ -65,17 +63,22 @@ class TestEndToEndPipeline:
             RerankResult(
                 doc_id="ing_0001",
                 content="烟酰胺(Nicotinamide)安全浓度≤5%，在化妆品中广泛使用",
-                ce_score_ensemble=0.92, bi_score=0.88, final_score=0.95,
+                ce_score_ensemble=0.92,
+                bi_score=0.88,
+                final_score=0.95,
             ),
             RerankResult(
                 doc_id="reg_0001",
                 content="GB/T 化妆品中烟酰胺限量标准",
-                ce_score_ensemble=0.75, bi_score=0.72, final_score=0.78,
+                ce_score_ensemble=0.75,
+                bi_score=0.72,
+                final_score=0.78,
             ),
         ]
         ctx.rerank_results = rerank_results
 
         from retrieval.evidence_gate import EvidenceEnsembleGate
+
         gate = EvidenceEnsembleGate()
         evidence_result = gate.evaluate(
             query=ctx.rewrite_result.rewritten_query,
@@ -88,7 +91,7 @@ class TestEndToEndPipeline:
 
         gen_result = GenerationResult(
             answer="烟酰胺（Nicotinamide）在化妆品中的安全浓度一般为 2%-5%。"
-                   "根据相关法规，烟酰胺在驻留型化妆品中的最大允许浓度为 5%。",
+            "根据相关法规，烟酰胺在驻留型化妆品中的最大允许浓度为 5%。",
             model_used="qwen3-4b",
             max_tokens=512,
         )
@@ -96,6 +99,7 @@ class TestEndToEndPipeline:
         assert "烟酰胺" in ctx.generation_result.answer
 
         from retrieval.answer_gate import AnswerGate
+
         answer_gate = AnswerGate()
         answer_gate_result = answer_gate.verify(
             answer=ctx.generation_result.answer,
@@ -119,6 +123,7 @@ class TestEndToEndPipeline:
     def test_fallback_rewrite_logic(self):
         """pipeline 的 _fallback_rewrite 应正确进行规则分类。"""
         from core.pipeline import OnlineRAGPipeline
+
         pipeline = OnlineRAGPipeline()
 
         result = pipeline._fallback_rewrite("这个成分是否符合法规要求？")
@@ -142,11 +147,14 @@ class TestEndToEndPipeline:
         """pipeline 的 _should_use_clip_sync 应返回三档 (use_clip, top_k)。"""
         from core.pipeline import OnlineRAGPipeline
         from core.pipeline_context import QueryRewriteResult
+
         pipeline = OnlineRAGPipeline()
 
         visual_rewrite = QueryRewriteResult(
             rewritten_query="请扫描标签上的成分表",
-            business_type="ingredient", intent="ingredient", requires_context=True,
+            business_type="ingredient",
+            intent="ingredient",
+            requires_context=True,
         )
         use_clip, top_k = pipeline._should_use_clip_sync(visual_rewrite)
         assert use_clip is True
@@ -154,14 +162,18 @@ class TestEndToEndPipeline:
 
         ingredient_rewrite = QueryRewriteResult(
             rewritten_query="烟酰胺浓度",
-            business_type="ingredient", intent="ingredient", requires_context=True,
+            business_type="ingredient",
+            intent="ingredient",
+            requires_context=True,
         )
         use_clip, top_k = pipeline._should_use_clip_sync(ingredient_rewrite)
         assert use_clip is True
 
         general_rewrite = QueryRewriteResult(
             rewritten_query="你好世界",
-            business_type="general", intent="general", requires_context=True,
+            business_type="general",
+            intent="general",
+            requires_context=True,
         )
         use_clip, top_k = pipeline._should_use_clip_sync(general_rewrite)
         assert use_clip is False
@@ -171,6 +183,7 @@ class TestEndToEndPipeline:
         """pipeline 的 _merge_and_dedup 应正确去重。"""
         from core.pipeline import OnlineRAGPipeline
         from core.pipeline_context import RecallResult
+
         pipeline = OnlineRAGPipeline()
 
         results = [

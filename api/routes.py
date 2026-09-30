@@ -16,9 +16,8 @@ import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
-
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from qdrant_client.http.models import FieldCondition, Filter, MatchValue
 
 from api.models import (
     CacheHitRate,
@@ -33,8 +32,7 @@ from api.models import (
     QueryResponse,
     StatsResponse,
 )
-from common.auth import require_identity
-from common.auth import validate_doc_id
+from common.auth import require_identity, validate_doc_id
 from common.config import get_config_dict
 from common.models import UserIdentity
 from core.pipeline import OnlineRAGPipeline
@@ -68,6 +66,7 @@ def get_metrics():
     global _metrics
     if _metrics is None:
         from monitoring.otel_tracer import MetricsCollector
+
         _metrics = MetricsCollector()
     return _metrics
 
@@ -130,9 +129,7 @@ def query_handler(
     return QueryResponse(
         answer=ctx.final_response,
         session_id=ctx.session_id,
-        business_type=(
-            ctx.rewrite_result.business_type if ctx.rewrite_result else None
-        ),
+        business_type=(ctx.rewrite_result.business_type if ctx.rewrite_result else None),
         intent=ctx.rewrite_result.intent if ctx.rewrite_result else None,
         evidence_doc_ids=ctx.evidence_locked_doc_ids,
         latency_ms=round(ctx.get_total_latency_ms(), 2),
@@ -190,9 +187,7 @@ def chat_handler(
         answer=ctx.final_response,
         session_id=req.session_id,
         history=history,
-        business_type=(
-            ctx.rewrite_result.business_type if ctx.rewrite_result else None
-        ),
+        business_type=(ctx.rewrite_result.business_type if ctx.rewrite_result else None),
         intent=ctx.rewrite_result.intent if ctx.rewrite_result else None,
         evidence_doc_ids=ctx.evidence_locked_doc_ids or [],
         latency_ms=round(ctx.get_total_latency_ms(), 2),
@@ -216,7 +211,7 @@ def continuation_handler(
 
     完整续写逻辑需要微服务架构支持，此处返回空桩响应。
     """
-    session = SessionState.get_or_create(req.session_id)
+    SessionState.get_or_create(req.session_id)
     return {
         "answer": "",
         "has_more": False,
@@ -271,6 +266,7 @@ def health_handler():
     # Redis
     try:
         from cache.redis_cache import RedisCache
+
         rc = RedisCache()
         checks["redis"] = rc.enabled
     except Exception as e:
@@ -279,6 +275,7 @@ def health_handler():
     # Qdrant
     try:
         from common.config import get_config_dict
+
         _cfg = get_config_dict()
         _qc = QdrantClient(
             host=_cfg["qdrant"]["host"],
@@ -291,6 +288,7 @@ def health_handler():
     # Elasticsearch
     try:
         from elasticsearch import Elasticsearch
+
         es = Elasticsearch([_config["elasticsearch"]["host"]])
         checks["elasticsearch"] = es.ping()
     except Exception as e:
@@ -397,16 +395,12 @@ def media_handler(
             host=qdrant_cfg.get("host", "localhost"),
             port=qdrant_cfg.get("port", 6333),
         )
-        collection_name = _config.get("embedding", {}).get("text", {}).get(
-            "collection", "rag_text_768"
-        )
+        collection_name = _config.get("embedding", {}).get("text", {}).get("collection", "rag_text_768")
 
         # 使用 scroll 按 doc_id 过滤
         records, _ = client.scroll(
             collection_name=collection_name,
-            scroll_filter=Filter(
-                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
-            ),
+            scroll_filter=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]),
             limit=1,
             with_payload=["role_mask", "dept_mask", "status"],
         )

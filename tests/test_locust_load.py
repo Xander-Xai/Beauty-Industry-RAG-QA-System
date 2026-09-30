@@ -1,4 +1,5 @@
 """静态验证 Locust 压测脚本的导入和基本结构。"""
+
 import os
 import sys
 import types
@@ -29,28 +30,28 @@ class TestLocustScriptStructure:
 
     def test_locust_compiles(self):
         """locustfile.py 应能成功编译（语法正确）。"""
-        with open("tests/load/locustfile.py", "r", encoding="utf-8") as f:
+        with open("tests/load/locustfile.py", encoding="utf-8") as f:
             code = f.read()
         compile(code, "tests/load/locustfile.py", "exec")  # should not raise
 
     def test_queries_non_empty(self):
         """测试查询列表应非空。"""
-        from tests.load.locustfile import ALL_QUERIES
         from tests.load.locustfile import (
+            ALL_QUERIES,
             QUERIES_GENERAL,
             QUERIES_INGREDIENT,
             QUERIES_REGULATION,
         )
+
         assert len(QUERIES_REGULATION) > 0
         assert len(QUERIES_INGREDIENT) > 0
         assert len(QUERIES_GENERAL) > 0
-        assert len(ALL_QUERIES) == (
-            len(QUERIES_REGULATION) + len(QUERIES_INGREDIENT) + len(QUERIES_GENERAL)
-        )
+        assert len(ALL_QUERIES) == (len(QUERIES_REGULATION) + len(QUERIES_INGREDIENT) + len(QUERIES_GENERAL))
 
     def test_latency_stats(self):
         """LatencyStats 数据结构正确。"""
         from tests.load.locustfile import LatencyStats
+
         stats = LatencyStats()
         assert stats.p50 == 0.0
         assert stats.p95 == 0.0
@@ -69,5 +70,6 @@ class TestLocustScriptStructure:
     def test_report_dir(self):
         """REPORT_DIR 应指向 reports/benchmark/。"""
         from tests.load.locustfile import REPORT_DIR
+
         assert "reports" in str(REPORT_DIR)
         assert "benchmark" in str(REPORT_DIR)

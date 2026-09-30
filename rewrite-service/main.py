@@ -84,7 +84,7 @@ async def rewrite(req: RewriteRequest, _auth: None = Depends(verify_service_toke
     except Exception as exc:
         metrics.increment("rewrite.errors")
         logger.error("rewrite failed: %s", exc)
-        raise HTTPException(status_code=500, detail="查询改写失败，请稍后重试")
+        raise HTTPException(status_code=500, detail="查询改写失败，请稍后重试") from exc
 
 
 @app.post("/api/variants", response_model=VariantsResponse)
@@ -102,7 +102,7 @@ async def variants(req: VariantsRequest, _auth: None = Depends(verify_service_to
     except Exception as exc:
         metrics.increment("rewrite.variants.errors")
         logger.error("variants failed: %s", exc)
-        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试") from exc
 
 
 @app.get("/metrics")
@@ -116,4 +116,4 @@ async def get_metrics():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8101)
+    uvicorn.run(app, host="0.0.0.0", port=8101)  # noqa: S104 -- container service intentionally binds all interfaces

@@ -32,6 +32,7 @@ class CLIPRetriever:
     def embedding_service(self):
         if self._embedding_service is None:
             from models.embedding_service import EmbeddingService
+
             self._embedding_service = EmbeddingService()
         return self._embedding_service
 

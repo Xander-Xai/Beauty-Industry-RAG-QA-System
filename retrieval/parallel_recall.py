@@ -20,6 +20,7 @@ import numpy as np
 
 from common.audit import log_audit_event
 from common.config import get_config_dict
+from core.pipeline_context import SessionState
 from retrieval_service.rerank.rrf_fusion import rrf_fusion
 
 config = get_config_dict()
@@ -47,6 +48,7 @@ class ParallelRecallManager:
     def dense_retriever(self):
         if self._dense_retriever is None:
             from retrieval.dense_retriever import DenseRetriever
+
             self._dense_retriever = DenseRetriever()
         return self._dense_retriever
 
@@ -54,6 +56,7 @@ class ParallelRecallManager:
     def bm25_retriever(self):
         if self._bm25_retriever is None:
             from retrieval.bm25_retriever import BM25Retriever
+
             self._bm25_retriever = BM25Retriever()
         return self._bm25_retriever
 
@@ -61,6 +64,7 @@ class ParallelRecallManager:
     def clip_retriever(self):
         if self._clip_retriever is None:
             from retrieval.clip_retriever import CLIPRetriever
+
             self._clip_retriever = CLIPRetriever()
         return self._clip_retriever
 
@@ -72,6 +76,7 @@ class ParallelRecallManager:
         用 is_allowed() 对召回结果进行角色/部门权限过滤。
         """
         from auth.bitmask_rbac import is_allowed
+
         filtered = []
         for r in results:
             doc_role = getattr(r, "role_mask", r.metadata.get("role_mask", 0))
@@ -126,30 +131,39 @@ class ParallelRecallManager:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # ① Dense 语义路 (BGE → Qdrant)
             if top_k_per_path.get("dense_bge", {}).get("enabled", True):
-                futures[executor.submit(
-                    self._recall_dense, query_embedding, qdrant_filter,
-                    top_k_per_path["dense_bge"].get("top_k", 50)
-                )] = "dense_bge"
+                futures[
+                    executor.submit(
+                        self._recall_dense, query_embedding, qdrant_filter, top_k_per_path["dense_bge"].get("top_k", 50)
+                    )
+                ] = "dense_bge"
 
             # ② BM25 关键词精确路 (ES)
             if top_k_per_path.get("bm25_es", {}).get("enabled", True):
-                futures[executor.submit(
-                    self._recall_bm25, query, user_role_mask, user_dept_mask,
-                    top_k_per_path["bm25_es"].get("top_k", 50)
-                )] = "bm25_es"
+                futures[
+                    executor.submit(
+                        self._recall_bm25,
+                        query,
+                        user_role_mask,
+                        user_dept_mask,
+                        top_k_per_path["bm25_es"].get("top_k", 50),
+                    )
+                ] = "bm25_es"
 
             # ③ CLIP 视觉语义路
             if use_clip and top_k_per_path.get("clip_visual", {}).get("enabled", True):
-                futures[executor.submit(
-                    self._recall_clip, query, qdrant_filter, clip_top_k
-                )] = "clip_visual"
+                futures[executor.submit(self._recall_clip, query, qdrant_filter, clip_top_k)] = "clip_visual"
 
             # ④ 改写泛化路（Query Rewrite 变体）
             if top_k_per_path.get("rewrite_variants", {}).get("enabled", True):
-                futures[executor.submit(
-                    self._recall_rewrite_variants, query, query_embedding, qdrant_filter,
-                    top_k_per_path["rewrite_variants"].get("top_k", 30)
-                )] = "rewrite_variant"
+                futures[
+                    executor.submit(
+                        self._recall_rewrite_variants,
+                        query,
+                        query_embedding,
+                        qdrant_filter,
+                        top_k_per_path["rewrite_variants"].get("top_k", 30),
+                    )
+                ] = "rewrite_variant"
 
             # 收集结果（各路独立存储，用于 RRF 融合）
             for future in as_completed(futures):
@@ -172,8 +186,7 @@ class ParallelRecallManager:
             )
             all_results = fused_results
             logger.info(
-                f"RRF 融合完成: {sum(len(v) for v in path_results.values())} "
-                f"输入 → {len(all_results)} 条融合结果"
+                f"RRF 融合完成: {sum(len(v) for v in path_results.values())} 输入 → {len(all_results)} 条融合结果"
             )
         except Exception as e:
             logger.warning(f"RRF 融合失败，回退到简单合并: {e}")
@@ -188,18 +201,16 @@ class ParallelRecallManager:
             path_name in qdrant_paths and path_name not in path_results
             for path_name in qdrant_paths
             if any(futures[f] == path_name for f in futures)
-        ) or (len(all_doc_ids) < 10 and any(
-            path_name in qdrant_paths for path_name in path_results
-            if not path_results[path_name]
-        ))
+        ) or (
+            len(all_doc_ids) < 10
+            and any(path_name in qdrant_paths for path_name in path_results if not path_results[path_name])
+        )
         if qdrant_failed:
             logger.warning("Qdrant 路径异常: 触发 ES Fallback（Qdrant 可能不可用）")
         if len(all_doc_ids) < 50:
             logger.info(f"召回有效文档数 {len(all_doc_ids)} < 50，触发 ES Fallback")
             try:
-                fallback_results = self._recall_es_fallback(
-                    query, user_role_mask, user_dept_mask, top_k_per_path
-                )
+                fallback_results = self._recall_es_fallback(query, user_role_mask, user_dept_mask, top_k_per_path)
                 if fallback_results:
                     all_results.extend(fallback_results)
                     logger.info(f"ES Fallback 补充召回 {len(fallback_results)} 条")
@@ -211,20 +222,34 @@ class ParallelRecallManager:
     def _recall_dense(self, query_embedding, qdrant_filter, top_k) -> list:
         """Dense 语义召回"""
         from core.pipeline_context import RecallResult
+
         hits = self.dense_retriever.search(query_embedding, qdrant_filter, top_k)
-        return [RecallResult(
-            doc_id=h["doc_id"], content=h["content"],
-            score=h["score"], source="dense_bge", metadata=h.get("metadata", {}),
-        ) for h in hits]
+        return [
+            RecallResult(
+                doc_id=h["doc_id"],
+                content=h["content"],
+                score=h["score"],
+                source="dense_bge",
+                metadata=h.get("metadata", {}),
+            )
+            for h in hits
+        ]
 
     def _recall_bm25(self, query, user_role_mask, user_dept_mask, top_k) -> list:
         """BM25 关键词召回"""
         from core.pipeline_context import RecallResult
+
         hits = self.bm25_retriever.search(query, user_role_mask, user_dept_mask, top_k)
-        return [RecallResult(
-            doc_id=h["doc_id"], content=h["content"],
-            score=h["score"], source="bm25_es", metadata=h.get("metadata", {}),
-        ) for h in hits]
+        return [
+            RecallResult(
+                doc_id=h["doc_id"],
+                content=h["content"],
+                score=h["score"],
+                source="bm25_es",
+                metadata=h.get("metadata", {}),
+            )
+            for h in hits
+        ]
 
     def _recall_clip(self, query, qdrant_filter, top_k) -> list:
         """
@@ -239,6 +264,7 @@ class ParallelRecallManager:
 
         def _do_clip():
             from models.embedding_service import EmbeddingService
+
             embedding_svc = EmbeddingService()
             clip_embedding = embedding_svc.encode_text_clip(query)
             return self.clip_retriever.search(clip_embedding, qdrant_filter, top_k)
@@ -247,13 +273,18 @@ class ParallelRecallManager:
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(_do_clip)
                 hits = future.result(timeout=clip_timeout_s)
-            return [RecallResult(
-                doc_id=h["doc_id"], content=h.get("content", ""),
-                score=h["score"], source="clip_visual",
-                metadata={"image_uri": h.get("image_uri", "")},
-            ) for h in hits]
+            return [
+                RecallResult(
+                    doc_id=h["doc_id"],
+                    content=h.get("content", ""),
+                    score=h["score"],
+                    source="clip_visual",
+                    metadata={"image_uri": h.get("image_uri", "")},
+                )
+                for h in hits
+            ]
         except (FuturesTimeout, TimeoutError) as e:
-            logger.warning(f"CLIP 检索超时 ({clip_timeout_s*1000:.0f}ms)，丢弃 CLIP 分支: {e}")
+            logger.warning(f"CLIP 检索超时 ({clip_timeout_s * 1000:.0f}ms)，丢弃 CLIP 分支: {e}")
             return []
         except Exception as e:
             logger.error(f"CLIP 视觉语义召回失败: {e}")
@@ -263,6 +294,7 @@ class ParallelRecallManager:
         """改写泛化路召回"""
         from core.pipeline_context import RecallResult
         from rewrite.query_rewriter import QueryRewriter
+
         rewriter = QueryRewriter()
         variants = rewriter.generate_variants(query)
 
@@ -270,11 +302,18 @@ class ParallelRecallManager:
         for variant in variants[:3]:
             variant_embedding = self.dense_retriever.encode(variant)
             hits = self.dense_retriever.search(variant_embedding, qdrant_filter, top_k // 3)
-            results.extend([RecallResult(
-                doc_id=h["doc_id"], content=h["content"],
-                score=h["score"], source="rewrite_variant",
-                metadata={"variant_query": variant},
-            ) for h in hits])
+            results.extend(
+                [
+                    RecallResult(
+                        doc_id=h["doc_id"],
+                        content=h["content"],
+                        score=h["score"],
+                        source="rewrite_variant",
+                        metadata={"variant_query": variant},
+                    )
+                    for h in hits
+                ]
+            )
         return results
 
     def _recall_es_fallback(self, query, user_role_mask, user_dept_mask, top_k_per_path) -> list:
@@ -284,12 +323,19 @@ class ParallelRecallManager:
         当 Qdrant 不可用或召回有效文档数 < 50 时，自动切换到 ES 全文检索。
         """
         from core.pipeline_context import RecallResult
+
         fallback_top_k = top_k_per_path.get("bm25_es", {}).get("top_k", 50)
         hits = self.bm25_retriever.fallback_search(query, top_k=fallback_top_k)
-        return [RecallResult(
-            doc_id=h["doc_id"], content=h["content"],
-            score=h["score"], source="bm25_fallback", metadata=h.get("metadata", {}),
-        ) for h in hits]
+        return [
+            RecallResult(
+                doc_id=h["doc_id"],
+                content=h["content"],
+                score=h["score"],
+                source="bm25_fallback",
+                metadata=h.get("metadata", {}),
+            )
+            for h in hits
+        ]
 
     def _compute_agreement_score(self, path_results: dict[str, list]) -> float:
         """
@@ -328,6 +374,7 @@ class ParallelRecallManager:
                     labels = km.fit_predict(X)
 
                     from collections import Counter
+
                     total = len(labels)
                     label_counts = Counter(labels)
                     entropy = 0.0
@@ -393,15 +440,21 @@ class ParallelRecallManager:
 
         try:
             from models.embedding_service import EmbeddingService
+
             embedding_svc = EmbeddingService()
             clip_embedding = embedding_svc.encode_text_clip(query)
             hits = self.clip_retriever.search(clip_embedding, qdrant_filter, top_k)
 
-            results = [RecallResult(
-                doc_id=h["doc_id"], content=h.get("content", ""),
-                score=h["score"], source="clip_async",
-                metadata={"image_uri": h.get("image_uri", "")},
-            ) for h in hits]
+            results = [
+                RecallResult(
+                    doc_id=h["doc_id"],
+                    content=h.get("content", ""),
+                    score=h["score"],
+                    source="clip_async",
+                    metadata={"image_uri": h.get("image_uri", "")},
+                )
+                for h in hits
+            ]
 
             # 存入 session 供后续轮次复用
             if session:

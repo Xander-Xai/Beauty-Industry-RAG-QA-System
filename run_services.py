@@ -17,6 +17,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 logging.basicConfig(
@@ -73,11 +74,17 @@ def start_vllm_service(
         return None
 
     cmd = [
-        sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-        "--model", model_path,
-        "--port", str(port),
-        "--max-model-len", str(max_model_len),
-        "--gpu-memory-utilization", str(gpu_memory_utilization),
+        sys.executable,
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--model",
+        model_path,
+        "--port",
+        str(port),
+        "--max-model-len",
+        str(max_model_len),
+        "--gpu-memory-utilization",
+        str(gpu_memory_utilization),
         "--trust-remote-code",
     ]
 
@@ -156,7 +163,7 @@ def start_rerank_service(port: int = 8103) -> subprocess.Popen:
     Returns:
         subprocess.Popen 对象
     """
-    rerank_service_code = f'''
+    rerank_service_code = f"""
 import argparse
 import logging
 import time
@@ -195,13 +202,13 @@ def startup():
             _nli_tokenizer = AutoTokenizer.from_pretrained(_nli_model_path)
             _nli_model = AutoModelForSequenceClassification.from_pretrained(_nli_model_path)
             _nli_model.eval()
-            logger.info(f"NLI 模型加载完成: {_nli_model_path}")
+            logger.info(f"NLI 模型加载完成: {{_nli_model_path}}")
         else:
-            logger.warning(f"NLI 模型路径不存在: {_nli_model_path}，/rerank/nli 将返回 501")
+            logger.warning(f"NLI 模型路径不存在: {{_nli_model_path}}，/rerank/nli 将返回 501")
     except ImportError:
         logger.warning("transformers 未安装，/rerank/nli 将返回 501")
     except Exception as e:
-        logger.warning(f"NLI 模型加载失败: {e}，/rerank/nli 将返回 501")
+        logger.warning(f"NLI 模型加载失败: {{e}}，/rerank/nli 将返回 501")
 
 @app.post("/rerank/batch")
 def rerank_batch(req: RerankRequest):
@@ -273,11 +280,13 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default={port})
     args = parser.parse_args()
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
-'''
+"""
 
-    service_file = "/tmp/rerank_service_temp.py"
-    with open(service_file, "w") as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", prefix="rerank_service_", suffix=".py", encoding="utf-8", delete=False
+    ) as f:
         f.write(rerank_service_code)
+        service_file = f.name
 
     proc = subprocess.Popen(
         [sys.executable, service_file, "--port", str(port)],
@@ -287,7 +296,15 @@ if __name__ == "__main__":
     )
     _processes["rerank-batch"] = proc
     logger.info(f"Rerank Batch Service 已启动 → port {port} (pid={proc.pid})")
-    _wait_for_service("rerank-batch", port, timeout=15)
+    try:
+        _wait_for_service("rerank-batch", port, timeout=15)
+    except Exception:
+        proc.terminate()
+        proc.wait(timeout=5)
+        os.unlink(service_file)
+        raise
+
+    os.unlink(service_file)
 
     return proc
 
@@ -297,26 +314,18 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser(description="服务启动器")
-    parser.add_argument(
-        "--service",
-        choices=["all", "rewrite", "gen", "rerank"],
-        default="all",
-        help="启动的服务"
-    )
+    parser.add_argument("--service", choices=["all", "rewrite", "gen", "rerank"], default="all", help="启动的服务")
     parser.add_argument(
         "--deployment-mode",
         choices=["production", "testing", "development"],
         default=None,
-        help="部署模式 (默认从 config.json 读取)。testing/development 跳过 14B，复用 4B"
+        help="部署模式 (默认从 config.json 读取)。testing/development 跳过 14B，复用 4B",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="仅打印启动命令，不实际执行"
-    )
+    parser.add_argument("--dry-run", action="store_true", help="仅打印启动命令，不实际执行")
     args = parser.parse_args()
 
     from common.config import get_config_dict
+
     config = get_config_dict()
 
     # 解析部署模式：CLI 参数 > config.json > 默认 development

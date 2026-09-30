@@ -1,4 +1,5 @@
 """BM25 Retriever 测试 — 查询构建、权限过滤、版本过滤。"""
+
 import os
 import sys
 import types
@@ -25,6 +26,7 @@ class TestBM25QueryBuilding:
     def _make_retriever(self):
         """创建不连接 ES 的 BM25Retriever。"""
         from retrieval.bm25_retriever import BM25Retriever
+
         r = BM25Retriever.__new__(BM25Retriever)
         r._es_client = None
         r.enabled = True
@@ -84,22 +86,20 @@ class TestBM25QueryBuilding:
             should = f.get("bool", {}).get("should", [])
             for s in should:
                 if "script" in s:
-                    assert False, "超级管理员不应有脚本过滤"
+                    raise AssertionError("超级管理员不应有脚本过滤")
 
     def test_version_epoch_filter(self):
         """应包含 knowledge_version_epoch 过滤。"""
         r = self._make_retriever()
         # patch config
         import retrieval.bm25_retriever as mod
+
         old_epoch = mod.config.get("knowledge_version_epoch")
         mod.config["knowledge_version_epoch"] = "20260603_00"
         try:
             query_body = r._build_es_query("测试", 0, 0, 10)
             filters = query_body["query"]["bool"]["filter"]
-            epoch_found = any(
-                f.get("term", {}).get("doc_version_epoch") == "20260603_00"
-                for f in filters
-            )
+            epoch_found = any(f.get("term", {}).get("doc_version_epoch") == "20260603_00" for f in filters)
             assert epoch_found, "应包含版本 epoch 过滤"
         finally:
             if old_epoch is not None:

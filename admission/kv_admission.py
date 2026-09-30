@@ -21,6 +21,7 @@ Prefix Caching protection (PRD §9):
   ``max_tokens`` parameter, which would invalidate the Prefix Cache key
   hash and trigger a Prefill storm.
 """
+
 import threading
 
 from common.audit import log_audit_event
@@ -46,42 +47,47 @@ class KVAdmissionControl:
     """
 
     # PRD §5.2.3 双因子 KV 成本模型
-    KV_PER_TOKEN = 0.45 * 1024           # 兼容旧代码
-    KV_PER_TOKEN_PREFILL = 0.45 * 1024   # 0.45 KB per token (prefill phase)
-    KV_PER_TOKEN_DECODE = 0.54 * 1024    # 0.54 KB per token (decode phase = 1.2x prefill)
+    KV_PER_TOKEN = 0.45 * 1024  # 兼容旧代码
+    KV_PER_TOKEN_PREFILL = 0.45 * 1024  # 0.45 KB per token (prefill phase)
+    KV_PER_TOKEN_DECODE = 0.54 * 1024  # 0.54 KB per token (decode phase = 1.2x prefill)
     OUTPUT_MAP = {
-        'regulation': 1024, 'development': 768, 'formulation': 768,
-        'ingredient': 512, 'product': 512, 'general': 512, 'short': 256,
+        "regulation": 1024,
+        "development": 768,
+        "formulation": 768,
+        "ingredient": 512,
+        "product": 512,
+        "general": 512,
+        "short": 256,
     }
 
     # PRD §5.2.5 / §9 thresholds — unified with PRD spec
-    THRESHOLD_TIGHTEN = 0.70     # 70%: token bucket tightened, requests queued
-    THRESHOLD_TRUNCATE = 0.80    # 80%: app-layer stream truncation
-    THRESHOLD_SOFT_STOP = 0.90   # 90%: P1 downgrade to 4B, P2 dropped
-    THRESHOLD_CRITICAL = 0.95    # 95%: extreme overload, P0 downgrade + shrink
+    THRESHOLD_TIGHTEN = 0.70  # 70%: token bucket tightened, requests queued
+    THRESHOLD_TRUNCATE = 0.80  # 80%: app-layer stream truncation
+    THRESHOLD_SOFT_STOP = 0.90  # 90%: P1 downgrade to 4B, P2 dropped
+    THRESHOLD_CRITICAL = 0.95  # 95%: extreme overload, P0 downgrade + shrink
 
     # PRD §5.2.5 — Priority levels
     PRIORITY_MAP = {
-        "regulation":  "P0",
+        "regulation": "P0",
         "development": "P1",
-        "ingredient":  "P1",
-        "product":     "P2",
-        "general":     "P2",
-        "chat":        "P2",
-        "short":       "P2",
+        "ingredient": "P1",
+        "product": "P2",
+        "general": "P2",
+        "chat": "P2",
+        "short": "P2",
     }
 
     def __init__(self):
-        kv_gb = _config['gpu0']['models']['gen_14b']['kv_cache_budget_gb']
-        sf = _config['admission_control']['safety_factor']
+        kv_gb = _config["gpu0"]["models"]["gen_14b"]["kv_cache_budget_gb"]
+        sf = _config["admission_control"]["safety_factor"]
         self.kv_budget = int(kv_gb * 1024**3 * sf)
         self.kv_total = int(kv_gb * 1024**3)
         # PRD §5.2.5 / §9: four-level thresholds, all configurable
-        ac = _config.get('admission_control', {})
-        self.threshold_tighten = ac.get('kv_pressure_tighten', self.THRESHOLD_TIGHTEN)
-        self.threshold_truncate = ac.get('kv_pressure_truncate', self.THRESHOLD_TRUNCATE)
-        self.threshold_soft_stop = ac.get('kv_pressure_soft_stop', self.THRESHOLD_SOFT_STOP)
-        self.threshold_critical = ac.get('kv_pressure_critical', self.THRESHOLD_CRITICAL)
+        ac = _config.get("admission_control", {})
+        self.threshold_tighten = ac.get("kv_pressure_tighten", self.THRESHOLD_TIGHTEN)
+        self.threshold_truncate = ac.get("kv_pressure_truncate", self.THRESHOLD_TRUNCATE)
+        self.threshold_soft_stop = ac.get("kv_pressure_soft_stop", self.THRESHOLD_SOFT_STOP)
+        self.threshold_critical = ac.get("kv_pressure_critical", self.THRESHOLD_CRITICAL)
         self.active = {}
         self._lock = threading.RLock()
 
@@ -126,7 +132,7 @@ class KVAdmissionControl:
         est = self.estimate_kv(inp, out, bt)
         priority = self._get_priority(bt)
         admitted = True
-        reason = 'admitted'
+        reason = "admitted"
         p = 0.0
 
         with self._lock:
@@ -138,16 +144,16 @@ class KVAdmissionControl:
                     # P0: retained with forced downgrade (14B→4B) + shrink
                     cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
                     if cur + est > self.kv_budget:
-                        admitted, reason = False, 'critical_p0_budget'
+                        admitted, reason = False, "critical_p0_budget"
                     else:
                         self.active[rid] = (inp, out, bt)
-                        admitted, reason = True, 'critical'
+                        admitted, reason = True, "critical"
                 elif priority == "P1":
                     # P1: queued (not admitted)
-                    admitted, reason = False, 'critical_p1_queued'
+                    admitted, reason = False, "critical_p1_queued"
                 else:
                     # P2: rejected with 503
-                    admitted, reason = False, 'critical_p2_rejected'
+                    admitted, reason = False, "critical_p2_rejected"
 
             elif p > self.threshold_soft_stop:
                 # ── 95%: priority-based handling ──
@@ -155,34 +161,34 @@ class KVAdmissionControl:
                     # P0: admitted normally (protected)
                     cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
                     if cur + est > self.kv_budget:
-                        admitted, reason = False, 'budget_exceeded'
+                        admitted, reason = False, "budget_exceeded"
                     else:
                         self.active[rid] = (inp, out, bt)
-                        admitted, reason = True, 'admitted'
+                        admitted, reason = True, "admitted"
                 elif priority == "P1":
                     # P1: downgraded (14B→4B)
                     cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
                     if cur + est > self.kv_budget:
-                        admitted, reason = False, 'budget_exceeded'
+                        admitted, reason = False, "budget_exceeded"
                     else:
                         self.active[rid] = (inp, out, bt)
-                        admitted, reason = True, 'downgrade_to_4b'
+                        admitted, reason = True, "downgrade_to_4b"
                 else:
                     # P2: rejected
-                    admitted, reason = False, 'soft_stop'
+                    admitted, reason = False, "soft_stop"
 
             else:
                 cur = sum(self.estimate_kv(v[0], v[1], v[2]) for v in self.active.values())
                 if cur + est > self.kv_budget:
-                    admitted, reason = False, 'budget_exceeded'
+                    admitted, reason = False, "budget_exceeded"
                 else:
                     self.active[rid] = (inp, out, bt)
                     if p > self.threshold_truncate:
                         # 80%: app-layer stream truncation
-                        reason = 'admitted_with_truncation'
+                        reason = "admitted_with_truncation"
                     elif p > self.threshold_tighten:
                         # 70%: token bucket tightened
-                        reason = 'admitted_with_tighten'
+                        reason = "admitted_with_tighten"
 
         if not admitted:
             log_audit_event(
@@ -219,19 +225,19 @@ class KVAdmissionControl:
 
         Returns None when no truncation is needed.
         """
-        if reason == 'admitted_with_truncation':
+        if reason == "admitted_with_truncation":
             return max(requested_max_tokens // 2, 256)
-        if reason == 'critical':
+        if reason == "critical":
             return max(requested_max_tokens // 4, 256)
         return None
 
     def should_force_downgrade(self, reason: str) -> bool:
         """Whether to force model downgrade (14B→4B)"""
-        return reason in ('critical', 'downgrade_to_4b')
+        return reason in ("critical", "downgrade_to_4b")
 
     def should_reject_503(self, reason: str) -> bool:
         """Whether to return HTTP 503 (extreme overload for P2)"""
-        return reason == 'critical_p2_rejected'
+        return reason == "critical_p2_rejected"
 
     def release(self, rid):
         with self._lock:
@@ -240,7 +246,7 @@ class KVAdmissionControl:
     def get_status(self):
         with self._lock:
             return {
-                'kv_pressure': round(self._pressure_unlocked(), 3),
-                'active': len(self.active),
-                'kv_budget_mb': round(self.kv_budget / 1024**2, 1),
+                "kv_pressure": round(self._pressure_unlocked(), 3),
+                "active": len(self.active),
+                "kv_budget_mb": round(self.kv_budget / 1024**2, 1),
             }

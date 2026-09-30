@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture(scope="module")
 def client():
     from app import app
+
     return TestClient(app)
 
 
@@ -58,7 +59,7 @@ class TestMetricsPrometheusFormat:
         """Each metric group should have a # TYPE declaration."""
         resp = client.get("/api/metrics")
         lines = resp.text.strip().splitlines()
-        type_lines = [l for l in lines if l.startswith("# TYPE")]
+        type_lines = [line for line in lines if line.startswith("# TYPE")]
         assert len(type_lines) > 0, "Expected at least one # TYPE declaration"
 
     def test_type_declarations_match_metric_lines(self, client):
@@ -158,10 +159,8 @@ class TestMetricsMetricTypes:
                 summary_names.add(parts[2])
 
         for name in summary_names:
-            quantile_lines = [l for l in lines if name in l and 'quantile=' in l]
-            assert len(quantile_lines) > 0, (
-                f"Summary metric {name} should have quantile lines"
-            )
+            quantile_lines = [line for line in lines if name in line and "quantile=" in line]
+            assert len(quantile_lines) > 0, f"Summary metric {name} should have quantile lines"
 
     def test_summary_has_count_line(self, client):
         """Each summary metric should have a _count line."""
@@ -175,10 +174,8 @@ class TestMetricsMetricTypes:
                 summary_base_names.add(parts[2])
 
         for name in summary_base_names:
-            count_lines = [l for l in lines if l.startswith(name + "_count")]
-            assert len(count_lines) > 0, (
-                f"Summary {name} should have a _count line"
-            )
+            count_lines = [line for line in lines if line.startswith(name + "_count")]
+            assert len(count_lines) > 0, f"Summary {name} should have a _count line"
 
 
 # ── No auth required ────────────────────────────────────────────────────────

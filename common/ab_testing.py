@@ -39,8 +39,9 @@ EXPERIMENT_CONFIG_FILE = os.path.join(EXPERIMENT_DIR, "experiments.json")
 @dataclass
 class ExperimentVariant:
     """实验变体"""
-    name: str                           # "control" / "treatment_a" / ...
-    traffic_ratio: float = 0.5          # 流量比例 (0.0 - 1.0)
+
+    name: str  # "control" / "treatment_a" / ...
+    traffic_ratio: float = 0.5  # 流量比例 (0.0 - 1.0)
     config_override: dict = field(default_factory=dict)  # 覆盖配置项
     description: str = ""
 
@@ -48,16 +49,17 @@ class ExperimentVariant:
 @dataclass
 class Experiment:
     """A/B 实验"""
+
     experiment_id: str
     name: str
     description: str
     variants: list[ExperimentVariant]
-    status: str = "draft"               # draft / running / completed / terminated
+    status: str = "draft"  # draft / running / completed / terminated
     created_at: str = ""
     started_at: str = ""
     ended_at: str = ""
-    duration_days: int = 7              # 实验持续天数
-    min_sample_size: int = 200          # 每组最小样本量
+    duration_days: int = 7  # 实验持续天数
+    min_sample_size: int = 200  # 每组最小样本量
     metrics: dict = field(default_factory=dict)  # 各组指标
 
 
@@ -83,12 +85,8 @@ class ABExperimentPlatform:
                 with open(EXPERIMENT_CONFIG_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 for exp_id, exp_data in data.items():
-                    variants = [
-                        ExperimentVariant(**v) for v in exp_data.pop("variants", [])
-                    ]
-                    self._experiments[exp_id] = Experiment(
-                        variants=variants, **exp_data
-                    )
+                    variants = [ExperimentVariant(**v) for v in exp_data.pop("variants", [])]
+                    self._experiments[exp_id] = Experiment(variants=variants, **exp_data)
             except Exception as e:
                 logger.warning(f"加载实验配置失败: {e}")
 
@@ -145,7 +143,7 @@ class ABExperimentPlatform:
         Returns:
             experiment_id
         """
-        exp_id = f"exp_{hashlib.md5(f'{name}_{time.time()}'.encode()).hexdigest()[:8]}"
+        exp_id = f"exp_{hashlib.sha256(f'{name}_{time.time()}'.encode()).hexdigest()[:8]}"
 
         parsed_variants = [
             ExperimentVariant(
@@ -217,7 +215,7 @@ class ABExperimentPlatform:
             return None
 
         # 确定性 hash 分流
-        hash_val = int(hashlib.md5(f"{user_id}:{experiment_id}".encode()).hexdigest(), 16)
+        hash_val = int(hashlib.sha256(f"{user_id}:{experiment_id}".encode()).hexdigest(), 16)
         bucket = (hash_val % 10000) / 10000.0  # 0.0 - 1.0
 
         cumulative = 0.0
@@ -270,11 +268,13 @@ class ABExperimentPlatform:
         # 按变体分组存储指标
         variant_metrics = exp.metrics.setdefault(variant.name, {})
         metric_list = variant_metrics.setdefault(metric_name, [])
-        metric_list.append({
-            "user_id": user_id,
-            "value": value,
-            "ts": time.time(),
-        })
+        metric_list.append(
+            {
+                "user_id": user_id,
+                "value": value,
+                "ts": time.time(),
+            }
+        )
 
         # 每 100 条自动持久化
         if len(metric_list) % 100 == 0:
@@ -346,12 +346,14 @@ class ABExperimentPlatform:
                 z_stat, p_value = self._z_test(v0_values, v1_values)
                 if p_value < 0.05:
                     winner = v0_name if sum(v0_values) / len(v0_values) < sum(v1_values) / len(v1_values) else v1_name
-                    results["significant_results"].append({
-                        "metric": metric_name,
-                        "winner": winner,
-                        "z_stat": round(z_stat, 4),
-                        "p_value": round(p_value, 6),
-                    })
+                    results["significant_results"].append(
+                        {
+                            "metric": metric_name,
+                            "winner": winner,
+                            "z_stat": round(z_stat, 4),
+                            "p_value": round(p_value, 6),
+                        }
+                    )
 
         return results
 
@@ -385,6 +387,7 @@ class ABExperimentPlatform:
     def _normal_cdf(x: float) -> float:
         """标准正态分布 CDF 近似（Abramowitz & Stegun）"""
         import math
+
         a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
         p = 0.3275911
         sign = 1 if x >= 0 else -1

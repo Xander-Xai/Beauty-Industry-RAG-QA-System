@@ -1,4 +1,5 @@
 """Audit logging middleware for tracking user queries and access control."""
+
 import hashlib
 import json
 import logging

@@ -2,6 +2,7 @@
 test_monitoring_subsystem.py — 新增测试: MetricsCollector 记录/导出/百分位、
 AlertingManager 规则触发/恢复/throughput QPS。
 """
+
 import os
 import sys
 import time
@@ -28,13 +29,16 @@ except ImportError:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_collector():
     from monitoring.otel_tracer import MetricsCollector
+
     return MetricsCollector()
 
 
 def _make_alerting(metrics=None):
     from monitoring.otel_tracer import AlertingManager
+
     if metrics is None:
         metrics = _make_collector()
     return AlertingManager(metrics)
@@ -43,13 +47,22 @@ def _make_alerting(metrics=None):
 def _make_ctx(**overrides):
     """创建最小 RequestContext 用于 record_request。"""
     from core.pipeline_context import RequestContext
+
     ctx = RequestContext(user_input="test", session_id="s1", user_id="u1")
-    ctx.rewrite_result = overrides.get("rewrite_result", MagicMock(
-        fallback=False, business_type="general",
-    ))
-    ctx.evidence_result = overrides.get("evidence_result", MagicMock(
-        evidence_score=0.8, decision="pass",
-    ))
+    ctx.rewrite_result = overrides.get(
+        "rewrite_result",
+        MagicMock(
+            fallback=False,
+            business_type="general",
+        ),
+    )
+    ctx.evidence_result = overrides.get(
+        "evidence_result",
+        MagicMock(
+            evidence_score=0.8,
+            decision="pass",
+        ),
+    )
     ctx.cache_hit_level = overrides.get("cache_hit_level", None)
     ctx.degraded = overrides.get("degraded", False)
     ctx.blip_triggered = overrides.get("blip_triggered", False)
@@ -62,6 +75,7 @@ def _make_ctx(**overrides):
 # ===========================================================================
 # 1. MetricsCollector — record_request increments counters correctly
 # ===========================================================================
+
 
 class TestMetricsCollectorRecordRequest:
     """record_request 应正确递增各类计数器。"""
@@ -157,6 +171,7 @@ class TestMetricsCollectorRecordRequest:
 # 2. to_prometheus_text() Output Format
 # ===========================================================================
 
+
 class TestMetricsCollectorPrometheusFormat:
     """to_prometheus_text() 输出格式测试。"""
 
@@ -182,9 +197,9 @@ class TestMetricsCollectorPrometheusFormat:
         for i in range(100):
             mc.observe_histogram("latency_rewrite", float(i * 10))
         output = mc.to_prometheus_text()
-        assert "quantile=\"0.5\"" in output
-        assert "quantile=\"0.95\"" in output
-        assert "quantile=\"0.99\"" in output
+        assert 'quantile="0.5"' in output
+        assert 'quantile="0.95"' in output
+        assert 'quantile="0.99"' in output
         assert "rag_latency_rewrite_seconds_count 100" in output
 
     def test_prometheus_output_contains_uptime(self):
@@ -204,14 +219,15 @@ class TestMetricsCollectorPrometheusFormat:
         """空收集器也应输出 uptime。"""
         mc = _make_collector()
         output = mc.to_prometheus_text()
-        lines = [l for l in output.strip().split("\n") if not l.startswith("#")]
+        [line for line in output.strip().split("\n") if not line.startswith("#")]
         # 至少 uptime 行
-        assert any("rag_uptime_seconds" in l for l in output.split("\n"))
+        assert any("rag_uptime_seconds" in line for line in output.split("\n"))
 
 
 # ===========================================================================
 # 3. Gauge Setting and Retrieval
 # ===========================================================================
+
 
 class TestMetricsCollectorGauges:
     """gauge 设置和检索测试。"""
@@ -248,6 +264,7 @@ class TestMetricsCollectorGauges:
 # ===========================================================================
 # 4. Histogram Percentile Computation
 # ===========================================================================
+
 
 class TestMetricsCollectorHistogram:
     """直方图百分位计算测试。"""
@@ -299,6 +316,7 @@ class TestMetricsCollectorHistogram:
 # ===========================================================================
 # 5. AlertingManager — Rule Triggering with Duration Threshold
 # ===========================================================================
+
 
 class TestAlertingManagerTriggering:
     """AlertingManager 规则触发测试。"""
@@ -364,6 +382,7 @@ class TestAlertingManagerTriggering:
 # 6. AlertingManager — Rule Recovery
 # ===========================================================================
 
+
 class TestAlertingManagerRecovery:
     """AlertingManager 告警恢复测试。"""
 
@@ -418,6 +437,7 @@ class TestAlertingManagerRecovery:
 # ===========================================================================
 # 7. Throughput QPS Metric Computation
 # ===========================================================================
+
 
 class TestThroughputQPS:
     """throughput QPS 计算测试。"""

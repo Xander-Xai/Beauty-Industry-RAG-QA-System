@@ -37,9 +37,9 @@ logger = logging.getLogger(__name__)
 # 业务类型 -> QPS 上限映射（PRD §13: Regulation 60%, R&D 30%, Chat 10%）
 # ---------------------------------------------------------------------------
 BUSINESS_TYPE_LIMITS: dict[str, float] = {
-    "regulation": 60.0,   # 法规类：最高优先级
-    "research": 30.0,     # 研发类：中等优先级
-    "general": 10.0,      # 通用类：低优先级
+    "regulation": 60.0,  # 法规类：最高优先级
+    "research": 30.0,  # 研发类：中等优先级
+    "general": 10.0,  # 通用类：低优先级
 }
 
 DEFAULT_LIMIT: float = 10.0
@@ -48,7 +48,7 @@ BURST_MULTIPLIER: float = 2.0
 # ---------------------------------------------------------------------------
 # Redis 令牌桶 Lua 脚本（PRD §13: Redis-State 限流）
 # ---------------------------------------------------------------------------
-_TOKEN_BUCKET_LUA = """
+_BUCKET_LUA_SOURCE = """
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local refill_rate = tonumber(ARGV[2])
@@ -77,6 +77,7 @@ return allowed
 @dataclass
 class TokenBucket:
     """内存级令牌桶（Redis 不可用时的降级方案）。"""
+
     capacity: float
     tokens: float
     refill_rate: float
@@ -124,6 +125,7 @@ class RateLimiter:
         """尝试初始化 Redis 连接（用于 Redis-State 限流）"""
         try:
             import redis
+
             redis_cfg = {
                 "host": os.environ.get("REDIS_HOST", "redis"),
                 "port": int(os.environ.get("REDIS_PORT", "6379")),
@@ -134,7 +136,7 @@ class RateLimiter:
             }
             self._redis = redis.Redis(**redis_cfg)
             self._redis.ping()
-            self._lua_sha = self._redis.script_load(_TOKEN_BUCKET_LUA)
+            self._lua_sha = self._redis.script_load(_BUCKET_LUA_SOURCE)
             self._redis_available = True
             logger.info("Redis 限流后端初始化完成")
         except Exception as e:
@@ -168,8 +170,12 @@ class RateLimiter:
             key = f"rl:{user_id}:{business_type}"
             now = time.time()
             allowed = self._redis.evalsha(
-                self._lua_sha, 1, key,
-                capacity, rate, now,
+                self._lua_sha,
+                1,
+                key,
+                capacity,
+                rate,
+                now,
             )
             if not allowed:
                 raise self._rate_limit_error(business_type)
@@ -181,7 +187,7 @@ class RateLimiter:
             async with self._lock:
                 bucket = self._get_or_create_bucket(user_id, business_type)
                 if not bucket.consume():
-                    raise self._rate_limit_error(business_type)
+                    raise self._rate_limit_error(business_type) from e
 
     @staticmethod
     def _rate_limit_error(business_type: str) -> HTTPException:

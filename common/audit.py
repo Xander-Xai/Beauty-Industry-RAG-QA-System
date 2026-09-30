@@ -7,6 +7,7 @@
 3. 研发配方类查询（business_type="development"）脱敏为 [REDACTED]
 4. 审计日志持久化：Redis Stream + 文件 JSONL 双 Sink
 """
+
 import hashlib
 import json
 import logging
@@ -35,6 +36,7 @@ def _init_sinks():
 
     try:
         import redis as _redis_lib
+
         cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
         with open(cfg_path, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -133,9 +135,7 @@ def query_audit_events(
             # 优先从 SortedSet 查询（新数据写入 SortedSet）
             min_score = start_time or 0
             max_score = end_time or "+inf"
-            raw_logs = _redis_client.zrangebyscore(
-                "rag:audit_logs", min_score, max_score, start=0, num=limit * 2
-            )
+            raw_logs = _redis_client.zrangebyscore("rag:audit_logs", min_score, max_score, start=0, num=limit * 2)
             for raw in raw_logs:
                 try:
                     event = json.loads(raw)
@@ -153,9 +153,10 @@ def query_audit_events(
 
             # SortedSet 无数据时，回退到 Stream 查询（兼容旧数据）
             stream_entries = _redis_client.xrevrange(
-                "audit:events", count=limit * 2,
+                "audit:events",
+                count=limit * 2,
             )
-            for entry_id, fields in stream_entries:
+            for _entry_id, fields in stream_entries:
                 try:
                     event = json.loads(fields.get("data", "{}"))
                     ts = event.get("ts", 0)
@@ -236,12 +237,18 @@ def get_audit_events(
 def normalize_query(query: str) -> str:
     """PRD §10.2: 查询标准化 — 大小写统一、多余空格/标点清理"""
     import re as _re
+
     q = query.strip()
-    q = _re.sub(r'\s+', ' ', q)  # 多余空白合并
-    q = _re.sub(r'[？！。，、；：]', lambda m: {
-        '？': '?', '！': '!', '。': '.', '，': ',', '、': ',', '；': ';', '：': ':'
-    }.get(m.group(), m.group()), q)  # 中文标点统一为英文
+    q = _re.sub(r"\s+", " ", q)  # 多余空白合并
+    q = _re.sub(
+        r"[？！。，、；：]",
+        lambda m: {"？": "?", "！": "!", "。": ".", "，": ",", "、": ",", "；": ";", "：": ":"}.get(
+            m.group(), m.group()
+        ),
+        q,
+    )  # 中文标点统一为英文
     return q.lower()
+
 
 def hash_query(query: str) -> str:
     """对用户查询进行 SHA256 哈希（先标准化），前 16 位用于日志"""
@@ -261,7 +268,7 @@ def redact_query(query: str, business_type: str = "") -> str:
 
 
 def log_audit_event(
-    event_type: str,           # query_received / admission_rejected / cache_hit / etc.
+    event_type: str,  # query_received / admission_rejected / cache_hit / etc.
     request_id: str,
     user_id: str = "",
     user_role_mask: int = 0,

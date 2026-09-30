@@ -39,9 +39,10 @@ class StatelessRouter:
     def __init__(self):
         # 端点 URL 从环境变量（Docker 部署）或 config.json（本地部署）读取
         import os as _os
-        rewrite_port = config['gpu1']['models']['vllm_rewrite']['port']
-        gen_4b_port = config['gpu1']['models']['vllm_gen_4b']['port']
-        gen_14b_port = config['gpu0']['models']['gen_14b']['port']
+
+        rewrite_port = config["gpu1"]["models"]["vllm_rewrite"]["port"]
+        gen_4b_port = config["gpu1"]["models"]["vllm_gen_4b"]["port"]
+        gen_14b_port = config["gpu0"]["models"]["gen_14b"]["port"]
         self.endpoints = {
             "rewrite": _os.environ.get("VLLM_REWRITE_URL", f"http://localhost:{rewrite_port}"),
             "gen_4b": _os.environ.get("VLLM_GEN_4B_URL", f"http://localhost:{gen_4b_port}"),

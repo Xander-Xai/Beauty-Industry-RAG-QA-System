@@ -27,6 +27,7 @@ from admission.kv_admission import KVAdmissionControl
 
 # ── 辅助 fixtures ──
 
+
 @pytest.fixture
 def admission():
     """创建一个全新的 KVAdmissionControl 实例"""
@@ -34,6 +35,7 @@ def admission():
 
 
 # ── KV 压力计算 ──
+
 
 class TestEstimateKV:
     """测试 KV 估算逻辑（PRD §5.2.3 双因子模型）"""
@@ -62,6 +64,7 @@ class TestEstimateKV:
 
 # ── PRD §9 阈值对齐测试 ──
 
+
 class TestThresholdAlignment:
     """验证阈值与 PRD §5.2.5 / §9 规格一致"""
 
@@ -75,6 +78,7 @@ class TestThresholdAlignment:
 
 
 # ── 压力阈值分层决策（PRD §5.2.5 优先级差异化）──
+
 
 class TestAdmitDecision:
     """测试各压力等级的准入/拒绝决策（含 P0/P1/P2 优先级差异化，PRD §5.2.5 阈值）"""
@@ -90,8 +94,10 @@ class TestAdmitDecision:
     def test_reject_at_critical_pressure_p2(self):
         """压力 >0.95 + P2：critical_p2_rejected"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.97), \
-             patch("admission.kv_admission.log_audit_event"):
+        with (
+            patch.object(ctrl, "_pressure_unlocked", return_value=0.97),
+            patch("admission.kv_admission.log_audit_event"),
+        ):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
         assert admitted is False
         assert reason == "critical_p2_rejected"
@@ -100,8 +106,10 @@ class TestAdmitDecision:
     def test_admit_at_critical_pressure_p0(self):
         """压力 >0.95 + P0：admitted with critical (强制降级)"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.97), \
-             patch("admission.kv_admission.log_audit_event"):
+        with (
+            patch.object(ctrl, "_pressure_unlocked", return_value=0.97),
+            patch("admission.kv_admission.log_audit_event"),
+        ):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "regulation")
         assert admitted is True
         assert reason == "critical"
@@ -110,8 +118,10 @@ class TestAdmitDecision:
     def test_reject_at_critical_pressure_p1(self):
         """压力 >0.95 + P1：critical_p1_queued"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.97), \
-             patch("admission.kv_admission.log_audit_event"):
+        with (
+            patch.object(ctrl, "_pressure_unlocked", return_value=0.97),
+            patch("admission.kv_admission.log_audit_event"),
+        ):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "development")
         assert admitted is False
         assert reason == "critical_p1_queued"
@@ -120,8 +130,10 @@ class TestAdmitDecision:
     def test_reject_at_soft_stop_pressure_p2(self):
         """压力在 0.90~0.95 + P2：soft_stop 拒绝"""
         ctrl = KVAdmissionControl()
-        with patch.object(ctrl, "_pressure_unlocked", return_value=0.94), \
-             patch("admission.kv_admission.log_audit_event"):
+        with (
+            patch.object(ctrl, "_pressure_unlocked", return_value=0.94),
+            patch("admission.kv_admission.log_audit_event"),
+        ):
             admitted, reason, priority = ctrl.admit("req_test", 100, 256, "general")
         assert admitted is False
         assert reason == "soft_stop"
@@ -200,6 +212,7 @@ class TestAdmitDecision:
 
 # ── 预算限制 ──
 
+
 class TestBudgetExceeded:
     """测试 KV 预算超限拒绝"""
 
@@ -229,6 +242,7 @@ class TestBudgetExceeded:
 
 
 # ── Release 与状态 ──
+
 
 class TestReleaseAndStatus:
     """测试请求释放和状态查询"""
@@ -273,6 +287,7 @@ class TestReleaseAndStatus:
 
 # ── Prefix Caching 保护 + 应用层截断 ──
 
+
 class TestPrefixCachingProtection:
     """PRD §9: get_effective_max_tokens 不修改 max_tokens（Prefix Caching 保护）"""
 
@@ -291,8 +306,15 @@ class TestPrefixCachingProtection:
     def test_effective_max_tokens_unchanged_for_all_reasons(self):
         """所有 reason: max_tokens 均不变"""
         ctrl = KVAdmissionControl()
-        for reason in ["admitted", "admitted_with_tighten", "admitted_with_truncation",
-                        "critical", "downgrade_to_4b", "soft_stop", "budget_exceeded"]:
+        for reason in [
+            "admitted",
+            "admitted_with_tighten",
+            "admitted_with_truncation",
+            "critical",
+            "downgrade_to_4b",
+            "soft_stop",
+            "budget_exceeded",
+        ]:
             assert ctrl.get_effective_max_tokens(1024, reason) == 1024
 
     def test_truncation_tokens_for_truncation(self):
@@ -317,6 +339,7 @@ class TestPrefixCachingProtection:
 
 # ── should_force_downgrade / should_reject_503 ──
 
+
 class TestDowngradeAndReject:
     """测试降级与 503 拒绝判定"""
 
@@ -337,6 +360,7 @@ class TestDowngradeAndReject:
 
 
 # ── 并发安全性 ──
+
 
 class TestConcurrency:
     """测试并发场景下的线程安全"""
@@ -384,6 +408,7 @@ class TestConcurrency:
 
 
 # ── P0/P1/P2 优先级映射 ──
+
 
 class TestPriorityMapping:
     """测试业务类型到优先级的映射"""

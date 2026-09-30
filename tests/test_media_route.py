@@ -28,6 +28,7 @@ from common.models import UserIdentity
 
 class _FakeQdrantRecord:
     """模拟 Qdrant 查询返回的 Record 对象"""
+
     def __init__(self, doc_id, role_mask=0, dept_mask=0, status="active"):
         self.payload = {
             "role_mask": role_mask,

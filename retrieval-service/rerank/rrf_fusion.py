@@ -71,17 +71,16 @@ def rrf_fusion(
 
     fused = []
     for doc_id, score in sorted_docs:
-        fused.append(RecallResult(
-            doc_id=doc_id,
-            content=doc_content.get(doc_id, ""),
-            score=score,
-            source=doc_source.get(doc_id, "rrf_fused"),
-            metadata=doc_metadata.get(doc_id, {}),
-        ))
+        fused.append(
+            RecallResult(
+                doc_id=doc_id,
+                content=doc_content.get(doc_id, ""),
+                score=score,
+                source=doc_source.get(doc_id, "rrf_fused"),
+                metadata=doc_metadata.get(doc_id, {}),
+            )
+        )
 
     input_count = sum(len(v) for v in results_map.values())
-    logger.info(
-        f"RRF fusion complete: {input_count} "
-        f"inputs -> {len(fused)} unique docs"
-    )
+    logger.info(f"RRF fusion complete: {input_count} inputs -> {len(fused)} unique docs")
     return fused
