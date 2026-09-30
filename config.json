@@ -2,7 +2,7 @@
   "deployment_mode": "development",
   "system": {
     "name": "化妆品行业RAG问答系统",
-    "version": "2.0.0",
+    "version": "2.3.0",
     "dual_gpu": true
   },
   "gpu0": {

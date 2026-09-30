@@ -26,6 +26,8 @@ data/
 !data/__init__.py
 !data/mock_generator.py
 offline/
+.superpowers/**/state/server.pid
+.superpowers/**/state/server-stopped
 
 # IDE
 .vscode/

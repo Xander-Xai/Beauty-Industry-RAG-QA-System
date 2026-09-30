@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+Changes present on `main` after the 2.3.0 release entry (through the reconciliation base commit):
+
+### Added
+
+- QLoRA fine-tuning utility, sample data, and separate fine-tuning dependencies.
+- PEFT `AdapterManager` and integration with `LLMClient`.
+- Weighted Reciprocal Rank Fusion (RRF) in multi-path retrieval.
+- Dedicated configurable BiEncoder reranker support.
+- RAGAS evaluation harness, golden-set data, and CLI entrypoint.
+- Prefix-cache hit/miss metrics and Locust report improvements.
+
+### Fixed
+
+- AdapterManager and RAGAS test coverage and mock isolation issues.
+- BiEncoder test coverage and configuration.
+
+### Correction — historical offline capability claim
+
+The 2.3.0 entry below says `offline/document_processor.py` was added. That file and the related ingestion modules are absent from the current repository, and `git log --all` contains no implementation history for them. The current `offline/` directory contains only QLoRA utility assets. Current documentation now marks document ingestion as planned; the historical 2.3.0 entry is retained unchanged as release history.
+
+### Version policy
+
+`config.json` → `system.version` is the canonical runtime version and must match the latest dated release heading below. `Unreleased` records changes without assigning a new version. A changelog version does not imply a GitHub Release or tag; no GitHub Release existed at the reconciliation base.
+
 ## [2.3.0] - 2026-06-06
 
 ### Fixed — 矛盾统一 + Bug 修复 + GAP 补全 (16 项)

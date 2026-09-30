@@ -1,3 +1,25 @@
+# Document Type: Product / Architecture Design
+
+**Implementation Status:** mixed — this document records goals and design proposals as well as capabilities whose code has since been added. A PRD statement is not evidence of implementation.
+
+**Canonical Runtime Status:** [README.md](README.md) + [docs/repository-truth-audit.md](docs/repository-truth-audit.md).
+
+| Topic | Current classification | Evidence / boundary |
+|---|---|---|
+| Offline ingestion and OCR | Planned | No production parser, OCR ingestion, vector writer or scheduler under `offline/`; see audit and Issue #2 |
+| Airflow ingestion | Planned | Design reference only; no end-to-end production ingestion is established |
+| RRF | Implemented in code | Fusion implementation exists; production relevance/quality is not implied |
+| BiEncoder | Partial | Reranker and pipeline integration exist; model assets and evaluation are separate |
+| RAGAS | Partial | Evaluation harness and data exist; the harness alone certifies no quality threshold |
+| QLoRA | Partial | Training utility and example data exist; trained output and reproducible result are not included |
+| AdapterManager | Partial | PEFT lifecycle code integrates with `LLMClient`; actual loading requires configuration, dependencies and adapter assets |
+| RBAC | Partial | Runtime auth/RBAC code exists; deployment policy and end-to-end access still require verification |
+| Cache | Partial | Cache implementations and metrics exist; the complete PRD invalidation design is not certified |
+| KV admission | Partial | Admission control code exists; capacity behavior requires workload-specific measurement |
+| Performance metrics | Design targets | Numerical latency/QPS claims below have no benchmark artifact and are not verified production results |
+
+All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Historical implementation plans under `docs/superpowers/` are not current implementation evidence.
+
 化妆品企业级多模态 RAG 智能问答系统（双卡版）
 1. 项目背景
 面向中小型化妆品企业（研发/品质/法规/销售），构建统一知识问答系统，解决成分/法规/配方知识分散、法规体系复杂（8大体系）、非结构化数据占比高、传统知识库不支持多轮与跨模态查询等问题。
@@ -69,11 +91,11 @@ AND status == 'active'
 3.6 文档生命周期与版本化管理（核心修订）
 引入基于 doc_version_epoch 的版本化管控替代实时时间判断，消除因 expiry_date 变更引发的缓存全量失效问题：
 ● 元数据扩展：effective_epoch（生效版本）、expiry_epoch（过期版本）、status（active/archived）。
-● 版本滚动规则：由 Airflow 每日/每小时生成新的 active_epoch 增量值（如 20260411_01），或由发布系统触发 bump 版本号。
+● 设计目标：由 Airflow 每日/每小时生成新的 active_epoch 增量值（如 20260411_01），或由发布系统触发 bump 版本号。当前仓库未验证此 ingestion workflow。
 ● 检索过滤逻辑：所有检索（Qdrant/ES）均使用 doc_version_epoch == {active_epoch} 作为硬性约束，不再依赖 expiry_date > current_timestamp() 运行时判断。
-● 过期处理：Airflow 每日任务将 expiry_epoch < active_epoch 的文档标记为 archived，并更新状态；前端可开启“包含历史版本”开关，此时替换 active_epoch 为历史区间查询。
+● 设计目标：定时任务将 expiry_epoch < active_epoch 的文档标记为 archived，并更新状态；前端历史区间查询尚需按实际代码验证。
 3.7 离线调度
-Apache Airflow 每周增量更新，每月全量重建。根据 embedding_type 分流写入对应 Collection。
+设计目标：Apache Airflow 每周增量更新、每月全量重建，并根据 embedding_type 分流写入对应 Collection。当前仓库不含已验证的生产 ingestion pipeline。
 4. 在线推理架构
 4.1 核心链路
 Query → 用户身份解析 → 二级缓存（L1/L2）
@@ -91,7 +113,7 @@ Query → 用户身份解析 → 二级缓存（L1/L2）
 ● 关键修正：Rewrite 定位为轻量预处理阶段，若 vLLM-Rewrite 实例繁忙（由 Admission Control 判断 KV 压力），则直接在应用层触发结构兜底（降级为规则解析），绝不进入阻塞式等待队列，避免破坏 vLLM 的批次合并效率。
 4.3 模型分级路由
 ● BERT 复杂度评估（0.3B，二分类）：简单问题 → vLLM-Gen-4B；复杂问题 → Qwen3-14B (4-bit NF4)。
-  注：QLoRA 领域微调训练脚本已跑通（rank=16, alpha=32），adapter 加载逻辑已实现，实际 adapter 权重需单独训练生成。
+  状态：仓库包含 QLoRA 训练脚本、样本数据和 PEFT AdapterManager 代码；本 PRD 不据此声称训练已验证。训练产物需单独生成，adapter 加载还依赖运行配置、依赖和模型资产。
 4.4 Query Rewrite（路由增强器，非核心强依赖）
 定位修正：Rewrite 作为“路由增强器”而非必经中心节点，主链路已具备独立检索与生成能力。
 ● 输入：原始 query + 最近 6 轮对话。
