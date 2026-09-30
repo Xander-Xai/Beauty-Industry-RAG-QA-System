@@ -39,7 +39,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-timeout
+          pip install pytest pytest-asyncio pytest-timeout
 
       - name: Repository consistency
         run: python scripts/check_repo_consistency.py
