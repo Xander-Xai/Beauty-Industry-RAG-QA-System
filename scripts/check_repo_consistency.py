@@ -67,11 +67,19 @@ STALE_GOVERNANCE_CLAIM_PATTERNS = [
 ]
 
 # Qdrant IVF tuning parameters (nlist/nprobe) are not part of the implemented
-# collection contract; current docs must not present them as implemented.
-NON_IMPLEMENTED_QDRANT_PARAM_PATTERNS = [
-    r"\bnlist\b",
-    r"\bnprobe\b",
-]
+# collection contract, so current docs must not present them as implemented.
+# Matching is negation-aware: an affirmative implementation/tuning claim is
+# flagged, while a truthful disclaimer ("nprobe is not supported") is allowed.
+_QDRANT_PARAM_RE = re.compile(r"\b(?:nlist|nprobe)\b")
+_QDRANT_USE_VERB_RE = re.compile(
+    r"use[sd]?|using|adopt(?:s|ed)?|configure[sd]?|tun(?:e|es|ed|ing)|采用|使用|配置|设置|启用|调优",
+    re.IGNORECASE,
+)
+_QDRANT_NEGATION_RE = re.compile(
+    r"not|never|unsupported|without|no\s+support|"
+    r"不支持|未|尚未|没有|不含|不使用|未声明|未配置",
+    re.IGNORECASE,
+)
 
 REQUIRED_AUDIT_AREAS = {
     "Application",
@@ -211,17 +219,43 @@ def check_documented_offline_commands(path: Path, subcommands: set[str], errors:
             )
 
 
+def non_implemented_qdrant_param_claims(text: str) -> list[str]:
+    """Return nlist/nprobe occurrences presented as current implementation.
+
+    An occurrence is a claim when it sits in an affirmative use/tuning clause and
+    no negation marker appears in its surrounding context.
+    """
+    claims: list[str] = []
+    for match in _QDRANT_PARAM_RE.finditer(text):
+        context = text[max(0, match.start() - 40) : match.end() + 20]
+        if _QDRANT_NEGATION_RE.search(context):
+            continue
+        prefix = text[max(0, match.start() - 40) : match.start()]
+        suffix = text[match.end() : match.end() + 20]
+        affirmative_use = _QDRANT_USE_VERB_RE.search(prefix) is not None
+        affirmative_tuning = re.match(r"\s*(?:[=≈~]|调优|自适应|tuning)", suffix, flags=re.IGNORECASE) is not None
+        if affirmative_use or affirmative_tuning:
+            claims.append(match.group(0))
+    return claims
+
+
 def check_forbidden_current_claims(path: Path, errors: list[str]) -> None:
     """Flag superseded governance claims and non-implemented contract parameters."""
     text = path.read_text(encoding="utf-8")
-    patterns = STALE_GOVERNANCE_CLAIM_PATTERNS + NON_IMPLEMENTED_QDRANT_PARAM_PATTERNS
-    for pattern in patterns:
+    for pattern in STALE_GOVERNANCE_CLAIM_PATTERNS:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             fail(
                 errors,
                 f"{_display(path)}: superseded current claim matched {pattern!r}: {match.group(0)!r}",
             )
+
+    qdrant_claims = sorted(set(non_implemented_qdrant_param_claims(text)))
+    if qdrant_claims:
+        fail(
+            errors,
+            f"{_display(path)}: presents non-implemented Qdrant IVF parameters as current: {qdrant_claims}",
+        )
 
 
 def check_metrics_route_contract(errors: list[str]) -> None:
@@ -296,13 +330,21 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
         fail(errors, "repository truth audit verification date is missing")
     else:
         value = date_match.group(1).rstrip(".")
-        try:
-            datetime.date.fromisoformat(value)
-        except ValueError:
+        # Require the documented YYYY-MM-DD shape explicitly: date.fromisoformat()
+        # also accepts compact and ISO-week forms such as 20261002 or 2026-W40-5.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
             fail(
                 errors,
                 f"repository truth audit verification date must be ISO YYYY-MM-DD, got {value!r}",
             )
+        else:
+            try:
+                datetime.date.fromisoformat(value)
+            except ValueError:
+                fail(
+                    errors,
+                    f"repository truth audit verification date is not a valid calendar date: {value!r}",
+                )
 
     audit_lines = audit_text.splitlines()
     header = next((line for line in audit_lines if line.startswith("| Area |")), "")

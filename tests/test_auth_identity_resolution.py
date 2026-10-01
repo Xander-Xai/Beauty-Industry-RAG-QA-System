@@ -78,6 +78,22 @@ def test_rs256_token_accepted_without_legacy_secret(monkeypatch, tmp_path):
     assert resp.json() == {"user_id": "rs256_only_user", "role_mask": 0x01, "dept_mask": 0x02}
 
 
+def test_rs256_rejected_when_algorithm_disabled(monkeypatch, tmp_path):
+    """Unsetting JWT_ALGORITHM must disable RS256 verification, not just login."""
+    private_path, public_path = generate_keypair(str(tmp_path))
+    monkeypatch.setenv("JWT_PRIVATE_KEY_PATH", private_path)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_PATH", public_path)
+    monkeypatch.delenv("JWT_ALGORITHM", raising=False)
+    monkeypatch.setenv("AUTH_DEV_MODE", "false")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    reload_config()
+
+    token = create_access_token("disabled_user", role_mask=0x01, dept_mask=0x01)
+    resp = TestClient(_protected_app()).get("/protected", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 401
+
+
 def test_legacy_hs256_fallback_still_accepted(monkeypatch):
     """Legacy HS256 tokens remain an optional fallback when JWT_SECRET is set."""
     import jwt as pyjwt

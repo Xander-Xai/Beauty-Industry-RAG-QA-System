@@ -23,6 +23,7 @@ import time
 from fastapi import HTTPException, Request, status
 from fastapi.security import HTTPBearer
 
+from auth.jwt_auth import get_jwt_config as get_rs256_jwt_config
 from auth.jwt_auth import verify_token as verify_rs256_token
 from common.config import get_config
 from common.models import UserIdentity
@@ -81,10 +82,17 @@ def _get_jwt_settings() -> dict:
 
 
 def _decode_jwt(token: str) -> dict | None:
-    """Decode and validate a JWT, preferring the RS256 browser auth contract."""
-    rs256_payload = verify_rs256_token(token, "access")
-    if rs256_payload is not None:
-        return rs256_payload
+    """Decode and validate a JWT, preferring the RS256 browser auth contract.
+
+    RS256 verification is independent of the legacy HS256 secret, but it still
+    honors its own enable switch: ``JWT_ALGORITHM`` must be configured. Unsetting
+    the algorithm disables the RS256 path, matching ``/api/auth/metadata`` and the
+    login/refresh endpoints, which report JWT auth as disabled.
+    """
+    if get_rs256_jwt_config().enabled:
+        rs256_payload = verify_rs256_token(token, "access")
+        if rs256_payload is not None:
+            return rs256_payload
 
     settings = _get_jwt_settings()
     if not settings["enabled"]:
@@ -232,9 +240,9 @@ async def parse_identity(request: Request) -> UserIdentity:
     """
     cfg = get_config()
 
-    # 1. JWT Bearer token — always attempt verification. RS256 (auth.jwt_auth)
-    # verification is independent of the legacy HS256 secret; the HS256
-    # fallback inside _decode_jwt decides its own compatibility enablement.
+    # 1. JWT Bearer token — always attempt decoding. _decode_jwt gates the RS256
+    # path on its own JWT_ALGORITHM enable switch (independent of the legacy
+    # HS256 secret) and falls back to HS256 only when that secret is enabled.
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]

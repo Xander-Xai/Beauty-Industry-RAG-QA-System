@@ -75,6 +75,29 @@ def test_truth_audit_rejects_non_iso_date(tmp_path):
     assert any("ISO YYYY-MM-DD" in error for error in errors)
 
 
+def test_truth_audit_rejects_compact_iso_date(tmp_path):
+    """fromisoformat also accepts 20261002; the guard must require YYYY-MM-DD."""
+    audit = tmp_path / "audit.md"
+    audit.write_text(
+        "Reconciled candidate: `HEAD`\nPost-reconciliation verification date: 20261002\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_truth_audit(errors, audit)
+    assert any("ISO YYYY-MM-DD" in error for error in errors)
+
+
+def test_truth_audit_rejects_iso_week_date(tmp_path):
+    audit = tmp_path / "audit.md"
+    audit.write_text(
+        "Reconciled candidate: `HEAD`\nPost-reconciliation verification date: 2026-W40-5\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_truth_audit(errors, audit)
+    assert any("ISO YYYY-MM-DD" in error for error in errors)
+
+
 def test_truth_audit_rejects_missing_date(tmp_path):
     audit = tmp_path / "audit.md"
     audit.write_text("Reconciled candidate: `HEAD`\n", encoding="utf-8")
@@ -101,6 +124,18 @@ def test_superseded_contract_claim_is_flagged(tmp_path):
     clean_errors: list[str] = []
     check_forbidden_current_claims(clean, clean_errors)
     assert clean_errors == []
+
+
+def test_qdrant_param_disclaimer_is_not_flagged(tmp_path):
+    """A truthful 'not supported' disclaimer must not trip the drift guard."""
+    disclaimer = tmp_path / "disclaimer.md"
+    disclaimer.write_text(
+        "Qdrant 使用 Cosine 距离；本仓库不支持 nlist / nprobe 调优参数。",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_forbidden_current_claims(disclaimer, errors)
+    assert errors == []
 
 
 def test_current_metrics_and_rbac_contracts_pass():
