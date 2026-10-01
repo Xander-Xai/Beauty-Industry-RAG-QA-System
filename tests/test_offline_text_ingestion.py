@@ -17,6 +17,11 @@ from offline.text_ingestion import (
 )
 
 
+def _text_records(client, collection):
+    records, _ = client.scroll(collection, limit=1000, with_payload=True)
+    return [record for record in records if (record.payload or {}).get("doc_type") == "text"]
+
+
 def test_processor_handles_short_bom_overlap_stability_and_changed_content(tmp_path):
     path = tmp_path / "guide.txt"
     path.write_text("\ufeffAlpha beta gamma delta", encoding="utf-8")
@@ -312,7 +317,7 @@ def test_txt_to_local_qdrant_query_authorization_and_idempotence(tmp_path):
 
     repeated = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
     assert [item.chunk_id for item in chunks] == [item.chunk_id for item in repeated]
-    assert client.count("rag_text_16", exact=True).count == 1
+    assert len(_text_records(client, "rag_text_16")) == 1
 
     with pytest.raises(ValueError, match="uint32"):
         service.ingest(source, role_mask=2**32, dept_mask=4, doc_version_epoch="phase_1")
@@ -329,12 +334,12 @@ def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
     source = _write_source(tmp_path, "stable.txt", "shared collagen moisturizer content")
 
     epoch_a = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_a")
-    points_a, _ = client.scroll("epoch_test", limit=10, with_payload=True)
+    points_a = _text_records(client, "epoch_test")
     ids_a = {point.id for point in points_a}
     assert len(ids_a) == len(epoch_a)
 
     epoch_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b")
-    points_b, _ = client.scroll("epoch_test", limit=10, with_payload=True)
+    points_b = _text_records(client, "epoch_test")
     ids_by_epoch = {
         epoch: {point.id for point in points_b if point.payload["doc_version_epoch"] == epoch}
         for epoch in ("epoch_a", "epoch_b")
@@ -358,7 +363,7 @@ def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
         assert {hit["metadata"]["doc_version_epoch"] for hit in hits} == {epoch}
 
     repeated_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b")
-    points_after_repeat, _ = client.scroll("epoch_test", limit=10, with_payload=True)
+    points_after_repeat = _text_records(client, "epoch_test")
     assert [chunk.chunk_id for chunk in repeated_b] == [chunk.chunk_id for chunk in epoch_b]
     assert len(points_after_repeat) == len(epoch_a) + len(epoch_b)
     assert {point.id for point in points_after_repeat if point.payload["doc_version_epoch"] == "epoch_a"} == ids_a
@@ -374,11 +379,11 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
     source = _write_source(tmp_path, "mutable.txt", "old content that spans multiple chunks")
     old_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
     assert len(old_chunks) > 1
-    original_ids = {record.id for record in client.scroll("replace_test", limit=10, with_payload=True)[0]}
+    original_ids = {record.id for record in _text_records(client, "replace_test")}
 
     source.write_text("new content", encoding="utf-8")
     phase_1 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
-    phase_1_records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    phase_1_records = _text_records(client, "replace_test")
     phase_1_ids = {record.id for record in phase_1_records}
     assert len(phase_1) == 1
     assert len(phase_1_ids) == 1
@@ -387,7 +392,7 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
 
     phase_2 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
     assert len(phase_2) == 1
-    records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    records = _text_records(client, "replace_test")
     phase_2_ids = {record.id for record in records if record.payload["doc_version_epoch"] == "phase_2"}
     assert {record.id for record in records if record.payload["doc_version_epoch"] == "phase_1"} == phase_1_ids
     assert phase_1_ids.isdisjoint(phase_2_ids)
@@ -395,7 +400,7 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
     source.write_text("replacement for B", encoding="utf-8")
     replacement_b = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
     assert replacement_b
-    records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    records = _text_records(client, "replace_test")
     assert {record.id for record in records if record.payload["doc_version_epoch"] == "phase_1"} == phase_1_ids
     replacement_b_ids = {record.id for record in records if record.payload["doc_version_epoch"] == "phase_2"}
     assert {record.payload["content"] for record in records if record.payload["doc_version_epoch"] == "phase_2"} == {
@@ -405,7 +410,7 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
 
     source.write_text(" \n", encoding="utf-8")
     assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2") == []
-    records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    records = _text_records(client, "replace_test")
     assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1"}
 
     service.writer.seal_epoch("phase_2")
@@ -447,7 +452,7 @@ def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
     )
 
     service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default")
-    assert client.count("legacy_default", exact=True).count == 1
+    assert len(_text_records(client, "legacy_default")) == 1
     service.writer.seal_epoch("default")
     with pytest.raises(ValueError, match="is sealed"):
         service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default")
@@ -512,6 +517,41 @@ def test_same_content_retry_accepts_qdrant_cosine_normalization(tmp_path):
     assert retry == first
     stored = client.scroll("cosine_normalized_retry", limit=10, with_vectors=True)[0][0].vector
     assert stored == pytest.approx([0.6, 0.8] + [0.0] * 14)
+
+
+def test_epoch_rejects_different_embedding_revision_across_documents(tmp_path):
+    client = QdrantClient(":memory:")
+
+    class VersionedEmbedder:
+        dimension = 16
+
+        def __init__(self, version, marker):
+            self.embedding_version = version
+            self.marker = marker
+
+        def embed_texts(self, texts):
+            return [[self.marker, 1.0] + [0.0] * 14 for _ in texts]
+
+    first_source = _write_source(tmp_path, "first.txt", "first document")
+    second_source = _write_source(tmp_path, "second.txt", "second document")
+    first_service = TextIngestionService(
+        DocumentProcessor(),
+        VersionedEmbedder("model-v1", 0.25),
+        QdrantTextWriter(client, "epoch_embedding_version", dimension=16),
+    )
+    second_service = TextIngestionService(
+        DocumentProcessor(),
+        VersionedEmbedder("model-v2", 0.75),
+        QdrantTextWriter(client, "epoch_embedding_version", dimension=16),
+    )
+
+    first_service.ingest(first_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    with pytest.raises(ValueError, match="embedding version changed within epoch"):
+        second_service.ingest(second_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+
+    points, _ = client.scroll("epoch_embedding_version", limit=100, with_payload=True)
+    text_points = [point for point in points if point.payload.get("doc_type") == "text"]
+    assert {point.payload["embedding_version"] for point in text_points} == {"model-v1"}
 
 
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):
@@ -695,7 +735,7 @@ def test_concurrent_writers_tolerate_collection_create_race(tmp_path):
     assert not any(thread.is_alive() for thread in writers)
     assert failures == []
     assert qdrant.collection_exists("fresh_race")
-    assert qdrant.count("fresh_race", exact=True).count == 2
+    assert len(_text_records(qdrant, "fresh_race")) == 2
 
 
 def test_collection_schema_mismatch_fails_clearly():

@@ -78,6 +78,36 @@ def _local_epoch_lock(epoch: str, *, shared: bool):
         os.close(file_descriptor)
 
 
+@contextmanager
+def _local_epoch_embedding_lock(epoch: str):
+    """Serialize initialization and validation of an epoch's embedding contract."""
+    import fcntl
+
+    owner_id = os.getuid() if hasattr(os, "getuid") else os.getpid()
+    configured_lock_dir = os.environ.get("OFFLINE_INGESTION_LOCK_DIR")
+    lock_dir = (
+        Path(configured_lock_dir)
+        if configured_lock_dir
+        else Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
+    )
+    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory_stat = lock_dir.stat()
+    if hasattr(os, "getuid") and directory_stat.st_uid != owner_id:
+        raise PermissionError(f"ingestion lock directory is owned by another user: {lock_dir}")
+    if directory_stat.st_mode & 0o077:
+        raise PermissionError(f"ingestion lock directory must not be accessible by other users: {lock_dir}")
+
+    lock_key = hashlib.sha256(f"epoch-embedding:{epoch}".encode()).hexdigest()
+    lock_path = lock_dir / f"{lock_key}.lock"
+    file_descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(file_descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(file_descriptor, fcntl.LOCK_UN)
+        os.close(file_descriptor)
+
+
 @dataclass(frozen=True)
 class TextChunk:
     """Parsed text fragment plus the storage and authorization contract."""
@@ -382,8 +412,10 @@ class QdrantTextWriter:
                 existing_records = []
                 offset = None
                 source_filter = Filter(
-                    must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))],
-                    should=epoch_conditions,
+                    must=[
+                        FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+                        Filter(should=epoch_conditions),
+                    ],
                 )
                 while True:
                     records, offset = self.client.scroll(
@@ -432,6 +464,8 @@ class QdrantTextWriter:
                     if not existing_records and not points:
                         return
                     raise ValueError(f"knowledge epoch {doc_version_epoch!r} is sealed; write to a new epoch")
+                if points:
+                    self._ensure_epoch_embedding_version(doc_version_epoch)
 
                 existing_ids = [record.id for record in existing_records]
                 if existing_ids:
@@ -490,6 +524,81 @@ class QdrantTextWriter:
 
     def _epoch_seal_id(self, epoch: str) -> str:
         return str(uuid.uuid5(_POINT_NAMESPACE, f"epoch-seal:{epoch}"))
+
+    def _epoch_embedding_version_id(self, epoch: str) -> str:
+        return str(uuid.uuid5(_POINT_NAMESPACE, f"epoch-embedding-version:{epoch}"))
+
+    def _ensure_epoch_embedding_version(self, epoch: str) -> None:
+        """Pin each epoch to one embedding revision before any document is written."""
+        from qdrant_client.http.models import (
+            FieldCondition,
+            Filter,
+            IsEmptyCondition,
+            MatchValue,
+            PayloadField,
+            PointStruct,
+        )
+
+        with _local_epoch_embedding_lock(epoch):
+            marker_id = self._epoch_embedding_version_id(epoch)
+            marker = self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=[marker_id],
+                with_payload=True,
+                with_vectors=False,
+            )
+            marker_payload = marker[0].payload or {} if marker else {}
+            pinned_version = marker_payload.get("embedding_version")
+            if pinned_version is not None and pinned_version != self.embedding_version:
+                raise ValueError("embedding version changed within epoch; ingest into a new epoch")
+            if pinned_version == self.embedding_version:
+                return
+
+            epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=epoch))]
+            if epoch == "default":
+                epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
+            existing_versions = set()
+            offset = None
+            epoch_filter = Filter(
+                must=[
+                    FieldCondition(key="doc_type", match=MatchValue(value="text")),
+                    FieldCondition(key="status", match=MatchValue(value="active")),
+                    Filter(should=epoch_conditions),
+                ],
+            )
+            while True:
+                records, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=epoch_filter,
+                    limit=256,
+                    with_payload=["embedding_version"],
+                    with_vectors=False,
+                    offset=offset,
+                )
+                existing_versions.update((record.payload or {}).get("embedding_version") for record in records)
+                if offset is None:
+                    break
+
+            if existing_versions and existing_versions != {self.embedding_version}:
+                raise ValueError("embedding version is missing or mixed within epoch; ingest into a new epoch")
+            if pinned_version is None:
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=[
+                        PointStruct(
+                            id=marker_id,
+                            vector=[1.0] + [0.0] * (self.dimension - 1),
+                            payload={
+                                "doc_type": "epoch_manifest",
+                                "manifest_type": "embedding_version",
+                                "embedding_version": self.embedding_version,
+                                "doc_version_epoch": epoch,
+                                "status": "archived",
+                            },
+                        )
+                    ],
+                    wait=True,
+                )
 
     def _is_epoch_sealed(self, epoch: str) -> bool:
         records = self.client.retrieve(
