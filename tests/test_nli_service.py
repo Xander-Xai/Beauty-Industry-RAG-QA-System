@@ -97,9 +97,10 @@ torch_mock.nn.Module = object
 _cuda_mock = types.ModuleType("torch.cuda")
 _cuda_mock.is_available = lambda: False
 torch_mock.cuda = _cuda_mock
-# Use direct assignment, NOT setdefault — setdefault is a no-op when another
-# test file has already imported the real `torch` into sys.modules.
-sys.modules["torch"] = torch_mock
+# NOTE: the fake torch is injected by the autouse fixture below, never at module
+# import time, so merely collecting this test module does not pollute
+# ``sys.modules['torch']`` for other test modules (e.g. RAGAS tests that need
+# the real torch to be importable).
 
 
 @pytest.fixture(autouse=True)

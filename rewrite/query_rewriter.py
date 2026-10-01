@@ -220,7 +220,7 @@ class QueryRewriter:
 
         try:
             router = StatelessRouter()
-            response = router.route_completion("rewrite", prompt, max_tokens=192, temperature=payload["temperature"])
+            response = router.route_completion("gen_4b", prompt, max_tokens=192, temperature=payload["temperature"])
             return response
         except Exception as e:
             logger.error(f"vLLM-Rewrite 调用失败: {e}")

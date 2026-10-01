@@ -26,6 +26,12 @@
         },
         "quantization_bits": 4,
         "quant_type": "nf4",
+        "awq": {
+          "enabled": false,
+          "model_path": "./models/Qwen3-14B-AWQ",
+          "group_size": 128,
+          "version": "gemm"
+        },
         "max_model_len": 8192,
         "gpu_memory_utilization": 0.85,
         "kv_cache_budget_gb": 8.0,
@@ -44,20 +50,13 @@
   "gpu1": {
     "role": "控制与轻推理",
     "models": {
-      "vllm_rewrite": {
+      "vllm_4b": {
         "name": "Qwen3-4B",
         "engine": "vllm",
         "port": 8101,
         "model_path": "./models/Qwen3-4B-Instruct",
         "max_model_len": 4096,
-        "max_tokens": 192
-      },
-      "vllm_gen_4b": {
-        "name": "Qwen3-4B",
-        "engine": "vllm",
-        "port": 8102,
-        "model_path": "./models/Qwen3-4B-Instruct",
-        "max_model_len": 4096
+        "gpu_memory_utilization": 0.4
       },
       "bert_complexity": {
         "name": "BERT复杂度分类",
@@ -98,7 +97,7 @@
         "name": "BLIP图像描述",
         "model_path": "./blip-image-captioning-large",
         "device": "cuda:1",
-        "trigger_threshold": 0.05,
+        "trigger_threshold": 0.3,
         "max_images_per_request": 5,
         "cache_ttl_seconds": 3600
       },
@@ -245,14 +244,14 @@
     "development": ["配方", "研发", "工艺", "制备", "合成", "开发"],
     "ingredient": ["成分", "INCI", "功效", "浓度", "含量", "添加量"],
     "product": ["产品", "品牌", "适用", "肤质", "包装"],
-    "visual": ["图片", "包装", "外观", "照片", "扫描", "标签", "成分表", "配方", "图像", "图像识别", "OCR", "说明书", "瓶身", "外盒"],
+    "visual": ["图片", "包装", "外观", "照片", "扫描", "标签", "成分表", "配方", "图像", "图像识别", "OCR", "说明书", "瓶身", "外盒", "瓶盖", "瓶贴", "生产日期", "保质期", "批号", "条形码", "产品图", "实物图", "对比图", "展示图", "扫描件", "背标", "正标", "净含量", "成分", "功效", "使用说明", "警告", "储存", "生产商", "委托方", "地址", "化妆品生产许可证", "执行标准", "备案号", "注册证", "防伪", "二维码", "售价"],
     "_comment_visual": "visual 关键词用于 CLIP 图像检索触发判别"
   },
   "model_routing": {
     "tiers": {
       "complex":  { "endpoint": "gen_14b", "label": "复杂/高精度模型" },
       "simple":   { "endpoint": "gen_4b",  "label": "简单/轻量模型" },
-      "rewrite":  { "endpoint": "vllm_rewrite", "label": "查询改写" }
+      "rewrite":  { "endpoint": "gen_4b", "label": "查询改写" }
     },
     "endpoint_map": {
       "qwen3-4b": "gen_4b",
@@ -294,7 +293,9 @@
   },
   "clip_sync": {
     "timeout_ms": 120,
-    "low_cost_top_k": 20
+    "low_cost_top_k": 20,
+    "threshold_high": 0.50,
+    "threshold_low": 0.20
   },
   "clip_async": {
     "enabled": true,
@@ -321,7 +322,7 @@
   },
   "alerting": {
     "rules": [
-      {"name": "blip_trigger_high", "metric": "blip_trigger_rate", "threshold": 0.1,
+      {"name": "blip_trigger_high", "metric": "blip_trigger_rate", "threshold": 0.15,
        "duration_s": 300, "severity": "warning", "comparison": "gt"},
       {"name": "cache_hit_L1_drop", "metric": "cache_hit_rate_L1", "threshold": 0.3,
        "duration_s": 300, "severity": "warning", "comparison": "lt"},
@@ -339,7 +340,7 @@
     }
   },
   "auth": {
-    "dev_mode": true,
+    "dev_mode": false,
     "jwt_secret": "",
     "jwt_expiry_hours": 24
   },
@@ -356,5 +357,19 @@
       { "key": "regulation", "label": "Regulatory Affairs", "role_mask": 4, "dept_mask": 4 },
       { "key": "sales", "label": "Commercial Team", "role_mask": 8, "dept_mask": 8 }
     ]
+  },
+  "ragas": {
+    "enabled": true,
+    "dataset_path": "tests/evaluation/golden_set.jsonl",
+    "default_metrics": ["faithfulness", "answer_relevancy", "context_precision", "context_recall"],
+    "llm_backend": {
+      "type": "openai",
+      "model": "gpt-4o-mini",
+      "api_base": "",
+      "api_key_env": "OPENAI_API_KEY"
+    },
+    "report_output_dir": "./data/eval/reports",
+    "baseline_tag": "baseline",
+    "comparison_tags": []
   }
 }

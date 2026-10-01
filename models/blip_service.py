@@ -8,7 +8,7 @@ BLIP 在线按需推理模块（PRD §6）
 2. BERT 意图分类：intent 为 formulation / ingredient 且 business_type 含图像意图
 3. CLIP 召回结果存在 image_uri（说明有图像命中）
 
-触发率 <5%，结果缓存 TTL 1h，GPU 批处理延迟 ≤120ms。
+触发率 ~15%，结果缓存 TTL 1h，GPU 批处理延迟 ≤120ms。
 
 使用场景：
 - 用户查询涉及包装外观、成分表图片、标签等视觉内容
@@ -54,6 +54,26 @@ VISUAL_KEYWORDS = {
     "实物图",
     "对比图",
     "展示图",
+    # 扩展关键词（Item X: 视觉覆盖调至 ~15%）
+    "扫描件",
+    "背标",
+    "正标",
+    "净含量",
+    "成分",
+    "功效",
+    "使用说明",
+    "警告",
+    "储存",
+    "生产商",
+    "委托方",
+    "地址",
+    "化妆品生产许可证",
+    "执行标准",
+    "备案号",
+    "注册证",
+    "防伪",
+    "二维码",
+    "售价",
 }
 
 
@@ -64,14 +84,16 @@ class BLIPTargetDetector:
     决策逻辑：
     is_blip_triggered = max(keyword_rule_score, bert_classifier_score, has_image_hit)
 
-    任一条件满足即触发 BLIP，触发率控制在 <5%。
+    任一条件满足即触发 BLIP，触发率控制 ~15%（阈值从 config 读取，默认 0.3）。
     """
 
     def __init__(self):
         self._bert_model = None
         self._bert_tokenizer = None
         self._bert_load_attempted = False  # 避免重复尝试加载失败的模型
-        logger.info("BLIPTargetDetector 初始化完成")
+        # 从 config 读取触发阈值，默认 0.3（原硬编码 0.6，降低以提升覆盖至 ~15%）
+        self._threshold = config.get("gpu1", {}).get("models", {}).get("blip", {}).get("trigger_threshold", 0.3)
+        logger.info(f"BLIPTargetDetector 初始化完成（触发阈值={self._threshold}）")
 
     def should_trigger(
         self,
@@ -104,7 +126,7 @@ class BLIPTargetDetector:
         bert_score = self._bert_intent_score(query, business_type, intent)
 
         score = max(keyword_score, bert_score)
-        triggered = score >= 0.6
+        triggered = score >= self._threshold
 
         if triggered:
             logger.debug(f"BLIP 触发: keyword={keyword_score:.2f}, bert={bert_score:.2f}")

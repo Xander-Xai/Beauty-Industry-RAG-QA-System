@@ -12,6 +12,7 @@ BM25 关键词检索模块（readme 7.1 并行多路召回第 2 路）
 from __future__ import annotations
 
 import logging
+import os
 
 from common.config import get_config_dict
 
@@ -43,8 +44,9 @@ class BM25Retriever:
 
                 es_cfg = config.get("elasticsearch", {})
                 kwargs = {"hosts": [es_cfg.get("host", "http://localhost:9200")]}
-                username = es_cfg.get("username", "")
-                password = es_cfg.get("password", "")
+                # 优先从环境变量读取 ES 凭据，再回退到 config.json
+                username = os.environ.get("ELASTICSEARCH_USERNAME") or es_cfg.get("username", "")
+                password = os.environ.get("ELASTICSEARCH_PASSWORD") or es_cfg.get("password", "")
                 if username and password:
                     kwargs["basic_auth"] = (username, password)
                 self._es_client = Elasticsearch(**kwargs)

@@ -145,11 +145,10 @@ class BertModelConfig:
 
 @dataclass(frozen=True)
 class GpuModelsConfig:
-    """Holds the two possible model sub-sections under a GPU config."""
+    """Holds the model sub-sections under a GPU config."""
 
     gen_14b: VllmModelConfig | None = None
-    vllm_rewrite: VllmModelConfig | None = None
-    vllm_gen_4b: VllmModelConfig | None = None
+    vllm_4b: VllmModelConfig | None = None
     bert_complexity: BertModelConfig | None = None
     cross_encoder_a: BertModelConfig | None = None
     cross_encoder_b: BertModelConfig | None = None
@@ -330,7 +329,7 @@ def resolve_model_endpoint(tier_name: str, is_production: bool = True) -> str:
         is_production: 是否为生产模式（决定是否允许复杂模型直连）
 
     Returns:
-        端点键名（如 'gen_4b', 'gen_14b', 'vllm_rewrite'）
+        端点键名（如 'gen_4b', 'gen_14b'）
     """
     cfg = get_config().model_routing
     if not is_production and tier_name == "complex":
@@ -395,6 +394,32 @@ class CacheConfig:
 
 
 @dataclass(frozen=True)
+class RagasLlmBackendConfig:
+    type: str = "openai"
+    model: str = "gpt-4o-mini"
+    api_base: str = ""
+    api_key_env: str = "OPENAI_API_KEY"
+
+
+@dataclass(frozen=True)
+class RagasConfig:
+    enabled: bool = True
+    dataset_path: str = "tests/evaluation/golden_set.jsonl"
+    default_metrics: list[str] = field(
+        default_factory=lambda: [
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
+            "context_recall",
+        ]
+    )
+    llm_backend: RagasLlmBackendConfig = field(default_factory=RagasLlmBackendConfig)
+    report_output_dir: str = "./data/eval/reports"
+    baseline_tag: str = "baseline"
+    comparison_tags: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Top-level configuration dataclass, mirrors config.json structure."""
 
@@ -416,6 +441,7 @@ class AppConfig:
     ui: UiConfig = field(default_factory=UiConfig)
     alerting: AlertingConfig = field(default_factory=AlertingConfig)
     cache_config: CacheConfig = field(default_factory=CacheConfig)
+    ragas: RagasConfig = field(default_factory=RagasConfig)
     knowledge_version_epoch: str = "20260603_00"
     deployment_mode: str = "development"
 
@@ -562,6 +588,14 @@ def _parse_config_dict(raw: dict) -> AppConfig:
     rules_raw = alerting_data.get("rules", [])
     if rules_raw:
         alerting_data["rules"] = [_parse_dict(AlertRule, r) if isinstance(r, dict) else r for r in rules_raw]
+
+    # Handle ragas config
+    ragas_data = raw.get("ragas", {})
+    if isinstance(ragas_data, dict):
+        llm_raw = ragas_data.get("llm_backend", {})
+        if isinstance(llm_raw, dict):
+            ragas_data["llm_backend"] = _parse_dict(RagasLlmBackendConfig, llm_raw)
+        raw["ragas"] = ragas_data
 
     return _parse_dict(AppConfig, raw)
 

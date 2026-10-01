@@ -16,6 +16,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from common.config import get_config, is_production_mode
+
 logger = logging.getLogger(__name__)
 
 # CORS 来源白名单：通过环境变量配置，多个来源用逗号分隔
@@ -25,13 +27,9 @@ if _cors_origins_str:
     CORS_ORIGINS = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
 else:
     # H-10: 生产模式下 CORS_ORIGINS 必须显式设置
-    try:
-        from common.config import is_production_mode
-
-        if is_production_mode():
-            raise RuntimeError("生产模式下必须通过 CORS_ORIGINS 环境变量设置允许的来源（不可使用通配符 *）")
-    except ImportError:
-        pass
+    cfg = get_config()
+    if cfg.deployment_mode == "production" or is_production_mode():
+        raise RuntimeError("生产模式下必须通过 CORS_ORIGINS 环境变量设置允许的来源（不可使用通配符 *）")
     CORS_ORIGINS = ["*"]
     logger.warning("CORS_ORIGINS 未设置，使用通配符 *（仅限开发模式）")
 

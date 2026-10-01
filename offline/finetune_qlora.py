@@ -27,7 +27,13 @@ import sys
 from dataclasses import dataclass, field
 
 import torch
-from datasets import Dataset
+
+try:
+    from datasets import Dataset
+
+    DATASETS_AVAILABLE = True
+except ImportError:
+    DATASETS_AVAILABLE = False
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -87,12 +93,15 @@ class DataArguments:
     save_total_limit: int = field(default=1)
     warmup_steps: int = field(default=100)
     fp16: bool = field(default=True)
+    validation_split: float = field(
+        default=0.0, metadata={"help": "Fraction of data held out for validation (0.0 = no split)"}
+    )
 
 
 # ── 数据加载 ────────────────────────────────────────────────────────────
 
 
-def load_training_data(data_path: str, tokenizer) -> Dataset:
+def load_training_data(data_path: str, tokenizer) -> "Dataset":
     """
     加载 JSON 格式训练数据，使用 tokenizer.apply_chat_template 格式化。
 
@@ -122,6 +131,8 @@ def load_training_data(data_path: str, tokenizer) -> Dataset:
             }
         )
 
+    if not DATASETS_AVAILABLE:
+        raise RuntimeError("datasets package is required but not installed. Run: pip install datasets")
     dataset = Dataset.from_list(formatted)
     logger.info("Loaded %d training examples from %s", len(dataset), data_path)
     return dataset
@@ -142,7 +153,7 @@ def create_bnb_config(model_args: ModelArguments) -> BitsAndBytesConfig:
     )
 
 
-def create_lora_config(lora_args: LoRAArguments) -> LoraConfig:
+def create_lora_config(lora_args: LoRAArguments) -> "LoraConfig":
     """创建 LoRA 配置，匹配 config.json gen_14b 的参数。"""
     target_modules = [m.strip() for m in lora_args.lora_target_modules.split(",")]
     return LoraConfig(
@@ -206,6 +217,17 @@ def main():
     # 5. 训练数据
     logger.info("Loading training data from %s...", data_args.data_path)
     dataset = load_training_data(data_args.data_path, tokenizer)
+    logger.info("Data loaded: %d examples", len(dataset))
+    # 数据集统计
+    if data_args.validation_split > 0:
+        split = dataset.train_test_split(test_size=data_args.validation_split, seed=42)
+        train_dataset = split["train"]
+        eval_dataset = split["test"]
+        logger.info("Train: %d / Eval: %d", len(train_dataset), len(eval_dataset))
+    else:
+        train_dataset = dataset
+        eval_dataset = None
+        logger.info("Training on all %d examples (no validation split)", len(dataset))
 
     # 6. Trainer
     training_args = TrainingArguments(
@@ -228,7 +250,8 @@ def main():
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         dataset_text_field="text",
         max_seq_length=data_args.max_seq_length,
     )
@@ -238,7 +261,51 @@ def main():
     # 7. 保存 LoRA adapter
     logger.info("Saving LoRA adapter to %s...", data_args.output_dir)
     trainer.save_model(data_args.output_dir)
+
+    # 8. 生成 Model Card
+    _write_model_card(data_args, lora_args, model_args, len(dataset))
     logger.info("Fine-tuning complete!")
+
+
+def _write_model_card(data_args, lora_args, model_args, dataset_size: int):
+    """生成 Model Card README.md 到输出目录。"""
+    import os
+
+    card_path = os.path.join(data_args.output_dir, "README.md")
+    card = f"""# QLoRA Adapter — Model Card
+
+## Base Model
+- **Model**: {model_args.model_path}
+- **Quantization**: {model_args.quantization_bits}-bit {model_args.quant_type}
+
+## LoRA Configuration
+- **Rank (r)**: {lora_args.lora_rank}
+- **Alpha**: {lora_args.lora_alpha}
+- **Dropout**: {lora_args.lora_dropout}
+- **Target Modules**: {lora_args.lora_target_modules}
+
+## Training Data
+- **Size**: {dataset_size} examples
+- **Source**: {data_args.data_path}
+
+## Training Hyperparameters
+- **Epochs**: {data_args.num_epochs}
+- **Batch Size**: {data_args.batch_size}
+- **Gradient Accumulation Steps**: {data_args.gradient_accumulation_steps}
+- **Learning Rate**: {data_args.learning_rate}
+- **Max Sequence Length**: {data_args.max_seq_length}
+- **Warmup Steps**: {data_args.warmup_steps}
+- **FP16**: {data_args.fp16}
+- **Validation Split**: {data_args.validation_split}
+
+## Deployment
+Place this adapter at the path referenced by `config.json` under `gen_14b.lora_adapter_path`.
+vLLM will load it automatically via `--enable-lora --lora-modules QLoRA-adapter=<path>`.
+"""
+    os.makedirs(os.path.dirname(card_path), exist_ok=True)
+    with open(card_path, "w") as f:
+        f.write(card)
+    logger.info("Model card written: %s", card_path)
 
 
 if __name__ == "__main__":
