@@ -18,6 +18,9 @@ def main():
     parser.add_argument("--role-mask", type=int)
     parser.add_argument("--dept-mask", type=int)
     parser.add_argument("--epoch")
+    parser.add_argument(
+        "--source-id", help="Stable source identifier; required when SOURCE is outside configured data_dir"
+    )
     parser.add_argument("--mode", choices=["rewrite-feedback"], help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -42,6 +45,7 @@ def main():
             role_mask=args.role_mask,
             dept_mask=args.dept_mask,
             doc_version_epoch=args.epoch,
+            source_id=args.source_id,
         )
         logger.info("Ingested %d text chunks", len(chunks))
         return 0

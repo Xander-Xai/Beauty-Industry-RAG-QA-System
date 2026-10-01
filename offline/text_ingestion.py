@@ -96,6 +96,7 @@ class DocumentProcessor:
         chunk_overlap: int = 50,
         max_document_bytes: int = 131_072,
         max_chunks: int = 256,
+        source_root: str | Path | None = None,
     ):
         if type(chunk_size) is not int or chunk_size <= 0:
             raise ValueError("chunk_size must be a positive integer")
@@ -109,11 +110,26 @@ class DocumentProcessor:
         self.chunk_overlap = chunk_overlap
         self.max_document_bytes = max_document_bytes
         self.max_chunks = max_chunks
+        self.source_root = Path(source_root).resolve() if source_root is not None else None
 
-    @staticmethod
-    def document_identity(source: str | Path) -> tuple[str, str]:
-        source_path = str(Path(source).resolve())
-        doc_id = hashlib.sha256(source_path.encode("utf-8")).hexdigest()
+    def document_identity(self, source: str | Path, source_id: str | None = None) -> tuple[str, str]:
+        resolved_path = Path(source).resolve()
+        source_path = str(resolved_path)
+        if source_id is not None:
+            identity = source_id.strip()
+            if not identity:
+                raise ValueError("source_id must not be empty")
+        elif self.source_root is not None:
+            try:
+                identity = resolved_path.relative_to(self.source_root).as_posix()
+            except ValueError as exc:
+                raise ValueError(
+                    f"source is outside the configured data root {self.source_root}; provide an explicit source_id"
+                ) from exc
+        else:
+            # Low-level/test users without a configured root retain path-based isolation.
+            identity = source_path
+        doc_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         return source_path, doc_id
 
     def process(
@@ -123,6 +139,7 @@ class DocumentProcessor:
         role_mask: int,
         dept_mask: int,
         doc_version_epoch: str,
+        source_id: str | None = None,
     ) -> list[TextChunk]:
         _validate_permissions(role_mask, dept_mask)
         _validate_epoch(doc_version_epoch)
@@ -145,7 +162,7 @@ class DocumentProcessor:
         chunk_count = 1 if len(text) <= self.chunk_size else math.ceil((len(text) - self.chunk_size) / step) + 1
         if chunk_count > self.max_chunks:
             raise ValueError(f"text document exceeds the {self.max_chunks}-chunk ingestion limit: {path}")
-        source_path, doc_id = self.document_identity(path)
+        source_path, doc_id = self.document_identity(path, source_id)
         content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         chunks: list[TextChunk] = []
         for chunk_index, offset in enumerate(range(0, len(text), step)):
@@ -398,13 +415,15 @@ class TextIngestionService:
         role_mask: int,
         dept_mask: int,
         doc_version_epoch: str,
+        source_id: str | None = None,
     ) -> list[TextChunk]:
-        _, doc_id = self.processor.document_identity(source)
+        _, doc_id = self.processor.document_identity(source, source_id)
         chunks = self.processor.process(
             source,
             role_mask=role_mask,
             dept_mask=dept_mask,
             doc_version_epoch=doc_version_epoch,
+            source_id=source_id,
         )
         vectors = self.embedder.embed_texts([chunk.text for chunk in chunks])
         self.writer.replace_document(doc_id, doc_version_epoch, chunks, vectors)
@@ -440,6 +459,7 @@ def configured_text_ingestion_service():
             int(chunk_size * overlap_ratio),
             max_document_bytes,
             max_chunks,
+            knowledge_base.get("data_dir", "./data"),
         ),
         BGETextEmbedder(embedding["model_path"], dimension, embedding_batch_size),
         QdrantTextWriter(client, collection, dimension),

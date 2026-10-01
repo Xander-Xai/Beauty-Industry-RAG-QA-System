@@ -47,6 +47,32 @@ def test_processor_empty_utf8_and_unsupported_or_malformed_input(tmp_path):
         processor.process(pdf, role_mask=0, dept_mask=0, doc_version_epoch="default")
 
 
+def test_document_identity_is_stable_across_data_root_mounts_and_file_moves(tmp_path):
+    first_root = tmp_path / "mount-a" / "data"
+    second_root = tmp_path / "mount-b" / "data"
+    first_root.mkdir(parents=True)
+    second_root.mkdir(parents=True)
+    first = first_root / "guides" / "policy.txt"
+    second = second_root / "guides" / "policy.txt"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("same source", encoding="utf-8")
+    second.write_text("same source", encoding="utf-8")
+
+    processor_a = DocumentProcessor(source_root=first_root)
+    processor_b = DocumentProcessor(source_root=second_root)
+    _, first_id = processor_a.document_identity(first)
+    _, second_id = processor_b.document_identity(second)
+    _, moved_id = processor_a.document_identity(first, source_id="policy:ingredient-safety")
+    first.rename(first_root / "renamed.txt")
+    _, renamed_id = processor_a.document_identity(first_root / "renamed.txt", source_id="policy:ingredient-safety")
+
+    assert first_id == second_id
+    assert moved_id == renamed_id
+    with pytest.raises(ValueError, match="outside the configured data root"):
+        processor_a.document_identity(second)
+
+
 def test_document_size_limits_reject_before_embedding_or_qdrant_write(tmp_path):
     client = QdrantClient(":memory:")
 
@@ -504,6 +530,10 @@ def test_compose_app_uses_internal_qdrant_hostname():
     compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
     app_environment = compose["services"]["app"]["environment"]
     assert "QDRANT_HOST=qdrant" in app_environment
+    assert compose["services"]["qdrant"]["ports"] == [
+        "127.0.0.1:6333:6333",
+        "127.0.0.1:6334:6334",
+    ]
 
 
 def test_qdrant_text_search_paginates_until_unique_documents_are_filled():

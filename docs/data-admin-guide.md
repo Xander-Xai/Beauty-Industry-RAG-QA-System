@@ -4,7 +4,9 @@
 
 在线检索代码会读取 Qdrant 和搜索服务中的数据。当前 Phase 1 只支持 UTF-8 TXT → 确定性字符切块 → BGE 文本 embedding adapter → Qdrant text collection；真实 BGE 模型 smoke test 尚未验证。PDF/DOCX/XLSX、OCR、CLIP、Elasticsearch 写入、调度、完整重建和反馈闭环尚未实现。完整后续范围见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
-`run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 是当前唯一支持的文档 ingestion 命令。它要求显式给出权限掩码和知识版本 epoch；掩码必须是 uint32。公开内容使用两个掩码 `0`，受限内容使用对应的非零角色和部门掩码。命令使用 `config.json` 中的 BGE 模型路径、768 维度和 `rag_text_768` collection；Qdrant 地址优先读取 `.env`/环境变量 `QDRANT_HOST`、`QDRANT_PORT` 和 `QDRANT_GRPC_PORT`，否则回退到 `config.json`。在线 reader 读取相同的环境覆盖后连接同一 Qdrant endpoint。Docker Compose app 服务显式使用内部主机名 `qdrant`；主机 CLI 可使用 `.env.example` 中的 `localhost`。
+`run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 是当前唯一支持的文档 ingestion 命令。它要求显式给出权限掩码和知识版本 epoch；掩码必须是 uint32。公开内容使用两个掩码 `0`，受限内容使用对应的非零角色和部门掩码。命令使用 `config.json` 中的 BGE 模型路径、768 维度和 `rag_text_768` collection；Qdrant 地址优先读取 `.env`/环境变量 `QDRANT_HOST`、`QDRANT_PORT` 和 `QDRANT_GRPC_PORT`，否则回退到 `config.json`。在线 reader 读取相同的环境覆盖后连接同一 Qdrant endpoint。Docker Compose app 服务显式使用内部主机名 `qdrant`；Compose 将 Qdrant HTTP/gRPC 端口只发布到主机回环地址，供主机 CLI 使用 `localhost`，不会监听外部网卡。
+
+文档身份默认由配置的 `knowledge_base.data_dir` 内相对路径确定，因此在不同机器或挂载根目录下重复导入同一相对路径会得到相同 `doc_id`。SOURCE 必须位于该数据根目录下；外部路径必须显式指定稳定的 `--source-id`（例如稳定业务文档键），文件移动时继续使用同一 source ID。`source_path` 仍记录本次导入使用的绝对路径以便排查。
 
 示例：
 
