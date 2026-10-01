@@ -321,7 +321,7 @@ def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
     assert {point.id for point in points_after_repeat if point.payload["doc_version_epoch"] == "epoch_a"} == ids_a
 
 
-def test_reingestion_removes_old_or_emptied_source_chunks(tmp_path):
+def test_epoch_snapshots_reject_same_epoch_mutation_and_preserve_old_version(tmp_path):
     client = QdrantClient(":memory:")
     service = TextIngestionService(
         DocumentProcessor(chunk_size=12, chunk_overlap=0),
@@ -334,27 +334,26 @@ def test_reingestion_removes_old_or_emptied_source_chunks(tmp_path):
     assert client.count("replace_test", exact=True).count == len(old_chunks)
 
     source.write_text("new content", encoding="utf-8")
-    new_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
-    assert len(new_chunks) == 1
-    assert client.count("replace_test", exact=True).count == 1
-    records, _ = client.scroll("replace_test", limit=10, with_payload=True)
-    assert [record.payload["content"] for record in records] == ["new content"]
+    with pytest.raises(ValueError, match="epochs are immutable"):
+        service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    assert client.count("replace_test", exact=True).count == len(old_chunks)
 
-    # Replacing B must not archive or delete A, even for the same logical source.
-    epoch_a = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="epoch_a")
-    epoch_a_records, _ = client.scroll("replace_test", limit=10, with_payload=True)
-    epoch_a_ids = {record.id for record in epoch_a_records if record.payload["doc_version_epoch"] == "epoch_a"}
-    assert len(epoch_a_ids) == len(epoch_a)
-    source.write_text("replacement for B", encoding="utf-8")
-    service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    new_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
+    assert len(new_chunks) == 1
+    assert client.count("replace_test", exact=True).count == len(old_chunks) + 1
     records, _ = client.scroll("replace_test", limit=10, with_payload=True)
-    assert {record.payload["doc_version_epoch"] for record in records} == {"epoch_a", "phase_1"}
-    assert {record.id for record in records if record.payload["doc_version_epoch"] == "epoch_a"} == {*epoch_a_ids}
+    assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1", "phase_2"}
+    assert {record.payload["content"] for record in records} == {chunk.text for chunk in old_chunks} | {"new content"}
+
+    with pytest.raises(ValueError, match="epochs are immutable"):
+        service.ingest(source, role_mask=8, dept_mask=4, doc_version_epoch="phase_2")
 
     source.write_text(" \n", encoding="utf-8")
-    assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1") == []
+    with pytest.raises(ValueError, match="epochs are immutable"):
+        service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
+    assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_3") == []
     records, _ = client.scroll("replace_test", limit=10, with_payload=True)
-    assert {record.payload["doc_version_epoch"] for record in records} == {"epoch_a"}
+    assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1", "phase_2"}
 
 
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):

@@ -322,7 +322,7 @@ class QdrantTextWriter:
         chunks: list[TextChunk],
         vectors: list[list[float]],
     ) -> None:
-        """Replace one source/epoch safely; stale points become inactive before removal."""
+        """Write an immutable document snapshot; changes require a new epoch."""
         _validate_epoch(doc_version_epoch)
         points = self._build_points(chunks, vectors)
         if any(chunk.doc_id != doc_id or chunk.doc_version_epoch != doc_version_epoch for chunk in chunks):
@@ -331,43 +331,52 @@ class QdrantTextWriter:
         lock_context = (self.replacement_lock or _local_replacement_lock)(doc_id, doc_version_epoch)
         with lock_context:
             self.ensure_collection()
-            from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+            from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
 
-            existing_ids = []
+            epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=doc_version_epoch))]
+            if doc_version_epoch == "default":
+                # Treat pre-slice points as members of the legacy default snapshot.
+                epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
+            existing_records = []
             offset = None
             source_filter = Filter(
-                must=[
-                    FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
-                    FieldCondition(key="doc_version_epoch", match=MatchValue(value=doc_version_epoch)),
-                ]
+                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))],
+                should=epoch_conditions,
             )
             while True:
                 records, offset = self.client.scroll(
                     collection_name=self.collection_name,
                     scroll_filter=source_filter,
                     limit=256,
-                    with_payload=False,
+                    with_payload=["chunk_index", "content", "role_mask", "dept_mask", "status"],
                     with_vectors=False,
                     offset=offset,
                 )
-                existing_ids.extend(record.id for record in records)
+                existing_records.extend(records)
                 if offset is None:
                     break
 
-            if existing_ids:
-                # Active-only online queries fail closed if subsequent upsert/delete fails.
-                self.client.set_payload(
-                    collection_name=self.collection_name,
-                    payload={"status": "archived"},
-                    points=existing_ids,
-                    wait=True,
+            if existing_records:
+
+                def signature(payload):
+                    return (
+                        payload.get("chunk_index"),
+                        payload.get("content"),
+                        payload.get("role_mask"),
+                        payload.get("dept_mask"),
+                        payload.get("status"),
+                    )
+
+                existing_signature = sorted(signature(record.payload or {}) for record in existing_records)
+                desired_signature = sorted(signature(point.payload or {}) for point in points)
+                if existing_signature == desired_signature and len(existing_records) == len(points):
+                    return
+                raise ValueError(
+                    "knowledge epochs are immutable: changed content, permissions, or deletion requires a new epoch"
                 )
+
             if points:
                 self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
-            replacement_ids = {point.id for point in points}
-            stale_ids = [point_id for point_id in existing_ids if point_id not in replacement_ids]
-            if stale_ids:
-                self.client.delete(collection_name=self.collection_name, points_selector=stale_ids, wait=True)
 
     def _build_points(self, chunks: list[TextChunk], vectors: list[list[float]]):
         from qdrant_client.http.models import PointStruct
