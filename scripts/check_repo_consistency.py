@@ -4,14 +4,21 @@
 This guard is intentionally conservative: it fails on broken local references,
 runtime-artifact leaks, version drift, documented-but-missing offline CLI
 subcommands, stale "offline ingestion is missing" claims in current operator
-docs, and an invalid/absent repository truth audit. It does not flag historical
-CHANGELOG text or historical implementation plans.
+docs, superseded governance/contract claims in canonical docs, and an
+invalid/absent repository truth audit. It does not flag historical CHANGELOG
+text or historical implementation plans.
+
+The truth audit is expected to resolve its candidate from ``HEAD`` and to carry
+an ISO ``YYYY-MM-DD`` verification date. The date is validated for shape only;
+the guard never hardcodes a specific date or depends on the current date, a
+GitHub API, or wall-clock state, so runs stay deterministic.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import datetime
 import json
 import re
 import subprocess
@@ -49,6 +56,21 @@ STALE_OFFLINE_CLAIM_PATTERNS = [
     r"(不含|没有).{0,10}(文档\s*ingestion|离线 ingestion|原始文档导入)",
     r"offline.{0,12}modules.{0,24}(不存在|missing|absent)",
     r"no\s+ingestion\s+pipeline",
+]
+
+# Current canonical docs must not carry superseded governance state. Merged PR /
+# closed Issue status belongs to Git/GitHub history, not long-term docs.
+STALE_GOVERNANCE_CLAIM_PATTERNS = [
+    r"PR\s*#\d+[^\n]{0,40}(remains?|is|still)\s+open",
+    r"#\d+[^\n]{0,20}(仍|尚)(未|待)合并",
+    r"Issue\s*#\d+[^\n]{0,30}(is\s+open|未关闭|仍开放)",
+]
+
+# Qdrant IVF tuning parameters (nlist/nprobe) are not part of the implemented
+# collection contract; current docs must not present them as implemented.
+NON_IMPLEMENTED_QDRANT_PARAM_PATTERNS = [
+    r"\bnlist\b",
+    r"\bnprobe\b",
 ]
 
 REQUIRED_AUDIT_AREAS = {
@@ -189,6 +211,42 @@ def check_documented_offline_commands(path: Path, subcommands: set[str], errors:
             )
 
 
+def check_forbidden_current_claims(path: Path, errors: list[str]) -> None:
+    """Flag superseded governance claims and non-implemented contract parameters."""
+    text = path.read_text(encoding="utf-8")
+    patterns = STALE_GOVERNANCE_CLAIM_PATTERNS + NON_IMPLEMENTED_QDRANT_PARAM_PATTERNS
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            fail(
+                errors,
+                f"{_display(path)}: superseded current claim matched {pattern!r}: {match.group(0)!r}",
+            )
+
+
+def check_metrics_route_contract(errors: list[str]) -> None:
+    """The metrics route is ``/api/metrics``; current docs must not claim ``GET /metrics``."""
+    for name in ("docs/operations-guide.md", "docs/pre-launch-checklist.md"):
+        path = ROOT / name
+        if path.exists() and "/api/metrics" not in path.read_text(encoding="utf-8"):
+            fail(errors, f"{name}: must document the /api/metrics route")
+    for path in CANONICAL_DOCS:
+        if path.exists() and re.search(r"`GET /metrics`", path.read_text(encoding="utf-8")):
+            fail(errors, f"{_display(path)}: metrics route must be documented as /api/metrics")
+
+
+def check_rbac_mask_contract(errors: list[str]) -> None:
+    """Canonical RBAC docs must use the uint32 mask contract."""
+    prd = ROOT / "PRD.md"
+    if not prd.exists():
+        return
+    text = prd.read_text(encoding="utf-8")
+    if "uint32" not in text:
+        fail(errors, "PRD.md must document the uint32 RBAC mask contract")
+    if re.search(r"\bint32\b", text):
+        fail(errors, "PRD.md must not describe RBAC masks as int32")
+
+
 def check_stale_offline_claims(path: Path, errors: list[str]) -> None:
     text = path.read_text(encoding="utf-8")
     for pattern in STALE_OFFLINE_CLAIM_PATTERNS:
@@ -224,16 +282,27 @@ def check_entrypoint_imports(entrypoint: Path, errors: list[str]) -> None:
                 fail(errors, f"{entrypoint.relative_to(ROOT)}: unresolved local import {module}")
 
 
-def check_truth_audit(errors: list[str]) -> None:
-    audit_path = ROOT / "docs/repository-truth-audit.md"
+def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None:
+    audit_path = audit_path or (ROOT / "docs/repository-truth-audit.md")
     if not audit_path.exists():
         fail(errors, "docs/repository-truth-audit.md is missing")
         return
     audit_text = audit_path.read_text(encoding="utf-8")
     if not re.search(r"(?m)^Reconciled candidate:\s+`HEAD`(?:\s|$)", audit_text):
         fail(errors, "repository truth audit must resolve its candidate from HEAD at verification time")
-    if not re.search(r"(?m)^Post-reconciliation verification date:\s+2026-10-01\.?\s*$", audit_text):
-        fail(errors, "repository truth audit verification date is missing or stale")
+
+    date_match = re.search(r"(?m)^Post-reconciliation verification date:\s*(\S+)\s*$", audit_text)
+    if not date_match:
+        fail(errors, "repository truth audit verification date is missing")
+    else:
+        value = date_match.group(1).rstrip(".")
+        try:
+            datetime.date.fromisoformat(value)
+        except ValueError:
+            fail(
+                errors,
+                f"repository truth audit verification date must be ISO YYYY-MM-DD, got {value!r}",
+            )
 
     audit_lines = audit_text.splitlines()
     header = next((line for line in audit_lines if line.startswith("| Area |")), "")
@@ -299,6 +368,8 @@ def main() -> int:
             fail(errors, f"docs/README.md must separate current and historical documentation ({heading})")
 
     check_truth_audit(errors)
+    check_metrics_route_contract(errors)
+    check_rbac_mask_contract(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
@@ -326,6 +397,7 @@ def main() -> int:
             check_markdown_links(doc, errors)
             check_documented_paths(doc, errors)
             check_documented_python_commands(doc, errors)
+            check_forbidden_current_claims(doc, errors)
 
     subcommands = run_offline_subcommands()
     for doc in CURRENT_OFFLINE_DOCS:
