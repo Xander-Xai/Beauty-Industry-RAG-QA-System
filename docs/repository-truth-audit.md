@@ -6,6 +6,8 @@
 - Historical merged PRs: #3, #4, #5, #6, #7.
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
 - Current v2.5 reconciliation branch: based on the merged `main` plus the v2.5 runtime/security work.
+- Runtime validation: see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)
+  (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
 a commit cannot embed its own SHA without making the value stale).
 Post-reconciliation verification date: 2026-10-02.
@@ -27,9 +29,10 @@ large-corpus throughput has been established.
 | FastAPI lifecycle | Startup/shutdown use a `lifespan` context manager (no deprecated `on_event`) | `app.py` | `tests/test_api.py` | n/a | CI imports the app; no deprecation warnings asserted | VERIFIED | Keep `on_event` out of the canonical app |
 | Generation topology | One shared 4B vLLM endpoint serves rewrite + simple generation; complex generation routes to 14B | `router/stateless_router.py`, `models/llm_client.py`, `config.json` | `tests/test_architecture_contract.py`, `tests/test_pipeline_ordering.py` | `gpu1.models.vllm_4b`, `gpu0.models.gen_14b` | Unit tests only; no GPU deployment executed here | VERIFIED | Single-4B GPU deployment stays external validation |
 | Authentication | RS256 browser tokens verify independently of the legacy HS256 secret; legacy HS256 remains an optional fallback | `auth/jwt_auth.py`, `common/auth.py`, `api/routes_auth.py` | `tests/test_jwt_auth.py`, `tests/test_auth_routes.py`, `tests/test_auth_identity_resolution.py` | `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH`/`JWT_ALGORITHM`; `JWT_SECRET` optional | CI unit/API tests; no production identity-policy audit | VERIFIED | Keep RS256 primary and the HS256 compatibility path explicitly bounded |
-| Login rate limiting | 5 attempts/min; Redis-backed across workers with in-memory fallback; `X-Forwarded-For` honored only behind `TRUSTED_PROXIES` | `api/routes_auth.py` | `tests/test_auth_routes.py` | `REDIS_PASSWORD`/`REDIS_CACHE_*`, `TRUSTED_PROXIES` | Unit tests with a fake Redis client; real multi-worker / reverse-proxy behavior not validated | PARTIAL | Real multi-worker + proxy validation pending |
-| Session persistence | `SessionState` persists to Redis across workers with in-memory fallback and a stable Pydantic-safe schema | `core/pipeline_context.py` | `tests/test_pipeline_context.py` | `REDIS_PASSWORD`/`REDIS_CACHE_*` | Unit round-trip tests with a fake Redis client; real multi-worker Redis not validated | PARTIAL | Real multi-worker Redis validation pending |
-| Observability endpoints | `/api/stats` and `/api/metrics` require an authenticated identity; `/api/health` is public | `api/routes.py` | `tests/test_metrics_endpoint.py`, `tests/test_api.py` | n/a | CI API tests; Prometheus authenticated scrape not validated | VERIFIED | Document bearer-token scraping |
+| Login rate limiting | 5 attempts/min; Redis-backed across workers with in-memory fallback; `X-Forwarded-For` honored only behind `TRUSTED_PROXIES` | `api/routes_auth.py` | `tests/test_auth_routes.py`, `tests/integration/test_login_rate_limit_runtime.py` | `REDIS_PASSWORD`/`REDIS_CACHE_*`, `TRUSTED_PROXIES` | Local real Redis (7.4.9): 6 attempts from one IP alternating across two processes -> 6th 429; window expiry; Redis-down -> per-process memory fallback. HTTP multi-worker behind a load balancer still pending | VERIFIED | Production proxy/load-balancer topology stays deployment-specific |
+| Session persistence | `SessionState` persists to Redis across workers with in-memory fallback and a stable Pydantic-safe schema | `core/pipeline_context.py` | `tests/test_pipeline_context.py`, `tests/integration/test_redis_session_runtime.py` | `REDIS_PASSWORD`/`REDIS_CACHE_*` | Local real Redis (7.4.9): write in process A, typed restore in process B, update seen in process C, TTL refresh, malformed/incompatible fallback. Cluster/Sentinel not validated | VERIFIED | Production Redis topology stays deployment-specific |
+| Trusted proxy | Client IP comes from the TCP peer unless the peer is a trusted proxy; forwarded chain is walked right-to-left | `api/routes_auth.py`, `app.py` | `tests/test_auth_routes.py`, `tests/integration/test_trusted_proxy_runtime.py` | `TRUSTED_PROXIES` | Real nginx (single + multi-hop) and direct access validated; uvicorn `proxy_headers=False` required so the app policy is authoritative. Only nginx validated | VERIFIED | Other LB/proxy products need deployment-specific config |
+| Observability endpoints | `/api/stats` and `/api/metrics` require an authenticated identity; `/api/health` is public | `api/routes.py` | `tests/test_metrics_endpoint.py`, `tests/test_api.py`, `tests/integration/test_metrics_auth_runtime.py` | n/a | CI API tests + local authenticated Prometheus scrape (no token 401, bearer 200, target UP, `up == 1`) | VERIFIED | Keep bearer-token scraping documented |
 | Microservices | Service components exist; integrated production deployment is not established | `api-gateway/`, `retrieval-service/`, `generation-service/`, `monitoring-service/` | Component tests exist; no complete frontend-to-service e2e evidence | Compose files and per-service settings | CI is not a production deployment or end-to-end verification | PARTIAL | Treat as secondary components pending independent deployment validation |
 | Document parsing | TXT/PDF/DOCX/XLSX parsing with scanned-PDF OCR routing | `offline/document_processor.py`, `offline/chunking.py` | `tests/offline/test_document_processor.py`, `tests/offline/test_chunking.py` | `knowledge_base.chunk_size`, `max_document_bytes`, `max_binary_document_bytes`, `xlsx_rows_per_block` | Deterministic fixtures; no real-corpus parsing benchmark | VERIFIED | Claim parsing implementation only |
 | OCR | OCR adapter and image pipeline exist; real PaddleOCR runtime is external | `offline/image_processor.py` | `tests/offline/test_image_processing.py` (deterministic provider) | `knowledge_base.ocr.*`; optional `offline/requirements-ocr.txt` | PaddleOCR not installed in default CI; real OCR smoke not run | PARTIAL | Real PaddleOCR smoke pending external runtime |
@@ -38,7 +41,7 @@ large-corpus throughput has been established.
 | Qdrant text | Text writer with epoch/seal/staging lifecycle | `offline/text_ingestion.py` | `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py` | `embedding.text.collection`, `qdrant.*` | In-memory Qdrant + real Qdrant integration | VERIFIED | Keep lifecycle contract covered |
 | Qdrant image | Epoch-aware image writer; legacy points retrievable in `default` | `offline/qdrant_writer.py` | `tests/offline/test_image_processing.py` | `embedding.image_clip.collection` | In-memory Qdrant + real Qdrant integration | VERIFIED | Keep epoch-isolation regression coverage |
 | Elasticsearch | `cosmetics_docs` writer with explicit mapping and `search_after` epoch pagination | `offline/elasticsearch_writer.py` | `tests/offline/test_elasticsearch_writer.py`, `tests/offline/test_offline_end_to_end.py` | `elasticsearch.*`; `requirements.txt` pins client `<9` | Fake client unit tests (the fake rejects `_id` sorting) + real Elasticsearch integration; epoch reads sort on `chunk_id` | VERIFIED | Keep mapping and pagination-sort regression coverage |
-| Elasticsearch security | Compose enables `xpack.security.enabled=true`; online/offline clients prefer env credentials over `config.json` | `docker-compose.yml`, `retrieval/bm25_retriever.py`, `common/config.py` | `tests/test_docker_compose.py` | `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` | `docker compose config` parsing only; authenticated real-ES integration not validated | PARTIAL | Real authenticated Compose ES validation pending |
+| Elasticsearch security | Compose enables `xpack.security.enabled=true`; online/offline clients prefer env credentials over `config.json` | `docker-compose.yml`, `retrieval/bm25_retriever.py`, `common/config.py` | `tests/test_docker_compose.py`, `scripts/validation/validate_es_auth.py` | `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` | Compose config parsing + local authenticated ES 8.11 (anon/wrong 401; writer mapping + `search_after`; BM25 online search). Cluster/TLS/multi-node not validated | VERIFIED | Production ES topology stays deployment-specific |
 | Source state | SQLite incremental state; content-hash and permission-mask authoritative, committed only after a successful snapshot | `offline/state_store.py`, `offline/snapshot_builder.py` | `tests/offline/test_state_store.py`, `tests/offline/test_reconciliation_fixes.py` | `knowledge_base.state_db_path` | Temp DB tests; runtime DB untracked | VERIFIED | Do not claim an mtime/size short-circuit |
 | Incremental snapshot | Incremental build produces a complete target-epoch snapshot | `offline/snapshot_builder.py` | `tests/offline/test_snapshot_builder.py`, `tests/offline/test_offline_end_to_end.py` | `knowledge_base.*` | Deterministic in-memory integration | VERIFIED | Keep carry-forward coverage |
 | Carry-forward | Unchanged documents are copied across epochs; incompatible versions require full rebuild | `offline/carry_forward.py` | `tests/offline/test_snapshot_builder.py` | `embedding.*.model_revision` | Deterministic integration | VERIFIED | Keep version-compatibility guard |
@@ -74,13 +77,16 @@ These are implemented in code but not validated against real external assets/run
 - Real PaddleOCR smoke — external runtime not installed.
 - Real Airflow DAG execution — Airflow not installed.
 - Production evaluation / benchmark — no reproducible artifact checked in.
-- Real Redis multi-worker session persistence (cross-worker round-trip on a live Redis).
-- Real Redis cross-worker login rate-limit behavior and window expiry under concurrency.
-- Reverse-proxy client-IP resolution with a real proxy and `TRUSTED_PROXIES`.
-- Authenticated Elasticsearch Compose integration (online + offline clients against `xpack.security`).
-- Prometheus authenticated scrape of `/api/metrics`.
-- Real RAGAS evaluation with a permitted dependency and API key.
-- Single shared 4B vLLM GPU deployment (and 14B routing) on real hardware.
+- Real RAGAS evaluation with a permitted dependency and evaluator API key — not run in this
+  environment (no `OPENAI_API_KEY`; installed `ragas` import currently broken).
+- Single shared 4B vLLM GPU deployment (and 14B routing) — model weights absent, `vllm` not installed.
+- Production Redis topology (cluster/Sentinel) and HTTP multi-worker behind a load balancer.
+- Non-nginx reverse proxies (Cloudflare / ALB / Traefik) — require deployment-specific configuration.
+
+Validated locally on 2026-10-02 (see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)):
+real Redis multi-process session persistence and login rate limiting, real nginx proxy-trust resolution,
+authenticated Elasticsearch online + offline paths, and an authenticated Prometheus scrape. Local
+validation is not a production benchmark.
 
 ## Offline history check
 

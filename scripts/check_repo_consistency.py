@@ -148,6 +148,7 @@ REQUIRED_AUDIT_AREAS = {
     "Generation topology",
     "Login rate limiting",
     "Session persistence",
+    "Trusted proxy",
     "Observability endpoints",
     "Elasticsearch security",
 }
