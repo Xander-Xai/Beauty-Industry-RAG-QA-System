@@ -36,7 +36,10 @@
 
 ## 3. 当前已知运维风险
 
-- **知识库数据准备**：当前只支持通过 `python3 run_offline.py ingest-text ...` 将 UTF-8 TXT 分块并写入 Qdrant 文本 collection。PDF/DOCX/XLSX、OCR、CLIP、ES 写入、调度与完整重建仍未实现。BGE 模型须按 `config.json` 配置并由操作者准备；CI 不下载模型。后续实现见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+- **知识库数据准备**：通过 `run_offline.py` 构建离线快照（`full-rebuild` / `incremental-build`），
+  `seal-epoch` 校验并封存，再手动切换 `knowledge_version_epoch` 激活。真实 BGE/CLIP 模型与可选
+  PaddleOCR 运行时须由操作者准备；CI 使用确定性测试 embedder，不下载模型。操作细节见
+  [数据管理手册](data-admin-guide.md)。
 - **单体与微服务并存**：排障时必须先确认当前请求到底走的是 `app.py` 还是单独网关/微服务。
 - **开发身份开关**：如果生产环境误保留 `AUTH_DEV_MODE=true`，会形成身份伪造风险。
 - **运行配置来源**：服务现在会自动读取项目根目录 `.env`；排障时要同时检查 `.env` 与进程环境。
@@ -59,6 +62,16 @@
 2. 抽样检查 `/api/stats`
 3. 检查错误日志中的 401 / 403 / 500
 
+### 离线知识库
+
+1. 确认 `config.json` 的 `knowledge_version_epoch` 与预期 active epoch 一致
+2. 检查 Qdrant 文本/图像 collection 与 Elasticsearch index mapping 是否存在且维度/字段正确
+3. 运行或确认最近一次 `seal-epoch` 的快照校验通过（Qdrant text/image + Elasticsearch + RBAC）
+4. 检查状态数据库 `knowledge_base.state_db_path` 的最近处理时间与失败源
+5. 检查是否仍有未封存的 staging epoch；失败构建不应被自动封存
+6. 确认已保留上一 sealed epoch 以便回滚
+7. 审核反馈队列（`offline.feedback.store_path`）中 pending 记录
+
 ## 5. 常见故障定位
 
 ### 首页能访问但问答失败
@@ -79,6 +92,18 @@
 - 检查登录账号是否真的是 `admin` 角色
 - 检查 JWT 是否过期
 - 检查生产环境是否混入旧的前端缓存
+
+### 离线构建失败或 `seal-epoch` 被拒绝
+
+- 模型资产缺失：确认 `embedding.text.model_path` / `embedding.image_clip.model_path` 存在
+- OCR 报错：安装 `offline/requirements-ocr.txt`
+- Qdrant `dimension does not match`：`create-index --recreate --yes`
+- ES `field ... must be ...`：mapping 与 writer 不一致，重建 index
+- `embedding version changed within epoch`：构建新 epoch 或 `full-rebuild`
+- carry-forward `IncompatibleEmbeddingVersion`：改用 `full-rebuild`
+- `knowledge epoch ... is sealed`：写入新的未封存 epoch
+- 校验失败：查看 `seal-epoch` 报出的具体错误；不要用 `--skip-validation` 绕过
+- `source is outside the configured data root`：移动 SOURCE 或提供 `--source-id`
 
 ## 6. 备份建议
 

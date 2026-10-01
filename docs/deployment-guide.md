@@ -16,7 +16,7 @@
 cp .env.example .env
 ```
 
-`common/config.py` 负责读取应用配置。按 `.env.example` 准备环境；运行单体应用使用 `python3 app.py`。`run_offline.py ingest-text` 提供受限的 UTF-8 TXT → BGE adapter → Qdrant 文本导入切片；它不提供其他文档格式或完整离线管线。
+`common/config.py` 负责读取应用配置。按 `.env.example` 准备环境；运行单体应用使用 `python3 app.py`。离线知识库由 `run_offline.py` 子命令构建（`create-index` / `ingest` / `incremental-build` / `full-rebuild` / `seal-epoch`），操作细节见 [数据管理手册](data-admin-guide.md)。
 
 生产环境至少明确设置：
 
@@ -74,9 +74,23 @@ docker compose up -d
 - `http://localhost:8000/api/auth/metadata`
 - `http://localhost:8000/`
 
-## 4. 知识库现状
+## 4. 离线知识库部署要求
 
-`offline/` 包含 QLoRA 微调工具，以及受限的 UTF-8 TXT → BGE adapter → Qdrant 文本导入切片。PDF/DOCX/XLSX 解析、OCR、CLIP、Elasticsearch 写入、增量调度和全量重建仍未包含；CI 不下载模型，也没有真实 BGE smoke 验证。完整离线管线继续跟踪在 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+离线管线代码位于 `offline/`，入口为 `run_offline.py`。部署时需要区分：
+
+- **默认应用部署**：`python3 app.py` 或 `docker compose up -d`，提供在线问答；不包含 Airflow，
+  也不自动运行离线构建。
+- **离线 ingestion 依赖**：PDF/DOCX/XLSX 解析库已包含在 `requirements.txt`
+  （PyMuPDF / python-docx / openpyxl / pandas）。
+- **可选 OCR 运行时**：处理扫描件或图片时安装 `offline/requirements-ocr.txt`
+  （PaddleOCR / PaddlePaddle）。默认不安装，CI 不依赖它。
+- **可选 Airflow 部署**：`dags/knowledge_base_dags.py` 仅在 Airflow 已安装且离线模块可发现时
+  注册 DAG。默认 `docker compose` 不启动 Airflow；DAG 代码存在不等于调度器在运行。
+- **外部模型资产**：真实 BGE/CLIP 权重需由操作者按 `config.json` 准备；仓库不随附，也不在
+  import 阶段下载。缺少资产时真实模型 smoke 状态为 `EXTERNAL_MODEL_ASSET_REQUIRED`。
+
+离线构建、校验与封存命令见 [数据管理手册](data-admin-guide.md)。构建出的 epoch 需要操作者
+手动切换 `config.json` 的 `knowledge_version_epoch` 才会对在线检索生效。
 
 ## 5. 当前已对齐的前后端能力
 

@@ -10,13 +10,40 @@
 
 ## 离线处理状态
 
-当前 `offline/` 包含一个受限的 TXT → text embedding → Qdrant 导入切片，以及 QLoRA 微调脚本、样本数据和独立微调依赖。
+离线知识库管线位于 `offline/`，通过 `run_offline.py` 子命令发现文档、构建完整 epoch 快照、校验并封存。实现证据与测试证据分离列于 [Repository Truth Audit](docs/repository-truth-audit.md)，操作细节见 [数据管理手册](docs/data-admin-guide.md)。
 
-**已包含：** `python3 run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 支持 UTF-8 TXT、确定性字符切块、BGE 文本 embedding adapter 和 Qdrant `rag_text_768` 写入；`seal-epoch` 封存导入完成的不可变快照。生产 BGE adapter 使用 `config.json` 中配置的模型路径；常规测试使用轻量确定性测试 embedder，不下载模型。该实现没有声称已完成真实 BGE 模型 smoke 验证。
+### 已在代码与确定性测试中实现
 
-**仍不支持：** PDF、DOCX、XLSX、OCR、CLIP ingestion、Elasticsearch 写入、调度、完整重建和反馈闭环。`run_offline.py` 只开放已实现的 TXT ingestion 与 epoch 封存操作。后续范围跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+- 多格式解析：UTF-8 TXT、PDF（文本页 + 扫描页 OCR 路由）、DOCX、XLSX，以及独立图片（PNG/JPEG/WebP/BMP/TIFF）。
+- 确定性字符切块（默认 500 字符、10% 重叠）与稳定逻辑身份（`doc_id` / `chunk_id` / `image_id`）；物理 Qdrant point ID 按 epoch 版本化。
+- BGE 文本 embedding adapter 与 CLIP 图像 embedding adapter（512d），共用在线查询的预处理与归一化契约。
+- Qdrant 文本/图像 writer 与 Elasticsearch `cosmetics_docs` writer（显式 mapping，RBAC 字段为 keyword/long）。
+- 增量状态检测（内容哈希为准）、snapshot carry-forward、全量重建、快照校验、epoch 封存。
+- 调度抽象（cron/Airflow/CLI 共用同一业务逻辑）与反馈导出（`review_status` 门控）。
+- CLI：`create-index`、`ingest`、`incremental-build`、`full-rebuild`、`seal-epoch`；`ingest-text` 作为向后兼容的 TXT 专用子命令保留。
+- 跨平台文件锁（POSIX `fcntl` / Windows `msvcrt`）。
 
-仓库中存在 Airflow DAG 草案；它引用的 scheduler/feedback modules 不存在，因此当前不会注册可用的 ingestion DAG。DAG 文件存在不等同于生产导入管线。需要导入 UTF-8 TXT 时，可使用上面的 `ingest-text` 命令；更完整的 PDF/DOCX/XLSX、调度与重建能力仍未实现。
+### 需要外部运行时 / 资产
+
+- 真实 BGE 模型（`config.json` → `embedding.text.model_path`）。
+- 真实 CLIP 模型（启用视觉检索时，`embedding.image_clip.model_path`）。
+- PaddleOCR / PaddlePaddle（需要 OCR 时；见 `offline/requirements-ocr.txt`，默认不安装）。
+- Airflow（仅在希望由 Airflow 调度时；默认 Compose 不启动 Airflow，DAG 代码存在不等于调度器在运行）。
+
+### 尚未作为生产结果验证
+
+- 真实模型质量、生产延迟/QPS、大规模语料吞吐。真实 BGE/CLIP/PaddleOCR smoke 需要本地模型资产；本仓库当前未执行，状态为 `EXTERNAL_MODEL_ASSET_REQUIRED`，不使用确定性测试 embedder 冒充真实模型验证。
+
+### 常用离线命令
+
+```bash
+python3 run_offline.py create-index
+python3 run_offline.py full-rebuild --epoch phase_2
+python3 run_offline.py seal-epoch --epoch phase_2
+python3 run_offline.py incremental-build --from-epoch phase_1 --to-epoch phase_2
+```
+
+`seal-epoch` 默认先做完整快照校验（Qdrant text/image + Elasticsearch）再封存；`--skip-validation` 是明确的危险逃生口。封存后需要操作者手动把 `config.json` 的 `knowledge_version_epoch` 切换到新 epoch 并重启在线服务。
 
 ## Quick Start
 
@@ -85,14 +112,14 @@ api/                      /api/* routes
 core/                     Online RAG pipeline
 retrieval/                Retrieval, RRF, BiEncoder and reranking
 models/                   Model clients and AdapterManager
-offline/                  TXT ingestion slice and QLoRA utility
-run_offline.py            TXT ingestion and rewrite-feedback entrypoint
+offline/                  Offline ingestion pipeline and QLoRA utility
+run_offline.py            Offline ingestion/rebuild/seal and rewrite-feedback entrypoint
 frontend/                 React application
 api-gateway/              Microservice code; separate integration status
 retrieval-service/        Microservice code; separate integration status
 generation-service/       Microservice code; separate integration status
 monitoring-service/       Microservice code; separate integration status
-tests/                    Runtime tests and non-collected planned contracts
+tests/                    Runtime tests and non-collected historical contracts
 docs/                     User, operator, design and audit documentation
 config.json               Runtime configuration; system.version is 2.3.0
 ```
