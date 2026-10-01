@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -123,19 +124,62 @@ def main() -> int:
         fail(errors, f"runtime version {runtime_version} differs from latest changelog release {releases[0]}")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    if not (ROOT / "app.py").is_file() or "`app.py`" not in readme:
+        fail(errors, "README must identify the existing canonical app.py entrypoint")
     if re.search(r"(?im)^\s*License\s*:\s*MIT\s*$|\[MIT\]\(LICENSE\)", readme) and not (ROOT / "LICENSE").is_file():
         fail(errors, "README declares MIT but root LICENSE is missing")
+    if re.search(
+        r"(?m)^\s*python(?:3|\d+(?:\.\d+)?)?\s+run_offline\.py\s+--mode\s+(?:create-index|incremental|full|feedback)\b",
+        readme,
+    ):
+        fail(errors, "README advertises unavailable offline ingestion commands")
+
+    docs_index = (ROOT / "docs/README.md").read_text(encoding="utf-8")
+    for heading in ("Canonical / Current", "Historical / Implementation Plans"):
+        if heading not in docs_index:
+            fail(errors, f"docs/README.md must separate current and historical documentation ({heading})")
 
     audit_path = ROOT / "docs/repository-truth-audit.md"
     if audit_path.exists():
-        for line_number, line in enumerate(audit_path.read_text(encoding="utf-8").splitlines(), 1):
+        audit_text = audit_path.read_text(encoding="utf-8")
+        if not re.search(r"(?m)^Reconciled candidate:\s+`HEAD`(?:\s|$)", audit_text):
+            fail(errors, "repository truth audit must resolve its candidate from HEAD at verification time")
+        if not re.search(r"(?m)^Post-reconciliation verification date:\s+2026-10-01\.?\s*$", audit_text):
+            fail(errors, "repository truth audit verification date is missing or stale")
+        audit_lines = audit_text.splitlines()
+        header = next((line for line in audit_lines if line.startswith("| Area |")), "")
+        columns_header = [part.strip().lower() for part in header.strip("|").split("|")]
+        status_column = columns_header.index("status") if "status" in columns_header else -1
+        for line_number, line in enumerate(audit_lines, 1):
             if line.startswith("|") and "---" not in line and "Area" not in line:
                 columns = [part.strip() for part in line.strip("|").split("|")]
-                if len(columns) >= 6 and columns[4] not in STATUSES:
-                    fail(errors, f"repository audit line {line_number}: invalid status {columns[4]!r}")
-        audit_text = audit_path.read_text(encoding="utf-8").lower()
-        if "offline ingestion" in audit_text and "| planned |" not in audit_text:
+                if status_column < 0 or len(columns) <= status_column or columns[status_column] not in STATUSES:
+                    value = columns[status_column] if status_column >= 0 and len(columns) > status_column else "missing"
+                    fail(errors, f"repository audit line {line_number}: invalid status {value!r}")
+        audit_text_lower = audit_text.lower()
+        if "offline ingestion" in audit_text_lower and "| planned |" not in audit_text_lower:
             fail(errors, "offline ingestion must remain classified as PLANNED in repository audit")
+
+    contract_dir = ROOT / "tests/contracts"
+    if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
+        fail(errors, "planned contracts under tests/contracts must not match pytest's default test_*.py collection")
+
+    try:
+        tracked = (
+            subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True)
+            .stdout.decode()
+            .split("\0")
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        fail(errors, f"cannot inspect tracked runtime artifacts: {exc}")
+        tracked = []
+    runtime_state_paths = [
+        path
+        for path in tracked
+        if path and (path.endswith(".pid") or "/state/server-stopped" in path or "/state/server.pid" in path)
+    ]
+    if runtime_state_paths:
+        fail(errors, f"runtime state artifacts must not be tracked: {', '.join(runtime_state_paths)}")
 
     for doc in CANONICAL_DOCS:
         if doc.exists():

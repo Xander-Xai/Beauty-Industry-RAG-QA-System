@@ -41,15 +41,15 @@ NLI / Gate（GPU Batch）	10–25ms
 LLM Decode（含 Prefill）	900–2000ms
 合计（全链路 RAG）	1.1s – 2.3s
 P99 波动（长尾 Decode）	2.5s – 3.2s
-修正说明：CrossEncoder 与 NLI 已由 CPU 串行迁移至 GPU 批处理，延迟从 150–250ms + 20–50ms 降低至 30–60ms + 10–25ms，且支持跨请求 batch 聚合，QPS 得到根本性提升。
+设计说明（未实测）：目标架构拟将 CrossEncoder 与 NLI 从 CPU 串行处理调整为 GPU 批处理，并支持跨请求 batch 聚合。此处延迟区间和吞吐改善均为未验证目标；仓库没有可复现 benchmark artifact，不能据此声称生产性能提升。
 2.2 吞吐模型（Capacity Model）
 系统性能由以下核心关系约束：
 QPS ≈ 有效并发 / 平均延迟
 有效并发 = KV_Budget / E[KV_per_active_sequence(t)] × safety_factor
 ● KV_Budget：GPU0 为 14B 模型预留的 KV Cache 总量（≤8GB）× 安全系数 0.7。
 ● E[KV_per_active_sequence]：基于请求序列长度分布（长尾分布）计算的 KV 成本期望值，非固定均值常数。
-● QPS 推导：以 Avg latency=1.6s、有效并发=25 计，QPS≈15.6，波动区间 12–18。
-注：QPS 为推导值而非固定配置，实际承载能力随 workload mix、序列长度分布、KV 动态占用而变化。轻量 rewrite 场景可承载 25–60 QPS。
+● QPS 模型示例：若假设 Avg latency=1.6s、有效并发=25，则数学推导 QPS≈15.6；这是未经 workload benchmark 验证的估算，不是生产结果。
+注：QPS 为推导值而非固定配置，实际承载能力随 workload mix、序列长度分布、KV 动态占用而变化。轻量 rewrite 的 25–60 QPS 也是设计估值，未经可复现实测。
 3. 离线知识库构建
 3.1 数据范围
 500+ 文档（PDF/Word/Excel）、包装图片/扫描件，覆盖 2000+ 成分、3000+ 配方（原料研发配方种类）、1500+ 产品（实际制造产品）、8 大法规体系。
@@ -482,8 +482,8 @@ KV_Pressure = current_used_kv / max_kv_capacity
   ○ CrossEncoder Ensemble 与 Evidence Ensemble Gate 取代单点判决，引入检索一致性评分与多维度投票机制，将系统从“串行过滤链”升级为“并行证据系统”。
   ○ 实体识别召回能力通过离线评估集（Recall@K、F1）量化监控，保证召回稳定性可验证。
 12. 文档生命周期闭环与稀疏权限召回兜底，保障召回质量与合规性。
-13. 重模型推理 GPU 批处理化（关键架构修正）：
-  ○ 将 CrossEncoder、NLI、BiEncoder、CLIP Text Encoder、BLIP 从 CPU 串行迁移至 GPU1 统一批处理，引入 Rerank Batch Aggregator 实现微批聚合，单请求等效延迟由 200–400ms 降至 30–60ms，QPS 瓶颈彻底解除。
+13. 重模型推理 GPU 批处理化（设计目标，尚无可复现性能验证）：
+  ○ 目标是在 GPU1 批处理 CrossEncoder、NLI、BiEncoder、CLIP Text Encoder、BLIP，并用 Rerank Batch Aggregator 聚合微批。200–400ms、30–60ms 和 QPS 改善均为设计估值，不代表当前生产实测。
   ○ CPU 回归轻量逻辑层（routing/feature assembly/metadata filter/cache lookup），系统从“GPU 闲置 + CPU 爆炸”的反模式转变为“GPU 计算 + CPU 编排”的最佳实践。
   ○ 批处理参数（窗口时间、batch size）纳入离线反馈闭环，实现数据驱动的持续优化。
 14. 数据驱动闭环：所有关键策略（RRF 权重、Evidence Gate 阈值、Rewrite Prompt、Rerank Batch 参数）均通过日志采集、人工标注、离线评估与 A/B 实验进行迭代优化，系统从“规则完备”升级为“规则 + 统计反馈 + 可校准参数的检索学习系统”。

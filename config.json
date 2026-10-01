@@ -16,6 +16,9 @@
         "lora_adapter_path": "./models/Qwen3-14B-QLoRA-adapter",
         "lora_rank": 16,
         "lora_target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "peft_config": {
+          "auto_discover": true
+        },
         "quantization_bits": 4,
         "quant_type": "nf4",
         "max_model_len": 8192,
