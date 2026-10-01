@@ -188,6 +188,7 @@ class SessionState:
     _sessions_lock: ClassVar[threading.Lock] = threading.Lock()
 
     _SESSION_REDIS_TTL = 7200  # Redis 中会话过期时间（2 小时）
+    _SESSION_SCHEMA_VERSION = 1  # Redis payload schema version（用于兼容/降级判断）
 
     def add_round(self, user_input: str, response: str, rewrite: QueryRewriteResult | None = None):
         """添加一轮对话"""
@@ -214,31 +215,95 @@ class SessionState:
         return [r["user_input"] for r in self.dialog_rounds[-n:]]
 
     def store_async_clip_result(self, results: list[RecallResult]):
-        """存储异步 CLIP 补充召回结果"""
-        self.async_clip_results = results
+        """存储异步 CLIP 补充召回结果，并同步持久化（跨 worker 可见）。"""
+        self.async_clip_results = list(results)
+        self._persist_to_redis()
+
+    @staticmethod
+    def _dump_rewrite(rewrite: QueryRewriteResult | dict | None) -> dict | None:
+        if rewrite is None:
+            return None
+        if isinstance(rewrite, QueryRewriteResult):
+            return rewrite.model_dump(mode="json")
+        if isinstance(rewrite, dict):
+            return rewrite
+        return None
+
+    @staticmethod
+    def _load_rewrite(data: QueryRewriteResult | dict | None) -> QueryRewriteResult | None:
+        if not data:
+            return None
+        if isinstance(data, QueryRewriteResult):
+            return data
+        try:
+            return QueryRewriteResult.model_validate(data)
+        except Exception:
+            return None
+
+    @classmethod
+    def _dump_recall(cls, result: RecallResult | dict) -> dict:
+        if isinstance(result, RecallResult):
+            return result.model_dump(mode="json")
+        return result if isinstance(result, dict) else {}
+
+    @classmethod
+    def _load_recall(cls, data: dict) -> RecallResult | None:
+        if isinstance(data, RecallResult):
+            return data
+        try:
+            return RecallResult.model_validate(data)
+        except Exception:
+            return None
 
     def _to_dict(self) -> dict:
-        """序列化为 dict（用于 Redis 存储）。"""
+        """序列化为 JSON-safe dict（用于 Redis 存储）。
+
+        Pydantic 对象必须经 ``model_dump(mode="json")`` 转换，否则
+        ``json.dumps`` 会抛 TypeError，导致持久化静默失败。
+        """
         return {
+            "schema_version": self._SESSION_SCHEMA_VERSION,
             "session_id": self.session_id,
-            "dialog_rounds": self.dialog_rounds,
             "max_rounds": self.max_rounds,
-            "locked_doc_ids": self.locked_doc_ids,
-            "async_clip_results": self.async_clip_results,
             "created_at": self.created_at,
+            "locked_doc_ids": list(self.locked_doc_ids),
+            "last_rewrite_result": self._dump_rewrite(self.last_rewrite_result),
+            "dialog_rounds": [
+                {
+                    "user_input": round_.get("user_input", ""),
+                    "response": round_.get("response", ""),
+                    "rewrite": self._dump_rewrite(round_.get("rewrite")),
+                }
+                for round_ in self.dialog_rounds
+            ],
+            "async_clip_results": [self._dump_recall(result) for result in self.async_clip_results],
         }
 
     @classmethod
     def _from_dict(cls, data: dict) -> SessionState:
-        """从 dict 反序列化（从 Redis 读取）。"""
-        return cls(
+        """从 dict 反序列化（从 Redis 读取），重建 Pydantic 对象。"""
+        session = cls(
             session_id=data["session_id"],
-            dialog_rounds=data.get("dialog_rounds", []),
             max_rounds=data.get("max_rounds", 6),
-            locked_doc_ids=data.get("locked_doc_ids", []),
-            async_clip_results=data.get("async_clip_results", []),
+            locked_doc_ids=list(data.get("locked_doc_ids", [])),
             created_at=data.get("created_at", time.time()),
         )
+        session.last_rewrite_result = cls._load_rewrite(data.get("last_rewrite_result"))
+        session.dialog_rounds = [
+            {
+                "user_input": round_.get("user_input", ""),
+                "response": round_.get("response", ""),
+                "rewrite": cls._load_rewrite(round_.get("rewrite")),
+            }
+            for round_ in data.get("dialog_rounds", [])
+            if isinstance(round_, dict)
+        ]
+        session.async_clip_results = [
+            result
+            for result in (cls._load_recall(item) for item in data.get("async_clip_results", []))
+            if result is not None
+        ]
+        return session
 
     def _persist_to_redis(self):
         """将当前会话状态写入 Redis（异步静默失败）。"""
@@ -280,11 +345,15 @@ class SessionState:
             if raw is None:
                 return None
             data = json.loads(raw)
+            if data.get("schema_version") != cls._SESSION_SCHEMA_VERSION:
+                logger.debug("Redis 会话 schema 不兼容，忽略并降级: %s", key)
+                return None
             session = cls._from_dict(data)
             # 刷新 TTL
             client.expire(key, cls._SESSION_REDIS_TTL)
             return session
-        except Exception:
+        except Exception as exc:
+            logger.debug("Redis 会话读取失败，降级内存: %s", exc)
             return None
 
     @classmethod

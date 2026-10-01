@@ -1,5 +1,6 @@
 """Auth API routes -- login, refresh, user management."""
 
+import ipaddress
 import logging
 import os
 import time
@@ -82,15 +83,54 @@ def _check_redis_rate_limit(ip: str) -> bool:
         return False
 
 
+def _trusted_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    """解析 TRUSTED_PROXIES（逗号分隔的 IP/CIDR）；未配置时返回空列表。
+
+    安全默认：未显式配置可信代理时，永不信任客户端提供的
+    ``X-Forwarded-For``，只使用 TCP 对端地址。
+    """
+    raw = os.environ.get("TRUSTED_PROXIES", "")
+    networks: list[ipaddress._BaseNetwork] = []
+    for part in raw.split(","):
+        entry = part.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("忽略无效的 TRUSTED_PROXIES 条目: %r", entry)
+    return networks
+
+
+def _is_trusted_proxy(ip: str, networks: list[ipaddress._BaseNetwork]) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in network for network in networks)
+
+
 def _get_client_ip(request: Request) -> str:
-    """获取客户端真实 IP，支持反向代理场景下解析 X-Forwarded-For 头。"""
+    """获取用于限流的客户端 IP。
+
+    只有当 TCP 对端本身属于 ``TRUSTED_PROXIES`` 时，才解析
+    ``X-Forwarded-For``；从右向左跳过可信代理，返回第一个不可信地址。
+    这样，未受信任的客户端无法通过伪造 XFF 切换限流身份。
+    """
+    peer = request.client.host if request.client else "unknown"
+    networks = _trusted_proxy_networks()
+    if not networks or not _is_trusted_proxy(peer, networks):
+        return peer
+
     forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        # X-Forwarded-For: <client>, <proxy1>, <proxy2>
-        return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "unknown"
+    if not forwarded:
+        return peer
+
+    chain = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+    for candidate in reversed(chain):
+        if not _is_trusted_proxy(candidate, networks):
+            return candidate
+    return chain[0] if chain else peer
 
 
 def _check_login_rate_limit(ip: str):

@@ -7,10 +7,11 @@ No external services (Redis, Qdrant, ES) required.
 
 import os
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from auth.jwt_auth import generate_keypair
@@ -458,3 +459,159 @@ class TestSecurity:
 
         resp = client.get("/api/auth/users", headers=_auth_header(expired_token))
         assert resp.status_code == 401
+
+
+# ===========================================================================
+# 5. Trusted proxy client-IP resolution and login rate limiting
+# ===========================================================================
+
+
+def _make_request(peer: str, forwarded: str | None = None):
+    headers = {}
+    if forwarded is not None:
+        headers["X-Forwarded-For"] = forwarded
+    return SimpleNamespace(client=SimpleNamespace(host=peer), headers=headers)
+
+
+class TestClientIpResolution:
+    """X-Forwarded-For must only be honored behind a configured trusted proxy."""
+
+    def test_untrusted_client_xff_is_ignored(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
+        req = _make_request("203.0.113.9", "1.2.3.4")
+        assert auth_module._get_client_ip(req) == "203.0.113.9"
+
+    def test_client_xff_cannot_rotate_identity_without_trusted_proxy(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
+        first = auth_module._get_client_ip(_make_request("203.0.113.9", "1.1.1.1"))
+        second = auth_module._get_client_ip(_make_request("203.0.113.9", "2.2.2.2"))
+        assert first == second == "203.0.113.9"
+
+    def test_trusted_proxy_uses_forwarded_client(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
+        req = _make_request("10.0.0.5", "198.51.100.7")
+        assert auth_module._get_client_ip(req) == "198.51.100.7"
+
+    def test_trusted_proxy_chain_walks_right_to_left(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
+        # client, proxy1(trusted), proxy2(trusted) -> client is first untrusted
+        req = _make_request("10.0.0.5", "198.51.100.7, 10.0.0.6, 10.0.0.7")
+        assert auth_module._get_client_ip(req) == "198.51.100.7"
+
+    def test_invalid_xff_entries_ignored(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.0/8")
+        req = _make_request("10.0.0.5", "not-an-ip, 198.51.100.7")
+        assert auth_module._get_client_ip(req) == "198.51.100.7"
+
+    def test_invalid_trusted_proxy_config_is_ignored(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        monkeypatch.setenv("TRUSTED_PROXIES", "garbage")
+        req = _make_request("203.0.113.9", "1.2.3.4")
+        assert auth_module._get_client_ip(req) == "203.0.113.9"
+
+
+class _FakePipeline:
+    def __init__(self, store):
+        self._store = store
+        self._ops = []
+
+    def incr(self, key, amount=1):
+        self._ops.append(("incr", key, amount))
+        return self
+
+    def expire(self, key, ttl):
+        self._ops.append(("expire", key, ttl))
+        return self
+
+    def execute(self):
+        for op in self._ops:
+            if op[0] == "incr":
+                self._store.values[op[1]] = int(self._store.values.get(op[1], 0)) + op[2]
+            else:
+                self._store.expires[op[1]] = op[2]
+        self._ops = []
+
+
+class _FakeRateLimiter:
+    def __init__(self, fail=False):
+        self.values: dict = {}
+        self.expires: dict = {}
+        self.fail = fail
+
+    def get(self, key):
+        if self.fail:
+            raise RuntimeError("redis down")
+        return self.values.get(key)
+
+    def pipeline(self):
+        if self.fail:
+            raise RuntimeError("redis down")
+        return _FakePipeline(self)
+
+
+class TestLoginRateLimit:
+    """Login rate limit boundary + Redis/memory fallback behavior."""
+
+    def test_memory_limit_blocks_sixth_attempt(self):
+        import api.routes_auth as auth_module
+
+        auth_module._login_attempts.clear()
+        ip = "198.51.100.10"
+        for _ in range(auth_module._LOGIN_RATE_LIMIT):
+            auth_module._check_login_rate_limit(ip)
+        with pytest.raises(Exception) as exc_info:
+            auth_module._check_login_rate_limit(ip)
+        assert exc_info.value.status_code == 429
+
+    def test_window_expiry_recovers(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        auth_module._login_attempts.clear()
+        ip = "198.51.100.11"
+        now = [1000.0]
+        monkeypatch.setattr(auth_module, "time", SimpleNamespace(time=lambda: now[0]))
+        for _ in range(auth_module._LOGIN_RATE_LIMIT):
+            auth_module._check_login_rate_limit(ip)
+        with pytest.raises(HTTPException) as exc_info:
+            auth_module._check_login_rate_limit(ip)
+        assert exc_info.value.status_code == 429
+        now[0] += auth_module._LOGIN_RATE_WINDOW + 1
+        auth_module._check_login_rate_limit(ip)  # should be allowed again
+
+    def test_redis_limiter_blocks_sixth_attempt(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        auth_module._login_attempts.clear()
+        fake = _FakeRateLimiter()
+        monkeypatch.setattr(auth_module, "_get_redis_rate_limiter", lambda: fake)
+        ip = "198.51.100.12"
+        for _ in range(auth_module._LOGIN_RATE_LIMIT):
+            auth_module._check_login_rate_limit(ip)
+        with pytest.raises(Exception) as exc_info:
+            auth_module._check_login_rate_limit(ip)
+        assert exc_info.value.status_code == 429
+        assert fake.expires[f"ratelimit:login:{ip}"] == int(auth_module._LOGIN_RATE_WINDOW)
+
+    def test_redis_error_falls_back_to_memory(self, monkeypatch):
+        import api.routes_auth as auth_module
+
+        auth_module._login_attempts.clear()
+        fake = _FakeRateLimiter(fail=True)
+        monkeypatch.setattr(auth_module, "_get_redis_rate_limiter", lambda: fake)
+        ip = "198.51.100.13"
+        for _ in range(auth_module._LOGIN_RATE_LIMIT):
+            auth_module._check_login_rate_limit(ip)
+        with pytest.raises(Exception) as exc_info:
+            auth_module._check_login_rate_limit(ip)
+        assert exc_info.value.status_code == 429

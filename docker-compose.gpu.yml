@@ -1,7 +1,7 @@
 # GPU 服务覆盖层 — 双卡生产模式
 # 用法: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
-# AWQ INT4 量化部署（替代 NF4）:
-#   1. python offline/quantize_awq.py --model_path ./models/Qwen3-14B-Instruct --output_dir ./models/Qwen3-14B-AWQ
+# AWQ INT4 量化部署（替代 NF4，非默认路径）:
+#   1. 自行准备/执行量化流程，产出 AWQ 权重（本仓库不随附量化脚本或权重）
 #   2. 修改下方 vllm-gen-14b 的 command: --model /models/qwen3-14b-awq --quantization awq
 services:
   app:

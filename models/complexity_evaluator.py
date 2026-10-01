@@ -2,7 +2,7 @@
 BERT 复杂度评估器（readme 4.3 节）
 
 模型：BERT 0.3B，二分类。准确率 97.2% / P99 ≤ 12ms 为设计目标，生产环境当前使用规则兜底。
-功能：判断查询复杂度 → 简单问题路由到 vLLM-Gen-4B，复杂问题路由到 Qwen3-14B (4-bit NF4, PEFT-ready)
+功能：判断查询复杂度 → 简单问题路由到共享 4B vLLM 端点 (gen_4b)，复杂问题路由到 Qwen3-14B (4-bit NF4, PEFT-ready)
 
 模型不存在时自动降级为增强规则评估
 """
@@ -24,7 +24,7 @@ class ComplexityEvaluator:
     BERT 复杂度评估器
 
     二分类模型：
-    - 0: 简单查询 → 路由到 vLLM-Gen-4B
+    - 0: 简单查询 → 路由到共享 4B vLLM 端点 (gen_4b)
     - 1: 复杂查询 → 路由到 Qwen3-14B (4-bit NF4, PEFT-ready)
 
     复杂查询特征：

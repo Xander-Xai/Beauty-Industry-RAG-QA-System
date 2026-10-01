@@ -2,7 +2,7 @@
 LLM 客户端模块
 
 支持双 vLLM 实例调用：
-- vLLM-Gen-4B (GPU1): 简单查询
+- vLLM-4B (GPU1, gen_4b): 简单查询与 rewrite 共用
 - vLLM-Gen-14B (GPU0): 复杂查询（法规/研发，PEFT adapter optional）
 
 通过 StatelessRouter 分发请求

@@ -84,7 +84,7 @@ class QueryRewriter:
     """
     Query Rewrite 模块
 
-    通过 vLLM-Rewrite (Qwen3-4B) 执行查询改写，
+    通过共享 4B vLLM 端点 (Qwen3-4B, gen_4b) 执行查询改写，
     输出 business_type / intent / rewritten_query 等结构化字段，
     为后续检索路由和权限控制提供信号。
 
@@ -165,7 +165,7 @@ class QueryRewriter:
             query=query,
         )
 
-        # 调用 vLLM-Rewrite
+        # 调用共享 4B vLLM 端点 (gen_4b)
         response_text = self._call_llm(prompt)
 
         # 解析 JSON
@@ -189,7 +189,7 @@ class QueryRewriter:
         """
         生成 2~3 个变体 Query 用于改写泛化路召回（readme 7.1 第4路）
 
-        通过 vLLM-Rewrite 生成同义变体
+        通过共享 4B vLLM 端点 (gen_4b) 生成同义变体
         """
         variant_prompt = f"""请为以下查询生成2-3个不同表述的同义变体查询，用于搜索引擎检索。
 每个变体一行，只输出变体，不要其他内容。
@@ -209,7 +209,7 @@ class QueryRewriter:
             return []
 
     def _call_llm(self, prompt: str, temperature: float = None) -> str:
-        """调用 vLLM-Rewrite 实例"""
+        """调用共享 4B vLLM 端点 (gen_4b)"""
         from router.stateless_router import StatelessRouter
 
         payload = {
@@ -223,7 +223,7 @@ class QueryRewriter:
             response = router.route_completion("gen_4b", prompt, max_tokens=192, temperature=payload["temperature"])
             return response
         except Exception as e:
-            logger.error(f"vLLM-Rewrite 调用失败: {e}")
+            logger.error(f"共享 4B vLLM 端点调用失败: {e}")
             raise
 
     def _parse_response(self, text: str, original_query: str) -> QueryRewriteResult | None:

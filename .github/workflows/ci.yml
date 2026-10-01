@@ -62,10 +62,48 @@ jobs:
             --timeout=60 \
             -x
 
-  ragas-eval:
-    name: RAGAS 评估（可选）
+  evaluation-guard:
+    name: 评估确定性守卫
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout
+
+      # Deterministic only: schema/count/classification checks and harness
+      # unit tests. RAGAS itself is intentionally NOT installed, so this job
+      # proves the missing-dependency path stays non-misleading.
+      - name: Validate golden set schema and size
+        run: |
+          python -m tests.evaluation.validate_golden_set \
+            --dataset tests/evaluation/golden_set.jsonl
+
+      - name: RAGAS harness + reporter unit tests (no real ragas)
+        env:
+          DEPLOYMENT_MODE: testing
+        run: python -m pytest tests/evaluation/ -q
+
+  ragas-real-eval:
+    name: RAGAS 真实评估（需显式启用）
+    # Opt-in only: requires a repo variable AND a configured API key, so a
+    # known-unpatched RAGAS dependency is never installed unconditionally and
+    # an all-zero fallback can never be uploaded as a quality report.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.RAGAS_EVAL_ENABLED == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -80,9 +118,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # RAGAS is opt-in: vet the dependency/security policy before enabling
+          # the RAGAS_EVAL_ENABLED repository variable.
+          pip install ragas
 
-      - name: Run RAGAS evaluation (golden set mode)
-        if: ${{ secrets.OPENAI_API_KEY != '' }}
+      - name: Require API key
+        run: |
+          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "OPENAI_API_KEY is not configured; refusing to run real RAGAS evaluation." >&2
+            exit 1
+          fi
+
+      - name: Run RAGAS evaluation (fails if ragas is unavailable)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           DEPLOYMENT_MODE: testing
@@ -90,10 +137,10 @@ jobs:
           python -m tests.evaluation.ragas_eval \
             --dataset tests/evaluation/golden_set.jsonl \
             --tag ci-${{ github.sha }} \
-            --report-dir data/eval/reports
+            --report-dir data/eval/reports \
+            --require-ragas
 
       - name: Upload evaluation report
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ragas-eval-report

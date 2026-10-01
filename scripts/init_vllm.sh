@@ -25,8 +25,8 @@ wait_for_vllm() {
     return 1
 }
 
+# Single shared 4B endpoint: rewrite and simple generation share Qwen3-4B (8101).
 wait_for_vllm "http://localhost:8100" "vLLM-Gen-14B"
-wait_for_vllm "http://localhost:8101" "vLLM-Rewrite"
-wait_for_vllm "http://localhost:8102" "vLLM-Gen-4B"
+wait_for_vllm "http://localhost:8101" "vLLM-4B"
 
 echo "=== 所有 vLLM 服务已就绪 ==="

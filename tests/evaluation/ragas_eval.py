@@ -4,12 +4,15 @@ RAGAS 评估器
 独立离线评估模块，用于基于 RAGAS 框架评估 RAG 系统质量。
 支持 CLI 接口和编程式调用。
 
-如果 RAGAS 未安装，evaluate() 会优雅降级返回全零分数。
+如果 RAGAS 未安装，evaluate() 会优雅降级返回全零分数 + ``_warning``。
+注意：零分是“未运行”的降级标记，不是质量结果。CI / 报告中必须显式标注
+UNAVAILABLE；使用 ``--require-ragas`` 可强制要求真实 RAGAS，缺依赖时直接失败。
 """
 
 import json
 import logging
 import os
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -286,12 +289,28 @@ def main() -> None:
         default=None,
         help="要计算的指标列表（默认行为从 config.json 读取）",
     )
+    parser.add_argument(
+        "--require-ragas",
+        action="store_true",
+        help="要求真实 RAGAS 依赖；缺失时以退出码 2 失败，绝不生成零分报告",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+
+    if args.require_ragas:
+        try:
+            import datasets  # type: ignore[import-untyped]  # noqa: F401
+            import ragas  # type: ignore[import-untyped]  # noqa: F401
+        except ImportError as exc:
+            print(
+                f"RAGAS UNAVAILABLE: {exc}\n真实 RAGAS 依赖未安装（或安全策略禁止安装）；本次运行不生成任何质量报告。",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from exc
 
     evaluator = RAGASEvaluator(dataset_path=args.dataset)
     logger.info("加载了 %d 条测试数据", len(evaluator.dataset))
