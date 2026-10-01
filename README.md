@@ -81,6 +81,7 @@ Compose 需要 Redis、Qdrant、Elasticsearch 等服务。启动前检查 compos
 ## 当前代码能力
 
 - FastAPI 单体入口及 `/api/query`、`/api/chat`、认证、会话、媒体访问和指标路由。
+- 认证以 RS256 为主：`POST /api/auth/login` 签发 RS256 access/refresh token；`common/auth` 以 RS256 验签，旧 HS256 `JWT_SECRET` 仅为可选兼容回退。
 - 多路召回及 Reciprocal Rank Fusion（RRF）实现。
 - 可配置的 BiEncoder rerank 阶段及 CrossEncoder ensemble 代码。
 - PEFT `AdapterManager` 与 `LLMClient` 集成；是否实际加载 adapter 取决于本地模型、依赖和配置。仓库没有随附训练后的 adapter 权重。

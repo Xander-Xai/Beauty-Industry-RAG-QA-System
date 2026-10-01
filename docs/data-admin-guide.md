@@ -102,6 +102,8 @@ python3 run_offline.py incremental-build --from-epoch phase_1 --to-epoch phase_2
 - 目标 epoch 是一份**完整快照**，而非仅包含变更文件。
 - 若源 epoch 的 `embedding_version` 与当前构建契约不一致，carry-forward 会拒绝并要求执行
   全量重建（模型权重或预处理变化必须进入新 epoch）。
+- Elasticsearch 读取超过 10,000 文档窗口时使用 `search_after` 分页，并按唯一 keyword 字段
+  `chunk_id` 排序（不使用 Elasticsearch 8 默认禁用排序的 `_id`）。
 
 ## 9. 校验与封存
 

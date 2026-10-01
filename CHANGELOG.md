@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-Changes present on `main` after the 2.3.0 release entry (through the reconciliation base commit):
+Changes present on `main` after the 2.3.0 release entry:
 
 ### Added
 
@@ -42,6 +42,12 @@ Changes present on `main` after the 2.3.0 release entry (through the reconciliat
 - BM25 results expose the source-level `doc_id` (and `chunk_id`) so they merge with Qdrant results
   in RRF instead of using the ES `_id`.
 - Elasticsearch epoch reads use `search_after` pagination past the 10,000-document window.
+- Elasticsearch epoch pagination now sorts `search_after` reads on the unique keyword
+  `chunk_id` rather than `_id`, because Elasticsearch 8 disables sorting/fielddata on
+  `_id` by default. The earlier pagination path existed but could not run against the
+  real service until this sort field was corrected.
+- The Elasticsearch test fake now rejects `_id` sorting so this real-service
+  incompatibility is covered by regression tests.
 - Airflow `DEFAULT_ARGS` uses valid `BaseOperator` timeout keys and task callables return
   JSON-serializable dictionaries.
 - Image retrieval (sync and async CLIP) now respects the active `knowledge_version_epoch`

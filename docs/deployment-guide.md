@@ -25,6 +25,7 @@ cp .env.example .env
 - `CORS_ORIGINS=https://your-frontend.example.com`
 - `JWT_PRIVATE_KEY_PATH`
 - `JWT_PUBLIC_KEY_PATH`
+- `JWT_ALGORITHM=RS256`
 - `REDIS_PASSWORD`
 - `MINIO_ACCESS_KEY`
 - `MINIO_SECRET_KEY`
@@ -34,6 +35,7 @@ cp .env.example .env
 
 - `common/config.py` 会优先读取 `.env` / 进程环境中的 `DEPLOYMENT_MODE` 和 `AUTH_DEV_MODE`。
 - 如果生产环境仍保留 `AUTH_DEV_MODE=true`，任意客户端都可伪造 `X-User-*` 头部，不符合真实上线要求。
+- 认证算法边界：浏览器登录由 `POST /api/auth/login` 签发 RS256 access/refresh token，`common/auth.parse_identity` 以 RS256 验签为主。RS256 验签不依赖 legacy `JWT_SECRET`；`JWT_SECRET`（HS256）仅为可选向后兼容回退，只有需要继续接受旧 HS256 token 时才设置。生产环境只需 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM`。
 
 ### 2.2 前端构建
 
