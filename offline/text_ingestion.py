@@ -465,7 +465,7 @@ class QdrantTextWriter:
                         return
                     raise ValueError(f"knowledge epoch {doc_version_epoch!r} is sealed; write to a new epoch")
                 if points:
-                    self._ensure_epoch_embedding_version(doc_version_epoch)
+                    self._ensure_epoch_embedding_version(doc_version_epoch, doc_id)
 
                 existing_ids = [record.id for record in existing_records]
                 if existing_ids:
@@ -528,7 +528,7 @@ class QdrantTextWriter:
     def _epoch_embedding_version_id(self, epoch: str) -> str:
         return str(uuid.uuid5(_POINT_NAMESPACE, f"epoch-embedding-version:{epoch}"))
 
-    def _ensure_epoch_embedding_version(self, epoch: str) -> None:
+    def _ensure_epoch_embedding_version(self, epoch: str, replacing_doc_id: str) -> None:
         """Pin each epoch to one embedding revision before any document is written."""
         from qdrant_client.http.models import (
             FieldCondition,
@@ -558,10 +558,10 @@ class QdrantTextWriter:
             if epoch == "default":
                 epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
             existing_versions = set()
+            epoch_records = []
             offset = None
             epoch_filter = Filter(
                 must=[
-                    FieldCondition(key="doc_type", match=MatchValue(value="text")),
                     FieldCondition(key="status", match=MatchValue(value="active")),
                     Filter(should=epoch_conditions),
                 ],
@@ -571,16 +571,33 @@ class QdrantTextWriter:
                     collection_name=self.collection_name,
                     scroll_filter=epoch_filter,
                     limit=256,
-                    with_payload=["embedding_version"],
+                    with_payload=["embedding_version", "doc_id"],
                     with_vectors=False,
                     offset=offset,
                 )
+                epoch_records.extend(records)
                 existing_versions.update((record.payload or {}).get("embedding_version") for record in records)
                 if offset is None:
                     break
 
-            if existing_versions and existing_versions != {self.embedding_version}:
+            unknown_legacy_records = [
+                record for record in epoch_records if (record.payload or {}).get("embedding_version") is None
+            ]
+            if any(
+                epoch != "default" or (record.payload or {}).get("doc_id") != replacing_doc_id
+                for record in unknown_legacy_records
+            ):
                 raise ValueError("embedding version is missing or mixed within epoch; ingest into a new epoch")
+            known_versions = existing_versions - {None}
+            if known_versions and known_versions != {self.embedding_version}:
+                raise ValueError("embedding version is missing or mixed within epoch; ingest into a new epoch")
+            if unknown_legacy_records:
+                self.client.set_payload(
+                    collection_name=self.collection_name,
+                    payload={"status": "archived"},
+                    points=[record.id for record in unknown_legacy_records],
+                    wait=True,
+                )
             if pinned_version is None:
                 self.client.upsert(
                     collection_name=self.collection_name,

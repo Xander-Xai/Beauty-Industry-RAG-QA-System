@@ -554,6 +554,79 @@ def test_epoch_rejects_different_embedding_revision_across_documents(tmp_path):
     assert {point.payload["embedding_version"] for point in text_points} == {"model-v1"}
 
 
+def test_default_epoch_does_not_mix_untyped_legacy_vectors(tmp_path):
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    client = QdrantClient(":memory:")
+    client.create_collection("legacy_epoch_version", vectors_config=VectorParams(size=16, distance=Distance.COSINE))
+    client.upsert(
+        "legacy_epoch_version",
+        points=[
+            PointStruct(
+                id="00000000-0000-0000-0000-000000000001",
+                vector=[1.0] + [0.0] * 15,
+                payload={"doc_id": "legacy-document", "status": "active", "role_mask": 0, "dept_mask": 0},
+            )
+        ],
+        wait=True,
+    )
+    source = _write_source(tmp_path, "new.txt", "new model document")
+    service = TextIngestionService(
+        DocumentProcessor(),
+        DeterministicTestEmbedder(16),
+        QdrantTextWriter(client, "legacy_epoch_version", dimension=16),
+    )
+
+    with pytest.raises(ValueError, match="embedding version is missing or mixed within epoch"):
+        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default")
+
+    points, _ = client.scroll("legacy_epoch_version", limit=10, with_payload=True)
+    assert [point.id for point in points] == ["00000000-0000-0000-0000-000000000001"]
+
+
+def test_default_epoch_replaces_untyped_legacy_points_for_same_document(tmp_path):
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    client = QdrantClient(":memory:")
+    client.create_collection(
+        "legacy_source_replacement", vectors_config=VectorParams(size=16, distance=Distance.COSINE)
+    )
+    source = _write_source(tmp_path, "legacy-source.txt", "replacement content")
+    _, doc_id = DocumentProcessor().document_identity(source)
+    legacy_id = "00000000-0000-0000-0000-000000000002"
+    client.upsert(
+        "legacy_source_replacement",
+        points=[
+            PointStruct(
+                id=legacy_id,
+                vector=[1.0] + [0.0] * 15,
+                payload={
+                    "doc_id": doc_id,
+                    "chunk_index": 0,
+                    "content": "old public content",
+                    "role_mask": 0,
+                    "dept_mask": 0,
+                    "status": "active",
+                },
+            )
+        ],
+        wait=True,
+    )
+    service = TextIngestionService(
+        DocumentProcessor(),
+        DeterministicTestEmbedder(16),
+        QdrantTextWriter(client, "legacy_source_replacement", dimension=16),
+    )
+
+    service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default")
+
+    points = _text_records(client, "legacy_source_replacement")
+    assert len(points) == 1
+    assert points[0].payload["doc_id"] == doc_id
+    assert points[0].payload["role_mask"] == 8
+    assert legacy_id not in {point.id for point in points}
+
+
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):
     from contextlib import contextmanager
 
