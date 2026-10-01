@@ -29,11 +29,12 @@ from common.models import UserIdentity
 class _FakeQdrantRecord:
     """模拟 Qdrant 查询返回的 Record 对象"""
 
-    def __init__(self, doc_id, role_mask=0, dept_mask=0, status="active"):
+    def __init__(self, doc_id, role_mask=0, dept_mask=0, status="active", epoch="default"):
         self.payload = {
             "role_mask": role_mask,
             "dept_mask": dept_mask,
             "status": status,
+            "doc_version_epoch": epoch,
         }
 
 
@@ -90,6 +91,13 @@ class TestMediaEndpointAllowed:
         assert data["doc_id"] == "pub_doc"
         assert data["url"] == "https://minio.example.com/signed/pub_doc"
         assert data["expires_in_seconds"] > 0
+        media_filter = mock_qdrant.return_value.scroll.call_args.kwargs["scroll_filter"]
+        filter_values = {(condition.key, condition.match.value) for condition in media_filter.must}
+        assert filter_values == {
+            ("doc_id", "pub_doc"),
+            ("status", "active"),
+            ("doc_version_epoch", "default"),
+        }
         app.dependency_overrides.clear()
 
     @patch("api.routes.QdrantClient")

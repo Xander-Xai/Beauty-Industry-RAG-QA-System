@@ -369,7 +369,7 @@ def media_handler(
     PRD §10: 资源访问安全
 
     流程：
-    1. 通过 Qdrant 查询 doc_id 的元数据（role_mask, dept_mask, status）
+    1. 通过 Qdrant 查询当前 active epoch 中 doc_id 的元数据
     2. 使用 common/auth.is_allowed 进行权限二次校验
     3. 通过 common/minio_client 生成 60s 有效 presigned URL
     4. 返回 {doc_id, url, expires_in_seconds}
@@ -396,13 +396,20 @@ def media_handler(
             port=qdrant_cfg.get("port", 6333),
         )
         collection_name = _config.get("embedding", {}).get("text", {}).get("collection", "rag_text_768")
+        active_epoch = _config.get("knowledge_version_epoch", "default")
 
-        # 使用 scroll 按 doc_id 过滤
+        # Scope metadata authorization to the current version before checking masks.
         records, _ = client.scroll(
             collection_name=collection_name,
-            scroll_filter=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]),
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+                    FieldCondition(key="status", match=MatchValue(value="active")),
+                    FieldCondition(key="doc_version_epoch", match=MatchValue(value=active_epoch)),
+                ]
+            ),
             limit=1,
-            with_payload=["role_mask", "dept_mask", "status"],
+            with_payload=["role_mask", "dept_mask", "status", "doc_version_epoch"],
         )
 
         if records:

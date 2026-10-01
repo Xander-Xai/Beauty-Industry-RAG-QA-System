@@ -109,12 +109,13 @@ class ParallelRecallManager:
         Returns:
             (list[RecallResult], retrieval_agreement_score)
         """
-        from auth.bitmask_rbac import build_qdrant_filter
+        from auth.bitmask_rbac import build_qdrant_filter, build_qdrant_image_filter
 
         top_k_per_path = top_k_per_path or config["retrieval"]["parallel_paths"]
 
         active_epoch = config.get("knowledge_version_epoch", "default")
         qdrant_filter = build_qdrant_filter(user_role_mask, user_dept_mask, active_epoch)
+        image_qdrant_filter = build_qdrant_image_filter(user_role_mask, user_dept_mask)
 
         log_audit_event(
             event_type="recall_filter",
@@ -150,7 +151,7 @@ class ParallelRecallManager:
 
             # ③ CLIP 视觉语义路
             if use_clip and top_k_per_path.get("clip_visual", {}).get("enabled", True):
-                futures[executor.submit(self._recall_clip, query, qdrant_filter, clip_top_k)] = "clip_visual"
+                futures[executor.submit(self._recall_clip, query, image_qdrant_filter, clip_top_k)] = "clip_visual"
 
             # ④ 改写泛化路（Query Rewrite 变体）
             if top_k_per_path.get("rewrite_variants", {}).get("enabled", True):
@@ -451,11 +452,13 @@ class ParallelRecallManager:
         top_k = top_k or clip_cfg.get("top_k", 100)
 
         try:
+            from auth.bitmask_rbac import build_qdrant_image_filter
             from models.embedding_service import EmbeddingService
 
             embedding_svc = EmbeddingService()
             clip_embedding = embedding_svc.encode_text_clip(query)
-            hits = self.clip_retriever.search(clip_embedding, qdrant_filter, top_k)
+            image_qdrant_filter = build_qdrant_image_filter(user_role_mask, user_dept_mask)
+            hits = self.clip_retriever.search(clip_embedding, image_qdrant_filter, top_k)
 
             results = [
                 RecallResult(

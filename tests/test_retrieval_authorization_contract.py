@@ -68,6 +68,51 @@ def test_parallel_recall_drops_missing_and_unauthorized_metadata():
     assert [result.doc_id for result in visible] == ["public"]
 
 
+def test_parallel_recall_scopes_epoch_only_to_text_collection():
+
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    class DenseRetriever:
+        def __init__(self):
+            self.qdrant_filter = None
+
+        def search(self, query_embedding, qdrant_filter, top_k):
+            self.qdrant_filter = qdrant_filter
+            return []
+
+    manager = ParallelRecallManager.__new__(ParallelRecallManager)
+    dense = DenseRetriever()
+    manager._dense_retriever = dense
+    manager._bm25_retriever = None
+    manager._clip_retriever = None
+    manager._rewrite_variants_retriever = None
+    manager.max_workers = 2
+    clip_filters = []
+    manager._recall_clip = lambda query, qdrant_filter, top_k: clip_filters.append(qdrant_filter) or []
+
+    manager.execute(
+        query="query",
+        query_embedding=np.array([0.1]),
+        user_role_mask=0,
+        user_dept_mask=0,
+        use_clip=True,
+        clip_top_k=5,
+        top_k_per_path={
+            "dense_bge": {"enabled": True, "top_k": 5},
+            "bm25_es": {"enabled": False, "top_k": 0},
+            "clip_visual": {"enabled": True, "top_k": 5},
+            "rewrite_variants": {"enabled": False, "top_k": 0},
+        },
+    )
+
+    dense_fields = {(condition.key, condition.match.value) for condition in dense.qdrant_filter.must}
+    clip_fields = {(condition.key, condition.match.value) for condition in clip_filters[0].must}
+    assert ("doc_version_epoch", "default") in dense_fields
+    assert ("status", "active") in dense_fields
+    assert clip_fields == {("status", "active")}
+    assert not any(key == "doc_version_epoch" for key, _ in clip_fields)
+
+
 def test_parallel_recall_fallback_requires_permission_scoped_search():
     from retrieval.parallel_recall import ParallelRecallManager
 
