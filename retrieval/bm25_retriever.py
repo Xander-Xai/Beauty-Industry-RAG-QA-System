@@ -87,16 +87,21 @@ class BM25Retriever:
 
             hits = []
             for hit in response["hits"]["hits"]:
+                source = hit.get("_source", {})
+                # Expose the source-level doc_id (matches Qdrant) so RRF merges
+                # chunks from the same document. Fall back to the ES _id only
+                # for legacy rows written without a doc_id field.
                 hits.append(
                     {
-                        "doc_id": hit["_id"],
-                        "content": hit["_source"].get("content", ""),
+                        "doc_id": source.get("doc_id") or hit["_id"],
+                        "content": source.get("content", ""),
                         "score": hit["_score"],
                         "metadata": {
-                            "doc_type": hit["_source"].get("doc_type", ""),
-                            "law_id": hit["_source"].get("law_id", ""),
-                            "role_mask": hit["_source"].get("role_mask"),
-                            "dept_mask": hit["_source"].get("dept_mask"),
+                            "doc_type": source.get("doc_type", ""),
+                            "law_id": source.get("law_id", ""),
+                            "chunk_id": source.get("chunk_id"),
+                            "role_mask": source.get("role_mask"),
+                            "dept_mask": source.get("dept_mask"),
                         },
                     }
                 )
@@ -237,12 +242,13 @@ class BM25Retriever:
             )
             return [
                 {
-                    "doc_id": hit["_id"],
-                    "content": hit["_source"].get("content", ""),
+                    "doc_id": hit.get("_source", {}).get("doc_id") or hit["_id"],
+                    "content": hit.get("_source", {}).get("content", ""),
                     "score": hit["_score"],
                     "metadata": {
-                        "role_mask": hit["_source"].get("role_mask"),
-                        "dept_mask": hit["_source"].get("dept_mask"),
+                        "chunk_id": hit.get("_source", {}).get("chunk_id"),
+                        "role_mask": hit.get("_source", {}).get("role_mask"),
+                        "dept_mask": hit.get("_source", {}).get("dept_mask"),
                     },
                 }
                 for hit in response["hits"]["hits"]

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import timedelta
 from importlib.util import find_spec
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -65,15 +66,16 @@ DEFAULT_ARGS = {
     "email_on_failure": True,
     "email_on_retry": False,
     "retries": 1,
-    "retry_delay_minutes": 30,
-    "execution_timeout_minutes": 120,
+    "retry_delay": timedelta(minutes=30),
+    "execution_timeout": timedelta(minutes=120),
 }
 
 
 def _task_incremental_update():
     from offline.scheduler import OfflineScheduler
 
-    result = OfflineScheduler().run_incremental_cycle()
+    # XCom/serialization-safe dict result; see OfflineScheduler.run_incremental_update.
+    result = OfflineScheduler().run_incremental_update()
     print(f"incremental cycle complete: {json.dumps(result, ensure_ascii=False)}")
     return result
 
@@ -81,7 +83,7 @@ def _task_incremental_update():
 def _task_full_rebuild():
     from offline.scheduler import OfflineScheduler
 
-    result = OfflineScheduler().run_full_rebuild_cycle()
+    result = OfflineScheduler().run_full_rebuild()
     print(f"full rebuild complete: {json.dumps(result, ensure_ascii=False)}")
     return result
 

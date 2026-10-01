@@ -92,8 +92,10 @@ python3 run_offline.py full-rebuild --epoch phase_2 --seal
 python3 run_offline.py incremental-build --from-epoch phase_1 --to-epoch phase_2
 ```
 
-- 变更检测以**内容哈希为准**；`file_size`/`mtime_ns` 仅用于记录，不用于跳过哈希比较。
-  即使大小与 mtime 不变但内容变化，也会判定为 MODIFIED。
+- 变更检测以**内容哈希为准**，并同时比较解析出的 `role_mask`/`dept_mask`：文件字节不变但权限
+  变化也会重新处理。`file_size`/`mtime_ns` 仅用于记录，不用于跳过哈希比较。
+- 源状态只在整份快照构建并校验成功后写入；构建中途失败不会把已处理的源标记为已完成，
+  重试时仍会重新处理。
 - 未变化文档从 `--from-epoch` **carry forward** 到 `--to-epoch`（复制 Qdrant 文本/图像点与 ES
   文档，改写 `doc_version_epoch` 与物理 ID，保持逻辑 ID 不变）。
 - 修改/新增文档重新处理，删除文档不出现在目标 epoch。

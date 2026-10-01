@@ -42,10 +42,26 @@ class FakeElasticsearchClient:
     def update(self, index: str, id: str, doc: dict):
         self.store[index]["docs"].setdefault(id, {}).update(doc)
 
-    def search(self, index: str, query: dict, size: int = 10, _source: bool = True, track_total_hits: bool = False):
+    def search(
+        self,
+        index: str,
+        query: dict,
+        size: int = 10,
+        _source: bool = True,
+        track_total_hits: bool = False,
+        sort=None,
+        search_after=None,
+    ):
         docs = self.store[index]["docs"]
         hits = [{"_id": doc_id, "_source": document} for doc_id, document in docs.items() if _matches(document, query)]
-        return {"hits": {"total": {"value": len(hits)}, "hits": hits[:size]}}
+        hits.sort(key=lambda hit: hit["_id"])
+        total = len(hits)
+        if search_after is not None:
+            hits = [hit for hit in hits if hit["_id"] > search_after[0]]
+        page = hits[:size]
+        for hit in page:
+            hit["sort"] = [hit["_id"]]
+        return {"hits": {"total": {"value": total}, "hits": page}}
 
     def set_mapping_type(self, index: str, field: str, value: str):
         self.store[index]["mappings"].setdefault("properties", {}).setdefault(field, {})["type"] = value

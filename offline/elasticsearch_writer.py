@@ -78,11 +78,14 @@ def document_id(logical_id: str, epoch: str) -> str:
 class ElasticsearchWriter:
     """Upsert/replace documents in the BM25 index with explicit mapping checks."""
 
-    def __init__(self, client, index_name: str = DEFAULT_INDEX_NAME):
+    def __init__(self, client, index_name: str = DEFAULT_INDEX_NAME, page_size: int = 1000):
         if not index_name:
             raise ValueError("an index name is required")
+        if type(page_size) is not int or page_size <= 0:
+            raise ValueError("page_size must be a positive integer")
         self.client = client
         self.index_name = index_name
+        self.page_size = page_size
 
     def ensure_index(self, *, recreate: bool = False, confirm: bool = False) -> None:
         exists = bool(self.client.indices.exists(index=self.index_name))
@@ -155,13 +158,30 @@ class ElasticsearchWriter:
             self.client.update(index=self.index_name, id=existing_id, doc={"status": "archived"})
 
     def documents_for_epoch(self, doc_version_epoch: str) -> list[dict]:
-        response = self.client.search(
-            index=self.index_name,
-            query=_epoch_query(doc_version_epoch),
-            size=10000,
-            _source=True,
-        )
-        return [hit["_source"] for hit in response["hits"]["hits"]]
+        hits = self._paginated_search(_epoch_query(doc_version_epoch), source=True)
+        return [hit["_source"] for hit in hits]
+
+    def _paginated_search(self, query: dict, *, source: bool) -> list[dict]:
+        """Search every matching document using ``search_after`` pagination."""
+        hits: list[dict] = []
+        search_after = None
+        while True:
+            kwargs = {
+                "index": self.index_name,
+                "query": query,
+                "size": self.page_size,
+                "_source": source,
+                "sort": [{"_id": "asc"}],
+            }
+            if search_after is not None:
+                kwargs["search_after"] = search_after
+            response = self.client.search(**kwargs)
+            page = response["hits"]["hits"]
+            hits.extend(page)
+            if len(page) < self.page_size:
+                break
+            search_after = page[-1].get("sort") or [page[-1]["_id"]]
+        return hits
 
     def count_documents(self, doc_version_epoch: str | None = None) -> int:
         query = _epoch_query(doc_version_epoch) if doc_version_epoch is not None else {"match_all": {}}
@@ -176,8 +196,7 @@ class ElasticsearchWriter:
                 "minimum_should_match": 1,
             }
         }
-        response = self.client.search(index=self.index_name, query=query, size=1000, _source=False)
-        return [hit["_id"] for hit in response["hits"]["hits"]]
+        return [hit["_id"] for hit in self._paginated_search(query, source=False)]
 
 
 def _epoch_conditions(epoch: str) -> list[dict]:

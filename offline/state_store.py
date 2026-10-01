@@ -28,9 +28,16 @@ CREATE TABLE IF NOT EXISTS source_state (
     document_type TEXT NOT NULL,
     last_successful_epoch TEXT NOT NULL DEFAULT '',
     last_processed_at TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'active'
+    status TEXT NOT NULL DEFAULT 'active',
+    role_mask INTEGER NOT NULL DEFAULT 0,
+    dept_mask INTEGER NOT NULL DEFAULT 0
 )
 """
+
+_MIGRATION_COLUMNS = {
+    "role_mask": "INTEGER NOT NULL DEFAULT 0",
+    "dept_mask": "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,8 @@ class SourceState:
     last_successful_epoch: str
     last_processed_at: str
     status: str
+    role_mask: int = 0
+    dept_mask: int = 0
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,13 @@ class StateStore:
         self._connection.row_factory = sqlite3.Row
         with self._connection:
             self._connection.execute(_SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        existing = {row["name"] for row in self._connection.execute("PRAGMA table_info(source_state)")}
+        for column, definition in _MIGRATION_COLUMNS.items():
+            if column not in existing:
+                self._connection.execute(f"ALTER TABLE source_state ADD COLUMN {column} {definition}")
 
     def close(self) -> None:
         self._connection.close()
@@ -93,8 +109,9 @@ class StateStore:
                 """
                 INSERT INTO source_state (
                     source_id, relative_path, file_size, mtime_ns, content_hash,
-                    document_type, last_successful_epoch, last_processed_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    document_type, last_successful_epoch, last_processed_at, status,
+                    role_mask, dept_mask
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id) DO UPDATE SET
                     relative_path = excluded.relative_path,
                     file_size = excluded.file_size,
@@ -103,7 +120,9 @@ class StateStore:
                     document_type = excluded.document_type,
                     last_successful_epoch = excluded.last_successful_epoch,
                     last_processed_at = excluded.last_processed_at,
-                    status = excluded.status
+                    status = excluded.status,
+                    role_mask = excluded.role_mask,
+                    dept_mask = excluded.dept_mask
                 """,
                 (
                     state.source_id,
@@ -115,6 +134,8 @@ class StateStore:
                     state.last_successful_epoch,
                     state.last_processed_at,
                     state.status,
+                    state.role_mask,
+                    state.dept_mask,
                 ),
             )
 
@@ -122,23 +143,40 @@ class StateStore:
         with self._connection:
             self._connection.execute("UPDATE source_state SET status = 'archived' WHERE source_id = ?", (source_id,))
 
-    def classify(self, source_id: str, *, content_hash: str) -> str:
+    def classify(
+        self,
+        source_id: str,
+        *,
+        content_hash: str,
+        role_mask: int | None = None,
+        dept_mask: int | None = None,
+    ) -> str:
         state = self.get(source_id)
         if state is None or state.status != "active":
             return NEW
-        if state.content_hash == content_hash:
-            return UNCHANGED
-        return MODIFIED
+        if state.content_hash != content_hash:
+            return MODIFIED
+        if role_mask is not None and role_mask != state.role_mask:
+            return MODIFIED
+        if dept_mask is not None and dept_mask != state.dept_mask:
+            return MODIFIED
+        return UNCHANGED
 
     def diff(self, current: dict[str, dict]) -> ChangeSet:
         """Classify the current source set against stored state.
 
-        ``current`` maps ``source_id`` to a dict with ``content_hash`` (and
-        optionally ``relative_path``/``document_type`` used only for metadata).
+        ``current`` maps ``source_id`` to a dict with ``content_hash`` and,
+        when available, the resolved ``role_mask``/``dept_mask`` so permission
+        changes force reprocessing even when the file bytes are unchanged.
         """
         new, modified, unchanged = [], [], []
         for source_id, metadata in current.items():
-            change = self.classify(source_id, content_hash=metadata["content_hash"])
+            change = self.classify(
+                source_id,
+                content_hash=metadata["content_hash"],
+                role_mask=metadata.get("role_mask"),
+                dept_mask=metadata.get("dept_mask"),
+            )
             if change == NEW:
                 new.append(source_id)
             elif change == MODIFIED:
@@ -160,4 +198,6 @@ def _row_to_state(row: sqlite3.Row) -> SourceState:
         last_successful_epoch=row["last_successful_epoch"],
         last_processed_at=row["last_processed_at"],
         status=row["status"],
+        role_mask=row["role_mask"] if "role_mask" in row.keys() else 0,
+        dept_mask=row["dept_mask"] if "dept_mask" in row.keys() else 0,
     )

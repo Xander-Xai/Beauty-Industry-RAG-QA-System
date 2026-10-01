@@ -32,6 +32,18 @@ Changes present on `main` after the 2.3.0 release entry (through the reconciliat
 
 ### Fixed
 
+- Source state is committed only after the whole snapshot (validate + optional seal) succeeds, so a
+  failed multi-source build cannot mark sources as processed.
+- Incremental change detection now also compares resolved permission masks, so a permission change
+  reprocesses the document even when the file bytes are unchanged.
+- Re-ingesting a document that no longer has images now removes its stale image points.
+- Snapshot validation treats unexpected document IDs as errors, so a full snapshot cannot be sealed
+  with documents outside the current source set.
+- BM25 results expose the source-level `doc_id` (and `chunk_id`) so they merge with Qdrant results
+  in RRF instead of using the ES `_id`.
+- Elasticsearch epoch reads use `search_after` pagination past the 10,000-document window.
+- Airflow `DEFAULT_ARGS` uses valid `BaseOperator` timeout keys and task callables return
+  JSON-serializable dictionaries.
 - Image retrieval (sync and async CLIP) now respects the active `knowledge_version_epoch`
   exactly like text retrieval; legacy missing-epoch points no longer leak into a non-default epoch.
 - `seal-epoch` now runs the canonical snapshot validator (Qdrant text/image + Elasticsearch)

@@ -105,6 +105,8 @@ class SnapshotBuilder:
                 "file_size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
                 "document_type": source.document_type,
+                "role_mask": source.role_mask,
+                "dept_mask": source.dept_mask,
             }
         return metadata
 
@@ -159,8 +161,19 @@ class SnapshotBuilder:
             doc_version_epoch=epoch,
         )
 
-    def ingest_source(self, source: IngestionSource, epoch: str) -> tuple[int, int]:
-        """Ingest one source and return (chunks_written, images_written)."""
+    def ingest_source(
+        self,
+        source: IngestionSource,
+        epoch: str,
+        *,
+        state_sink: list[SourceState] | None = None,
+    ) -> tuple[int, int]:
+        """Ingest one source and return (chunks_written, images_written).
+
+        State is upserted immediately unless ``state_sink`` is provided, in
+        which case the caller stages it and commits only after the whole
+        snapshot succeeds.
+        """
         doc_id = self._doc_id(source)
         if source.document_type == "image":
             record = self.image_processor.process_standalone_image(
@@ -196,26 +209,31 @@ class SnapshotBuilder:
 
         self._write_document(source, doc_id, epoch, chunks, images)
         stat = Path(source.path).stat()
-        self.state_store.upsert(
-            SourceState(
-                source_id=source.source_id,
-                relative_path=source.relative_path or source.source_id,
-                file_size=stat.st_size,
-                mtime_ns=stat.st_mtime_ns,
-                content_hash=self._file_hash(source.path),
-                document_type=source.document_type,
-                last_successful_epoch=epoch,
-                last_processed_at=datetime.now(timezone.utc).isoformat(),
-                status="active",
-            )
+        state = SourceState(
+            source_id=source.source_id,
+            relative_path=source.relative_path or source.source_id,
+            file_size=stat.st_size,
+            mtime_ns=stat.st_mtime_ns,
+            content_hash=self._file_hash(source.path),
+            document_type=source.document_type,
+            last_successful_epoch=epoch,
+            last_processed_at=datetime.now(timezone.utc).isoformat(),
+            status="active",
+            role_mask=source.role_mask,
+            dept_mask=source.dept_mask,
         )
+        if state_sink is None:
+            self.state_store.upsert(state)
+        else:
+            state_sink.append(state)
         return len(chunks), len(images)
 
     def _write_document(self, source, doc_id, epoch, chunks, images) -> None:
         vectors = self.vectorizer.embed_texts([chunk.text for chunk in chunks]) if chunks else []
         self.text_writer.replace_document(doc_id, epoch, chunks, vectors)
-        if images:
-            self.image_writer.replace_document(doc_id, epoch, images, [image.embedding for image in images])
+        # Always replace, even with zero images, so a document that changed from
+        # image-bearing to text-only has its stale image points removed.
+        self.image_writer.replace_document(doc_id, epoch, images, [image.embedding for image in images])
         if self.es_writer is not None:
             documents = []
             for chunk in chunks:
@@ -231,9 +249,10 @@ class SnapshotBuilder:
     ) -> BuildResult:
         result = BuildResult(epoch=epoch)
         expected = set()
+        pending_states: list[SourceState] = []
         for source in sources:
             try:
-                chunks, images = self.ingest_source(source, epoch)
+                chunks, images = self.ingest_source(source, epoch, state_sink=pending_states)
             except Exception:
                 result.failed_sources.append(source.source_id)
                 raise
@@ -246,6 +265,10 @@ class SnapshotBuilder:
         if seal:
             self.seal(epoch)
             result.sealed = True
+        # Commit source state only after the snapshot (and optional seal)
+        # succeeded, so a failed build cannot mark sources as processed.
+        for state in pending_states:
+            self.state_store.upsert(state)
         return result
 
     def build_incremental(
@@ -283,9 +306,10 @@ class SnapshotBuilder:
                 carried += carry_forward_es(self.es_writer, from_epoch, to_epoch, doc_ids=unchanged_doc_ids)
             result.carried_forward = carried
 
+        pending_states: list[SourceState] = []
         for source_id in changes.new + changes.modified:
             source = source_by_id[source_id]
-            chunks, images = self.ingest_source(source, to_epoch)
+            chunks, images = self.ingest_source(source, to_epoch, state_sink=pending_states)
             result.documents_processed += 1
             result.chunks_written += chunks
             result.images_written += images
@@ -298,7 +322,6 @@ class SnapshotBuilder:
                 self.image_writer.replace_document(doc_id, to_epoch, [], [])
                 if self.es_writer is not None:
                     self.es_writer.delete_document(doc_id, to_epoch)
-            self.state_store.mark_deleted(source_id)
 
         if validate:
             expected = {self._doc_id(source) for source in sources}
@@ -306,6 +329,11 @@ class SnapshotBuilder:
         if seal:
             self.seal(to_epoch)
             result.sealed = True
+        # Commit state only after the snapshot succeeded.
+        for state in pending_states:
+            self.state_store.upsert(state)
+        for source_id in changes.deleted:
+            self.state_store.mark_deleted(source_id)
         return result
 
     def seal(self, epoch: str) -> None:

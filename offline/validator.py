@@ -140,8 +140,8 @@ class SnapshotValidator:
             report.errors.append(f"epoch {report.epoch!r} is missing expected documents: {sorted(missing)[:10]}")
         unexpected = present - self.expected_doc_ids
         if unexpected:
-            report.warnings.append(
-                f"epoch {report.epoch!r} has documents outside the expected set: {sorted(unexpected)[:10]}"
+            report.errors.append(
+                f"epoch {report.epoch!r} contains documents outside the expected set: {sorted(unexpected)[:10]}"
             )
 
 
