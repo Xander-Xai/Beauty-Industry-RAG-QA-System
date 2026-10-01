@@ -220,23 +220,42 @@ class EmbeddingService:
             "status",
             "doc_version_epoch",
         ]
-        if hasattr(client, "query_points"):
-            response = client.query_points(
-                collection_name=collection_name,
-                query=query_embedding.flatten().tolist(),
-                limit=top_k,
-                query_filter=qdrant_filter,
-                with_payload=payload_fields,
-            )
-            points = response.points
-        else:  # Compatibility for older clients and repository test doubles.
-            points = client.search(
-                collection_name=collection_name,
-                query_vector=query_embedding.flatten().tolist(),
-                limit=top_k,
-                query_filter=qdrant_filter,
-                with_payload=payload_fields,
-            )
+        points = []
+        seen_doc_ids = set()
+        offset = 0
+        query_vector = query_embedding.flatten().tolist()
+        while len(points) < top_k:
+            if hasattr(client, "query_points"):
+                response = client.query_points(
+                    collection_name=collection_name,
+                    query=query_vector,
+                    limit=top_k,
+                    offset=offset,
+                    query_filter=qdrant_filter,
+                    with_payload=payload_fields,
+                )
+                page = response.points
+            else:  # Compatibility for older clients and repository test doubles.
+                page = client.search(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=top_k,
+                    offset=offset,
+                    query_filter=qdrant_filter,
+                    with_payload=payload_fields,
+                )
+
+            for point in page:
+                doc_id = (point.payload or {}).get("doc_id")
+                if not doc_id or str(doc_id) in seen_doc_ids:
+                    continue
+                seen_doc_ids.add(str(doc_id))
+                points.append(point)
+                if len(points) == top_k:
+                    break
+            if len(page) < top_k or len(points) == top_k:
+                break
+            offset += len(page)
 
         hits = []
         for point in points:

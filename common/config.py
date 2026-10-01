@@ -90,6 +90,15 @@ def _apply_env_overrides(raw: dict) -> dict:
     if env_auth_dev_mode is not None:
         auth_data["dev_mode"] = env_auth_dev_mode
 
+    qdrant_data = raw.setdefault("qdrant", {})
+    qdrant_host = os.environ.get("QDRANT_HOST")
+    if qdrant_host:
+        qdrant_data["host"] = qdrant_host
+    for env_name, config_name in (("QDRANT_PORT", "port"), ("QDRANT_GRPC_PORT", "grpc_port")):
+        env_value = os.environ.get(env_name)
+        if env_value:
+            qdrant_data[config_name] = int(env_value)
+
     return raw
 
 

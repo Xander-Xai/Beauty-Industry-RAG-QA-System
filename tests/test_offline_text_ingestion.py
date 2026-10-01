@@ -463,27 +463,64 @@ def test_collection_schema_mismatch_fails_clearly():
 
 
 def test_qdrant_environment_overrides_connection_config(monkeypatch):
-    from offline.text_ingestion import _qdrant_connection_kwargs
+    import qdrant_client
+
+    import models.embedding_service as embedding_module
+    from common.config import _apply_env_overrides
 
     monkeypatch.setenv("QDRANT_HOST", "127.0.0.1")
     monkeypatch.setenv("QDRANT_PORT", "7333")
     monkeypatch.setenv("QDRANT_GRPC_PORT", "7334")
-    assert _qdrant_connection_kwargs({"host": "qdrant", "port": 6333, "grpc_port": 6334}) == {
+    overridden = _apply_env_overrides({"qdrant": {"host": "qdrant", "port": 6333, "grpc_port": 6334}})
+    assert overridden["qdrant"] == {"host": "127.0.0.1", "port": 7333, "grpc_port": 7334}
+    created_clients = []
+
+    def fake_qdrant_client(**kwargs):
+        created_clients.append(kwargs)
+        return kwargs
+
+    monkeypatch.setattr(embedding_module, "config", overridden)
+    monkeypatch.setattr(qdrant_client, "QdrantClient", fake_qdrant_client)
+    reader = embedding_module.EmbeddingService.__new__(embedding_module.EmbeddingService)
+    reader._qdrant_client = None
+    assert reader.qdrant_client == {
         "host": "127.0.0.1",
         "port": 7333,
         "grpc_port": 7334,
-        "prefer_grpc": False,
+        "prefer_grpc": True,
     }
+    assert created_clients == [reader.qdrant_client]
 
     monkeypatch.delenv("QDRANT_HOST")
     monkeypatch.delenv("QDRANT_PORT")
     monkeypatch.delenv("QDRANT_GRPC_PORT")
-    assert _qdrant_connection_kwargs({"host": "qdrant", "port": 6333, "grpc_port": 6334}) == {
-        "host": "qdrant",
-        "port": 6333,
-        "grpc_port": 6334,
-        "prefer_grpc": False,
-    }
+    fallback = _apply_env_overrides({"qdrant": {"host": "qdrant", "port": 6333, "grpc_port": 6334}})
+    assert fallback["qdrant"] == {"host": "qdrant", "port": 6333, "grpc_port": 6334}
+
+
+def test_qdrant_text_search_paginates_until_unique_documents_are_filled():
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    from models.embedding_service import EmbeddingService
+
+    client = QdrantClient(":memory:")
+    client.create_collection("unique_docs", vectors_config=VectorParams(size=2, distance=Distance.COSINE))
+    client.upsert(
+        collection_name="unique_docs",
+        points=[
+            PointStruct(id=index, vector=[1.0, 0.0], payload={"doc_id": "long_doc", "content": f"chunk {index}"})
+            for index in range(3)
+        ]
+        + [PointStruct(id=4, vector=[0.0, 1.0], payload={"doc_id": "other_doc", "content": "other"})],
+        wait=True,
+    )
+    reader = EmbeddingService.__new__(EmbeddingService)
+    reader._qdrant_client = client
+
+    hits = reader.search_qdrant_text(np.array([1.0, 0.0]), collection_name="unique_docs", top_k=2)
+
+    assert [hit["doc_id"] for hit in hits] == ["long_doc", "other_doc"]
+    assert len(hits) == 2
 
 
 def test_qdrant_filter_includes_active_status_and_epoch():
