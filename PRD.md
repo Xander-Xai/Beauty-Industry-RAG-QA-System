@@ -6,8 +6,8 @@
 
 | Topic | Current classification | Evidence / boundary |
 |---|---|---|
-| Offline ingestion and OCR | Planned | No production parser, OCR ingestion, vector writer or scheduler under `offline/`; see audit and Issue #2 |
-| Airflow ingestion | Planned | Design reference only; no end-to-end production ingestion is established |
+| Offline ingestion and OCR | Implemented (external validation pending) | `offline/` implements TXT/PDF/DOCX/XLSX parsing, OCR/image pipeline, BGE/CLIP adapters, Qdrant text/image and Elasticsearch writers, incremental/carry-forward/full-rebuild, validator, epoch seal, scheduler and feedback; real model/OCR smoke is pending external assets (see audit) |
+| Airflow ingestion | Implemented in code; runtime optional | Config-driven DAGs register only when Airflow and offline modules are available; no real Airflow execution is verified and default Compose does not run Airflow |
 | RRF | Implemented in code | Fusion implementation exists; production relevance/quality is not implied |
 | BiEncoder | Partial | Reranker and pipeline integration exist; model assets and evaluation are separate |
 | RAGAS | Partial | Harness source and data exist; package is excluded from default dependencies pending an upstream security fix; no quality threshold is certified |
@@ -54,14 +54,21 @@ QPS ≈ 有效并发 / 平均延迟
 3.1 数据范围
 500+ 文档（PDF/Word/Excel）、包装图片/扫描件，覆盖 2000+ 成分、3000+ 配方（原料研发配方种类）、1500+ 产品（实际制造产品）、8 大法规体系。
 3.2 文档处理
-● 文本清洗去噪 → 结构化（JSON Lines）→ 语义切块（≈500 tokens，重叠 10%）。
+**实现状态：** 当前实现按**字符**切块（默认 500 字符、10% 重叠），不是 tokenizer 切块；设计中的
+JSON Lines 中间产物未采用，解析结果以有序 block（含 page/heading/paragraph/table/row_window
+元数据）直接进入 chunker。
+● 文本清洗去噪 → 有序结构化 block → 字符切块（≈500 字符，重叠 10%）。
 ● 向量化：bge-base-zh-v1.5 生成 768 维向量。
-● 元数据记录：doc_type, law_id, ingredient_id 等。
-● 权限字段注入（Bitmask）：离线计算 role_mask 和 dept_mask。
+● 元数据记录：doc_type、page_number、heading_level、sheet_name、row_start/row_end 等。
+● 权限字段注入（Bitmask）：离线按 `permission_rules` 计算 role_mask 和 dept_mask。
 3.3 图像处理
+**实现状态：** OCR provider 与 CLIP 图像 encoder 已实现并解耦（可注入）；PaddleOCR 为可选外部
+运行时，默认不安装。视觉权重规则已实现且确定性可测。**注意：** 当前 OCR 文本通过文本 writer
+写入，`embedding_type` 记录为 `"bge"`，尚未单独标记为设计中的 `"image_ocr"` 类型。
 ● 图像增强（二值化、去噪、倾斜校正）→ PaddleOCR 中文模型输出带坐标/字号/置信度的文本块。
-● 视觉权重注入：对核心区域（居中、大字号）文本按权重重复（如 3 次），拼接为 ocr_main_text 用于向量化；保留完整 ocr_full_text 用于溯源。
-● BGE 向量化 ocr_main_text，embedding_type = "image_ocr"。
+● 视觉权重注入：对核心区域（居中、大字号、高置信度）文本按权重重复（如 3 次），拼接为
+  ocr_main_text 用于向量化；保留完整 ocr_full_text 用于溯源。
+● BGE 向量化 OCR 文本（当前 embedding_type = "bge"）。
 ● CLIP-ViT-B/16 离线生成 512 维图像向量，embedding_type = "image_clip"。
 ● BLIP 不在离线阶段执行，仅在线按需触发。
 3.4 向量存储与权限标签（Bitmask）
@@ -91,11 +98,14 @@ AND status == 'active'
 3.6 文档生命周期与版本化管理（核心修订）
 引入基于 doc_version_epoch 的版本化管控替代实时时间判断，消除因 expiry_date 变更引发的缓存全量失效问题：
 ● 元数据扩展：effective_epoch（生效版本）、expiry_epoch（过期版本）、status（active/archived）。
-● 设计目标：由 Airflow 每日/每小时生成新的 active_epoch 增量值（如 20260411_01），或由发布系统触发 bump 版本号。当前仓库未验证此 ingestion workflow。
+● 实现状态：epoch 由 CLI/调度器构建并封存；**不会自动切换生产 active_epoch**。`knowledge_version_epoch` 的切换是明确的人工发布动作。设计中“Airflow 自动 bump”未实现。
 ● 检索过滤逻辑：所有检索（Qdrant/ES）均使用 doc_version_epoch == {active_epoch} 作为硬性约束，不再依赖 expiry_date > current_timestamp() 运行时判断。
 ● 设计目标：定时任务将 expiry_epoch < active_epoch 的文档标记为 archived，并更新状态；前端历史区间查询尚需按实际代码验证。
 3.7 离线调度
-设计目标：Apache Airflow 每周增量更新、每月全量重建，并根据 embedding_type 分流写入对应 Collection。当前仓库不含已验证的生产 ingestion pipeline。
+实现状态：业务逻辑位于 `offline/scheduler.py`（cron/Airflow/CLI 共用），频率来自
+`config.json` 的 `offline.scheduler`。`dags/knowledge_base_dags.py` 在 Airflow 可用且离线模块
+可发现时注册增量/全量/反馈 DAG。默认 Compose 不启动 Airflow；真实 Airflow 执行未验证。调度器
+最多 build/validate/seal，不自动激活 epoch。
 4. 在线推理架构
 4.1 核心链路
 Query → 用户身份解析 → 二级缓存（L1/L2）

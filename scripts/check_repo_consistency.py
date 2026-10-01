@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Check repository metadata and links that should stay aligned."""
+"""Check repository metadata, links, and drift-prone documentation claims.
+
+This guard is intentionally conservative: it fails on broken local references,
+runtime-artifact leaks, version drift, documented-but-missing offline CLI
+subcommands, stale "offline ingestion is missing" claims in current operator
+docs, and an invalid/absent repository truth audit. It does not flag historical
+CHANGELOG text or historical implementation plans.
+"""
 
 from __future__ import annotations
 
+import argparse
 import ast
 import json
 import re
@@ -18,9 +26,109 @@ CANONICAL_DOCS = [
 ]
 STATUSES = {"VERIFIED", "PARTIAL", "PLANNED", "BROKEN", "STALE", "HISTORICAL"}
 
+# Current operator-facing docs that must not regress to "offline ingestion is
+# missing" claims. Historical docs (CHANGELOG, the audit's history section) and
+# historical plans are excluded on purpose.
+CURRENT_OFFLINE_DOCS = [
+    ROOT / "README.md",
+    ROOT / "PRD.md",
+    ROOT / "docs/data-admin-guide.md",
+    ROOT / "docs/deployment-guide.md",
+    ROOT / "docs/operations-guide.md",
+    ROOT / "docs/pre-launch-checklist.md",
+    ROOT / "docs/user-guide.md",
+]
+
+STALE_OFFLINE_CLAIM_PATTERNS = [
+    r"TXT[- ]only",
+    r"仅支持.{0,8}TXT",
+    r"只支持.{0,8}TXT",
+    r"唯一.{0,10}ingest-text",
+    r"PDF/DOCX/XLSX.{0,24}(未实现|尚未实现|not implemented)",
+    r"(未实现|尚未实现|不包含|不存在).{0,24}(ingestion|离线管线|文档导入|导入管线)",
+    r"(不含|没有).{0,10}(文档\s*ingestion|离线 ingestion|原始文档导入)",
+    r"offline.{0,12}modules.{0,24}(不存在|missing|absent)",
+    r"no\s+ingestion\s+pipeline",
+]
+
+REQUIRED_AUDIT_AREAS = {
+    "Application",
+    "Microservices",
+    "Document parsing",
+    "OCR",
+    "BGE",
+    "CLIP",
+    "Qdrant text",
+    "Qdrant image",
+    "Elasticsearch",
+    "Source state",
+    "Incremental snapshot",
+    "Carry-forward",
+    "Full rebuild",
+    "Validator",
+    "Epoch seal",
+    "CLI",
+    "Scheduler",
+    "Airflow integration",
+    "Feedback",
+    "QLoRA",
+    "AdapterManager",
+    "RRF",
+    "BiEncoder",
+    "RAGAS",
+    "RBAC",
+    "Cache",
+    "Performance",
+    "CI",
+    "Security",
+    "Documentation governance",
+}
+
+# Offline capabilities that now exist in code. They must never be classified as
+# PLANNED/BROKEN in the current truth audit.
+OFFLINE_CAPABILITY_AREAS = {
+    "Document parsing",
+    "OCR",
+    "BGE",
+    "CLIP",
+    "Qdrant text",
+    "Qdrant image",
+    "Elasticsearch",
+    "Source state",
+    "Incremental snapshot",
+    "Carry-forward",
+    "Full rebuild",
+    "Validator",
+    "Epoch seal",
+    "CLI",
+    "Scheduler",
+    "Feedback",
+}
+
 
 def fail(errors: list[str], message: str) -> None:
     errors.append(message)
+
+
+def _display(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def run_offline_subcommands() -> set[str]:
+    """Return the subcommands actually defined by run_offline.py."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import run_offline
+
+    parser = run_offline._build_parser()
+    subcommands: set[str] = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            subcommands.update(action.choices.keys())
+    return subcommands
 
 
 def check_markdown_links(path: Path, errors: list[str]) -> None:
@@ -54,21 +162,11 @@ def resolve_repository_path(reference: str) -> Path | None:
 
 def check_documented_paths(path: Path, errors: list[str]) -> None:
     text = path.read_text(encoding="utf-8")
-    planned_missing = {
-        "offline/document_processor.py",
-        "offline/image_processor.py",
-        "offline/vectorizer.py",
-        "offline/scheduler.py",
-        "offline/feedback_loop.py",
-        "tests/test_offline_pipeline.py",
-    }
     path_pattern = re.compile(r"`((?:\.?/?[\w.-]+/)+[\w.-]+\.(?:py|md|json|ya?ml|sh|jsx|toml|txt))`")
     for reference in path_pattern.findall(text):
         normalized = reference.removeprefix("./")
         if normalized.startswith("models/") or normalized.startswith("docs/superpowers/"):
             continue  # operator-supplied assets or historical plans
-        if normalized in planned_missing:
-            continue  # explicitly documented as absent/planned
         if resolve_repository_path(normalized) is None:
             fail(errors, f"{path.relative_to(ROOT)}: referenced local path does not exist: {reference}")
 
@@ -79,6 +177,27 @@ def check_documented_python_commands(path: Path, errors: list[str]) -> None:
     for entrypoint in command_pattern.findall(text):
         if not (ROOT / entrypoint).is_file():
             fail(errors, f"{path.relative_to(ROOT)}: documented Python entrypoint does not exist: {entrypoint}")
+
+
+def check_documented_offline_commands(path: Path, subcommands: set[str], errors: list[str]) -> None:
+    text = path.read_text(encoding="utf-8")
+    for subcommand in re.findall(r"run_offline\.py\s+([a-z][a-z-]+)", text):
+        if subcommand not in subcommands:
+            fail(
+                errors,
+                f"{_display(path)}: documented run_offline.py subcommand does not exist: {subcommand}",
+            )
+
+
+def check_stale_offline_claims(path: Path, errors: list[str]) -> None:
+    text = path.read_text(encoding="utf-8")
+    for pattern in STALE_OFFLINE_CLAIM_PATTERNS:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            fail(
+                errors,
+                f"{_display(path)}: stale offline-ingestion claim matched {pattern!r}: {match.group(0)!r}",
+            )
 
 
 def check_entrypoint_imports(entrypoint: Path, errors: list[str]) -> None:
@@ -105,6 +224,51 @@ def check_entrypoint_imports(entrypoint: Path, errors: list[str]) -> None:
                 fail(errors, f"{entrypoint.relative_to(ROOT)}: unresolved local import {module}")
 
 
+def check_truth_audit(errors: list[str]) -> None:
+    audit_path = ROOT / "docs/repository-truth-audit.md"
+    if not audit_path.exists():
+        fail(errors, "docs/repository-truth-audit.md is missing")
+        return
+    audit_text = audit_path.read_text(encoding="utf-8")
+    if not re.search(r"(?m)^Reconciled candidate:\s+`HEAD`(?:\s|$)", audit_text):
+        fail(errors, "repository truth audit must resolve its candidate from HEAD at verification time")
+    if not re.search(r"(?m)^Post-reconciliation verification date:\s+2026-10-01\.?\s*$", audit_text):
+        fail(errors, "repository truth audit verification date is missing or stale")
+
+    audit_lines = audit_text.splitlines()
+    header = next((line for line in audit_lines if line.startswith("| Area |")), "")
+    columns_header = [part.strip().lower() for part in header.strip("|").split("|")]
+    area_column = columns_header.index("area") if "area" in columns_header else -1
+    status_column = columns_header.index("status") if "status" in columns_header else -1
+    if area_column < 0 or status_column < 0:
+        fail(errors, "repository truth audit must have Area and Status columns")
+        return
+
+    seen_areas: dict[str, str] = {}
+    for line_number, line in enumerate(audit_lines, 1):
+        if not line.startswith("|") or "---" in line or line.startswith("| Area"):
+            continue
+        columns = [part.strip() for part in line.strip("|").split("|")]
+        if len(columns) <= max(area_column, status_column):
+            fail(errors, f"repository audit line {line_number}: malformed row")
+            continue
+        status = columns[status_column]
+        if status not in STATUSES:
+            fail(errors, f"repository audit line {line_number}: invalid status {status!r}")
+            continue
+        seen_areas[columns[area_column]] = status
+
+    missing_areas = REQUIRED_AUDIT_AREAS - set(seen_areas)
+    if missing_areas:
+        fail(errors, f"repository truth audit is missing required areas: {sorted(missing_areas)}")
+
+    for area in sorted(OFFLINE_CAPABILITY_AREAS & set(seen_areas)):
+        if seen_areas[area] in {"PLANNED", "BROKEN", "STALE"}:
+            fail(
+                errors, f"repository truth audit classifies existing offline capability {area!r} as {seen_areas[area]}"
+            )
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -128,37 +292,13 @@ def main() -> int:
         fail(errors, "README must identify the existing canonical app.py entrypoint")
     if re.search(r"(?im)^\s*License\s*:\s*MIT\s*$|\[MIT\]\(LICENSE\)", readme) and not (ROOT / "LICENSE").is_file():
         fail(errors, "README declares MIT but root LICENSE is missing")
-    if re.search(
-        r"(?m)^\s*python(?:3|\d+(?:\.\d+)?)?\s+run_offline\.py\s+--mode\s+(?:create-index|incremental|full|feedback)\b",
-        readme,
-    ):
-        fail(errors, "README advertises unavailable offline ingestion commands")
 
     docs_index = (ROOT / "docs/README.md").read_text(encoding="utf-8")
     for heading in ("Canonical / Current", "Historical / Implementation Plans"):
         if heading not in docs_index:
             fail(errors, f"docs/README.md must separate current and historical documentation ({heading})")
 
-    audit_path = ROOT / "docs/repository-truth-audit.md"
-    if audit_path.exists():
-        audit_text = audit_path.read_text(encoding="utf-8")
-        if not re.search(r"(?m)^Reconciled candidate:\s+`HEAD`(?:\s|$)", audit_text):
-            fail(errors, "repository truth audit must resolve its candidate from HEAD at verification time")
-        if not re.search(r"(?m)^Post-reconciliation verification date:\s+2026-10-01\.?\s*$", audit_text):
-            fail(errors, "repository truth audit verification date is missing or stale")
-        audit_lines = audit_text.splitlines()
-        header = next((line for line in audit_lines if line.startswith("| Area |")), "")
-        columns_header = [part.strip().lower() for part in header.strip("|").split("|")]
-        status_column = columns_header.index("status") if "status" in columns_header else -1
-        for line_number, line in enumerate(audit_lines, 1):
-            if line.startswith("|") and "---" not in line and "Area" not in line:
-                columns = [part.strip() for part in line.strip("|").split("|")]
-                if status_column < 0 or len(columns) <= status_column or columns[status_column] not in STATUSES:
-                    value = columns[status_column] if status_column >= 0 and len(columns) > status_column else "missing"
-                    fail(errors, f"repository audit line {line_number}: invalid status {value!r}")
-        audit_text_lower = audit_text.lower()
-        if "offline ingestion" in audit_text_lower and "| planned |" not in audit_text_lower:
-            fail(errors, "offline ingestion must remain classified as PLANNED in repository audit")
+    check_truth_audit(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
@@ -186,6 +326,12 @@ def main() -> int:
             check_markdown_links(doc, errors)
             check_documented_paths(doc, errors)
             check_documented_python_commands(doc, errors)
+
+    subcommands = run_offline_subcommands()
+    for doc in CURRENT_OFFLINE_DOCS:
+        if doc.exists():
+            check_documented_offline_commands(doc, subcommands, errors)
+            check_stale_offline_claims(doc, errors)
 
     active_entrypoints = [ROOT / name for name in ("app.py", "run_offline.py", "run_services.py")]
     for entrypoint in active_entrypoints:

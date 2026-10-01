@@ -4,108 +4,42 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import re
-import tempfile
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from offline.file_lock import FileLockProvider
+
 _UINT32_MAX = 0xFFFFFFFF
 _EPOCH_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _POINT_NAMESPACE = uuid.UUID("74f7d957-77e6-4cac-9af6-a5f09c081215")
 
 
+_FILE_LOCK_PROVIDER = FileLockProvider()
+
+
 @contextmanager
 def _local_replacement_lock(doc_id: str, epoch: str):
-    """Serialize same-host CLI writers with a non-evictable POSIX file lock."""
-    import fcntl
-
-    owner_id = os.getuid() if hasattr(os, "getuid") else os.getpid()
-    configured_lock_dir = os.environ.get("OFFLINE_INGESTION_LOCK_DIR")
-    lock_dir = (
-        Path(configured_lock_dir)
-        if configured_lock_dir
-        else Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
-    )
-    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory_stat = lock_dir.stat()
-    if hasattr(os, "getuid") and directory_stat.st_uid != owner_id:
-        raise PermissionError(f"ingestion lock directory is owned by another user: {lock_dir}")
-    if directory_stat.st_mode & 0o077:
-        raise PermissionError(f"ingestion lock directory must not be accessible by other users: {lock_dir}")
-
-    lock_key = hashlib.sha256(f"{doc_id}:{epoch}".encode()).hexdigest()
-    lock_path = lock_dir / f"{lock_key}.lock"
-    file_descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(file_descriptor, fcntl.LOCK_EX)
+    """Serialize same-host CLI writers with a non-evictable OS file lock."""
+    with _FILE_LOCK_PROVIDER.replacement_lock(doc_id, epoch):
         yield
-    finally:
-        fcntl.flock(file_descriptor, fcntl.LOCK_UN)
-        os.close(file_descriptor)
 
 
 @contextmanager
 def _local_epoch_lock(epoch: str, *, shared: bool):
     """Coordinate epoch writes with sealing across local CLI processes."""
-    import fcntl
-
-    owner_id = os.getuid() if hasattr(os, "getuid") else os.getpid()
-    configured_lock_dir = os.environ.get("OFFLINE_INGESTION_LOCK_DIR")
-    lock_dir = (
-        Path(configured_lock_dir)
-        if configured_lock_dir
-        else Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
-    )
-    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory_stat = lock_dir.stat()
-    if hasattr(os, "getuid") and directory_stat.st_uid != owner_id:
-        raise PermissionError(f"ingestion lock directory is owned by another user: {lock_dir}")
-    if directory_stat.st_mode & 0o077:
-        raise PermissionError(f"ingestion lock directory must not be accessible by other users: {lock_dir}")
-
-    lock_key = hashlib.sha256(f"epoch:{epoch}".encode()).hexdigest()
-    lock_path = lock_dir / f"{lock_key}.lock"
-    file_descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(file_descriptor, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+    with _FILE_LOCK_PROVIDER.epoch_lock(epoch, shared=shared):
         yield
-    finally:
-        fcntl.flock(file_descriptor, fcntl.LOCK_UN)
-        os.close(file_descriptor)
 
 
 @contextmanager
 def _local_epoch_embedding_lock(epoch: str):
     """Serialize initialization and validation of an epoch's embedding contract."""
-    import fcntl
-
-    owner_id = os.getuid() if hasattr(os, "getuid") else os.getpid()
-    configured_lock_dir = os.environ.get("OFFLINE_INGESTION_LOCK_DIR")
-    lock_dir = (
-        Path(configured_lock_dir)
-        if configured_lock_dir
-        else Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
-    )
-    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory_stat = lock_dir.stat()
-    if hasattr(os, "getuid") and directory_stat.st_uid != owner_id:
-        raise PermissionError(f"ingestion lock directory is owned by another user: {lock_dir}")
-    if directory_stat.st_mode & 0o077:
-        raise PermissionError(f"ingestion lock directory must not be accessible by other users: {lock_dir}")
-
-    lock_key = hashlib.sha256(f"epoch-embedding:{epoch}".encode()).hexdigest()
-    lock_path = lock_dir / f"{lock_key}.lock"
-    file_descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(file_descriptor, fcntl.LOCK_EX)
+    with _FILE_LOCK_PROVIDER.epoch_embedding_lock(epoch):
         yield
-    finally:
-        fcntl.flock(file_descriptor, fcntl.LOCK_UN)
-        os.close(file_descriptor)
 
 
 @dataclass(frozen=True)
@@ -617,7 +551,15 @@ class QdrantTextWriter:
                     wait=True,
                 )
 
+    def ensure_epoch_embedding_version(self, epoch: str) -> None:
+        """Pin an epoch to this writer's embedding version without writing a document."""
+        _validate_epoch(epoch)
+        self.ensure_collection()
+        self._ensure_epoch_embedding_version(epoch, "__snapshot__")
+
     def _is_epoch_sealed(self, epoch: str) -> bool:
+        if not self.client.collection_exists(self.collection_name):
+            return False
         records = self.client.retrieve(
             collection_name=self.collection_name,
             ids=[self._epoch_seal_id(epoch)],

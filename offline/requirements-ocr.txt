@@ -1,0 +1,13 @@
+# Optional OCR runtime for the offline image pipeline.
+#
+# The OCR *adapter* (offline/image_processor.py, PaddleOCRProvider) is always
+# importable and is exercised by deterministic tests without these packages.
+# Install this file only on hosts that actually process scanned PDFs or images:
+#
+#     python3 -m pip install -r offline/requirements-ocr.txt
+#
+# PaddleOCR/PaddlePaddle are intentionally NOT part of the default
+# requirements.txt so the online API service and CI do not need a heavyweight,
+# platform-specific runtime.
+paddleocr>=2.7.0
+paddlepaddle>=2.6.0

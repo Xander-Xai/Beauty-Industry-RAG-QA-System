@@ -68,16 +68,14 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
     )
 
 
-def build_qdrant_image_filter(ur: int, ue: int):
-    """Build the legacy CLIP image filter without the text-only epoch field."""
-    if type(ur) is not int or not (0 <= ur <= _MAX_UINT32):
-        raise ValueError(f"user_role_mask 必须为 uint32 整数，收到: {ur!r}")
-    if type(ue) is not int or not (0 <= ue <= _MAX_UINT32):
-        raise ValueError(f"user_dept_mask 必须为 uint32 整数，收到: {ue!r}")
+def build_qdrant_image_filter(ur: int, ue: int, ae: str = "default"):
+    """Build the CLIP image filter with the same epoch contract as text.
 
-    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-
-    return Filter(must=[FieldCondition(key="status", match=MatchValue(value="active"))])
+    Text and image retrieval must both respect the active knowledge epoch. For
+    ``default`` the filter also matches legacy points that predate the epoch
+    field; those legacy points are excluded from every non-default epoch.
+    """
+    return build_qdrant_filter(ur, ue, ae)
 
 
 def encode_role_mask(roles):

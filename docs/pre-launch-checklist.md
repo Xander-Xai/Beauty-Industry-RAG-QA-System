@@ -4,7 +4,7 @@
 
 ## P0 阻塞项
 
-- [ ] 确认已准备外部 Qdrant/Elasticsearch 索引；本仓库不含文档 ingestion，实现状态跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)
+- [ ] 准备知识库索引：运行 `run_offline.py create-index`，或确认已存在由其他流程建立的 Qdrant/Elasticsearch 索引
 - [ ] 采用 `app.py` 单体 `/api/*` 主线；微服务目录需要独立验证其与当前前端的契约
 - [ ] 生成并配置 JWT 密钥
 - [ ] 设置 `AUTH_DEV_MODE=false`
@@ -34,8 +34,18 @@
 
 - [ ] 核对 Qdrant 集合名：`rag_text_768`、`rag_image_512`
 - [ ] 核对 Elasticsearch 索引：`cosmetics_docs`
-- [ ] 抽样检查文档元数据包含 `doc_id / role_mask / dept_mask / status`
+- [ ] 抽样检查文档元数据包含 `doc_id / role_mask / dept_mask / status / doc_version_epoch`
+- [ ] 准备生产 BGE 模型资产
+- [ ] 启用视觉检索时准备生产 CLIP 模型资产
+- [ ] 需要 OCR 时安装 PaddleOCR/PaddlePaddle 运行时
+- [ ] 运行完整快照构建（`full-rebuild`）并通过快照校验
+- [ ] 验证图像检索遵循 active epoch（legacy 点不泄漏到非 default epoch）
+- [ ] 验证不同角色的 RBAC 边界
+- [ ] 封存目标 epoch（`seal-epoch`）
+- [ ] 显式切换 `config.json` 的 `knowledge_version_epoch` 并重启在线服务
+- [ ] 保留上一 sealed epoch 以支持回滚
 - [ ] 抽样验证至少 10 个真实业务问题
+- [ ] 记录生产评测状态（真实模型 smoke / 质量评测是否为已验证结果）
 
 ## P2 运维准备
 
@@ -47,4 +57,13 @@
 
 ## 离线管线状态
 
-`run_offline.py ingest-text` 支持受限的 UTF-8 TXT → configured BGE adapter → Qdrant 文本导入切片；`seal-epoch` 封存已准备好的快照。CI 使用确定性测试 embedder，未验证真实 BGE 模型下载或推理，也不代表完整生产离线管线已验证。PDF/DOCX/XLSX、OCR、CLIP、Elasticsearch 写入、调度与完整重建仍未实现。`rewrite-feedback` 是独立 utility，不属于该 TXT 导入路径。
+`run_offline.py` 提供 `create-index`、`ingest`、`incremental-build`、`full-rebuild`、`seal-epoch`
+（以及向后兼容的 `ingest-text`）。管线覆盖 TXT/PDF/DOCX/XLSX/图片、扫描页 OCR 路由、BGE/CLIP
+adapter、Qdrant 文本/图像、Elasticsearch、增量 carry-forward、全量重建、快照校验与 epoch 封存，
+并在确定性测试中验证。
+
+真实 BGE/CLIP/PaddleOCR 需要外部模型/运行时资产，CI 不下载模型；真实模型 smoke 未执行时为
+`EXTERNAL_MODEL_ASSET_REQUIRED`。`seal-epoch` 默认先校验（Qdrant text/image + Elasticsearch）
+再封存；`--skip-validation` 仅为危险逃生口。封存后需手动切换 `knowledge_version_epoch` 才会
+对在线检索生效。调度抽象与 Airflow DAG 已实现，但默认 Compose 不运行 Airflow，也未做真实
+Airflow 执行验证。

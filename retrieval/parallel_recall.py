@@ -115,7 +115,7 @@ class ParallelRecallManager:
 
         active_epoch = config.get("knowledge_version_epoch", "default")
         qdrant_filter = build_qdrant_filter(user_role_mask, user_dept_mask, active_epoch)
-        image_qdrant_filter = build_qdrant_image_filter(user_role_mask, user_dept_mask)
+        image_qdrant_filter = build_qdrant_image_filter(user_role_mask, user_dept_mask, active_epoch)
 
         log_audit_event(
             event_type="recall_filter",
@@ -457,8 +457,10 @@ class ParallelRecallManager:
 
             embedding_svc = EmbeddingService()
             clip_embedding = embedding_svc.encode_text_clip(query)
-            image_qdrant_filter = build_qdrant_image_filter(user_role_mask, user_dept_mask)
-            hits = self.clip_retriever.search(clip_embedding, image_qdrant_filter, top_k)
+            if qdrant_filter is None:
+                active_epoch = config.get("knowledge_version_epoch", "default")
+                qdrant_filter = build_qdrant_image_filter(user_role_mask, user_dept_mask, active_epoch)
+            hits = self.clip_retriever.search(clip_embedding, qdrant_filter, top_k)
 
             results = [
                 RecallResult(
