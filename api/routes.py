@@ -32,7 +32,7 @@ from api.models import (
     QueryResponse,
     StatsResponse,
 )
-from common.auth import require_identity, validate_doc_id
+from common.auth import is_document_authorized, require_identity, validate_doc_id
 from common.config import get_config_dict
 from common.models import UserIdentity
 from core.pipeline import OnlineRAGPipeline
@@ -383,8 +383,7 @@ def media_handler(
         ) from exc
 
     # ── 1. 查询 Qdrant 获取文档元数据 ──
-    doc_role_mask = 0
-    doc_dept_mask = 0
+    metadata: dict | None = None
     doc_status = "active"
     found = False
 
@@ -418,10 +417,8 @@ def media_handler(
 
         if records:
             found = True
-            payload = records[0].payload or {}
-            doc_role_mask = payload.get("role_mask", 0)
-            doc_dept_mask = payload.get("dept_mask", 0)
-            doc_status = payload.get("status", "active")
+            metadata = records[0].payload or {}
+            doc_status = metadata.get("status", "active")
 
     except Exception as e:
         logger.warning(f"Qdrant 查询 doc_id={doc_id} 失败: {e}")
@@ -445,14 +442,13 @@ def media_handler(
             },
         )
 
-    # ── 3. 权限二次校验 ──
-    from common.auth import is_allowed
-
-    if not is_allowed(
-        doc_role_mask=doc_role_mask,
-        user_role_mask=identity.user_role_mask,
-        doc_dept_mask=doc_dept_mask,
-        user_dept_mask=identity.user_dept_mask,
+    # ── 3. 权限二次校验（统一 fail-closed helper）──
+    # is_document_authorized denies when role_mask/dept_mask are missing,
+    # malformed, negative or outside uint32, instead of treating them as public.
+    if not is_document_authorized(
+        metadata,
+        identity.user_role_mask,
+        identity.user_dept_mask,
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
