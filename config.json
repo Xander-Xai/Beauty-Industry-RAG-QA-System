@@ -114,6 +114,7 @@
   "embedding": {
     "text": {
       "model_path": "./models/bge-base-zh-v1.5",
+      "model_revision": "bge-base-zh-v1.5",
       "dimension": 768,
       "collection": "rag_text_768"
     },
@@ -162,6 +163,9 @@
     "data_dir": "./data",
     "chunk_size": 500,
     "chunk_overlap_ratio": 0.1,
+    "embedding_batch_size": 32,
+    "max_document_bytes": 131072,
+    "max_chunks": 256,
     "ocr": {
       "engine": "paddleocr",
       "language": "ch",

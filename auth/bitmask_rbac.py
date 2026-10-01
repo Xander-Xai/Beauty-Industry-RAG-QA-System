@@ -34,17 +34,18 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
     """
     构建 Qdrant Filter 对象。
 
-    Qdrant pre-filter 不支持位掩码运算（RBAC），因此仅处理：
+    Qdrant pre-filter 不支持位掩码运算（RBAC），因此仅处理状态和版本：
     - status == 'active'（标量精准匹配）
+    - doc_version_epoch == 当前知识库 epoch；历史无 epoch 点仅归入 default
 
-    RBAC 权限过滤和版本门控在 Python 层通过 is_allowed() 后置执行。
+    RBAC 权限过滤仍在 Python 层通过 is_allowed() 后置执行。
 
     安全：对所有输入进行类型和范围验证，防止过滤器注入。
     """
     # 输入验证：确保整数在 uint32 范围内
-    if not isinstance(ur, int) or not (0 <= ur <= _MAX_UINT32):
+    if type(ur) is not int or not (0 <= ur <= _MAX_UINT32):
         raise ValueError(f"user_role_mask 必须为 uint32 整数，收到: {ur!r}")
-    if not isinstance(ue, int) or not (0 <= ue <= _MAX_UINT32):
+    if type(ue) is not int or not (0 <= ue <= _MAX_UINT32):
         raise ValueError(f"user_dept_mask 必须为 uint32 整数，收到: {ue!r}")
 
     # 输入验证：knowledge_version_epoch 仅允许安全字符
@@ -52,13 +53,31 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
     if not _SAFE_VERSION_PATTERN.match(ae_str):
         raise ValueError(f"knowledge_version_epoch 包含非法字符: {ae_str!r}")
 
-    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+    from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
+
+    epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=ae_str))]
+    if ae_str == "default":
+        # Pre-slice points without an epoch are part of the legacy default index.
+        epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
 
     return Filter(
         must=[
             FieldCondition(key="status", match=MatchValue(value="active")),
-        ]
+        ],
+        should=epoch_conditions,
     )
+
+
+def build_qdrant_image_filter(ur: int, ue: int):
+    """Build the legacy CLIP image filter without the text-only epoch field."""
+    if type(ur) is not int or not (0 <= ur <= _MAX_UINT32):
+        raise ValueError(f"user_role_mask 必须为 uint32 整数，收到: {ur!r}")
+    if type(ue) is not int or not (0 <= ue <= _MAX_UINT32):
+        raise ValueError(f"user_dept_mask 必须为 uint32 整数，收到: {ue!r}")
+
+    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+
+    return Filter(must=[FieldCondition(key="status", match=MatchValue(value="active"))])
 
 
 def encode_role_mask(roles):

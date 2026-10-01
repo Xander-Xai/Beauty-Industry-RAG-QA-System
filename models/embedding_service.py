@@ -32,13 +32,31 @@ class EmbeddingService:
     - 统一接口封装，支持模型热切换
     """
 
-    def __init__(self):
+    def __init__(self, model_path: str | None = None):
         self._bge_model = None
         self._bge_tokenizer = None
+        self._bge_model_path = model_path or config["embedding"]["text"]["model_path"]
         self._clip_model = None
         self._clip_processor = None
         self._qdrant_client = None
         logger.info("EmbeddingService 初始化完成（模型懒加载）")
+
+    @property
+    def bge_tokenizer(self):
+        if self._bge_tokenizer is None:
+            from transformers import AutoTokenizer
+
+            self._bge_tokenizer = AutoTokenizer.from_pretrained(self._bge_model_path)
+        return self._bge_tokenizer
+
+    @property
+    def bge_model(self):
+        if self._bge_model is None:
+            from transformers import AutoModel
+
+            self._bge_model = AutoModel.from_pretrained(self._bge_model_path)
+            self._bge_model.eval()
+        return self._bge_model
 
     @property
     def qdrant_client(self):
@@ -69,8 +87,7 @@ class EmbeddingService:
         inputs = self.bge_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
         with torch.no_grad():
             outputs = self.bge_model(**inputs)
-        # mean pooling
-        embedding = outputs.last_hidden_state.mean(dim=1).numpy()
+        embedding = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"]).numpy()
         return embedding
 
     def encode_texts_batch(self, texts: list[str]) -> np.ndarray:
@@ -88,8 +105,16 @@ class EmbeddingService:
         inputs = self.bge_tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
         with torch.no_grad():
             outputs = self.bge_model(**inputs)
-        embeddings = outputs.last_hidden_state.mean(dim=1).numpy()
+        embeddings = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"]).numpy()
         return embeddings
+
+    @staticmethod
+    def _mean_pool(last_hidden_state, attention_mask):
+        """Mean-pool real tokens only so single and padded batch inputs agree."""
+        mask = attention_mask.unsqueeze(-1).to(dtype=last_hidden_state.dtype)
+        token_sums = (last_hidden_state * mask).sum(dim=1)
+        token_counts = mask.sum(dim=1).clamp(min=1)
+        return token_sums / token_counts
 
     def encode_text_clip(self, text: str) -> np.ndarray:
         """
@@ -181,16 +206,59 @@ class EmbeddingService:
         collection_name = collection_name or config["embedding"]["text"]["collection"]
         client = self.qdrant_client
 
-        results = client.search(
-            collection_name=collection_name,
-            query_vector=query_embedding.flatten().tolist(),
-            limit=top_k,
-            query_filter=qdrant_filter,
-            with_payload=["doc_id", "content", "doc_type", "embedding_type", "role_mask", "dept_mask"],
-        )
+        payload_fields = [
+            "doc_id",
+            "chunk_id",
+            "chunk_index",
+            "content",
+            "source_path",
+            "content_hash",
+            "doc_type",
+            "embedding_type",
+            "role_mask",
+            "dept_mask",
+            "status",
+            "doc_version_epoch",
+        ]
+        points = []
+        seen_doc_ids = set()
+        offset = 0
+        query_vector = query_embedding.flatten().tolist()
+        while len(points) < top_k:
+            if hasattr(client, "query_points"):
+                response = client.query_points(
+                    collection_name=collection_name,
+                    query=query_vector,
+                    limit=top_k,
+                    offset=offset,
+                    query_filter=qdrant_filter,
+                    with_payload=payload_fields,
+                )
+                page = response.points
+            else:  # Compatibility for older clients and repository test doubles.
+                page = client.search(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=top_k,
+                    offset=offset,
+                    query_filter=qdrant_filter,
+                    with_payload=payload_fields,
+                )
+
+            for point in page:
+                doc_id = (point.payload or {}).get("doc_id")
+                if not doc_id or str(doc_id) in seen_doc_ids:
+                    continue
+                seen_doc_ids.add(str(doc_id))
+                points.append(point)
+                if len(points) == top_k:
+                    break
+            if len(page) < top_k or len(points) == top_k:
+                break
+            offset += len(page)
 
         hits = []
-        for point in results:
+        for point in points:
             hits.append(
                 {
                     "doc_id": str(point.payload.get("doc_id", "")),
@@ -199,6 +267,12 @@ class EmbeddingService:
                     "metadata": {
                         "doc_type": point.payload.get("doc_type", ""),
                         "embedding_type": point.payload.get("embedding_type", ""),
+                        "chunk_id": point.payload.get("chunk_id"),
+                        "chunk_index": point.payload.get("chunk_index"),
+                        "source_path": point.payload.get("source_path"),
+                        "content_hash": point.payload.get("content_hash"),
+                        "status": point.payload.get("status"),
+                        "doc_version_epoch": point.payload.get("doc_version_epoch"),
                         "role_mask": point.payload.get("role_mask"),
                         "dept_mask": point.payload.get("dept_mask"),
                     },

@@ -36,7 +36,7 @@
 
 ## 3. 当前已知运维风险
 
-- **知识库数据准备**：仓库不含原始文档 ingestion、OCR、向量写入或调度实现。需要运维外部索引建设流程；缺失代码不能通过下载模型权重解决。后续实现见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+- **知识库数据准备**：当前只支持通过 `python3 run_offline.py ingest-text ...` 将 UTF-8 TXT 分块并写入 Qdrant 文本 collection。PDF/DOCX/XLSX、OCR、CLIP、ES 写入、调度与完整重建仍未实现。BGE 模型须按 `config.json` 配置并由操作者准备；CI 不下载模型。后续实现见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 - **单体与微服务并存**：排障时必须先确认当前请求到底走的是 `app.py` 还是单独网关/微服务。
 - **开发身份开关**：如果生产环境误保留 `AUTH_DEV_MODE=true`，会形成身份伪造风险。
 - **运行配置来源**：服务现在会自动读取项目根目录 `.env`；排障时要同时检查 `.env` 与进程环境。

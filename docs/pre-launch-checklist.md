@@ -47,4 +47,4 @@
 
 ## 离线管线状态
 
-`run_offline.py` ingestion modes 会明确失败，不能作为部署或上线验证步骤。`rewrite-feedback` 对应独立的 rewrite feedback utility，但不提供文档导入或索引构建。上线前需验证外部知识库流程及数据；不能把入口脚本存在视为管线已验证。
+`run_offline.py ingest-text` 支持受限的 UTF-8 TXT → configured BGE adapter → Qdrant 文本导入切片；`seal-epoch` 封存已准备好的快照。CI 使用确定性测试 embedder，未验证真实 BGE 模型下载或推理，也不代表完整生产离线管线已验证。PDF/DOCX/XLSX、OCR、CLIP、Elasticsearch 写入、调度与完整重建仍未实现。`rewrite-feedback` 是独立 utility，不属于该 TXT 导入路径。

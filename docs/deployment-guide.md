@@ -16,7 +16,7 @@
 cp .env.example .env
 ```
 
-`common/config.py` 负责读取应用配置。按 `.env.example` 准备环境；运行单体应用使用 `python3 app.py`。`run_offline.py` 不提供原始文档 ingestion。
+`common/config.py` 负责读取应用配置。按 `.env.example` 准备环境；运行单体应用使用 `python3 app.py`。`run_offline.py ingest-text` 提供受限的 UTF-8 TXT → BGE adapter → Qdrant 文本导入切片；它不提供其他文档格式或完整离线管线。
 
 生产环境至少明确设置：
 
@@ -76,7 +76,7 @@ docker compose up -d
 
 ## 4. 知识库现状
 
-`offline/` 目前只包含 QLoRA 微调工具、样本和依赖。文档解析、OCR 导入、embedding writer、索引创建、增量调度和全量重建均未包含；下载模型权重不会补齐缺失代码。需要在线试用时，请配置外部已建好的 Qdrant/Elasticsearch 索引。未来 ingestion 工作跟踪在 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+`offline/` 包含 QLoRA 微调工具，以及受限的 UTF-8 TXT → BGE adapter → Qdrant 文本导入切片。PDF/DOCX/XLSX 解析、OCR、CLIP、Elasticsearch 写入、增量调度和全量重建仍未包含；CI 不下载模型，也没有真实 BGE smoke 验证。完整离线管线继续跟踪在 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
 ## 5. 当前已对齐的前后端能力
 
