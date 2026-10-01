@@ -76,3 +76,6 @@ minio>=7.2.0
 # RAGAS evaluation framework
 ragas>=0.2.0
 datasets>=2.20.0
+
+# Phase 6: AWQ INT4 量化（可选，仅 GPU 部署需要）
+# autoawq>=0.2.0  # 正式使用请取消注释，安装依赖见 offline/requirements-awq.txt

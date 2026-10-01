@@ -51,3 +51,40 @@ jobs:
             --tb=short \
             --timeout=60 \
             -x
+
+  ragas-eval:
+    name: RAGAS 评估（可选）
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run RAGAS evaluation (golden set mode)
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DEPLOYMENT_MODE: testing
+        run: |
+          python -m tests.evaluation.ragas_eval \
+            --dataset tests/evaluation/golden_set.jsonl \
+            --tag ci-${{ github.sha }} \
+            --report-dir data/eval/reports
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragas-eval-report
+          path: data/eval/reports/

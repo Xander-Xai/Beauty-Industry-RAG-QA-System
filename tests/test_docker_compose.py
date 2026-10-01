@@ -31,8 +31,7 @@ def test_gpu_compose_has_vllm_services():
         config = yaml.safe_load(f)
     services = config.get("services", {})
     assert "vllm-gen-14b" in services
-    assert "vllm-rewrite" in services
-    assert "vllm-gen-4b" in services
+    assert "vllm-4b" in services
 
 
 def test_cpu_compose_has_no_gpu():

@@ -6,15 +6,20 @@
 
 - [ ] 下载模型权重（PaddleOCR、CLIP、BGE 等）至 `models/` 目录；离线导入命令：`python3 run_offline.py --mode create-index` 创建 Qdrant Collection/ES 索引，`python3 run_offline.py --mode incremental` 导入文档
 - [ ] 明确上线主线是 `app.py` 单体还是微服务网关；当前前端只按单体 `/api/*` 主线验证过
-- [ ] 生成并配置 JWT 密钥
-- [ ] 设置 `AUTH_DEV_MODE=false`
-- [ ] 设置 `CORS_ORIGINS`
+- [ ] 生成并配置 JWT RS256 密钥对（`keys/private.pem`、`keys/public.pem`）
+  ```bash
+  mkdir -p keys
+  python3 -c "from auth.jwt_auth import generate_keypair; generate_keypair('./keys')"
+  ```
+- [ ] 设置 `AUTH_DEV_MODE=false`（`config.json` 中 `auth.dev_mode` 现在默认为 `false`，但建议检查确认）
+- [ ] 设置 `CORS_ORIGINS`（生产模式未设置时后端硬性阻止启动）
+- [ ] 设置 `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD`（v2.5.0 ES xpack.security 启用）
 - [ ] 设置 `REDIS_PASSWORD`
 - [ ] 设置 `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`
 - [ ] 设置 `SERVICE_AUTH_TOKEN`
 - [ ] 确认项目根目录 `.env` 已被当前启动进程自动加载
 - [ ] 构建前端，确认 `frontend/dist` 已生成
-- [ ] 验证 `GET /api/health`、`GET /api/stats`、`GET /api/metrics`、`GET /api/auth/metadata`
+- [ ] 验证 `GET /api/health`（无认证）、`GET /api/stats`（需JWT）、`GET /api/metrics`（需JWT）、`GET /api/auth/metadata`（无认证）
 - [ ] 验证管理员可登录、创建用户、更新角色/部门
 - [ ] 验证不同角色访问 `/api/media/{doc_id}` 时权限正确
 
@@ -24,11 +29,14 @@
 - [ ] 验证前端 `Single Query` 对应 `POST /api/query`
 - [ ] 验证多轮对话使用 `POST /api/chat`
 - [ ] 验证前端 `Session` 面板对应 `GET /api/dialog_history`
-- [ ] 验证前端 `Stats` 面板对应 `GET /api/stats`
+- [ ] 验证前端 `Stats` 面板对应 `GET /api/stats`（需要 JWT 认证）
 - [ ] 验证证据文档通过预签名链接打开，而不是直接裸跳转 API
 - [ ] 验证管理员角色不会被 `rd` 等普通角色误判
 - [ ] 验证前端构建产物可由 FastAPI 正确挂载
 - [ ] 验证 `Dockerfile` 健康检查命中 `/api/health`
+- [ ] 验证 ES xpack.security 连接正常（`GET /api/health` 中 ES 依赖为 `true`）
+- [ ] 验证多 worker 部署下 Session 可跨进程共享（相同 session_id 可被不同 worker 处理后继续对话）
+- [ ] 运行 RAGAS 黄金数据集评估并保存基线（`python -m tests.evaluation.ragas_eval --tag production-baseline`）
 
 ## P1 数据与内容验证
 

@@ -23,8 +23,8 @@ cp .env.example .env
 - `DEPLOYMENT_MODE=production`
 - `AUTH_DEV_MODE=false`
 - `CORS_ORIGINS=https://your-frontend.example.com`
-- `JWT_PRIVATE_KEY_PATH`
-- `JWT_PUBLIC_KEY_PATH`
+- `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`（RS256 密钥对路径）
+- `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD`（ES xpack 凭据）
 - `REDIS_PASSWORD`
 - `MINIO_ACCESS_KEY`
 - `MINIO_SECRET_KEY`
@@ -32,8 +32,9 @@ cp .env.example .env
 
 说明：
 
-- `common/config.py` 会优先读取 `.env` / 进程环境中的 `DEPLOYMENT_MODE` 和 `AUTH_DEV_MODE`。
-- 如果生产环境仍保留 `AUTH_DEV_MODE=true`，任意客户端都可伪造 `X-User-*` 头部，不符合真实上线要求。
+- `config.json` 中 `auth.dev_mode` 现在**默认关闭**（`false`），需要开发模式时通过环境变量 `AUTH_DEV_MODE=true` 显式启用。
+- `app.py` 在生产模式（`DEPLOYMENT_MODE=production`）下会自动禁用 uvicorn 热重载。
+- `CORS_ORIGINS` 在生产模式下为强制项，缺失时服务将硬性阻止启动（v2.5.0）。
 
 ### 2.2 前端构建
 
@@ -53,6 +54,15 @@ mkdir -p keys
 python3 -c "from auth.jwt_auth import generate_keypair; generate_keypair('./keys')"
 ```
 
+生产环境建议使用 OpenSSL 生成更安全的密钥：
+
+```bash
+mkdir -p keys
+openssl genrsa -out keys/private.pem 2048
+openssl rsa -in keys/private.pem -pubout -out keys/public.pem
+chmod 600 keys/private.pem
+```
+
 ## 3. 启动方式
 
 ### 3.1 本地单体
@@ -70,9 +80,10 @@ docker compose up -d
 校验点：
 
 - `http://localhost:8000/api/health`
-- `http://localhost:8000/docs`
 - `http://localhost:8000/api/auth/metadata`
 - `http://localhost:8000/`
+
+> **注意**：`/api/stats` 和 `/api/metrics` 现在需要 JWT 认证（v2.5.0），无法直接浏览器访问，需通过 `curl -H "Authorization: Bearer <token>"` 或 Grafana 等监控工具配置认证后访问。
 
 ## 4. 知识库初始化现状
 
@@ -105,8 +116,12 @@ docker compose up -d
 
 - 将 `AUTH_DEV_MODE` 设为 `false`
 - 确认 `.env` 已被当前启动进程加载
-- 配置 `CORS_ORIGINS`
+- 确认 JWT RS256 密钥对已生成（`keys/private.pem`、`keys/public.pem`）
+- 确认 `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` 已配置（v2.5.0 ES xpack 安全加固）
+- 配置 `CORS_ORIGINS`（生产模式强制项）
 - 构建前端并确认 `frontend/dist` 已生成
 - 使用管理员账号验证用户创建、角色更新、证据文件访问
 - 确认 `Dockerfile` 健康检查访问的是 `/api/health`
+- 确认 Redis 会话可以跨多 worker 共享（v2.5.0：`SessionState` 已支持 Redis 持久化，TTL=7200s）
 - 审核 `docs/pre-launch-checklist.md` 中的 P0 阻塞项
+- 确认 `docs/ragas-evaluation-guide.md` 中的 RAGAS 评估配置（可选，仅用于离线质量评估）

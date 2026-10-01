@@ -35,9 +35,10 @@ npm run dev
 
 ### 生产模式
 
-- 使用账号密码登录
-- 登录成功后，浏览器会保存后端签发的 Access Token / Refresh Token
-- 页面会自动尝试刷新过期 Token
+- 使用账号密码登录（v2.5.0 起使用 RS256 签名的 JWT Token）
+- 登录成功后，浏览器会保存后端签发的 Access Token（15分钟） / Refresh Token（7天）
+- 页面会在 Token 过期前自动尝试刷新
+- `/api/stats` 和 `/api/metrics` 现在需要 JWT 认证，浏览器面板通过已登录 Token 自动授权
 
 ### 开发模式
 
@@ -96,8 +97,31 @@ npm run dev
 - `POST /api/auth/users`
 - `PUT /api/auth/users/{user_id}/roles`
 
-## 7. 当前仍需注意
+## 7. 离线质量评估
+
+系统已集成 RAGAS (Retrieval Augmented Generation Assessment) 框架，用于离线评估 RAG 管线的质量：
+
+- **黄金数据集**：`tests/evaluation/golden_set.jsonl`（27 条，覆盖 5 种业务类型、3 个难度级别）
+- **评估指标**：Faithfulness、Answer Relevancy、Context Precision、Context Recall
+- **生成报告**：自动保存到 `data/eval/reports/`，支持基线对比和版本演进追踪
+
+详细使用方法见 [`docs/ragas-evaluation-guide.md`](ragas-evaluation-guide.md)。
+
+运行评估：
+```bash
+# 数据集验证
+python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden_set.jsonl
+
+# 黄金数据集评估
+python -m tests.evaluation.ragas_eval --dataset tests/evaluation/golden_set.jsonl --tag baseline
+
+# 带 RAG 管线的端到端评估
+python -m tests.evaluation.ragas_eval --pipeline --tag v1-review
+```
+
+## 8. 当前仍需注意
 
 - `POST /api/continuation` 当前仍是占位接口，页面没有把它作为真实续写能力暴露。
 - 如果系统没有可用知识库数据，问答接口仍可能返回低质量结果或空结果。
 - 离线导入管线已实现（`offline/` 包），可通过 `python3 run_offline.py --mode incremental` 导入文档数据。运行前需先下载 PaddleOCR、CLIP、BGE 等模型权重。
+- RAGAS 端到端评估需所有基础设施（vLLM、Qdrant、ES、Redis）就绪后方可运行。

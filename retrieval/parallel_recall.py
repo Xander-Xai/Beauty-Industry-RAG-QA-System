@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from common.audit import log_audit_event
 from common.config import get_config_dict
 from retrieval_service.rerank.rrf_fusion import rrf_fusion
+
+if TYPE_CHECKING:
+    from core.pipeline_context import SessionState
 
 config = get_config_dict()
 
@@ -74,8 +78,9 @@ class ParallelRecallManager:
         from auth.bitmask_rbac import is_allowed
         filtered = []
         for r in results:
-            doc_role = getattr(r, "role_mask", r.metadata.get("role_mask", 0))
-            doc_dept = getattr(r, "dept_mask", r.metadata.get("dept_mask", 0))
+            metadata = getattr(r, "metadata", {}) or {}
+            doc_role = metadata.get("role_mask", 0)
+            doc_dept = metadata.get("dept_mask", 0)
             if is_allowed(doc_role, user_role_mask, doc_dept, user_dept_mask):
                 filtered.append(r)
         return filtered
@@ -89,6 +94,7 @@ class ParallelRecallManager:
         use_clip: bool = True,
         clip_top_k: int = 20,
         top_k_per_path: dict = None,
+        rrf_weights: dict[str, float] | None = None,
     ) -> tuple[list, float]:
         """
         并行执行多路召回
@@ -101,6 +107,7 @@ class ParallelRecallManager:
             use_clip: 是否启用 CLIP 视觉路
             clip_top_k: CLIP 同步召回 top_k
             top_k_per_path: 各路 top_k 配置
+            rrf_weights: 当前查询使用的RRF路径权重
 
         Returns:
             (list[RecallResult], retrieval_agreement_score)
@@ -156,6 +163,11 @@ class ParallelRecallManager:
                 path_name = futures[future]
                 try:
                     results = future.result()
+                    results = self._apply_rbac_filter(
+                        results,
+                        user_role_mask=user_role_mask,
+                        user_dept_mask=user_dept_mask,
+                    )
                     path_results[path_name] = results
                     all_results.extend(results)
                     logger.info(f"召回路 [{path_name}] 返回 {len(results)} 条结果")
@@ -168,7 +180,7 @@ class ParallelRecallManager:
             fused_results = rrf_fusion(
                 path_results,
                 k=rrf_config.get("k", 60),
-                weights=rrf_config.get("weights", None),
+                weights=rrf_weights or rrf_config.get("weights", None),
             )
             all_results = fused_results
             logger.info(
@@ -183,7 +195,7 @@ class ParallelRecallManager:
 
         # ES Fallback — Qdrant 路径异常或召回不足时触发
         all_doc_ids = {r.doc_id for r in all_results}
-        qdrant_paths = {"dense_bge", "clip_visual", "rewrite_variants"}
+        qdrant_paths = {"dense_bge", "clip_visual", "rewrite_variant"}
         qdrant_failed = any(
             path_name in qdrant_paths and path_name not in path_results
             for path_name in qdrant_paths
@@ -199,6 +211,11 @@ class ParallelRecallManager:
             try:
                 fallback_results = self._recall_es_fallback(
                     query, user_role_mask, user_dept_mask, top_k_per_path
+                )
+                fallback_results = self._apply_rbac_filter(
+                    fallback_results,
+                    user_role_mask=user_role_mask,
+                    user_dept_mask=user_dept_mask,
                 )
                 if fallback_results:
                     all_results.extend(fallback_results)
@@ -250,7 +267,10 @@ class ParallelRecallManager:
             return [RecallResult(
                 doc_id=h["doc_id"], content=h.get("content", ""),
                 score=h["score"], source="clip_visual",
-                metadata={"image_uri": h.get("image_uri", "")},
+                metadata={
+                    **(h.get("metadata") or {}),
+                    "image_uri": h.get("image_uri", ""),
+                },
             ) for h in hits]
         except (FuturesTimeout, TimeoutError) as e:
             logger.warning(f"CLIP 检索超时 ({clip_timeout_s*1000:.0f}ms)，丢弃 CLIP 分支: {e}")
@@ -273,7 +293,10 @@ class ParallelRecallManager:
             results.extend([RecallResult(
                 doc_id=h["doc_id"], content=h["content"],
                 score=h["score"], source="rewrite_variant",
-                metadata={"variant_query": variant},
+                metadata={
+                    **(h.get("metadata") or {}),
+                    "variant_query": variant,
+                },
             ) for h in hits])
         return results
 
@@ -285,7 +308,12 @@ class ParallelRecallManager:
         """
         from core.pipeline_context import RecallResult
         fallback_top_k = top_k_per_path.get("bm25_es", {}).get("top_k", 50)
-        hits = self.bm25_retriever.fallback_search(query, top_k=fallback_top_k)
+        hits = self.bm25_retriever.fallback_search(
+            query,
+            user_role_mask=user_role_mask,
+            user_dept_mask=user_dept_mask,
+            top_k=fallback_top_k,
+        )
         return [RecallResult(
             doc_id=h["doc_id"], content=h["content"],
             score=h["score"], source="bm25_fallback", metadata=h.get("metadata", {}),
@@ -363,6 +391,8 @@ class ParallelRecallManager:
         qdrant_filter,
         session: SessionState = None,
         top_k: int = None,
+        user_role_mask: int = 0,
+        user_dept_mask: int = 0,
     ) -> list:
         """
         CLIP 异步补召回（PRD §6 异步机制）
@@ -375,6 +405,8 @@ class ParallelRecallManager:
             qdrant_filter: Qdrant Filter 对象
             session: 会话状态（用于存储/复用异步结果）
             top_k: 召回数量（默认从配置读取）
+            user_role_mask: 用户角色位掩码
+            user_dept_mask: 用户部门位掩码
         """
         from core.pipeline_context import RecallResult
 
@@ -386,6 +418,11 @@ class ParallelRecallManager:
         if session and clip_cfg.get("preheat_on_multiturn", False):
             cached = session.async_clip_results
             if cached:
+                cached = self._apply_rbac_filter(
+                    cached,
+                    user_role_mask=user_role_mask,
+                    user_dept_mask=user_dept_mask,
+                )
                 logger.info(f"CLIP 异步预热命中: {len(cached)} 条")
                 return cached
 
@@ -400,8 +437,16 @@ class ParallelRecallManager:
             results = [RecallResult(
                 doc_id=h["doc_id"], content=h.get("content", ""),
                 score=h["score"], source="clip_async",
-                metadata={"image_uri": h.get("image_uri", "")},
+                metadata={
+                    **(h.get("metadata") or {}),
+                    "image_uri": h.get("image_uri", ""),
+                },
             ) for h in hits]
+            results = self._apply_rbac_filter(
+                results,
+                user_role_mask=user_role_mask,
+                user_dept_mask=user_dept_mask,
+            )
 
             # 存入 session 供后续轮次复用
             if session:

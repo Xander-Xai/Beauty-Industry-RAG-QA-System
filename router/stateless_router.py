@@ -25,9 +25,9 @@ class StatelessRouter:
     无状态轻量路由器
 
     路由规则：
-    - Rewrite 请求 → vLLM-Rewrite (GPU1, port 8101)
-    - Gen 简单请求 → vLLM-Gen-4B (GPU1, port 8102)
-    - Gen 复杂请求 → vLLM-Gen-14B (GPU0, port 8100)
+    - Rewrite 请求 → vLLM-4B (GPU1, port 8101)
+    - Gen 简单请求 → vLLM-4B (GPU1, port 8101) —— 同实例，不同 prompt
+    - Gen 复杂请求 → vLLM-14B (GPU0, port 8100)
 
     关键约束：
     - 不进行请求排队
@@ -39,12 +39,10 @@ class StatelessRouter:
     def __init__(self):
         # 端点 URL 从环境变量（Docker 部署）或 config.json（本地部署）读取
         import os as _os
-        rewrite_port = config['gpu1']['models']['vllm_rewrite']['port']
-        gen_4b_port = config['gpu1']['models']['vllm_gen_4b']['port']
+        vllm_4b_port = config['gpu1']['models']['vllm_4b']['port']
         gen_14b_port = config['gpu0']['models']['gen_14b']['port']
         self.endpoints = {
-            "rewrite": _os.environ.get("VLLM_REWRITE_URL", f"http://localhost:{rewrite_port}"),
-            "gen_4b": _os.environ.get("VLLM_GEN_4B_URL", f"http://localhost:{gen_4b_port}"),
+            "gen_4b": _os.environ.get("VLLM_4B_URL", f"http://localhost:{vllm_4b_port}"),
             "gen_14b": _os.environ.get("VLLM_GEN_14B_URL", f"http://localhost:{gen_14b_port}"),
         }
         self.timeout_seconds = float(_os.environ.get("VLLM_TIMEOUT_SECONDS", "10.0"))
@@ -62,7 +60,7 @@ class StatelessRouter:
         调用 vLLM OpenAI-compatible Chat Completions API
 
         Args:
-            endpoint_key: "rewrite" / "gen_4b" / "gen_14b"
+            endpoint_key: "gen_4b" / "gen_14b"（Rewrite 和简单 Gen 共用 gen_4b 端点）
             messages: [{"role": "system/user/assistant", "content": str}]
             max_tokens: 最大输出 token 数
             temperature: 生成温度

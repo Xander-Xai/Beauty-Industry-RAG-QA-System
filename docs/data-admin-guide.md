@@ -25,6 +25,7 @@
 - 图像向量集合：`rag_image_512`
 - Qdrant 主机：`qdrant:6333`
 - Elasticsearch 索引：`cosmetics_docs`
+- Elasticsearch 安全：v2.5.0 起启用 `xpack.security`，需通过环境变量 `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` 配置凭据
 
 ### 2.2 权限模型
 
@@ -83,7 +84,7 @@ python3 run_offline.py --mode create-index
 python3 run_offline.py --mode incremental
 ```
 
-基于文件 mtime+size 指纹检测新增/修改的文档，仅处理发生变化的部分，支持 `--force-full` 强制全量处理。
+基于文件 mtime+md5 指纹检测新增/修改的文档（v2.3.0），仅处理发生变化的部分，支持 `--force-full` 强制全量处理。
 
 ### 3.3 全量重建
 
@@ -125,3 +126,20 @@ python3 run_offline.py --mode rewrite-feedback  # Query Rewrite 反馈闭环
 4. `python3 run_offline.py --mode incremental`
 
 注意：部分模型（PaddleOCR）依赖 `requirements.txt` 之外的可选依赖，需单独安装。图像处理管线需要 GPU 支持以加速 CLIP 向量化。
+
+### 5. 离线质量评估
+
+数据集管理员还可以使用 RAGAS 框架进行离线质量评估：
+
+```bash
+# 验证黄金数据集格式
+python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden_set.jsonl
+
+# 运行黄金数据集评估
+python -m tests.evaluation.ragas_eval --dataset tests/evaluation/golden_set.jsonl --tag baseline
+
+# 查看最新报告
+ls -la data/eval/reports/
+```
+
+详细评估指南见 [`docs/ragas-evaluation-guide.md`](ragas-evaluation-guide.md)。

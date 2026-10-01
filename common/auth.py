@@ -170,7 +170,6 @@ def is_allowed(
     - Otherwise: role bits must overlap AND dept bits must overlap
       (doc_dept_mask == 0 means no dept restriction).
     """
-    cfg = get_config().rbac
     if is_admin_role_mask(user_role_mask):
         return True
     if doc_role_mask == 0:
@@ -190,8 +189,9 @@ def build_qdrant_filter(
     """
     Build a Qdrant Filter object.
 
-    Qdrant pre-filter 仅处理 status == 'active'（Qdrant Filter 不支持位掩码）。
-    RBAC 权限过滤和版本门控在 Python 层通过 is_allowed() 后置执行。
+    Qdrant pre-filter 处理 status == 'active'，并在显式激活知识版本时
+    处理 doc_version_epoch。Qdrant Filter 不支持位掩码，因此 RBAC 权限
+    仍在 Python 层通过 is_allowed() 二次校验。
 
     安全：对所有输入进行类型和范围验证。
     """
@@ -276,7 +276,7 @@ def generate_token(
     try:
         import jwt as _jwt
     except ImportError:
-        raise RuntimeError("PyJWT is not installed -- cannot generate tokens")
+        raise RuntimeError("PyJWT is not installed -- cannot generate tokens") from None
 
     cfg = get_config()
     now = int(time.time())

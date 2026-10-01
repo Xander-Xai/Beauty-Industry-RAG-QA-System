@@ -22,6 +22,8 @@ const DEFAULT_METADATA = {
   },
   rbac: {
     default_role: '',
+    roles: {},
+    departments: {},
     role_options: [
       { key: 'public', label: 'Public Visitor', role_mask: 0, dept_mask: 0 },
     ],
@@ -42,6 +44,21 @@ function getStoredJson(key) {
     return raw ? JSON.parse(raw) : null
   } catch {
     return null
+  }
+}
+
+/** Parse backend error response consistently — handles both ErrorResponse and plain errors. */
+function parseError(err) {
+  return err.detail?.detail || err.detail || err.error || (err.detail?.error) || null
+}
+
+/** Extract a human-readable message from a failed HTTP response. */
+async function parseResponseError(resp) {
+  try {
+    const body = await resp.json()
+    return parseError(body) || `HTTP ${resp.status}`
+  } catch {
+    return `HTTP ${resp.status}`
   }
 }
 
@@ -181,8 +198,8 @@ export default function App() {
     return () => clearInterval(interval)
   }, [accessToken])
 
-  const authRequired = metadata.auth.auth_required ?? (metadata.auth.jwt_enabled && !metadata.auth.dev_mode)
-  const loginEnabled = metadata.auth.login_enabled ?? metadata.auth.jwt_enabled
+  const authRequired = metadata.auth.auth_required
+  const loginEnabled = metadata.auth.login_enabled
   const canSend = Boolean(input.trim()) && !loading && (!authRequired || accessToken)
 
   const buildAuthHeaders = (tokenOverride = '') => {
@@ -242,7 +259,7 @@ export default function App() {
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(data.detail || `HTTP ${response.status}`)
+        throw new Error(await parseResponseError(response))
       }
 
       setAccessToken(data.access_token)
@@ -294,7 +311,7 @@ export default function App() {
         })
       }
       if (!resp.ok) {
-        throw new Error((await resp.json().catch(() => ({ detail: resp.statusText }))).detail || `HTTP ${resp.status}`)
+        throw new Error(await parseResponseError(resp))
       }
       const data = await resp.json()
       setSessionHistory(data)
@@ -309,9 +326,18 @@ export default function App() {
     setStatsLoading(true)
     setStatsError('')
     try {
-      const resp = await fetch(apiUrl('/api/stats'))
+      let resp = await fetch(apiUrl('/api/stats'), {
+        headers: buildAuthHeaders(),
+      })
+      if (resp.status === 401 && accessToken) {
+        const refreshedToken = await refreshAccessToken()
+        if (!refreshedToken) { setStatsError('Session expired. Please sign in again.'); return }
+        resp = await fetch(apiUrl('/api/stats'), {
+          headers: buildAuthHeaders(refreshedToken),
+        })
+      }
       if (!resp.ok) {
-        throw new Error((await resp.json().catch(() => ({ detail: resp.statusText }))).detail || `HTTP ${resp.status}`)
+        throw new Error(await parseResponseError(resp))
       }
       const data = await resp.json()
       setStats(data)
@@ -336,11 +362,11 @@ export default function App() {
         const retry = await fetch(apiUrl('/api/auth/users'), {
           headers: buildAuthHeaders(refreshedToken),
         })
-        if (!retry.ok) throw new Error((await retry.json()).detail || `HTTP ${retry.status}`)
+        if (!retry.ok) throw new Error(await parseResponseError(retry))
         const data = await retry.json()
         setUsers(data.users || [])
       } else if (!resp.ok) {
-        throw new Error((await resp.json()).detail || `HTTP ${resp.status}`)
+        throw new Error(await parseResponseError(resp))
       } else {
         const data = await resp.json()
         setUsers(data.users || [])
@@ -370,9 +396,9 @@ export default function App() {
           headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(refreshedToken) },
           body: JSON.stringify(createForm),
         })
-        if (!retry.ok) throw new Error((await retry.json()).detail || `HTTP ${retry.status}`)
+        if (!retry.ok) throw new Error(await parseResponseError(retry))
       } else if (!resp.ok) {
-        throw new Error((await resp.json()).detail || `HTTP ${resp.status}`)
+        throw new Error(await parseResponseError(resp))
       }
       setCreateForm({ user_id: '', username: '', password: '', display_name: '', roles: [], departments: [] })
       fetchUsers()
@@ -407,12 +433,12 @@ export default function App() {
           headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(refreshedToken) },
           body: JSON.stringify(payload),
         })
-        if (!retry.ok) throw new Error((await retry.json()).detail || `HTTP ${retry.status}`)
+        if (!retry.ok) throw new Error(await parseResponseError(retry))
         const data = await retry.json()
         updateUserDraft(user.user_id, 'roles', data.roles || [])
         updateUserDraft(user.user_id, 'departments', data.departments || [])
       } else if (!resp.ok) {
-        throw new Error((await resp.json()).detail || `HTTP ${resp.status}`)
+        throw new Error(await parseResponseError(resp))
       } else {
         const data = await resp.json()
         updateUserDraft(user.user_id, 'roles', data.roles || [])
@@ -437,7 +463,7 @@ export default function App() {
       }
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-        throw new Error(err.detail?.detail || err.detail || `HTTP ${resp.status}`)
+        throw new Error(parseError(err))
       }
       const data = await resp.json()
       window.open(data.url, '_blank', 'noopener,noreferrer')
@@ -490,7 +516,7 @@ export default function App() {
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: response.statusText }))
-        throw new Error(err.detail || `HTTP ${response.status}`)
+        throw new Error(parseError(err))
       }
 
       const data = await response.json()

@@ -280,9 +280,10 @@ class RerankBatchAggregator:
 
     def batch_predict(self, model, pairs: list[tuple[str, str]]) -> list[float]:
         """
-        批量预测（兼容同步调用）
+        请求内同步批量预测。
 
-        优先使用异步跨请求聚合；若异步不可用则回退为同步模式。
+        当前 CrossEncoder 主链路调用此方法；跨请求聚合需要显式调用
+        submit_batch()，不能仅凭 Aggregator 存在就视为已经接入。
 
         Args:
             model: CrossEncoder 或其他可 batch 预测的模型

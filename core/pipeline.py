@@ -361,6 +361,10 @@ class OnlineRAGPipeline:
                             recall_top_k[path_key] = {**recall_top_k[path_key], "top_k": 300}
                     if clip_use and "clip_visual" in recall_top_k:
                         recall_top_k["clip_visual"] = {**recall_top_k["clip_visual"], "top_k": clip_top_k}
+                    rrf_weights = self._build_rrf_weights(
+                        business_type=business_type,
+                        is_visual_relevant=clip_use and clip_top_k > 20,
+                    )
                     ctx.recall_results, ctx.retrieval_agreement_score = self.parallel_recall.execute(
                         query=ctx.rewrite_result.rewritten_query,
                         query_embedding=query_embedding,
@@ -369,6 +373,7 @@ class OnlineRAGPipeline:
                         use_clip=clip_use,
                         clip_top_k=clip_top_k,
                         top_k_per_path=recall_top_k,
+                        rrf_weights=rrf_weights,
                     )
                 ctx.record_timing("parallel_recall", (time.time() - t_recall) * 1000)
 
@@ -388,6 +393,8 @@ class OnlineRAGPipeline:
                             query=ctx.rewrite_result.rewritten_query,
                             qdrant_filter=clip_qdrant_filter,
                             session=session_state_for_clip,
+                            user_role_mask=ctx.user_role_mask,
+                            user_dept_mask=ctx.user_dept_mask,
                         )
                         # 不阻塞主流程：设置超时后放弃
                         try:
@@ -411,7 +418,7 @@ class OnlineRAGPipeline:
                         logger.debug(f"BLIP 触发跳过: {e}")
                 ctx.record_timing("blip_inference", (time.time() - t_blip) * 1000)
 
-                # ⑨ Union 合并去冗（PRD §4.5: 动态权重按 business_type + is_visual_relevant）
+                # ⑨ Union稳定去重（RRF已在并行召回管理器中完成）
                 ctx.union_recall_set = self._merge_and_dedup(
                     ctx.recall_results,
                     business_type=business_type,
@@ -476,8 +483,8 @@ class OnlineRAGPipeline:
                             metric_name="latency_ms",
                             value=ctx.get_total_latency_ms(),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("A/B latency metric recording failed: %s", exc)
 
                 # ⑬ 根据 Evidence Gate 决策分支
                 decision = ctx.evidence_result.decision
@@ -737,8 +744,8 @@ class OnlineRAGPipeline:
                     business_type = "development"
                     intent = "formulation"
                 bert_score = 0.7
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("BLIP intent model unavailable, using keyword fallback: %s", exc)
 
         # PRD §4.4: BERT 分类未命中时降级为关键词规则
         if bert_score == 0:
@@ -776,16 +783,16 @@ class OnlineRAGPipeline:
 
         Returns:
             (use_clip, top_k): 是否启用 CLIP + 对应 top_k
-            score >= 0.6 → (True, 50)  全量同步
-            0.3 <= score < 0.6 → (True, 20)  低成本同步
-            score < 0.3 → (False, 0)  跳过
+            score >= high_threshold → (True, 50)  全量同步
+            low_threshold <= score < high_threshold → (True, 20)  低成本同步
+            score < low_threshold → (False, 0)  跳过
         """
-        # 从 config.json 读取视觉关键词
-        visual_keywords = set(config.get("domain_keywords", {}).get("visual", [
-            "图片", "包装", "外观", "照片", "扫描", "标签",
-            "成分表", "配方", "图像", "图像识别", "OCR",
-            "说明书", "瓶身", "外盒",
-        ]))
+        # 从 config 读取 CLIP 路由阈值（调低以提升视觉查询覆盖至 ~15%）
+        clip_cfg = config.get("clip_sync", {})
+        threshold_high = clip_cfg.get("threshold_high", 0.50)
+        threshold_low = clip_cfg.get("threshold_low", 0.20)
+        # 从 config.json 读取视觉关键词词表
+        visual_keywords = set(config.get("domain_keywords", {}).get("visual", []))
         query_text = rewrite_result.rewritten_query if rewrite_result else ""
         keyword_hits = sum(1 for kw in visual_keywords if kw in query_text)
         keyword_score = min(keyword_hits * 0.3, 1.0)
@@ -814,9 +821,9 @@ class OnlineRAGPipeline:
             f"centroid={centroid_score:.1f}, total={score:.1f}"
         )
 
-        if score >= 0.6:
+        if score >= threshold_high:
             return True, 50   # 全量同步
-        elif score >= 0.3:
+        elif score >= threshold_low:
             return True, 20   # 低成本同步
         else:
             return False, 0   # 跳过
@@ -824,53 +831,43 @@ class OnlineRAGPipeline:
     def _merge_and_dedup(self, recall_results: list, business_type: str = "general",
                          is_visual_relevant: bool = False) -> list:
         """
-        Union 合并去冗 + 动态加权 RRF 融合（PRD §7.1 / §4.5 / §6）
+        对已经完成RRF融合的结果做稳定去重。
 
-        RRF 公式: final_score = src_score / (k + rank)
-        动态权重（PRD §4.5 §6）:
-        - w_clip: 视觉相关查询时提升至 2.0，否则使用 config 默认值
-        - w_text: 法规查询时提升至 1.5（PRD §6 法规查询 ES 权重 1.5）
-        - 权重初始值由 config.json 设定，线上由 A/B 实验持续校准
+        ES Fallback可能在RRF之后追加结果，因此这里保留首次出现的文档，
+        不再进行第二次伪RRF计分，避免覆盖真实的跨路径排名。
         """
-        rrf_cfg = config.get("retrieval", {}).get("rrf", {})
-        k = rrf_cfg.get("k", 60)
-        base_weights = rrf_cfg.get("weights", {"w_text": 1.0, "w_clip": 1.0, "w_ocr": 0.8})
-
-        # PRD §4.5 §6: 动态权重映射
-        weights = base_weights.copy()
-        if is_visual_relevant:
-            weights["w_clip"] = 2.0  # PRD §6: 视觉相关度高时 CLIP 权重提升至 2.0
-        if business_type == "regulation":
-            weights["w_text"] = 1.5  # PRD §6: 法规查询 ES 权重 1.5
-
-        seen_doc_ids: dict[str, dict] = {}  # doc_id → {result, best_score}
+        del business_type, is_visual_relevant
+        seen_doc_ids = set()
+        merged = []
         for r in recall_results:
-            # 按来源类型分配基础分数（归一化到 [0, 1] 区间用于 RRF）
-            embedding_type = getattr(r, "embedding_type", "") or ""
-            if "clip" in embedding_type:
-                src_score = weights.get("w_clip", 1.0)
-            elif "ocr" in embedding_type:
-                src_score = weights.get("w_ocr", 0.8)
-            else:
-                src_score = weights.get("w_text", 1.0)
-
-            # RRF: 1 / (k + rank)，rank 由首次出现顺序隐式决定
-            rrf_score = src_score / (k + len(seen_doc_ids))
-
-            if r.doc_id not in seen_doc_ids:
-                seen_doc_ids[r.doc_id] = {"result": r, "best_score": rrf_score}
-            else:
-                # 保留更高分数的版本
-                if rrf_score > seen_doc_ids[r.doc_id]["best_score"]:
-                    seen_doc_ids[r.doc_id]["result"] = r
-                    seen_doc_ids[r.doc_id]["best_score"] = rrf_score
-
-        # 按 RRF 分数降序排列
-        merged = [
-            v["result"]
-            for v in sorted(seen_doc_ids.values(), key=lambda x: x["best_score"], reverse=True)
-        ]
+            if r.doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(r.doc_id)
+            merged.append(r)
         return merged
+
+    @staticmethod
+    def _build_rrf_weights(
+        business_type: str,
+        is_visual_relevant: bool,
+    ) -> dict[str, float]:
+        """Map semantic config weights to concrete recall paths and apply query boosts."""
+        base = config.get("retrieval", {}).get("rrf", {}).get(
+            "weights",
+            {"w_text": 1.0, "w_clip": 1.0, "w_ocr": 0.8},
+        )
+        text_weight = base.get("w_text", 1.0)
+        weights = {
+            "dense_bge": base.get("dense_bge", text_weight),
+            "bm25_es": base.get("bm25_es", text_weight),
+            "clip_visual": base.get("clip_visual", base.get("w_clip", 1.0)),
+            "rewrite_variant": base.get("rewrite_variant", text_weight),
+        }
+        if business_type == "regulation":
+            weights["bm25_es"] = 1.5
+        if is_visual_relevant:
+            weights["clip_visual"] = 2.0
+        return weights
 
     def _maybe_trigger_blip(self, ctx):
         """
@@ -949,7 +946,7 @@ class OnlineRAGPipeline:
         2. 根据大纲定位已完成章节，模型仅补充剩余章节内容
         3. 通过 generate_continuation 填充
         """
-        from core.pipeline_context import GenerationResult
+        from core.pipeline_context import GenerationResult, SessionState
 
         try:
             session_state = SessionState.get_or_create(ctx.session_id or "default")

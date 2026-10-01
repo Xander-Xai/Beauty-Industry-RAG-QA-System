@@ -1,5 +1,53 @@
 # Changelog
 
+## [2.5.0] - 2026-06-24
+
+### Fixed — 安全加固 + 基础设施修复 (9 项)
+
+**安全加固 (S-01~S-04):**
+- api/routes.py: `/api/stats` 和 `/api/metrics` 添加 `Depends(require_identity)` 认证，防止未授权访问系统运行指标
+- api/middleware.py: 移除 CORS 生产模式检查的 `try/except ImportError`，改为直接导入 `is_production_mode()`，确保生产环境未设置 `CORS_ORIGINS` 时硬性阻止启动
+- api/routes_auth.py: 登录速率限制增加 `X-Forwarded-For` 解析，支持反向代理场景下获取客户端真实 IP
+- api/routes_auth.py: 登录速率限制增加 Redis 后端（`ratelimit:login:{ip}`），Redis 不可用时自动降级至内存；多 worker/多容器部署下共享限流状态
+
+**基础设施修复 (S-05~S-08):**
+- app.py: 从已弃用的 `@app.on_event("startup")` / `@app.on_event("shutdown")` 迁移至 `lifespan` 上下文管理器模式，消除 17 个 FastAPI 弃用警告
+- docker-compose.yml: 启用 Elasticsearch `xpack.security.enabled=true`，默认使用 `elastic` 用户 + 环境变量密码；健康检查使用认证请求
+- docker-compose.yml: app 服务增加 `REDIS_PASSWORD`、`ELASTICSEARCH_USERNAME`、`ELASTICSEARCH_PASSWORD` 环境变量传递
+- retrieval/bm25_retriever.py: ES 客户端增加环境变量 `ELASTICSEARCH_USERNAME`、`ELASTICSEARCH_PASSWORD` 读取优先（兜底 `config.json`）
+
+**跨 worker 会话共享 (S-09):**
+- core/pipeline_context.py: `SessionState` 增加 Redis 持久化支持；`get_or_create` 优先从 Redis 加载会话（key `session:{id}`，TTL 7200s）；`add_round`/`lock_evidence` 自动持久化变更
+
+### Changed
+- docker-compose.yml: ES 启用 xpack security
+- .env.example: ES 用户名/密码默认值改为 `elastic` / `REPLACE_WITH_STRONG_PASSWORD`
+- tests: 更新 stats/metrics 测试用例适配新的认证要求
+- 测试结果: **608 passed, 0 failed, 0 on_event warnings**
+
+---
+
+## [2.4.0] - 2026-06-24
+
+### Fixed — 前后端联调一致性 + 生产部署修复 (6 项)
+
+**前后端契约修复 (F-01~F-04):**
+- frontend: `DEFAULT_METADATA.rbac` 补充 `roles: {}` 和 `departments: {}` 字段，防止 `/api/auth/metadata` 加载失败时前端崩溃
+- frontend: `authRequired` 改为直接信任后端 `metadata.auth.auth_required`，不再自行使用 `??` 计算兜底逻辑（消除与后端逻辑漂移的风险）
+- frontend: 引入统一 `parseResponseError()` 错误解析函数，同时兼容 `ErrorResponse.error`、`ErrorResponse.detail` 及嵌套 `detail.detail` 三种错误响应格式
+- frontend: `sendMessage()`、`openEvidence()`、`handleLogin()`、`fetchSessionHistory()` 等所有错误处理路径统一使用 `parseResponseError()`
+
+**生产部署修复 (F-05~F-06):**
+- app.py: `uvicorn.run(reload=True)` 改为仅在非生产模式下启用热重载（`reload=_get_sys_config().deployment_mode != "production"`）
+- config.json: `auth.dev_mode` 默认值从 `true` 调整为 `false`，避免部署时意外暴露开发模式
+
+### Changed
+- config.json: dev_mode 默认关闭
+- README.md: 更新测试计数 (359→608)、补充前后端契约说明、记录生产修复
+- 测试结果: **608 passed, 0 failed**
+
+---
+
 ## [2.3.0] - 2026-06-06
 
 ### Fixed — 矛盾统一 + Bug 修复 + GAP 补全 (16 项)

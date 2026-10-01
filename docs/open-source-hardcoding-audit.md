@@ -17,6 +17,12 @@ This project is domain-configurable. The default configuration still models a co
 | Browser tab title | Static `index.html` title | React sets `document.title` from backend metadata at runtime |
 | Media route query | Raw `doc_id` interpolated into Qdrant scroll filter | Reuses `common.auth.validate_doc_id()` before querying |
 | Alert footer | Email alerts used a fixed product name | Alert emails now use `system.name` |
+| API auth (stats/metrics) | `/api/stats` and `/api/metrics` had no auth, exposing system metrics | v2.5.0: added `Depends(require_identity)`, monitoring tools must now configure Bearer token |
+| CORS production safety | Missing `CORS_ORIGINS` in production only logged a warning | v2.5.0: production mode hard-stops startup if `CORS_ORIGINS` is unset |
+| ES security | Elasticsearch ran without authentication | v2.5.0: `xpack.security.enabled=true` in docker-compose; `bm25_retriever.py` reads `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` from env vars |
+| Login rate limiting | In-memory only (not shared between workers) | v2.5.0: added Redis-backed rate limiting (`ratelimit:login:{ip}`) with automatic degradation to in-memory |
+| Session state per-worker | `SessionState` lived only in process memory, lost on multi-worker deployments | v2.5.0: `SessionState` persists to Redis (key `session:{id}`, TTL=7200s) with silent degradation to in-memory |
+| Auth route lifecycle | `@app.on_event("startup")` / `@app.on_event("shutdown")` deprecation warnings | v2.5.0: migrated to `lifespan` context manager, eliminating 17 FastAPI deprecation warnings |
 
 ## Runtime Contract
 
@@ -53,7 +59,7 @@ Response shape:
 }
 ```
 
-Production calls to `/api/query`, `/api/chat`, and `/api/media/{doc_id}` must use:
+Production calls to `/api/query`, `/api/chat`, `/api/media/{doc_id}`, `/api/stats`, and `/api/metrics` must use:
 
 ```http
 Authorization: Bearer <access_token>
@@ -66,6 +72,7 @@ Current frontend alignment additions:
 1. The browser now uses `auth_required` and `login_enabled` to decide whether sign-in is mandatory and whether the backend is actually ready to issue JWTs.
 2. `POST /api/query`, `GET /api/dialog_history`, and `GET /api/stats` now have first-class UI entry points instead of being backend-only capabilities.
 3. The default development role has been lowered to `public` instead of `admin`.
+4. **Stats and metrics endpoints now require JWT** (v2.5.0) — Prometheus scraping requires a valid Bearer token.
 
 ## Configuration Fields for Open Source Deployments
 
@@ -101,3 +108,5 @@ These are real-world hardcoding risks that should be addressed next, but were no
 - Backend metadata endpoint: `pytest tests/test_auth_metadata.py -q`
 - Frontend contract build: `cd frontend && npm run build`
 - Static hardcoding scan: search source for fixed user IDs, role labels, product names, and direct `open("config.json")`.
+- RAGAS dataset validation: `python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden_set.jsonl`
+- Full test suite: `pytest tests/ -q` (target: 640 passed)

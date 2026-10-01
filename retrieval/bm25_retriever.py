@@ -12,6 +12,7 @@ BM25 关键词检索模块（readme 7.1 并行多路召回第 2 路）
 from __future__ import annotations
 
 import logging
+import os
 
 from common.config import get_config_dict
 
@@ -42,8 +43,9 @@ class BM25Retriever:
                 from elasticsearch import Elasticsearch
                 es_cfg = config.get("elasticsearch", {})
                 kwargs = {"hosts": [es_cfg.get("host", "http://localhost:9200")]}
-                username = es_cfg.get("username", "")
-                password = es_cfg.get("password", "")
+                # 优先从环境变量读取 ES 凭据，再回退到 config.json
+                username = os.environ.get("ELASTICSEARCH_USERNAME") or es_cfg.get("username", "")
+                password = os.environ.get("ELASTICSEARCH_PASSWORD") or es_cfg.get("password", "")
                 if username and password:
                     kwargs["basic_auth"] = (username, password)
                 self._es_client = Elasticsearch(**kwargs)
@@ -93,6 +95,9 @@ class BM25Retriever:
                     "metadata": {
                         "doc_type": hit["_source"].get("doc_type", ""),
                         "law_id": hit["_source"].get("law_id", ""),
+                        "role_mask": hit["_source"].get("role_mask", 0),
+                        "dept_mask": hit["_source"].get("dept_mask", 0),
+                        "doc_version_epoch": hit["_source"].get("doc_version_epoch", ""),
                     },
                 })
             return hits
@@ -131,24 +136,28 @@ class BM25Retriever:
         # 判断 ES 版本选择过滤策略
         use_script_filter = self._es_version is not None and self._es_version >= (8, 0)
 
-        if use_script_filter and user_role_mask != self._super_admin_mask():
-            # ES >= 8.0: painless script_score 位运算过滤
-            must_filters.append({
-                "bool": {
-                    "should": [
-                        {"term": {"role_mask": 0}},  # 公开文档
-                        {"script": {
-                            "script": {
-                                "source": f"doc['role_mask'].value & {user_role_mask} != 0",
-                                "lang": "painless",
-                            }
-                        }},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            })
+        is_admin = user_role_mask in {
+            self._super_admin_mask(),
+            config.get("rbac", {}).get("roles", {}).get("admin"),
+        }
+        if not is_admin:
+            if use_script_filter:
+                # ES >= 8.0: painless script 位运算过滤
+                must_filters.append({
+                    "bool": {
+                        "should": [
+                            {"term": {"role_mask": 0}},  # 公开文档
+                            {"script": {
+                                "script": {
+                                    "source": f"doc['role_mask'].value & {user_role_mask} != 0",
+                                    "lang": "painless",
+                                }
+                            }},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                })
 
-            if user_dept_mask != 0:
                 must_filters.append({
                     "bool": {
                         "should": [
@@ -163,19 +172,17 @@ class BM25Retriever:
                         "minimum_should_match": 1,
                     }
                 })
-        else:
-            # ES < 8.0 或超级管理员: 使用预计算的 role_bucket / dept_bucket 字段
-            must_filters.append({
-                "bool": {
-                    "should": [
-                        {"term": {"role_bucket": user_role_mask}},
-                        {"term": {"role_mask": 0}},  # 兜底公开文档
-                    ],
-                    "minimum_should_match": 1,
-                }
-            })
-
-            if user_dept_mask != 0:
+            else:
+                # ES < 8.0: 使用预计算的 role_bucket / dept_bucket 字段
+                must_filters.append({
+                    "bool": {
+                        "should": [
+                            {"term": {"role_bucket": user_role_mask}},
+                            {"term": {"role_mask": 0}},  # 兜底公开文档
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                })
                 must_filters.append({
                     "bool": {
                         "should": [
@@ -188,7 +195,7 @@ class BM25Retriever:
 
         # 版本过滤
         active_epoch = config.get("knowledge_version_epoch", "")
-        if active_epoch:
+        if active_epoch and active_epoch != "default":
             must_filters.append({"term": {"doc_version_epoch": active_epoch}})
 
         return {
@@ -206,33 +213,21 @@ class BM25Retriever:
     def _super_admin_mask(self) -> int:
         return config.get("rbac", {}).get("super_admin_mask", 0xFFFFFFFF)
 
-    def fallback_search(self, query: str, top_k: int = 100) -> list[dict]:
+    def fallback_search(
+        self,
+        query: str,
+        user_role_mask: int = 0,
+        user_dept_mask: int = 0,
+        top_k: int = 100,
+    ) -> list[dict]:
         """
-        ES Fallback 检索（无权限过滤，用于向量检索不可用时的兜底）
+        ES Fallback 检索（复用主BM25的权限和版本过滤）
 
         readme 7.1: 当向量库不可用或召回有效文档数 < 50 时自动切换
         """
-        if not self.enabled or self.es_client is None:
-            return []
-
-        try:
-            query_body = {
-                "query": {"match": {"content": query}},
-                "size": top_k,
-            }
-            response = self.es_client.search(
-                index=config["elasticsearch"]["index"],
-                body=query_body,
-            )
-            return [
-                {
-                    "doc_id": hit["_id"],
-                    "content": hit["_source"].get("content", ""),
-                    "score": hit["_score"],
-                    "metadata": {},
-                }
-                for hit in response["hits"]["hits"]
-            ]
-        except Exception as e:
-            logger.error(f"ES Fallback 检索失败: {e}")
-            return []
+        return self.search(
+            query=query,
+            user_role_mask=user_role_mask,
+            user_dept_mask=user_dept_mask,
+            top_k=top_k,
+        )

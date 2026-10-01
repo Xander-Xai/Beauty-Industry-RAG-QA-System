@@ -7,11 +7,10 @@ CrossEncoder Ensemble 重排模块（readme 7.3 Stage 2）
 计算逻辑：CE_score = avg(CE_A(doc), CE_B(doc))
 Platt Scaling：将 CE 原始分映射为校准概率 [0, 1]
 
-GPU 批处理架构：
+当前主链路的 GPU 批处理：
 - Rerank Batch Aggregator 位于 GPU1
-- time-based batching: 10-20ms 窗口
-- size-based batching: max 64 pairs per batch
-- 单 pair 等效延迟由 CPU 200-400ms 降至 GPU 1-3ms
+- 单个请求内按 max_batch_size 对 pairs 分块预测
+- Aggregator 另有跨请求异步接口，但当前 rerank() 尚未接入该接口
 """
 
 from __future__ import annotations
@@ -79,7 +78,7 @@ class CrossEncoderEnsemble:
     """
     CrossEncoder 集成重排器
 
-    双模型 Ensemble + GPU 微批聚合
+    双模型 Ensemble + 请求内 GPU 批处理
     输出 Top-K 文档及其经 Platt Scaling 校准的概率分数
     """
 

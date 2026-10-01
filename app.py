@@ -1,10 +1,10 @@
 """
-FastAPI 应用入口（完全重写，替换 Flask）
+FastAPI 应用入口（使用 lifespan 模式，替代已弃用的 on_event）
 
 功能：
 - create_app() 工厂函数
 - 全局异常处理器
-- 启动/关闭生命周期事件
+- lifespan 生命周期（启动/关闭）
 - uvicorn.run 入口
 
 API 端点（由 api.routes 提供）：
@@ -16,8 +16,10 @@ API 端点（由 api.routes 提供）：
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -27,9 +29,6 @@ from api.middleware import setup_middleware
 from api.routes import get_metrics, get_pipeline, router
 from common.config import get_config_dict
 from common.config import get_config as _get_sys_config
-
-# H-7: 显式导入 SessionState，避免延迟导入导致清理任务 NameError
-from core.pipeline_context import SessionState
 
 # ─── 日志配置 ──────────────────────────────────────────────
 
@@ -53,11 +52,81 @@ def create_app() -> FastAPI:
     Returns:
         配置完成的 FastAPI 实例。
     """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """应用生命周期：启动时初始化组件，关闭时清理资源。"""
+        # ── startup ─────────────────────────────────────────
+        logger.info("系统启动中... 版本=%s", _APP_VERSION)
+
+        # 预初始化 pipeline（触发懒加载以尽早发现配置问题）
+        try:
+            pipeline = get_pipeline()
+            logger.info("OnlineRAGPipeline 初始化完成")
+        except Exception as e:
+            logger.error("OnlineRAGPipeline 初始化失败: %s", e)
+
+        # 预初始化 metrics
+        try:
+            metrics = get_metrics()
+            logger.info("MetricsCollector 初始化完成")
+        except Exception as e:
+            logger.error("MetricsCollector 初始化失败: %s", e)
+
+        # 生成 JWT 密钥对（首次运行）
+        try:
+            from auth.jwt_auth import generate_keypair, get_jwt_config
+            jwt_cfg = get_jwt_config()
+            if jwt_cfg.enabled and jwt_cfg.private_key_path and not os.path.isfile(jwt_cfg.private_key_path):
+                key_dir = os.path.dirname(jwt_cfg.private_key_path)
+                if key_dir:
+                    os.makedirs(key_dir, exist_ok=True)
+                    generate_keypair(key_dir)
+        except Exception as e:
+            logger.warning("JWT 密钥生成跳过: %s", e)
+
+        # 启动 SessionState 定期清理（每 5 分钟，防止内存泄漏）
+        from core.pipeline_context import SessionState
+
+        async def _cleanup_sessions():
+            while True:
+                await asyncio.sleep(300)
+                try:
+                    SessionState.cleanup_expired()
+                except Exception as e:
+                    logger.debug("会话定期清理跳过: %s", e)
+
+        cleanup_task = asyncio.create_task(_cleanup_sessions())
+        logger.info("SessionState 定期清理任务已启动（间隔 5 分钟）")
+
+        logger.info("系统启动完成，监听端口: %s", os.environ.get("API_PORT", 8000))
+
+        yield  # 应用在此运行
+
+        # ── shutdown ────────────────────────────────────────
+        logger.info("系统关闭中...")
+
+        # 取消清理任务
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+        # 清理过期会话
+        try:
+            SessionState.cleanup_expired()
+        except Exception as e:
+            logger.warning("会话清理失败: %s", e)
+
+        logger.info("系统已关闭")
+
     app = FastAPI(
         title=_get_sys_config().system.name,
         description=f"基于双 GPU、多模态检索增强生成（RAG）的企业级知识问答 API — {_get_sys_config().system.name}",
         version=_APP_VERSION,
-        # H-9: 生产模式下禁用 Swagger/ReDoc，避免暴露 API schema
+        lifespan=lifespan,
+        # 生产模式下禁用 Swagger/ReDoc，避免暴露 API schema
         docs_url="/docs" if _get_sys_config().deployment_mode != "production" else None,
         redoc_url="/redoc" if _get_sys_config().deployment_mode != "production" else None,
     )
@@ -80,8 +149,6 @@ def create_app() -> FastAPI:
     if os.path.isdir(static_dir):
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
-    # ── 首页（如果 static mount 没有 index.html）──
-
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         logger.error("未捕获异常: %s %s -> %s", request.method, request.url.path, exc, exc_info=True)
@@ -93,68 +160,6 @@ def create_app() -> FastAPI:
                 "code": 500,
             },
         )
-
-    # ── 生命周期事件 ─────────────────────────────────────
-
-    @app.on_event("startup")
-    async def on_startup():
-        logger.info("系统启动中... 版本=%s", _APP_VERSION)
-
-        # 预初始化 pipeline 和 metrics（触发懒加载以尽早发现配置问题）
-        try:
-            pipeline = get_pipeline()
-            logger.info("OnlineRAGPipeline 初始化完成")
-        except Exception as e:
-            logger.error("OnlineRAGPipeline 初始化失败: %s", e)
-
-        try:
-            metrics = get_metrics()
-            logger.info("MetricsCollector 初始化完成")
-        except Exception as e:
-            logger.error("MetricsCollector 初始化失败: %s", e)
-
-        # 启动 SessionState 定期清理（每 5 分钟清理过期会话，防止内存泄漏）
-        import asyncio
-
-        async def _cleanup_sessions():
-            while True:
-                await asyncio.sleep(300)  # 每 5 分钟
-                try:
-                    SessionState.cleanup_expired()
-                except Exception as e:
-                    logger.debug("会话定期清理跳过: %s", e)
-
-        asyncio.create_task(_cleanup_sessions())
-        logger.info("SessionState 定期清理任务已启动（间隔 5 分钟）")
-
-        logger.info("系统启动完成，监听端口: %s", os.environ.get("API_PORT", 8000))
-
-    @app.on_event("startup")
-    async def generate_jwt_keys():
-        """Generate JWT key pair if not exists and JWT is configured."""
-        import os
-
-        from auth.jwt_auth import generate_keypair, get_jwt_config
-        config = get_jwt_config()
-        if config.enabled and config.private_key_path:
-            if not os.path.isfile(config.private_key_path):
-                key_dir = os.path.dirname(config.private_key_path)
-                if key_dir:
-                    os.makedirs(key_dir, exist_ok=True)
-                    generate_keypair(key_dir)
-
-    @app.on_event("shutdown")
-    async def on_shutdown():
-        logger.info("系统关闭中...")
-
-        # 清理过期会话
-        try:
-            from core.pipeline_context import SessionState
-            SessionState.cleanup_expired()
-        except Exception as e:
-            logger.warning("会话清理失败: %s", e)
-
-        logger.info("系统已关闭")
 
     return app
 
@@ -172,6 +177,6 @@ if __name__ == "__main__":
         "app:app",
         host="0.0.0.0",
         port=int(os.environ.get("API_PORT", 8000)),
-        reload=True,
+        reload=_get_sys_config().deployment_mode != "production",
         log_level="info",
     )

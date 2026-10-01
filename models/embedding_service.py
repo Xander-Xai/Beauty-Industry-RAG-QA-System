@@ -183,7 +183,15 @@ class EmbeddingService:
             query_vector=query_embedding.flatten().tolist(),
             limit=top_k,
             query_filter=qdrant_filter,
-            with_payload=["doc_id", "content", "doc_type", "embedding_type"],
+            with_payload=[
+                "doc_id",
+                "content",
+                "doc_type",
+                "embedding_type",
+                "role_mask",
+                "dept_mask",
+                "doc_version_epoch",
+            ],
         )
 
         hits = []
@@ -195,6 +203,9 @@ class EmbeddingService:
                 "metadata": {
                     "doc_type": point.payload.get("doc_type", ""),
                     "embedding_type": point.payload.get("embedding_type", ""),
+                    "role_mask": point.payload.get("role_mask", 0),
+                    "dept_mask": point.payload.get("dept_mask", 0),
+                    "doc_version_epoch": point.payload.get("doc_version_epoch", ""),
                 },
             })
         return hits
@@ -224,7 +235,14 @@ class EmbeddingService:
             query_vector=query_embedding.flatten().tolist(),
             limit=top_k,
             query_filter=qdrant_filter,
-            with_payload=["doc_id", "content", "image_uri"],
+            with_payload=[
+                "doc_id",
+                "content",
+                "image_uri",
+                "role_mask",
+                "dept_mask",
+                "doc_version_epoch",
+            ],
         )
 
         hits = []
@@ -234,5 +252,10 @@ class EmbeddingService:
                 "content": point.payload.get("content", ""),
                 "image_uri": point.payload.get("image_uri", ""),
                 "score": point.score,
+                "metadata": {
+                    "role_mask": point.payload.get("role_mask", 0),
+                    "dept_mask": point.payload.get("dept_mask", 0),
+                    "doc_version_epoch": point.payload.get("doc_version_epoch", ""),
+                },
             })
         return hits
