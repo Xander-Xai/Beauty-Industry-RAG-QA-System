@@ -427,7 +427,7 @@ def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
         points=[
             PointStruct(
                 id=1,
-                vector=[1.0] + [0.0] * 15,
+                vector=DeterministicTestEmbedder(16).embed_texts(["legacy public policy"])[0],
                 payload={
                     "doc_id": doc_id,
                     "chunk_index": 0,
@@ -458,6 +458,37 @@ def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
     ]
     assert len(active_points) == 1
     assert active_points[0].payload["role_mask"] == 0
+
+
+def test_same_content_with_changed_embedding_vector_requires_new_epoch(tmp_path):
+    client = QdrantClient(":memory:")
+
+    class MutableEmbedder:
+        dimension = 16
+        embedding_version = "same-declared-revision"
+
+        def __init__(self):
+            self.marker = 0.25
+
+        def embed_texts(self, texts):
+            return [[self.marker] + [0.0] * 15 for _ in texts]
+
+    embedder = MutableEmbedder()
+    writer = QdrantTextWriter(client, "embedding_version", dimension=16)
+    service = TextIngestionService(DocumentProcessor(), embedder, writer)
+    source = _write_source(tmp_path, "same.txt", "same content")
+    service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+
+    embedder.marker = 0.75
+    with pytest.raises(ValueError, match="stored embedding vectors differ"):
+        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+
+    # Changing the declared model revision also requires a distinct epoch.
+    embedder.embedding_version = "new-model-revision"
+    revised_service = TextIngestionService(DocumentProcessor(), embedder, writer)
+    with pytest.raises(ValueError, match="embedding version changed"):
+        revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    assert revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_2")
 
 
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):

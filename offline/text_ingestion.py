@@ -224,7 +224,13 @@ class DocumentProcessor:
 class BGETextEmbedder:
     """Production adapter using the same BGE tokenizer and mean pooling as online queries."""
 
-    def __init__(self, model_name_or_path: str, dimension: int = 768, batch_size: int = 32):
+    def __init__(
+        self,
+        model_name_or_path: str,
+        dimension: int = 768,
+        batch_size: int = 32,
+        model_revision: str | None = None,
+    ):
         if not model_name_or_path:
             raise ValueError("a configured BGE model name or path is required")
         if type(batch_size) is not int or batch_size <= 0:
@@ -232,6 +238,7 @@ class BGETextEmbedder:
         self.model_name_or_path = model_name_or_path
         self.dimension = dimension
         self.batch_size = batch_size
+        self.embedding_version = f"{model_revision or model_name_or_path}:attention-mask-mean-pooling-v1"
         self._embedding_service = None
 
     def _load_embedding_service(self):
@@ -272,6 +279,7 @@ class DeterministicTestEmbedder:
         if type(dimension) is not int or dimension <= 0:
             raise ValueError("dimension must be a positive integer")
         self.dimension = dimension
+        self.embedding_version = "test-feature-hash-v1"
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         rows = []
@@ -306,6 +314,7 @@ class QdrantTextWriter:
         collection_name: str = "rag_text_768",
         dimension: int = 768,
         replacement_lock=None,
+        embedding_version: str = "unspecified-v1",
     ):
         if not collection_name or type(dimension) is not int or dimension <= 0:
             raise ValueError("a collection name and positive vector dimension are required")
@@ -313,6 +322,7 @@ class QdrantTextWriter:
         self.collection_name = collection_name
         self.dimension = dimension
         self.replacement_lock = replacement_lock
+        self.embedding_version = embedding_version
 
     def ensure_collection(self) -> None:
         from qdrant_client.http.exceptions import UnexpectedResponse
@@ -352,7 +362,7 @@ class QdrantTextWriter:
         chunks: list[TextChunk],
         vectors: list[list[float]],
     ) -> None:
-        """Write an immutable document snapshot; changes require a new epoch."""
+        """Replace one document in staging, while sealed epochs remain immutable."""
         _validate_epoch(doc_version_epoch)
         points = self._build_points(chunks, vectors)
         if any(chunk.doc_id != doc_id or chunk.doc_version_epoch != doc_version_epoch for chunk in chunks):
@@ -380,8 +390,16 @@ class QdrantTextWriter:
                         collection_name=self.collection_name,
                         scroll_filter=source_filter,
                         limit=256,
-                        with_payload=["chunk_index", "content", "role_mask", "dept_mask", "status"],
-                        with_vectors=False,
+                        with_payload=[
+                            "chunk_index",
+                            "content",
+                            "role_mask",
+                            "dept_mask",
+                            "status",
+                            "embedding_version",
+                            "doc_version_epoch",
+                        ],
+                        with_vectors=True,
                         offset=offset,
                     )
                     existing_records.extend(records)
@@ -389,14 +407,28 @@ class QdrantTextWriter:
                         break
 
                 sealed = self._is_epoch_sealed(doc_version_epoch)
+                existing_signature = self._document_signature(record.payload or {} for record in existing_records)
+                desired_signature = self._document_signature(point.payload or {} for point in points)
+                content_matches = existing_signature == desired_signature and len(existing_records) == len(points)
+                vectors_match = self._document_vectors_match(existing_records, points)
+                old_versions = {(record.payload or {}).get("embedding_version") for record in existing_records}
+                legacy_unversioned = (
+                    bool(existing_records)
+                    and doc_version_epoch == "default"
+                    and all(
+                        (record.payload or {}).get("doc_version_epoch") is None
+                        and (record.payload or {}).get("embedding_version") is None
+                        for record in existing_records
+                    )
+                )
+                version_matches = old_versions == {self.embedding_version} or legacy_unversioned
+                if existing_records and not version_matches:
+                    raise ValueError("embedding version changed or is unknown; ingest into a new epoch")
+                if content_matches and not vectors_match:
+                    raise ValueError("stored embedding vectors differ; ingest into a new epoch")
                 if sealed:
-                    if existing_records:
-                        existing_signature = self._document_signature(
-                            record.payload or {} for record in existing_records
-                        )
-                        desired_signature = self._document_signature(point.payload or {} for point in points)
-                        if existing_signature == desired_signature and len(existing_records) == len(points):
-                            return
+                    if content_matches and vectors_match and version_matches:
+                        return
                     if not existing_records and not points:
                         return
                     raise ValueError(f"knowledge epoch {doc_version_epoch!r} is sealed; write to a new epoch")
@@ -429,6 +461,23 @@ class QdrantTextWriter:
             )
 
         return sorted((signature(payload) for payload in payloads), key=repr)
+
+    @staticmethod
+    def _document_vectors_match(records, points) -> bool:
+        record_vectors = {record.payload.get("chunk_index"): record.vector for record in records if record.payload}
+        point_vectors = {point.payload.get("chunk_index"): point.vector for point in points if point.payload}
+        if record_vectors.keys() != point_vectors.keys():
+            return False
+        for chunk_index, stored in record_vectors.items():
+            current = point_vectors[chunk_index]
+            if isinstance(stored, dict) or isinstance(current, dict) or len(stored) != len(current):
+                return False
+            if not all(
+                math.isclose(float(left), float(right), rel_tol=1e-6, abs_tol=1e-7)
+                for left, right in zip(stored, current, strict=True)
+            ):
+                return False
+        return True
 
     def _epoch_seal_id(self, epoch: str) -> str:
         return str(uuid.uuid5(_POINT_NAMESPACE, f"epoch-seal:{epoch}"))
@@ -487,6 +536,7 @@ class QdrantTextWriter:
                 "content_hash": chunk.content_hash,
                 "doc_type": "text",
                 "embedding_type": "bge",
+                "embedding_version": self.embedding_version,
                 "role_mask": chunk.role_mask,
                 "dept_mask": chunk.dept_mask,
                 "status": chunk.status,
@@ -504,6 +554,11 @@ class TextIngestionService:
         self.processor = processor
         self.embedder = embedder
         self.writer = writer
+        self.writer.embedding_version = getattr(
+            embedder,
+            "embedding_version",
+            f"{type(embedder).__module__}.{type(embedder).__qualname__}",
+        )
 
     def ingest(
         self,
@@ -560,6 +615,11 @@ def configured_text_ingestion_service():
             max_chunks,
             knowledge_base.get("data_dir", "./data"),
         ),
-        BGETextEmbedder(embedding["model_path"], dimension, embedding_batch_size),
+        BGETextEmbedder(
+            embedding["model_path"],
+            dimension,
+            embedding_batch_size,
+            model_revision=embedding.get("model_revision"),
+        ),
         writer,
     )
