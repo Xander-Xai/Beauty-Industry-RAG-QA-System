@@ -181,4 +181,10 @@ if __name__ == "__main__":
         port=int(os.environ.get("API_PORT", 8000)),
         reload=_get_sys_config().deployment_mode != "production",
         log_level="info",
+        # Do not let uvicorn rewrite request.client from X-Forwarded-For. Its
+        # default (proxy_headers=True, forwarded_allow_ips=127.0.0.1) would trust
+        # XFF for localhost peers before api.routes_auth._get_client_ip runs and
+        # make the app-level TRUSTED_PROXIES policy bypassable. The application
+        # is the single authority for proxy trust.
+        proxy_headers=False,
     )
