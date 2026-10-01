@@ -24,15 +24,10 @@ except Exception:
 
 
 def is_allowed(dr, ur, dd, ud):
-    if dr == 0:
-        if dd == 0:
-            return True
-        return (dd & ud) != 0
-    if ur == _SUPER:
-        return True
-    role_ok = (dr & ur) != 0
-    dept_ok = dd == 0 or (dd & ud) != 0
-    return role_ok and dept_ok
+    """Compatibility wrapper for the canonical service-layer RBAC predicate."""
+    from common.auth import is_allowed as _is_allowed
+
+    return _is_allowed(dr, ur, dd, ud)
 
 
 def build_qdrant_filter(ur: int, ue: int, ae: str):

@@ -95,6 +95,8 @@ class BM25Retriever:
                         "metadata": {
                             "doc_type": hit["_source"].get("doc_type", ""),
                             "law_id": hit["_source"].get("law_id", ""),
+                            "role_mask": hit["_source"].get("role_mask"),
+                            "dept_mask": hit["_source"].get("dept_mask"),
                         },
                     }
                 )
@@ -114,92 +116,73 @@ class BM25Retriever:
         """
         构建 ES Bool 查询（含权限过滤下推）
 
-        权限过滤策略：
-        - ES >= 8.0: painless script_score 位运算过滤
-        - ES < 8.0: role_bucket + dept_bucket 字段 + terms 过滤
+        Role/dept bitmask checks use parameterized Painless filters on supported
+        Elasticsearch versions. Records missing either mask are excluded.
         """
         must_filters = [
             {"term": {"status": "active"}},
         ]
 
-        # 输入验证：确保整数类型和范围
+        # Invalid authorization context must fail closed rather than being
+        # coerced into a broader anonymous query.
         _MAX_UINT32 = 0xFFFFFFFF
-        if not isinstance(user_role_mask, int) or not (0 <= user_role_mask <= _MAX_UINT32):
-            logger.error("user_role_mask 类型或范围无效: %r", user_role_mask)
-            user_role_mask = 0
-        if not isinstance(user_dept_mask, int) or not (0 <= user_dept_mask <= _MAX_UINT32):
-            logger.error("user_dept_mask 类型或范围无效: %r", user_dept_mask)
-            user_dept_mask = 0
+        if (
+            type(user_role_mask) is not int
+            or not 0 <= user_role_mask <= _MAX_UINT32
+            or type(user_dept_mask) is not int
+            or not 0 <= user_dept_mask <= _MAX_UINT32
+        ):
+            raise ValueError("authorization masks must be uint32 integers")
 
-        # 判断 ES 版本选择过滤策略
-        use_script_filter = self._es_version is not None and self._es_version >= (8, 0)
+        # Missing permission fields are not equivalent to public access.
+        must_filters.extend(
+            [
+                {"exists": {"field": "role_mask"}},
+                {"exists": {"field": "dept_mask"}},
+            ]
+        )
 
-        if use_script_filter and user_role_mask != self._super_admin_mask():
-            # ES >= 8.0: painless script_score 位运算过滤
-            must_filters.append(
-                {
-                    "bool": {
-                        "should": [
-                            {"term": {"role_mask": 0}},  # 公开文档
-                            {
-                                "script": {
-                                    "script": {
-                                        "source": f"doc['role_mask'].value & {user_role_mask} != 0",
-                                        "lang": "painless",
-                                    }
-                                }
-                            },
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                }
-            )
+        from common.auth import is_admin_role_mask
 
-            if user_dept_mask != 0:
-                must_filters.append(
+        if not is_admin_role_mask(user_role_mask):
+            must_filters.extend(
+                [
                     {
                         "bool": {
                             "should": [
-                                {"term": {"dept_mask": 0}},  # 全部门可见
+                                {"term": {"role_mask": 0}},
                                 {
                                     "script": {
                                         "script": {
-                                            "source": f"doc['dept_mask'].value & {user_dept_mask} != 0",
+                                            "source": "doc['role_mask'].size() != 0 && (doc['role_mask'].value & params.user_role_mask) != 0",
                                             "lang": "painless",
+                                            "params": {"user_role_mask": user_role_mask},
                                         }
                                     }
                                 },
                             ],
                             "minimum_should_match": 1,
                         }
-                    }
-                )
-        else:
-            # ES < 8.0 或超级管理员: 使用预计算的 role_bucket / dept_bucket 字段
-            must_filters.append(
-                {
-                    "bool": {
-                        "should": [
-                            {"term": {"role_bucket": user_role_mask}},
-                            {"term": {"role_mask": 0}},  # 兜底公开文档
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                }
-            )
-
-            if user_dept_mask != 0:
-                must_filters.append(
+                    },
                     {
                         "bool": {
                             "should": [
-                                {"term": {"dept_bucket": user_dept_mask}},
                                 {"term": {"dept_mask": 0}},
+                                {
+                                    "script": {
+                                        "script": {
+                                            "source": "doc['dept_mask'].size() != 0 && (doc['dept_mask'].value & params.user_dept_mask) != 0",
+                                            "lang": "painless",
+                                            "params": {"user_dept_mask": user_dept_mask},
+                                        }
+                                    }
+                                },
                             ],
                             "minimum_should_match": 1,
                         }
-                    }
-                )
+                    },
+                ]
+            )
 
         # 版本过滤
         active_epoch = config.get("knowledge_version_epoch", "")
@@ -221,9 +204,25 @@ class BM25Retriever:
     def _super_admin_mask(self) -> int:
         return config.get("rbac", {}).get("super_admin_mask", 0xFFFFFFFF)
 
-    def fallback_search(self, query: str, top_k: int = 100) -> list[dict]:
+    def _build_es_fallback_query(
+        self,
+        query: str,
+        user_role_mask: int,
+        user_dept_mask: int,
+        top_k: int,
+    ) -> dict:
+        """Use the same authorization filters for fallback as regular BM25."""
+        return self._build_es_query(query, user_role_mask, user_dept_mask, top_k)
+
+    def fallback_search(
+        self,
+        query: str,
+        user_role_mask: int,
+        user_dept_mask: int,
+        top_k: int = 100,
+    ) -> list[dict]:
         """
-        ES Fallback 检索（无权限过滤，用于向量检索不可用时的兜底）
+        ES Fallback 检索；复用常规 BM25 的身份及权限过滤。
 
         readme 7.1: 当向量库不可用或召回有效文档数 < 50 时自动切换
         """
@@ -231,10 +230,7 @@ class BM25Retriever:
             return []
 
         try:
-            query_body = {
-                "query": {"match": {"content": query}},
-                "size": top_k,
-            }
+            query_body = self._build_es_fallback_query(query, user_role_mask, user_dept_mask, top_k)
             response = self.es_client.search(
                 index=config["elasticsearch"]["index"],
                 body=query_body,
@@ -244,7 +240,10 @@ class BM25Retriever:
                     "doc_id": hit["_id"],
                     "content": hit["_source"].get("content", ""),
                     "score": hit["_score"],
-                    "metadata": {},
+                    "metadata": {
+                        "role_mask": hit["_source"].get("role_mask"),
+                        "dept_mask": hit["_source"].get("dept_mask"),
+                    },
                 }
                 for hit in response["hits"]["hits"]
             ]

@@ -88,13 +88,13 @@ class TestParallelRecallExecute:
         mgr = self._make_manager()
         # mock dense retriever
         mgr._dense_retriever.search.return_value = [
-            {"doc_id": "d1", "content": "c1", "score": 0.9},
-            {"doc_id": "d2", "content": "c2", "score": 0.8},
+            {"doc_id": "d1", "content": "c1", "score": 0.9, "metadata": {"role_mask": 0, "dept_mask": 0}},
+            {"doc_id": "d2", "content": "c2", "score": 0.8, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
         # mock bm25 retriever
         mgr._bm25_retriever.search.return_value = [
-            {"doc_id": "d2", "content": "c2", "score": 0.85},
-            {"doc_id": "d3", "content": "c3", "score": 0.7},
+            {"doc_id": "d2", "content": "c2", "score": 0.85, "metadata": {"role_mask": 0, "dept_mask": 0}},
+            {"doc_id": "d3", "content": "c3", "score": 0.7, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
         # mock clip retriever (disable to simplify — use_clip=False)
 
@@ -129,7 +129,7 @@ class TestParallelRecallExecute:
         mgr = self._make_manager()
         mgr._dense_retriever.search.side_effect = ConnectionError("Qdrant 宕机")
         mgr._bm25_retriever.search.return_value = [
-            {"doc_id": "d1", "content": "c1", "score": 0.9},
+            {"doc_id": "d1", "content": "c1", "score": 0.9, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
 
         query_emb = np.random.rand(768).astype(np.float32)
@@ -159,7 +159,7 @@ class TestParallelRecallExecute:
 
         mgr = self._make_manager()
         mgr._dense_retriever.search.return_value = [
-            {"doc_id": "d1", "content": "c1", "score": 0.9},
+            {"doc_id": "d1", "content": "c1", "score": 0.9, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
         # CLIP retriever 不可用
         mgr._clip_retriever.search.side_effect = Exception("GPU timeout")
