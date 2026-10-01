@@ -87,8 +87,7 @@ class EmbeddingService:
         inputs = self.bge_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
         with torch.no_grad():
             outputs = self.bge_model(**inputs)
-        # mean pooling
-        embedding = outputs.last_hidden_state.mean(dim=1).numpy()
+        embedding = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"]).numpy()
         return embedding
 
     def encode_texts_batch(self, texts: list[str]) -> np.ndarray:
@@ -106,8 +105,16 @@ class EmbeddingService:
         inputs = self.bge_tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
         with torch.no_grad():
             outputs = self.bge_model(**inputs)
-        embeddings = outputs.last_hidden_state.mean(dim=1).numpy()
+        embeddings = self._mean_pool(outputs.last_hidden_state, inputs["attention_mask"]).numpy()
         return embeddings
+
+    @staticmethod
+    def _mean_pool(last_hidden_state, attention_mask):
+        """Mean-pool real tokens only so single and padded batch inputs agree."""
+        mask = attention_mask.unsqueeze(-1).to(dtype=last_hidden_state.dtype)
+        token_sums = (last_hidden_state * mask).sum(dim=1)
+        token_counts = mask.sum(dim=1).clamp(min=1)
+        return token_sums / token_counts
 
     def encode_text_clip(self, text: str) -> np.ndarray:
         """

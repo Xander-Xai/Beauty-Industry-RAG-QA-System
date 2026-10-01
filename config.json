@@ -162,6 +162,7 @@
     "data_dir": "./data",
     "chunk_size": 500,
     "chunk_overlap_ratio": 0.1,
+    "embedding_batch_size": 32,
     "ocr": {
       "engine": "paddleocr",
       "language": "ch",

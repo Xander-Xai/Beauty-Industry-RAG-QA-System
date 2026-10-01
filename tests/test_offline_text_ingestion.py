@@ -80,6 +80,73 @@ def test_bge_adapter_is_lazy_and_checks_model_output():
         adapter.embed_texts(["hello"])
 
 
+def test_bge_adapter_bounds_model_batch_size():
+    from offline.text_ingestion import BGETextEmbedder
+
+    class SharedOnlineEmbeddingService:
+        def __init__(self):
+            self.batch_lengths = []
+
+        def encode_texts_batch(self, texts):
+            self.batch_lengths.append(len(texts))
+            return [[0.1, 0.2] for _ in texts]
+
+    adapter = BGETextEmbedder("configured-bge", dimension=2, batch_size=2)
+    adapter._embedding_service = SharedOnlineEmbeddingService()
+    vectors = adapter.embed_texts(["one", "two", "three", "four", "five"])
+    assert len(vectors) == 5
+    assert adapter._embedding_service.batch_lengths == [2, 2, 1]
+
+
+def test_online_mean_pooling_ignores_padding_tokens():
+    from models.embedding_service import EmbeddingService
+
+    class Tensor:
+        def __init__(self, values):
+            self.values = np.asarray(values)
+
+        @property
+        def dtype(self):
+            return self.values.dtype
+
+        def unsqueeze(self, axis):
+            return Tensor(np.expand_dims(self.values, axis))
+
+        def to(self, dtype=None):
+            return Tensor(self.values.astype(dtype))
+
+        def sum(self, dim):
+            return Tensor(self.values.sum(axis=dim))
+
+        def clamp(self, min):
+            return Tensor(np.maximum(self.values, min))
+
+        def __mul__(self, other):
+            return Tensor(self.values * other.values)
+
+        def __truediv__(self, other):
+            return Tensor(self.values / other.values)
+
+        def tolist(self):
+            return self.values.tolist()
+
+    hidden = Tensor([[[2.0], [4.0], [100.0]], [[6.0], [8.0], [10.0]]])
+    attention_mask = Tensor([[1, 1, 0], [1, 1, 1]])
+    pooled = EmbeddingService._mean_pool(hidden, attention_mask)
+    assert pooled.tolist() == [[3.0], [8.0]]
+
+
+def test_cli_rejects_unimplemented_historical_modes(monkeypatch):
+    import sys
+
+    from run_offline import main
+
+    monkeypatch.setattr(sys, "argv", ["run_offline.py", "--mode", "full"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+
+
 def test_qdrant_writer_rejects_missing_permission_and_wrong_vectors(tmp_path):
     chunk = DocumentProcessor().process(
         _write_source(tmp_path, "restricted.txt", "restricted policy"),

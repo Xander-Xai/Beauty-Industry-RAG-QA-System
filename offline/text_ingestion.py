@@ -121,11 +121,14 @@ class DocumentProcessor:
 class BGETextEmbedder:
     """Production adapter using the same BGE tokenizer and mean pooling as online queries."""
 
-    def __init__(self, model_name_or_path: str, dimension: int = 768):
+    def __init__(self, model_name_or_path: str, dimension: int = 768, batch_size: int = 32):
         if not model_name_or_path:
             raise ValueError("a configured BGE model name or path is required")
+        if type(batch_size) is not int or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
         self.model_name_or_path = model_name_or_path
         self.dimension = dimension
+        self.batch_size = batch_size
         self._embedding_service = None
 
     def _load_embedding_service(self):
@@ -142,10 +145,19 @@ class BGETextEmbedder:
         if not texts:
             return []
         try:
-            vectors = self._load_embedding_service().encode_texts_batch(texts)
+            service = self._load_embedding_service()
         except Exception as exc:
             raise RuntimeError(f"BGE embedding failed for {self.model_name_or_path!r}: {exc}") from exc
-        rows = vectors.tolist() if hasattr(vectors, "tolist") else vectors
+        rows = []
+        for offset in range(0, len(texts), self.batch_size):
+            batch = texts[offset : offset + self.batch_size]
+            try:
+                vectors = service.encode_texts_batch(batch)
+            except Exception as exc:
+                raise RuntimeError(f"BGE embedding failed for {self.model_name_or_path!r}: {exc}") from exc
+            batch_rows = vectors.tolist() if hasattr(vectors, "tolist") else vectors
+            _validate_vectors(batch_rows, len(batch), self.dimension)
+            rows.extend(batch_rows)
         _validate_vectors(rows, len(texts), self.dimension)
         return rows
 
@@ -371,8 +383,9 @@ def configured_text_ingestion_service():
     chunk_size = int(knowledge_base.get("chunk_size", 500))
     overlap_ratio = float(knowledge_base.get("chunk_overlap_ratio", 0.1))
     dimension = int(embedding["dimension"])
+    embedding_batch_size = int(knowledge_base.get("embedding_batch_size", 32))
     return TextIngestionService(
         DocumentProcessor(chunk_size, int(chunk_size * overlap_ratio)),
-        BGETextEmbedder(embedding["model_path"], dimension),
+        BGETextEmbedder(embedding["model_path"], dimension, embedding_batch_size),
         QdrantTextWriter(client, collection, dimension, replacement_lock=replacement_lock),
     )
