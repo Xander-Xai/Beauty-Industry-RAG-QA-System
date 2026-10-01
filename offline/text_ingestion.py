@@ -60,6 +60,12 @@ class DocumentProcessor:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
+    @staticmethod
+    def document_identity(source: str | Path) -> tuple[str, str]:
+        source_path = str(Path(source).resolve())
+        doc_id = hashlib.sha256(source_path.encode("utf-8")).hexdigest()
+        return source_path, doc_id
+
     def process(
         self,
         source: str | Path,
@@ -81,8 +87,7 @@ class DocumentProcessor:
         text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
         if not text:
             return []
-        source_path = str(path.resolve())
-        doc_id = hashlib.sha256(source_path.encode("utf-8")).hexdigest()
+        source_path, doc_id = self.document_identity(path)
         content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         chunks: list[TextChunk] = []
         step = self.chunk_size - self.chunk_overlap
@@ -203,13 +208,71 @@ class QdrantTextWriter:
             raise ValueError("named Qdrant vectors are not supported by the text ingestion slice")
 
     def upsert(self, chunks: list[TextChunk], vectors: list[list[float]]) -> None:
+        points = self._build_points(chunks, vectors)
+        if points:
+            self.ensure_collection()
+            self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+
+    def replace_document(
+        self,
+        doc_id: str,
+        doc_version_epoch: str,
+        chunks: list[TextChunk],
+        vectors: list[list[float]],
+    ) -> None:
+        """Replace one source/epoch safely; stale points become inactive before removal."""
+        _validate_epoch(doc_version_epoch)
+        points = self._build_points(chunks, vectors)
+        if any(chunk.doc_id != doc_id or chunk.doc_version_epoch != doc_version_epoch for chunk in chunks):
+            raise ValueError("replacement chunks must match the requested document and epoch")
+
+        self.ensure_collection()
+        from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+
+        existing_ids = []
+        offset = None
+        source_filter = Filter(
+            must=[
+                FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+                FieldCondition(key="doc_version_epoch", match=MatchValue(value=doc_version_epoch)),
+            ]
+        )
+        while True:
+            records, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=source_filter,
+                limit=256,
+                with_payload=False,
+                with_vectors=False,
+                offset=offset,
+            )
+            existing_ids.extend(record.id for record in records)
+            if offset is None:
+                break
+
+        if existing_ids:
+            # Active-only online queries fail closed if subsequent upsert/delete fails.
+            self.client.set_payload(
+                collection_name=self.collection_name,
+                payload={"status": "archived"},
+                points=existing_ids,
+                wait=True,
+            )
+        if points:
+            self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+        replacement_ids = {point.id for point in points}
+        stale_ids = [point_id for point_id in existing_ids if point_id not in replacement_ids]
+        if stale_ids:
+            self.client.delete(collection_name=self.collection_name, points_selector=stale_ids, wait=True)
+
+    def _build_points(self, chunks: list[TextChunk], vectors: list[list[float]]):
         from qdrant_client.http.models import PointStruct
 
         if len(chunks) != len(vectors):
             raise ValueError("chunk and vector counts differ")
         _validate_vectors(vectors, len(chunks), self.dimension)
         points = []
-        for chunk, vector in zip(chunks, vectors):
+        for chunk, vector in zip(chunks, vectors, strict=True):
             _validate_permissions(chunk.role_mask, chunk.dept_mask)
             _validate_epoch(chunk.doc_version_epoch)
             if chunk.status != "active":
@@ -230,9 +293,7 @@ class QdrantTextWriter:
                 "metadata": chunk.metadata,
             }
             points.append(PointStruct(id=chunk.chunk_id, vector=vector, payload=payload))
-        if points:
-            self.ensure_collection()
-            self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+        return points
 
 
 class TextIngestionService:
@@ -251,6 +312,7 @@ class TextIngestionService:
         dept_mask: int,
         doc_version_epoch: str,
     ) -> list[TextChunk]:
+        _, doc_id = self.processor.document_identity(source)
         chunks = self.processor.process(
             source,
             role_mask=role_mask,
@@ -258,7 +320,7 @@ class TextIngestionService:
             doc_version_epoch=doc_version_epoch,
         )
         vectors = self.embedder.embed_texts([chunk.text for chunk in chunks])
-        self.writer.upsert(chunks, vectors)
+        self.writer.replace_document(doc_id, doc_version_epoch, chunks, vectors)
         return chunks
 
 

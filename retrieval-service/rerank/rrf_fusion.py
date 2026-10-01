@@ -48,20 +48,44 @@ def rrf_fusion(
     doc_source: dict[str, str] = {}
     doc_content: dict[str, str] = {}
     doc_metadata: dict[str, dict] = {}
+    doc_chunks: dict[str, dict[str, dict[str, str]]] = defaultdict(dict)
 
     for path_name, results in results_map.items():
         path_weight = weights.get(path_name, 1.0)
         if not results:
             continue
 
-        for rank, doc in enumerate(results):
+        # Qdrant returns chunks while fusion ranks source documents. Keep the
+        # best-ranked chunk per source in each path so long documents do not
+        # receive extra votes merely because they have more chunks.
+        seen_doc_ids: set[str] = set()
+        unique_docs = []
+        for doc in results:
+            if doc.doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(doc.doc_id)
+            unique_docs.append(doc)
+
+        for rank, doc in enumerate(unique_docs):
             rrf_score = path_weight / (k + (rank + 1))
             doc_scores[doc.doc_id] += rrf_score
             doc_paths[doc.doc_id] = doc_paths.get(doc.doc_id, 0) + 1
             if doc.doc_id not in doc_source:
                 doc_source[doc.doc_id] = doc.source
-                doc_content[doc.doc_id] = doc.content
                 doc_metadata[doc.doc_id] = doc.metadata
+            chunk_id = doc.metadata.get("chunk_id")
+            chunk_key = str(chunk_id) if chunk_id else doc.content
+            doc_chunks[doc.doc_id].setdefault(
+                chunk_key,
+                {"chunk_id": str(chunk_id or ""), "content": doc.content},
+            )
+
+    for doc_id, chunks in doc_chunks.items():
+        doc_content[doc_id] = "\n\n".join(chunk["content"] for chunk in chunks.values())
+        doc_metadata[doc_id] = {
+            **doc_metadata[doc_id],
+            "retrieved_chunks": list(chunks.values()),
+        }
 
     sorted_docs = sorted(
         doc_scores.items(),

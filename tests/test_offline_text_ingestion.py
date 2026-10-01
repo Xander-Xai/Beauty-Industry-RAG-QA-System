@@ -155,6 +155,30 @@ def test_txt_to_local_qdrant_query_authorization_and_idempotence(tmp_path):
         service.ingest(source, role_mask=2**32, dept_mask=4, doc_version_epoch="phase_1")
 
 
+def test_reingestion_removes_old_or_emptied_source_chunks(tmp_path):
+    client = QdrantClient(":memory:")
+    service = TextIngestionService(
+        DocumentProcessor(chunk_size=12, chunk_overlap=0),
+        DeterministicTestEmbedder(16),
+        QdrantTextWriter(client, "replace_test", dimension=16),
+    )
+    source = _write_source(tmp_path, "mutable.txt", "old content that spans multiple chunks")
+    old_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    assert len(old_chunks) > 1
+    assert client.count("replace_test", exact=True).count == len(old_chunks)
+
+    source.write_text("new content", encoding="utf-8")
+    new_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    assert len(new_chunks) == 1
+    assert client.count("replace_test", exact=True).count == 1
+    records, _ = client.scroll("replace_test", limit=10, with_payload=True)
+    assert [record.payload["content"] for record in records] == ["new content"]
+
+    source.write_text(" \n", encoding="utf-8")
+    assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1") == []
+    assert client.count("replace_test", exact=True).count == 0
+
+
 def test_qdrant_filter_includes_active_status_and_epoch():
     from auth.bitmask_rbac import build_qdrant_filter
 
