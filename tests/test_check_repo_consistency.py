@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from scripts.check_repo_consistency import (
     REQUIRED_AUDIT_AREAS,
+    check_docs_index,
     check_documented_offline_commands,
     check_forbidden_current_claims,
+    check_metrics_auth_contract,
     check_metrics_route_contract,
+    check_ragas_unavailable_contract,
     check_rbac_mask_contract,
     check_stale_offline_claims,
     check_truth_audit,
+    post_merge_phase_drift_claims,
+    retired_topology_claims,
     run_offline_subcommands,
 )
 
@@ -151,3 +156,37 @@ def test_required_audit_areas_are_present():
     audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
     for area in REQUIRED_AUDIT_AREAS:
         assert f"| {area} |" in audit, f"audit missing required area {area}"
+
+
+def test_post_merge_phase_drift_is_flagged_and_historical_is_exempt():
+    assert post_merge_phase_drift_claims("The candidate must pass all checks before merge.")
+    assert post_merge_phase_drift_claims("This branch is awaiting merge.")
+    assert post_merge_phase_drift_claims("Verified on the latest merged `main` (PR #7).")
+    # Historical narration is exempt.
+    assert post_merge_phase_drift_claims("Historical note: at that time it was awaiting merge.") == []
+
+
+def test_retired_topology_claim_is_flagged_but_history_is_exempt():
+    assert retired_topology_claims("Current runtime uses vLLM-Rewrite and vLLM-Gen-4B.")
+    assert retired_topology_claims("The config key vllm_rewrite still exists.")
+    # Explicit historical/target-design markers exempt the line.
+    assert retired_topology_claims("Historical design: vLLM-Rewrite plus vLLM-Gen-4B.") == []
+    assert retired_topology_claims("The retired vLLM-Rewrite instance is obsolete.") == []
+
+
+def test_docs_index_includes_current_canonical_docs():
+    errors: list[str] = []
+    check_docs_index(errors)
+    assert errors == []
+
+
+def test_ragas_unavailable_disclaimer_contract():
+    errors: list[str] = []
+    check_ragas_unavailable_contract(errors)
+    assert errors == []
+
+
+def test_metrics_auth_contract():
+    errors: list[str] = []
+    check_metrics_auth_contract(errors)
+    assert errors == []

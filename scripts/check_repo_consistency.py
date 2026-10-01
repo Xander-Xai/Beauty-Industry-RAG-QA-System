@@ -4,9 +4,11 @@
 This guard is intentionally conservative: it fails on broken local references,
 runtime-artifact leaks, version drift, documented-but-missing offline CLI
 subcommands, stale "offline ingestion is missing" claims in current operator
-docs, superseded governance/contract claims in canonical docs, and an
-invalid/absent repository truth audit. It does not flag historical CHANGELOG
-text or historical implementation plans.
+docs, superseded governance/contract claims in canonical docs,
+post-merge reconciliation-phase wording (pending candidate / awaiting merge /
+stale latest-merged-main references), current docs that still present the
+retired dual-4B topology, and an invalid/absent repository truth audit. It does
+not flag historical CHANGELOG text or historical implementation plans.
 
 The truth audit is expected to resolve its candidate from ``HEAD`` and to carry
 an ISO ``YYYY-MM-DD`` verification date. The date is validated for shape only;
@@ -66,6 +68,35 @@ STALE_GOVERNANCE_CLAIM_PATTERNS = [
     r"Issue\s*#\d+[^\n]{0,30}(is\s+open|未关闭|仍开放)",
 ]
 
+# After a reconciliation PR is merged, current docs must stop describing a
+# pending candidate/merge phase. These patterns are phase-specific on purpose:
+# they never hardcode which PR number is "latest", never call the GitHub API,
+# and never depend on the current date or wall clock. Historical narration that
+# carries an explicit historical marker is exempt.
+POST_MERGE_PHASE_DRIFT_PATTERNS = [
+    r"candidate\b[^\n]{0,80}?\bbefore\s+(?:the\s+)?merge\b",
+    r"\bmust\s+pass\b[^\n]{0,40}?\bbefore\s+(?:the\s+)?merge\b",
+    r"awaiting\s+merge\b",
+    r"latest\s+merged\s+`?main`?\s*\(PR\s*#\d+\)",
+]
+
+# The runtime consolidated the former vLLM-Rewrite / vLLM-Gen-4B instances into
+# a single shared 4B endpoint (`vllm_4b`). Current canonical docs must not
+# present the two-instance topology as the current implementation. Lines that
+# explicitly mark themselves as historical/target design are exempt.
+CONSOLIDATED_4B_DRIFT_PATTERNS = [
+    r"vLLM-(?:Rewrite|Gen-4B)",
+    r"vllm[-_](?:rewrite|gen[-_]4b)",
+]
+
+HISTORICAL_MARKERS = re.compile(
+    r"historical|target\s+design|at\s+that\s+time|release\s+history|"
+    r"before\s+PR\s*#\d+\s+merged|retained\s+unchanged|superseded|reconciliation|"
+    r"retired|obsolete|deprecated|no\s+longer|no\s+separate|removed|dropped|"
+    r"历史|当时|发布历史|保留不变|目标设计|原设计|已移除",
+    re.IGNORECASE,
+)
+
 # Qdrant IVF tuning parameters (nlist/nprobe) are not part of the implemented
 # collection contract, so current docs must not present them as implemented.
 # Matching is negation-aware: an affirmative implementation/tuning claim is
@@ -112,6 +143,13 @@ REQUIRED_AUDIT_AREAS = {
     "CI",
     "Security",
     "Documentation governance",
+    # v2.5 runtime/security contract areas.
+    "FastAPI lifecycle",
+    "Generation topology",
+    "Login rate limiting",
+    "Session persistence",
+    "Observability endpoints",
+    "Elasticsearch security",
 }
 
 # Offline capabilities that now exist in code. They must never be classified as
@@ -239,6 +277,34 @@ def non_implemented_qdrant_param_claims(text: str) -> list[str]:
     return claims
 
 
+def _unmarked_claim_lines(text: str, patterns: list[str]) -> list[str]:
+    """Return matches for ``patterns`` on lines without an explicit historical marker.
+
+    Deterministic and line-scoped: never hardcodes a PR number, calls the GitHub
+    API, reads the clock, or inspects git history.
+    """
+    claims: list[str] = []
+    for line in text.splitlines():
+        if HISTORICAL_MARKERS.search(line):
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, line, flags=re.IGNORECASE)
+            if match:
+                claims.append(match.group(0))
+                break
+    return claims
+
+
+def post_merge_phase_drift_claims(text: str) -> list[str]:
+    """Return reconciliation-phase claims that should have become post-merge truth."""
+    return _unmarked_claim_lines(text, POST_MERGE_PHASE_DRIFT_PATTERNS)
+
+
+def retired_topology_claims(text: str) -> list[str]:
+    """Return current-doc references to the retired dual-4B topology."""
+    return _unmarked_claim_lines(text, CONSOLIDATED_4B_DRIFT_PATTERNS)
+
+
 def check_forbidden_current_claims(path: Path, errors: list[str]) -> None:
     """Flag superseded governance claims and non-implemented contract parameters."""
     text = path.read_text(encoding="utf-8")
@@ -249,6 +315,21 @@ def check_forbidden_current_claims(path: Path, errors: list[str]) -> None:
                 errors,
                 f"{_display(path)}: superseded current claim matched {pattern!r}: {match.group(0)!r}",
             )
+
+    phase_claims = sorted(set(post_merge_phase_drift_claims(text)))
+    if phase_claims:
+        fail(
+            errors,
+            f"{_display(path)}: reconciliation-phase wording in current docs: {phase_claims}",
+        )
+
+    topology_claims = sorted(set(retired_topology_claims(text)))
+    if topology_claims:
+        fail(
+            errors,
+            f"{_display(path)}: retired dual-4B topology presented as current (mark as historical/target design): "
+            f"{topology_claims}",
+        )
 
     qdrant_claims = sorted(set(non_implemented_qdrant_param_claims(text)))
     if qdrant_claims:
@@ -267,6 +348,59 @@ def check_metrics_route_contract(errors: list[str]) -> None:
     for path in CANONICAL_DOCS:
         if path.exists() and re.search(r"`GET /metrics`", path.read_text(encoding="utf-8")):
             fail(errors, f"{_display(path)}: metrics route must be documented as /api/metrics")
+
+
+def check_docs_index(errors: list[str]) -> None:
+    """docs/README.md must index the current canonical docs under stable sections."""
+    path = ROOT / "docs/README.md"
+    if not path.exists():
+        fail(errors, "docs/README.md is missing")
+        return
+    text = path.read_text(encoding="utf-8")
+    required = [
+        "Canonical / Current",
+        "Evaluation",
+        "Interview / Architecture truth",
+        "Design",
+        "Historical / Implementation Plans",
+        "interview-architecture-baseline.md",
+        "ragas-evaluation-guide.md",
+        "repository-truth-audit.md",
+    ]
+    for token in required:
+        if token not in text:
+            fail(errors, f"docs/README.md must index {token!r}")
+
+
+def check_ragas_unavailable_contract(errors: list[str]) -> None:
+    """Docs must state that a missing-RAGAS zero result is not a quality score."""
+    disclaimer = re.compile(
+        r"零分|UNAVAILABLE|未运行|not\s+a\s+(?:valid\s+)?quality|不是质量|不代表质量",
+        re.IGNORECASE,
+    )
+    for name in (
+        "README.md",
+        "docs/ragas-evaluation-guide.md",
+        "docs/interview-architecture-baseline.md",
+    ):
+        path = ROOT / name
+        if path.exists() and not disclaimer.search(path.read_text(encoding="utf-8")):
+            fail(errors, f"{name}: must state that a missing-RAGAS zero result is not a quality result")
+
+
+def check_metrics_auth_contract(errors: list[str]) -> None:
+    """Operator docs must state that /api/metrics requires authentication."""
+    for name in (
+        "docs/operations-guide.md",
+        "docs/pre-launch-checklist.md",
+        "docs/deployment-guide.md",
+    ):
+        path = ROOT / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if not re.search(r"Bearer|需要认证|需要身份|require_identity", text):
+            fail(errors, f"{name}: must document that /api/metrics requires authentication")
 
 
 def check_rbac_mask_contract(errors: list[str]) -> None:
@@ -411,7 +545,10 @@ def main() -> int:
 
     check_truth_audit(errors)
     check_metrics_route_contract(errors)
+    check_metrics_auth_contract(errors)
     check_rbac_mask_contract(errors)
+    check_docs_index(errors)
+    check_ragas_unavailable_contract(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
