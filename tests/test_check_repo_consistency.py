@@ -190,3 +190,18 @@ def test_metrics_auth_contract():
     errors: list[str] = []
     check_metrics_auth_contract(errors)
     assert errors == []
+
+
+def test_uvicorn_proxy_headers_disabled_guard(tmp_path, monkeypatch):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "app.py").write_text("uvicorn.run('app:app')\n", encoding="utf-8")
+    errors: list[str] = []
+    guard.check_uvicorn_proxy_headers_disabled(errors)
+    assert errors
+
+    (tmp_path / "app.py").write_text("uvicorn.run('app:app', proxy_headers=False)\n", encoding="utf-8")
+    ok: list[str] = []
+    guard.check_uvicorn_proxy_headers_disabled(ok)
+    assert ok == []

@@ -55,6 +55,10 @@ Changes present on `main` after the 2.3.0 release entry:
   remains public.
 - Login rate-limit identity no longer trusts client-supplied `X-Forwarded-For` unless the
   TCP peer is in `TRUSTED_PROXIES`; forwarded chains are walked right-to-left past trusted hops.
+- `app.py` runs uvicorn with `proxy_headers=False`, so the application's `TRUSTED_PROXIES`
+  policy is authoritative. Without this, uvicorn's default (`proxy_headers=True`,
+  `forwarded_allow_ips=127.0.0.1`) rewrote `request.client` from `X-Forwarded-For` before the
+  app-level check and let a direct localhost client spoof its rate-limit identity.
 
 ### Fixed
 
@@ -93,6 +97,10 @@ Changes present on `main` after the 2.3.0 release entry:
   collection, which previously broke RAGAS tests that need the real `torch`.
 - CI no longer emits an all-zero RAGAS fallback as a quality report; real RAGAS evaluation is
   opt-in and fails fast when the dependency is unavailable.
+- Local runtime validation added real dependency evidence for Redis multi-worker session
+  persistence and login rate limiting, trusted-proxy client-IP resolution through nginx,
+  authenticated Elasticsearch online/offline paths, and an authenticated Prometheus scrape
+  (see `docs/validation/v2.5-runtime-security-validation.md`).
 
 ### Correction — historical offline capability claim (superseded)
 

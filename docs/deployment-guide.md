@@ -40,6 +40,7 @@ cp .env.example .env
 - Elasticsearch 安全边界：Compose 使用 `elastic` 用户 + `ELASTICSEARCH_PASSWORD`，健康检查也走认证请求；在线 `retrieval/bm25_retriever.py` 与离线 writer 会优先读取环境凭据，回退到 `config.json`。不要把无认证 ES 当作生产默认配置。
 - `GET /api/stats` 与 `GET /api/metrics` 需要身份认证（`require_identity`）；`GET /api/health` 保持公开。Prometheus 抓取需配置 `Authorization: Bearer <token>`。
 - 登录限流仅在 TCP 对端属于 `TRUSTED_PROXIES` 时才解析 `X-Forwarded-For`；未配置时使用对端地址，客户端无法通过伪造 XFF 绕过限流。
+- `app.py` 以 `proxy_headers=False` 启动 uvicorn，因此代理信任完全由应用的 `TRUSTED_PROXIES` 决定。若绕过 `app.py` 直接用 `uvicorn app:app` 启动，必须同样加 `--no-proxy-headers`，否则 uvicorn 会先信任 `X-Forwarded-For`（默认 `forwarded_allow_ips=127.0.0.1`）而绕过该策略。
 - 认证算法边界：浏览器登录由 `POST /api/auth/login` 签发 RS256 access/refresh token，`common/auth.parse_identity` 以 RS256 验签为主。RS256 验签不依赖 legacy `JWT_SECRET`；`JWT_SECRET`（HS256）仅为可选向后兼容回退，只有需要继续接受旧 HS256 token 时才设置。生产环境只需 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM`。
 
 ### 2.2 前端构建

@@ -148,6 +148,7 @@ REQUIRED_AUDIT_AREAS = {
     "Generation topology",
     "Login rate limiting",
     "Session persistence",
+    "Trusted proxy",
     "Observability endpoints",
     "Elasticsearch security",
 }
@@ -403,6 +404,24 @@ def check_metrics_auth_contract(errors: list[str]) -> None:
             fail(errors, f"{name}: must document that /api/metrics requires authentication")
 
 
+def check_uvicorn_proxy_headers_disabled(errors: list[str]) -> None:
+    """app.py must disable uvicorn's own X-Forwarded-For handling.
+
+    The application-level TRUSTED_PROXIES policy in api.routes_auth is only
+    authoritative when uvicorn does not pre-trust XFF for its default
+    ``forwarded_allow_ips`` peers.
+    """
+    app = ROOT / "app.py"
+    if not app.exists():
+        return
+    text = app.read_text(encoding="utf-8")
+    if "uvicorn.run" in text and "proxy_headers=False" not in text:
+        fail(
+            errors,
+            "app.py: uvicorn.run must set proxy_headers=False so the api.routes_auth TRUSTED_PROXIES policy is authoritative",
+        )
+
+
 def check_rbac_mask_contract(errors: list[str]) -> None:
     """Canonical RBAC docs must use the uint32 mask contract."""
     prd = ROOT / "PRD.md"
@@ -549,6 +568,7 @@ def main() -> int:
     check_rbac_mask_contract(errors)
     check_docs_index(errors)
     check_ragas_unavailable_contract(errors)
+    check_uvicorn_proxy_headers_disabled(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
