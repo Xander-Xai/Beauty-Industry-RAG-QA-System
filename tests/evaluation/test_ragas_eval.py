@@ -397,19 +397,115 @@ class TestRAGASEvaluatorCustomAnswerFn:
                 if mod in sys.modules:
                     del sys.modules[mod]
 
-    def test_main_cli(self, jsonl_file: str, monkeypatch, capsys) -> None:
-        """测试 CLI 入口 main() 函数"""
+    def test_main_cli(self, jsonl_file: str, monkeypatch, capsys, tmp_path, fake_ragas) -> None:
+        """CLI 在 RAGAS 可用时生成报告，并只调用 evaluator 一次。"""
         from tests.evaluation.ragas_eval import main
 
-        # 使用 patch 模拟 sys.argv
-        with patch("sys.argv", ["ragas_eval.py", "--dataset", jsonl_file]):
-            main()
+        out_dir = tmp_path / "reports"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ragas_eval.py", "--dataset", jsonl_file, "--report-dir", str(out_dir), "--tag", "cli"],
+        )
+        rc = main()
 
+        assert rc == 0
+        assert fake_ragas["calls"] == 1, "CLI must evaluate exactly once"
+        assert list(out_dir.glob("ragas_report_cli_*.json")), "report must be saved"
         captured = capsys.readouterr()
-        # CLI 现在输出 Markdown 报告
         assert "RAGAS 评估报告" in captured.out
         assert "cli" in captured.out
-        assert "忠实度" in captured.out  # 中文标签
+
+    def test_require_ragas_missing_returns_2(self, jsonl_file, monkeypatch, capsys, tmp_path) -> None:
+        """--require-ragas 且依赖缺失时返回 2，且不生成报告。"""
+        from tests.evaluation.ragas_eval import main
+
+        monkeypatch.setitem(sys.modules, "ragas", None)
+        monkeypatch.setitem(sys.modules, "datasets", None)
+        out_dir = tmp_path / "reports"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ragas_eval.py", "--dataset", jsonl_file, "--report-dir", str(out_dir), "--require-ragas"],
+        )
+        rc = main()
+        assert rc == 2
+        assert not list(out_dir.glob("*.json"))
+        assert "RAGAS UNAVAILABLE" in capsys.readouterr().err
+
+    def test_require_ragas_missing_key_returns_3(self, jsonl_file, monkeypatch, capsys, tmp_path, fake_ragas) -> None:
+        """真实 evaluator 模式缺少 API key 时返回 3，不生成有效报告。"""
+        from tests.evaluation.ragas_eval import main
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        out_dir = tmp_path / "reports"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ragas_eval.py", "--dataset", jsonl_file, "--report-dir", str(out_dir), "--require-ragas"],
+        )
+        rc = main()
+        assert rc == 3
+        assert not list(out_dir.glob("*.json"))
+        assert "RAGAS BLOCKED" in capsys.readouterr().err
+
+    def test_run_pipeline_uses_pipeline_outputs(self, jsonl_file, fake_ragas) -> None:
+        """pipeline 模式必须把真实 pipeline answer/contexts 传给 RAGAS。"""
+        from tests.evaluation.ragas_eval import RAGASEvaluator
+
+        class FakePipeline:
+            def process(self, ctx):
+                ctx.final_response = f"PIPELINE_ANSWER::{ctx.user_input}"
+                from common.models import RecallResult
+
+                ctx.rerank_results = [
+                    RecallResult(doc_id="d1", content=f"RETRIEVED::{ctx.user_input}", score=1.0, source="dense_bge")
+                ]
+                return ctx.final_response
+
+        evaluator = RAGASEvaluator(jsonl_file)
+        evaluator.run_pipeline_samples(FakePipeline())
+
+        assert fake_ragas["calls"] == 1
+        dataset = fake_ragas["datasets"][0]
+        assert all(a.startswith("PIPELINE_ANSWER::") for a in dataset["answer"])
+        assert all(c[0].startswith("RETRIEVED::") for c in dataset["contexts"])
+
+    def test_run_pipeline_failure_accounting(self, jsonl_file, fake_ragas) -> None:
+        """失败样本单独记录，聚合只使用成功样本。"""
+        from tests.evaluation.ragas_eval import RAGASEvaluator
+
+        calls = {"n": 0}
+
+        class FlakyPipeline:
+            def process(self, ctx):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise RuntimeError("boom")
+                ctx.final_response = "ok answer"
+                return ctx.final_response
+
+        evaluator = RAGASEvaluator(jsonl_file)
+        evaluator.run_pipeline_samples(FlakyPipeline())
+
+        counts = evaluator.last_counts
+        assert counts == {"requested": 2, "successful": 1, "failed": 1, "skipped": 0}
+        assert len(evaluator.last_failures) == 1
+        assert evaluator.last_failures[0]["stage"] == "pipeline"
+        dataset = fake_ragas["datasets"][0]
+        assert len(dataset["answer"]) == 1  # only the successful sample
+
+    def test_run_pipeline_all_failed_raises(self, jsonl_file, fake_ragas) -> None:
+        from tests.evaluation.ragas_eval import AllSamplesFailedError, RAGASEvaluator
+
+        class BrokenPipeline:
+            def process(self, ctx):
+                raise RuntimeError("always fails")
+
+        evaluator = RAGASEvaluator(jsonl_file)
+        with pytest.raises(AllSamplesFailedError):
+            evaluator.run_pipeline_samples(BrokenPipeline())
+        assert fake_ragas["calls"] == 0
 
     def test_evaluate_with_custom_answer_fn_ragas_installed(self, jsonl_file: str, monkeypatch) -> None:
         """RAGAS 已安装时使用自定义 answer_fn 评估"""

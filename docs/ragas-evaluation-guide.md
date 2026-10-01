@@ -25,31 +25,52 @@ RAGAS（Retrieval Augmented Generation Assessment）是 RAG 系统评估的事�
 
 ## 2. 快速开始
 
-### 2.1 安装依赖
+### 2.1 安装依赖（隔离环境）
+
+RAGAS **不在默认 `requirements.txt` 中**（上游依赖存在未修复的安全问题，且最新版
+`ragas 0.4.x` 当前 `import` 即失败）。请在一次性 venv 中安装固定的 evaluator 依赖：
 
 ```bash
-pip install ragas datasets
+python -m venv .venv-ragas && . .venv-ragas/bin/activate
+pip install -r requirements-ragas.txt   # ragas==0.2.15 + 兼容的 langchain 0.3.x
+pip check                                # 应为 No broken requirements found
 ```
+
+安全提示：`requirements-ragas.txt` 已记录 `pip-audit` 发现的已知漏洞，仅用于本地/临时
+评估环境，**不得**合并进生产镜像。
 
 ### 2.2 配置 LLM API Key
 
-RAGAS 需要调用 LLM 来评估答案质量。默认使用 OpenAI：
+RAGAS 需要调用 LLM 来评估答案质量。默认使用 OpenAI（provider/model 来自
+`config.json` → `ragas.llm_backend`，可用环境变量覆盖）：
 
 ```bash
 export OPENAI_API_KEY=sk-your-key-here
+# 可选覆盖：
+# export RAGAS_EVALUATOR_PROVIDER=openai
+# export RAGAS_EVALUATOR_MODEL=gpt-4o-mini
+# export RAGAS_EVALUATOR_BASE_URL=
 ```
 
 ### 2.3 运行评估
 
-```bash
-# 使用默认数据集（config.json 中配置的 golden_set.jsonl）
-python -m tests.evaluation.ragas_eval
+一次 run 只调用 evaluator 一次；缺少依赖或 evaluator key 时明确失败且不生成报告。
 
-# 指定数据集和标签
-python -m tests.evaluation.ragas_eval \
-  --dataset tests/evaluation/golden_set.jsonl \
-  --tag baseline-v1
+```bash
+# 评估器 smoke（使用数据集 reference 答案；不代表真实 pipeline 质量）
+python -m tests.evaluation.ragas_eval --require-ragas --limit 15
+
+# 真实 pipeline 端到端评估（需要 vLLM/Qdrant/ES/Redis）
+python -m tests.evaluation.ragas_eval --require-ragas --pipeline --limit 15 \
+  --dataset tests/evaluation/golden_set.jsonl --tag baseline-v1
+
+# 指定样本 id
+python -m tests.evaluation.ragas_eval --require-ragas --pipeline \
+  --sample-ids 0000-ab12cd34 0007-ef56ab78
 ```
+
+退出码：缺 RAGAS 依赖 `2`；缺 evaluator key `3`；管线初始化失败 `4`；全部样本失败 `5`；
+成功 `0`。任何失败路径都不会写出“成功”报告。
 
 ### 2.4 查看报告
 
@@ -121,12 +142,16 @@ python -m tests.evaluation.ragas_eval --pipeline --tag v1.0-review --dataset tes
 ```
 
 管线模式会：
-1. 遍历黄金数据集中的每个问题
-2. 通过 RAG 管线（`OnlineRAGPipeline.process()`）生成答案
-3. 使用管线生成的答案评估 RAGAS 指标
-4. 生成带管线答案的报告
+1. 遍历选定样本（`--limit` / `--sample-ids`）
+2. 通过真实 RAG 管线（`OnlineRAGPipeline.process()`）生成答案并记录真实 retrieved contexts
+3. 用管线答案与真实召回上下文评估 RAGAS 指标
+4. 生成带 pipeline provenance 的报告
 
 **前置条件**：确保所有基础设施已就绪（vLLM、Qdrant、Elasticsearch、Redis）。
+
+**重要**：只有此模式才是“真实 pipeline 质量”。`--pipeline` 之外的默认模式使用数据集
+reference 答案，仅为 evaluator smoke，不能作为项目质量证据。管线中失败的样本会被记录并
+从聚合分母中排除；全部失败时整次运行失败。
 
 ### 4.2 编程式使用
 
@@ -149,15 +174,20 @@ def my_rag_answer(question: str, contexts: list[str]) -> str:
 
 results = evaluator.evaluate_with_custom_answer_fn(my_rag_answer)
 
-# 方式 3：端到端管线评估
-results = evaluator.evaluate_with_pipeline(pipeline)
+# 方式 3：端到端真实管线评估（记录真实 answer + contexts）
+results = evaluator.run_pipeline_samples(pipeline, limit=15)
 
-# 方式 4：生成结构化报告
+# 方式 4：基于已完成的评估生成报告（不会重复调用 evaluator）
 reporter = RAGASReporter(evaluator)
-report = reporter.run_and_report(tag="my-experiment")
+report = reporter.build_report(tag="my-experiment", pipeline_mode=True)
 print(reporter.format_report_markdown(report))
 reporter.save_report(report, "./data/eval/reports")
 ```
+
+报告包含 provenance：`git_commit`、`dataset`/`dataset_sha256`、`sample_ids`、
+`evaluator_provider`/`evaluator_model`、`generation_model`、`mode`、`metrics`、
+`requested/successful/failed/skipped` 计数与 `failures`。一次 run 只调用 evaluator 一次
+（`run_and_report` 向后兼容，同样只调用一次）。
 
 ### 4.3 对比实验
 
@@ -273,10 +303,12 @@ python -m tests.evaluation.ragas_eval \
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
-| `No module named 'ragas'` | RAGAS 未安装 | `pip install ragas datasets`（先确认依赖/安全策略） |
-| 所有分数为 0.0 | RAGAS 未安装时 evaluator 返回零分 + `_warning` 降级标记；**零分表示“未运行”，不是质量结果** | 安装 RAGAS 后重跑，或用 `--require-ragas` 让缺依赖直接失败 |
-| `AuthenticationError` | API Key 未配置 | `export OPENAI_API_KEY=sk-...` |
-| 管线评估报错 | 基础设施未就绪 | 确保 vLLM / Qdrant / ES / Redis 在运行 |
+| `No module named 'ragas'` / `langchain_community...vertexai` | RAGAS 未安装，或最新版 `ragas` 与 `langchain-community` 不兼容 | 在隔离 venv 中 `pip install -r requirements-ragas.txt`；CLI 报 UNAVAILABLE 且不生成报告 |
+| 所有分数为 0.0 | RAGAS 不可用时的降级标记 | CLI 会以非 0 退出且不写报告；用 `--require-ragas` 强制真实依赖 |
+| `RAGAS BLOCKED` / exit 3 | 真实 evaluator 缺少 provider API key | `export OPENAI_API_KEY=...` |
+| `AuthenticationError` | API Key 无效或未配置 | 检查 `OPENAI_API_KEY` 与 provider/base_url |
+| 管线评估报错 / exit 4 | 基础设施未就绪 | 确保 vLLM / Qdrant / ES / Redis 在运行 |
+| 部分样本失败 | 单条 pipeline 请求失败 | 查看报告 `failures`；成功样本仍会聚合，全部失败则 exit 5 |
 | CLI 报 `FileNotFoundError` | 数据集路径错误 | 使用绝对路径或从项目根目录运行 |
 | 报告输出为纯 JSON 而非 Markdown | 报告生成器依赖错误 | 检查 `tests/evaluation/ragas_report.py` 的导入 |
 

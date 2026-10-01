@@ -210,15 +210,19 @@ class TestRAGASReporterInit:
 
 
 class TestRunAndReport:
-    def test_run_and_report_basic(self, sample_evaluator: RAGASEvaluator) -> None:
-        """run_and_report 应生成包含基本字段的报告（RAGAS 未安装）。"""
+    def test_run_and_report_unavailable_marks_status(self, sample_evaluator: RAGASEvaluator, monkeypatch) -> None:
+        """RAGAS 不可用时报 UNAVAILABLE，且不把零分当作质量分。"""
+        import sys
+
+        monkeypatch.setitem(sys.modules, "ragas", None)
+        monkeypatch.setitem(sys.modules, "datasets", None)
         reporter = RAGASReporter(sample_evaluator)
         report = reporter.run_and_report(tag="test-basic")
         assert isinstance(report, EvaluationReport)
         assert report.tag == "test-basic"
-        assert report.dataset_size == 2
-        assert "faithfulness" in report.overall_scores
-        assert report.overall_scores["faithfulness"] == 0.0  # RAGAS 未安装
+        assert report.evaluator_status == "unavailable"
+        assert report.overall_scores == {}
+        assert report.unavailable_reason
 
     def test_run_and_report_with_answers(self, sample_evaluator: RAGASEvaluator) -> None:
         """传入自定义答案应正确传递到评估器。"""
@@ -229,7 +233,7 @@ class TestRunAndReport:
         )
         assert report.dataset_size == 2
 
-    def test_run_and_report_metrics_subset(self, sample_evaluator: RAGASEvaluator) -> None:
+    def test_run_and_report_metrics_subset(self, sample_evaluator: RAGASEvaluator, fake_ragas) -> None:
         """指定指标子集时应只返回选中指标。"""
         reporter = RAGASReporter(sample_evaluator)
         report = reporter.run_and_report(
@@ -239,6 +243,39 @@ class TestRunAndReport:
         assert "faithfulness" in report.overall_scores
         assert "answer_relevancy" in report.overall_scores
         assert "context_precision" not in report.overall_scores
+        assert "context_recall" not in report.overall_scores
+
+    def test_single_evaluation_per_run(self, sample_evaluator: RAGASEvaluator, fake_ragas) -> None:
+        """run_and_report 只调用一次 evaluator。"""
+        reporter = RAGASReporter(sample_evaluator)
+        reporter.run_and_report(tag="once")
+        assert fake_ragas["calls"] == 1
+        assert sample_evaluator.evaluate_calls == 1
+
+    def test_build_report_does_not_reevaluate(self, sample_evaluator: RAGASEvaluator, fake_ragas) -> None:
+        """build_report 复用已完成的评估，不重复调用 evaluator。"""
+        sample_evaluator.evaluate()
+        assert fake_ragas["calls"] == 1
+        reporter = RAGASReporter(sample_evaluator)
+        reporter.build_report(tag="reuse")
+        assert fake_ragas["calls"] == 1
+        assert sample_evaluator.evaluate_calls == 1
+
+    def test_report_provenance_fields(self, sample_evaluator: RAGASEvaluator, fake_ragas) -> None:
+        """报告必须带有可追踪的来源信息与样本计数。"""
+        reporter = RAGASReporter(sample_evaluator)
+        report = reporter.run_and_report(tag="prov")
+        assert report.dataset.endswith(".jsonl")
+        assert len(report.dataset_sha256) == 16
+        assert report.requested_samples == 2
+        assert report.successful_samples == 2
+        assert report.failed_samples == 0
+        assert report.metrics
+        assert report.sample_ids
+        assert report.evaluator_provider
+        assert report.evaluator_model
+        assert report.evaluator_status == "available"
+        assert report.environment.get("python")
 
 
 class TestCategoryBreakdown:

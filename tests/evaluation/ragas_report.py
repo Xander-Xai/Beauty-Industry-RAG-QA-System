@@ -7,10 +7,13 @@ RAGAS 评估报告生成器
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass
+import subprocess
+import sys
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 from tests.evaluation.ragas_eval import RAGASEvaluator
@@ -37,6 +40,25 @@ class EvaluationReport:
     category_breakdown: dict[str, dict[str, float]]  # {类别: {指标: 均值}}
     dataset_size: int
     metadata: dict  # 配置快照、LLM 后端信息等
+    # Provenance / accounting (defaults keep older report files loadable).
+    run_id: str = ""
+    git_commit: str = ""
+    dataset: str = ""
+    dataset_sha256: str = ""
+    mode: str = "reference"  # "pipeline" | "reference"
+    evaluator_status: str = "unknown"  # "available" | "unavailable"
+    unavailable_reason: str | None = None
+    requested_samples: int = 0
+    successful_samples: int = 0
+    failed_samples: int = 0
+    skipped_samples: int = 0
+    sample_ids: list[str] = field(default_factory=list)
+    evaluator_provider: str = ""
+    evaluator_model: str = ""
+    generation_model: str = ""
+    metrics: list[str] = field(default_factory=list)
+    failures: list[dict] = field(default_factory=list)
+    environment: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -75,51 +97,160 @@ class RAGASReporter:
         answers: list[str] | None = None,
         metrics: list[str] | None = None,
     ) -> EvaluationReport:
-        """运行 RAGAS 评估并生成结构化报告。
+        """运行一次评估并生成报告（向后兼容入口）。
 
-        Args:
-            tag: 报告标签，用于区分不同配置/版本。
-            answers: 可选的 RAG 系统生成答案列表。
-            metrics: 要计算的指标列表。
-
-        Returns:
-            包含整体评分、逐条明细、类别拆分的 EvaluationReport。
+        This performs exactly one evaluator call, then builds the report from the
+        stored run state; it never evaluates twice.
         """
-        overall_scores = self._evaluator.evaluate(answers=answers, metrics=metrics)
-        per_sample = self._extract_per_sample_scores()
+        self._evaluator.evaluate(answers=answers, metrics=metrics)
+        return self.build_report(tag=tag, metrics=metrics)
 
-        # 合并分类字段到 per_sample
-        dataset = self._evaluator.dataset
-        for i, entry in enumerate(per_sample if per_sample else []):
-            if i < len(dataset):
-                entry["business_type"] = dataset[i].get("business_type", "unspecified")
-                entry["difficulty"] = dataset[i].get("difficulty", "unspecified")
+    def build_report(
+        self,
+        tag: str,
+        metrics: list[str] | None = None,
+        pipeline_mode: bool = False,
+    ) -> EvaluationReport:
+        """Build a report from the evaluator's completed run state.
 
-        category_breakdown = self._compute_category_breakdown(per_sample or [])
+        Does NOT call the evaluator. Aggregates only over the successful samples
+        that were actually evaluated.
+        """
+        evaluator = self._evaluator
+        available = evaluator.last_available
+        warning = evaluator.last_warning
+        overall_scores = dict(evaluator.last_scores) if available else {}
 
-        # 提取 metadata
+        per_sample = self._extract_per_sample_scores() or []
+        samples = evaluator.last_samples
+
+        # Attach generated/pipeline provenance and category fields per sample.
+        category_lookup = self._category_lookup()
+        for i, entry in enumerate(per_sample):
+            if i < len(samples):
+                sample = samples[i]
+                entry.setdefault("sample_id", sample.sample_id)
+                entry["generated_answer"] = sample.generated_answer
+                entry["retrieved_contexts"] = sample.retrieved_contexts
+                entry["reference_answer"] = sample.reference_answer
+                if sample.model:
+                    entry["generation_model"] = sample.model
+            sid = entry.get("sample_id")
+            meta = category_lookup.get(sid, {})
+            entry["business_type"] = meta.get("business_type", "unspecified")
+            entry["difficulty"] = meta.get("difficulty", "unspecified")
+
+        category_breakdown = self._compute_category_breakdown(per_sample)
+
+        backend = self._evaluator_backend()
+        generation_models = sorted({s.model for s in samples if s.model})
+        counts = evaluator.last_counts
+
+        metadata = self._config_metadata()
+        report = EvaluationReport(
+            tag=tag,
+            timestamp=datetime.now().isoformat(),
+            overall_scores=overall_scores,
+            per_sample_scores=per_sample,
+            category_breakdown=category_breakdown,
+            dataset_size=counts.get("successful", len(per_sample)),
+            metadata=metadata,
+            run_id=f"{tag}-{datetime.now().strftime('%Y%m%dT%H%M%S')}",
+            git_commit=self._git_commit(),
+            dataset=self._dataset_path(),
+            dataset_sha256=self._dataset_sha256(),
+            mode="pipeline" if pipeline_mode else "reference",
+            evaluator_status="available" if available else "unavailable",
+            unavailable_reason=None if available else warning,
+            requested_samples=counts.get("requested", 0),
+            successful_samples=counts.get("successful", 0),
+            failed_samples=counts.get("failed", 0),
+            skipped_samples=counts.get("skipped", 0),
+            sample_ids=list(evaluator.last_sample_ids),
+            evaluator_provider=backend.get("provider", ""),
+            evaluator_model=backend.get("model", ""),
+            generation_model=",".join(generation_models),
+            metrics=list(evaluator.last_scores),
+            failures=list(evaluator.last_failures),
+            environment=self._environment(),
+        )
+        return report
+
+    # ------------------------------------------------------------------
+    # Provenance helpers
+    # ------------------------------------------------------------------
+
+    def _dataset_path(self) -> str:
+        return getattr(self._evaluator, "_dataset_path", "") or ""
+
+    def _dataset_sha256(self) -> str:
+        path = self._dataset_path()
+        try:
+            with open(path, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()[:16]
+        except OSError:
+            return ""
+
+    def _category_lookup(self) -> dict[str, dict]:
+        """Map sample id -> category fields from the evaluator dataset."""
+        from tests.evaluation.ragas_eval import sample_id_for
+
+        lookup: dict[str, dict] = {}
+        for i, entry in enumerate(self._evaluator.dataset):
+            lookup[sample_id_for(entry, i)] = {
+                "business_type": entry.get("business_type", "unspecified"),
+                "difficulty": entry.get("difficulty", "unspecified"),
+            }
+        return lookup
+
+    @staticmethod
+    def _git_commit() -> str:
+        try:
+            out = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            return out.stdout.strip()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _environment() -> dict:
+        env: dict = {"python": sys.version.split()[0]}
+        try:
+            import ragas  # type: ignore[import-untyped]
+
+            env["ragas"] = getattr(ragas, "__version__", "unknown")
+        except Exception:
+            env["ragas"] = "unavailable"
+        return env
+
+    @staticmethod
+    def _evaluator_backend() -> dict:
+        try:
+            from tests.evaluation.ragas_eval import evaluator_backend
+
+            return evaluator_backend()
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _config_metadata() -> dict:
         try:
             from common.config import get_config
 
             cfg = get_config()
-            metadata = {
+            return {
                 "deployment_mode": cfg.deployment_mode,
                 "dataset_path": cfg.ragas.dataset_path,
                 "llm_backend": asdict(cfg.ragas.llm_backend) if hasattr(cfg.ragas, "llm_backend") else {},
                 "default_metrics": list(cfg.ragas.default_metrics),
             }
         except Exception:
-            metadata = {}
-
-        return EvaluationReport(
-            tag=tag,
-            timestamp=datetime.now().isoformat(),
-            overall_scores=overall_scores,
-            per_sample_scores=per_sample or [],
-            category_breakdown=category_breakdown,
-            dataset_size=len(dataset),
-            metadata=metadata,
-        )
+            return {}
 
     def _extract_per_sample_scores(self) -> list[dict] | None:
         """从 RAGAS Result 中提取每条数据的评分。
@@ -288,7 +419,18 @@ class RAGASReporter:
         lines.append(f"# RAGAS 评估报告: {report.tag}")
         lines.append("")
         lines.append(f"- **时间戳**: {report.timestamp}")
-        lines.append(f"- **数据集**: {report.dataset_size} 条")
+        lines.append(f"- **模式**: {report.mode}（pipeline=真实管线输出；reference=参考答案 smoke）")
+        lines.append(f"- **git commit**: {report.git_commit or '—'}")
+        lines.append(f"- **数据集**: {report.dataset} (sha256:{report.dataset_sha256 or '—'})")
+        lines.append(f"- **评测器**: {report.evaluator_provider}/{report.evaluator_model}")
+        lines.append(f"- **生成模型**: {report.generation_model or '—'}")
+        lines.append(
+            f"- **样本**: requested={report.requested_samples} "
+            f"successful={report.successful_samples} "
+            f"failed={report.failed_samples} skipped={report.skipped_samples}"
+        )
+        if report.evaluator_status != "available":
+            lines.append(f"- **状态**: UNAVAILABLE — {report.unavailable_reason or 'unknown'}")
 
         # 整体评分
         lines.append("")
@@ -318,6 +460,18 @@ class RAGASReporter:
                 for metric, score in metrics_dict.items():
                     label = METRIC_LABELS.get(metric, metric)
                     lines.append(f"| {label} | {score:.4f} |")
+
+        if report.failures:
+            lines.append("")
+            lines.append("## 失败样本")
+            lines.append("")
+            lines.append("| sample_id | stage | exception | message |")
+            lines.append("|-----------|-------|-----------|---------|")
+            for failure in report.failures:
+                lines.append(
+                    f"| {failure.get('sample_id', '?')} | {failure.get('stage', '?')} "
+                    f"| {failure.get('exception', '?')} | {failure.get('message', '')} |"
+                )
 
         return "\n".join(lines)
 

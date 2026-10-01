@@ -30,6 +30,10 @@ Changes present on `main` after the 2.3.0 release entry:
 - RAGAS evaluation harness, reporter, golden-set validator and CLI entrypoint; golden set
   expanded to 300+ entries (initial seed was 27; exact count is authoritative from
   `validate_golden_set`/`golden_set.jsonl`).
+- Isolated real-evaluator environment (`requirements-ragas.txt`: pinned ragas 0.2.15 +
+  langchain 0.3.x) with recorded `pip-audit` advisories; `--limit` / `--sample-ids` /
+  `--require-ragas` CLI options; report provenance (git commit, dataset hash, sample ids,
+  provider/model, attempt/success/failure counts).
 - Deterministic architecture-contract tests (`tests/test_architecture_contract.py`).
 - Redis-backed cross-worker session persistence for `SessionState` with in-memory fallback,
   including a stable serialization schema for nested Pydantic objects.
@@ -101,6 +105,11 @@ Changes present on `main` after the 2.3.0 release entry:
   persistence and login rate limiting, trusted-proxy client-IP resolution through nginx,
   authenticated Elasticsearch online/offline paths, and an authenticated Prometheus scrape
   (see `docs/validation/v2.5-runtime-security-validation.md`).
+- RAGAS CLI no longer evaluates twice: `main()` evaluates once and the reporter builds the
+  report from the stored run (`build_report`), halving evaluator cost and avoiding drift.
+- RAGAS `--pipeline` reports now use the real pipeline answer and retrieved contexts instead
+  of the dataset's reference answer; failed pipeline samples are recorded and excluded from
+  the aggregate, and an all-failed run exits non-zero.
 
 ### Correction — historical offline capability claim (superseded)
 

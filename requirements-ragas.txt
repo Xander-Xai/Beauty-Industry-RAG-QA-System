@@ -1,0 +1,31 @@
+# Isolated evaluator environment for real RAGAS runs. NOT part of the default
+# runtime requirements and must never be installed into the production image.
+#
+# Why this file exists: the currently resolvable RAGAS releases are not safe to
+# promote to default requirements.
+#   - ragas 0.4.x (latest) is import-broken: ragas/llms/base.py imports
+#     langchain_community.chat_models.vertexai, which langchain-community 0.4
+#     removed. `pip check` is clean yet `import ragas` raises ModuleNotFoundError.
+#   - ragas 0.2.x imports cleanly but pulls langchain 0.3.x, which carries
+#     advisories whose only fixes are in langchain 1.x (incompatible with
+#     ragas 0.2.x). ragas 0.2.15 itself has PYSEC-2026-3046 (no fix) and
+#     PYSEC-2026-3047 (fix 0.3.0rc1).
+#
+# Use only in a disposable venv:
+#   python -m venv .venv-ragas && . .venv-ragas/bin/activate
+#   pip install -r requirements-ragas.txt
+#   RUN_REAL_RAGAS=1 OPENAI_API_KEY=... \
+#     python -m tests.evaluation.ragas_eval --require-ragas --pipeline --limit 15
+#
+# Tested 2026-10-02: `pip check` clean, `import ragas` clean, metric imports OK.
+# pip-audit 2026-10-02: 15 advisories (diskcache, langchain, langchain-core,
+# langchain-openai, langchain-text-splitters, ragas). This is why RAGAS stays
+# out of production requirements until upstream provides a fixed, importable
+# release.
+
+ragas==0.2.15
+langchain-community==0.3.31
+langchain-core==0.3.86
+langchain-openai==0.3.35
+datasets==5.0.1
+openai==2.54.0

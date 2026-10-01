@@ -94,11 +94,13 @@ jobs:
           DEPLOYMENT_MODE: testing
         run: python -m pytest tests/evaluation/ -q
 
-  ragas-real-eval:
-    name: RAGAS 真实评估（需显式启用）
-    # Opt-in only: requires a repo variable AND a configured API key, so a
-    # known-unpatched RAGAS dependency is never installed unconditionally and
-    # an all-zero fallback can never be uploaded as a quality report.
+  ragas-evaluator-smoke:
+    name: RAGAS evaluator smoke（需显式启用）
+    # Opt-in only. This is an evaluator smoke (reference answers), not a
+    # project-pipeline quality run: CI has no vLLM/Qdrant/ES. The RAGAS deps are
+    # known-unfixed and live only in requirements-ragas.txt, never in the
+    # default production requirements. --require-ragas fails fast instead of
+    # emitting an all-zero fallback report.
     if: >-
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
@@ -118,18 +120,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # RAGAS is opt-in: vet the dependency/security policy before enabling
-          # the RAGAS_EVAL_ENABLED repository variable.
-          pip install ragas
+          # Isolated, pinned evaluator deps (vet the security note in the file
+          # before enabling the RAGAS_EVAL_ENABLED repository variable).
+          pip install -r requirements-ragas.txt
 
       - name: Require API key
         run: |
           if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
-            echo "OPENAI_API_KEY is not configured; refusing to run real RAGAS evaluation." >&2
+            echo "OPENAI_API_KEY is not configured; refusing to run the real RAGAS evaluator." >&2
             exit 1
           fi
 
-      - name: Run RAGAS evaluation (fails if ragas is unavailable)
+      - name: Run RAGAS evaluator smoke (fails if ragas is unavailable)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           DEPLOYMENT_MODE: testing
@@ -138,10 +140,11 @@ jobs:
             --dataset tests/evaluation/golden_set.jsonl \
             --tag ci-${{ github.sha }} \
             --report-dir data/eval/reports \
+            --limit 15 \
             --require-ragas
 
       - name: Upload evaluation report
         uses: actions/upload-artifact@v4
         with:
-          name: ragas-eval-report
+          name: ragas-evaluator-smoke-report
           path: data/eval/reports/
