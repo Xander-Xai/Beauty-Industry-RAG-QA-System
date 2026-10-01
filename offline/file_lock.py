@@ -33,9 +33,7 @@ def resolve_lock_dir() -> Path:
     """Return the private directory used for offline ingestion locks."""
     owner_id = _owner_id()
     configured = os.environ.get(_LOCK_DIR_ENV)
-    lock_dir = (
-        Path(configured) if configured else Path(tempfile.gettempdir()) / f"beauty-rag-offline-{owner_id}"
-    )
+    lock_dir = Path(configured) if configured else Path(tempfile.gettempdir()) / f"beauty-rag-offline-{owner_id}"
     lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     stat = lock_dir.stat()
     if hasattr(os, "getuid") and stat.st_uid != owner_id:
