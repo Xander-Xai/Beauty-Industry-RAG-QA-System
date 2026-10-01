@@ -345,6 +345,8 @@ class QdrantImageWriter:
         self._ensure_epoch_embedding_version(epoch, "__snapshot__")
 
     def _is_epoch_sealed(self, epoch: str) -> bool:
+        if not self.client.collection_exists(self.collection_name):
+            return False
         records = self.client.retrieve(
             collection_name=self.collection_name,
             ids=[self._epoch_seal_id(epoch)],

@@ -16,7 +16,9 @@ qdrant-client>=1.18.0
 faiss-cpu>=1.8.0
 
 # === Search Engine ===
-elasticsearch>=8.14.0
+# Pin below 9.x: the deployment Elasticsearch server is 8.x and the 9.x
+# python client sends a compatible-with=9 media header the 8.x server rejects.
+elasticsearch>=8.14.0,<9
 
 # === Cache ===
 redis>=5.0.0
