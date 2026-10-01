@@ -32,13 +32,31 @@ class EmbeddingService:
     - 统一接口封装，支持模型热切换
     """
 
-    def __init__(self):
+    def __init__(self, model_path: str | None = None):
         self._bge_model = None
         self._bge_tokenizer = None
+        self._bge_model_path = model_path or config["embedding"]["text"]["model_path"]
         self._clip_model = None
         self._clip_processor = None
         self._qdrant_client = None
         logger.info("EmbeddingService 初始化完成（模型懒加载）")
+
+    @property
+    def bge_tokenizer(self):
+        if self._bge_tokenizer is None:
+            from transformers import AutoTokenizer
+
+            self._bge_tokenizer = AutoTokenizer.from_pretrained(self._bge_model_path)
+        return self._bge_tokenizer
+
+    @property
+    def bge_model(self):
+        if self._bge_model is None:
+            from transformers import AutoModel
+
+            self._bge_model = AutoModel.from_pretrained(self._bge_model_path)
+            self._bge_model.eval()
+        return self._bge_model
 
     @property
     def qdrant_client(self):

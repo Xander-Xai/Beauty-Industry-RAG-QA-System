@@ -69,13 +69,13 @@ def test_bge_adapter_is_lazy_and_checks_model_output():
     adapter = BGETextEmbedder("configured-bge", dimension=2)
     assert adapter.embed_texts([]) == []
 
-    class Model:
-        def encode(self, texts, **kwargs):
+    class SharedOnlineEmbeddingService:
+        def encode_texts_batch(self, texts):
             return [[0.1, 0.2] for _ in texts]
 
-    adapter._model = Model()
+    adapter._embedding_service = SharedOnlineEmbeddingService()
     assert adapter.embed_texts(["hello"]) == [[0.1, 0.2]]
-    adapter._model.encode = lambda texts, **kwargs: [[0.1] for _ in texts]
+    adapter._embedding_service.encode_texts_batch = lambda texts: [[0.1] for _ in texts]
     with pytest.raises(ValueError, match="2 finite values"):
         adapter.embed_texts(["hello"])
 
@@ -177,6 +177,27 @@ def test_reingestion_removes_old_or_emptied_source_chunks(tmp_path):
     source.write_text(" \n", encoding="utf-8")
     assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1") == []
     assert client.count("replace_test", exact=True).count == 0
+
+
+def test_document_epoch_replacement_uses_injected_lock(tmp_path):
+    from contextlib import contextmanager
+
+    lock_calls = []
+
+    @contextmanager
+    def replacement_lock(doc_id, epoch):
+        lock_calls.append((doc_id, epoch))
+        yield
+
+    client = QdrantClient(":memory:")
+    service = TextIngestionService(
+        DocumentProcessor(),
+        DeterministicTestEmbedder(16),
+        QdrantTextWriter(client, "locked_test", dimension=16, replacement_lock=replacement_lock),
+    )
+    source = _write_source(tmp_path, "locked.txt", "serialized replacement")
+    chunks = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    assert lock_calls == [(chunks[0].doc_id, "phase_1")]
 
 
 def test_qdrant_filter_includes_active_status_and_epoch():

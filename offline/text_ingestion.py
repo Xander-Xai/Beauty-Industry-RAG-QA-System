@@ -6,6 +6,7 @@ import hashlib
 import math
 import re
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -118,30 +119,30 @@ class DocumentProcessor:
 
 
 class BGETextEmbedder:
-    """Optional production adapter around SentenceTransformer BGE models."""
+    """Production adapter using the same BGE tokenizer and mean pooling as online queries."""
 
     def __init__(self, model_name_or_path: str, dimension: int = 768):
         if not model_name_or_path:
             raise ValueError("a configured BGE model name or path is required")
         self.model_name_or_path = model_name_or_path
         self.dimension = dimension
-        self._model = None
+        self._embedding_service = None
 
-    def _load_model(self):
-        if self._model is None:
+    def _load_embedding_service(self):
+        if self._embedding_service is None:
             try:
-                from sentence_transformers import SentenceTransformer
+                from models.embedding_service import EmbeddingService
 
-                self._model = SentenceTransformer(self.model_name_or_path)
+                self._embedding_service = EmbeddingService(model_path=self.model_name_or_path)
             except Exception as exc:
-                raise RuntimeError(f"failed to load BGE model {self.model_name_or_path!r}: {exc}") from exc
-        return self._model
+                raise RuntimeError(f"failed to initialize BGE model {self.model_name_or_path!r}: {exc}") from exc
+        return self._embedding_service
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         try:
-            vectors = self._load_model().encode(texts, convert_to_numpy=True, show_progress_bar=False)
+            vectors = self._load_embedding_service().encode_texts_batch(texts)
         except Exception as exc:
             raise RuntimeError(f"BGE embedding failed for {self.model_name_or_path!r}: {exc}") from exc
         rows = vectors.tolist() if hasattr(vectors, "tolist") else vectors
@@ -184,12 +185,19 @@ def _validate_vectors(vectors: list[list[float]], expected_count: int, dimension
 class QdrantTextWriter:
     """Write online-reader-compatible text points to the configured Qdrant collection."""
 
-    def __init__(self, client, collection_name: str = "rag_text_768", dimension: int = 768):
+    def __init__(
+        self,
+        client,
+        collection_name: str = "rag_text_768",
+        dimension: int = 768,
+        replacement_lock=None,
+    ):
         if not collection_name or type(dimension) is not int or dimension <= 0:
             raise ValueError("a collection name and positive vector dimension are required")
         self.client = client
         self.collection_name = collection_name
         self.dimension = dimension
+        self.replacement_lock = replacement_lock
 
     def ensure_collection(self) -> None:
         from qdrant_client.http.models import Distance, VectorParams
@@ -226,44 +234,46 @@ class QdrantTextWriter:
         if any(chunk.doc_id != doc_id or chunk.doc_version_epoch != doc_version_epoch for chunk in chunks):
             raise ValueError("replacement chunks must match the requested document and epoch")
 
-        self.ensure_collection()
-        from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+        lock_context = self.replacement_lock(doc_id, doc_version_epoch) if self.replacement_lock else nullcontext()
+        with lock_context:
+            self.ensure_collection()
+            from qdrant_client.http.models import FieldCondition, Filter, MatchValue
 
-        existing_ids = []
-        offset = None
-        source_filter = Filter(
-            must=[
-                FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
-                FieldCondition(key="doc_version_epoch", match=MatchValue(value=doc_version_epoch)),
-            ]
-        )
-        while True:
-            records, offset = self.client.scroll(
-                collection_name=self.collection_name,
-                scroll_filter=source_filter,
-                limit=256,
-                with_payload=False,
-                with_vectors=False,
-                offset=offset,
+            existing_ids = []
+            offset = None
+            source_filter = Filter(
+                must=[
+                    FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+                    FieldCondition(key="doc_version_epoch", match=MatchValue(value=doc_version_epoch)),
+                ]
             )
-            existing_ids.extend(record.id for record in records)
-            if offset is None:
-                break
+            while True:
+                records, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=source_filter,
+                    limit=256,
+                    with_payload=False,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                existing_ids.extend(record.id for record in records)
+                if offset is None:
+                    break
 
-        if existing_ids:
-            # Active-only online queries fail closed if subsequent upsert/delete fails.
-            self.client.set_payload(
-                collection_name=self.collection_name,
-                payload={"status": "archived"},
-                points=existing_ids,
-                wait=True,
-            )
-        if points:
-            self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
-        replacement_ids = {point.id for point in points}
-        stale_ids = [point_id for point_id in existing_ids if point_id not in replacement_ids]
-        if stale_ids:
-            self.client.delete(collection_name=self.collection_name, points_selector=stale_ids, wait=True)
+            if existing_ids:
+                # Active-only online queries fail closed if subsequent upsert/delete fails.
+                self.client.set_payload(
+                    collection_name=self.collection_name,
+                    payload={"status": "archived"},
+                    points=existing_ids,
+                    wait=True,
+                )
+            if points:
+                self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+            replacement_ids = {point.id for point in points}
+            stale_ids = [point_id for point_id in existing_ids if point_id not in replacement_ids]
+            if stale_ids:
+                self.client.delete(collection_name=self.collection_name, points_selector=stale_ids, wait=True)
 
     def _build_points(self, chunks: list[TextChunk], vectors: list[list[float]]):
         from qdrant_client.http.models import PointStruct
@@ -334,6 +344,23 @@ def configured_text_ingestion_service():
     embedding = config["embedding"]["text"]
     collection = embedding["collection"]
     qdrant = config["qdrant"]
+    redis_config = config["redis"]["cache"]
+    from redis import Redis
+
+    redis_client = Redis(
+        host=redis_config["host"],
+        port=redis_config["port"],
+        db=redis_config.get("db", 0),
+        decode_responses=True,
+    )
+
+    def replacement_lock(doc_id: str, epoch: str):
+        return redis_client.lock(
+            f"offline-text-ingestion:{doc_id}:{epoch}",
+            timeout=3600,
+            blocking_timeout=300,
+        )
+
     client = QdrantClient(
         host=qdrant["host"],
         port=qdrant["port"],
@@ -347,5 +374,5 @@ def configured_text_ingestion_service():
     return TextIngestionService(
         DocumentProcessor(chunk_size, int(chunk_size * overlap_ratio)),
         BGETextEmbedder(embedding["model_path"], dimension),
-        QdrantTextWriter(client, collection, dimension),
+        QdrantTextWriter(client, collection, dimension, replacement_lock=replacement_lock),
     )
