@@ -267,6 +267,34 @@ def test_document_epoch_replacement_uses_injected_lock(tmp_path):
     assert lock_calls == [(chunks[0].doc_id, "phase_1")]
 
 
+def test_default_replacement_lock_serializes_local_writers():
+    import threading
+    import time
+
+    from offline.text_ingestion import _local_replacement_lock
+
+    state_lock = threading.Lock()
+    active_writers = 0
+    max_active_writers = 0
+
+    def replace():
+        nonlocal active_writers, max_active_writers
+        with _local_replacement_lock("same-document", "same-epoch"):
+            with state_lock:
+                active_writers += 1
+                max_active_writers = max(max_active_writers, active_writers)
+            time.sleep(0.03)
+            with state_lock:
+                active_writers -= 1
+
+    writers = [threading.Thread(target=replace) for _ in range(2)]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join()
+    assert max_active_writers == 1
+
+
 def test_qdrant_filter_includes_active_status_and_epoch():
     from auth.bitmask_rbac import build_qdrant_filter
 

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
+import tempfile
 import uuid
-from contextlib import nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -14,6 +16,31 @@ from typing import Protocol
 _UINT32_MAX = 0xFFFFFFFF
 _EPOCH_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _POINT_NAMESPACE = uuid.UUID("74f7d957-77e6-4cac-9af6-a5f09c081215")
+
+
+@contextmanager
+def _local_replacement_lock(doc_id: str, epoch: str):
+    """Serialize same-host CLI writers with a non-evictable POSIX file lock."""
+    import fcntl
+
+    owner_id = os.getuid() if hasattr(os, "getuid") else os.getpid()
+    lock_dir = Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
+    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory_stat = lock_dir.stat()
+    if hasattr(os, "getuid") and directory_stat.st_uid != owner_id:
+        raise PermissionError(f"ingestion lock directory is owned by another user: {lock_dir}")
+    if directory_stat.st_mode & 0o077:
+        raise PermissionError(f"ingestion lock directory must not be accessible by other users: {lock_dir}")
+
+    lock_key = hashlib.sha256(f"{doc_id}:{epoch}".encode()).hexdigest()
+    lock_path = lock_dir / f"{lock_key}.lock"
+    file_descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(file_descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(file_descriptor, fcntl.LOCK_UN)
+        os.close(file_descriptor)
 
 
 @dataclass(frozen=True)
@@ -246,7 +273,7 @@ class QdrantTextWriter:
         if any(chunk.doc_id != doc_id or chunk.doc_version_epoch != doc_version_epoch for chunk in chunks):
             raise ValueError("replacement chunks must match the requested document and epoch")
 
-        lock_context = self.replacement_lock(doc_id, doc_version_epoch) if self.replacement_lock else nullcontext()
+        lock_context = (self.replacement_lock or _local_replacement_lock)(doc_id, doc_version_epoch)
         with lock_context:
             self.ensure_collection()
             from qdrant_client.http.models import FieldCondition, Filter, MatchValue
@@ -356,23 +383,6 @@ def configured_text_ingestion_service():
     embedding = config["embedding"]["text"]
     collection = embedding["collection"]
     qdrant = config["qdrant"]
-    redis_config = config["redis"]["cache"]
-    from redis import Redis
-
-    redis_client = Redis(
-        host=redis_config["host"],
-        port=redis_config["port"],
-        db=redis_config.get("db", 0),
-        decode_responses=True,
-    )
-
-    def replacement_lock(doc_id: str, epoch: str):
-        return redis_client.lock(
-            f"offline-text-ingestion:{doc_id}:{epoch}",
-            timeout=3600,
-            blocking_timeout=300,
-        )
-
     client = QdrantClient(
         host=qdrant["host"],
         port=qdrant["port"],
@@ -387,5 +397,5 @@ def configured_text_ingestion_service():
     return TextIngestionService(
         DocumentProcessor(chunk_size, int(chunk_size * overlap_ratio)),
         BGETextEmbedder(embedding["model_path"], dimension, embedding_batch_size),
-        QdrantTextWriter(client, collection, dimension, replacement_lock=replacement_lock),
+        QdrantTextWriter(client, collection, dimension),
     )

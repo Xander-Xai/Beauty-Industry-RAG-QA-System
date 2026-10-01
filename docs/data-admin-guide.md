@@ -12,7 +12,7 @@
 python3 run_offline.py ingest-text ./data/public-guide.txt --role-mask 0 --dept-mask 0 --epoch default
 ```
 
-该切片按 UTF-8 读取（接受 BOM），按字符窗口切块，并使用稳定 point ID 重复 upsert。BGE 推理使用 `knowledge_base.embedding_batch_size`（默认 32）分批，query 与 document 都使用 attention-mask-aware mean pooling。内容变化会改变内容摘要和 chunk ID；同一来源和 epoch 的替换由 Redis 锁串行化，旧点先标记为 archived，再写入新点并清除旧 ID，空文件会清除现存点。每条 payload 都包含 `role_mask`、`dept_mask`、`status=active` 和 `doc_version_epoch`；在线 Qdrant 过滤会匹配 active 状态和当前 epoch，RBAC 仍由在线授权路径检查。CI 集成测试使用本地内存 Qdrant 与确定性测试 embedder，不会下载 BGE。
+该切片按 UTF-8 读取（接受 BOM），按字符窗口切块，并使用稳定 point ID 重复 upsert。BGE 推理使用 `knowledge_base.embedding_batch_size`（默认 32）分批，query 与 document 都使用 attention-mask-aware mean pooling。内容变化会改变内容摘要和 chunk ID；同一来源和 epoch 的替换使用按用户隔离的 POSIX 文件锁串行化，旧点先标记为 archived，再写入新点并清除旧 ID，空文件会清除现存点。该锁不依赖可淘汰的 Redis cache。每条 payload 都包含 `role_mask`、`dept_mask`、`status=active` 和 `doc_version_epoch`；在线 Qdrant 过滤会匹配 active 状态和当前 epoch，RBAC 仍由在线授权路径检查。CI 集成测试使用本地内存 Qdrant 与确定性测试 embedder，不会下载 BGE。
 
 ## 配置来源
 
