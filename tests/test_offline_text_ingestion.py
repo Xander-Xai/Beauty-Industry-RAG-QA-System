@@ -222,6 +222,52 @@ def test_txt_to_local_qdrant_query_authorization_and_idempotence(tmp_path):
         service.ingest(source, role_mask=2**32, dept_mask=4, doc_version_epoch="phase_1")
 
 
+def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
+    from auth.bitmask_rbac import build_qdrant_filter
+    from models.embedding_service import EmbeddingService
+
+    client = QdrantClient(":memory:")
+    embedder = DeterministicTestEmbedder(16)
+    writer = QdrantTextWriter(client, "epoch_test", dimension=16)
+    service = TextIngestionService(DocumentProcessor(), embedder, writer)
+    source = _write_source(tmp_path, "stable.txt", "shared collagen moisturizer content")
+
+    epoch_a = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_a")
+    points_a, _ = client.scroll("epoch_test", limit=10, with_payload=True)
+    ids_a = {point.id for point in points_a}
+    assert len(ids_a) == len(epoch_a)
+
+    epoch_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b")
+    points_b, _ = client.scroll("epoch_test", limit=10, with_payload=True)
+    ids_by_epoch = {
+        epoch: {point.id for point in points_b if point.payload["doc_version_epoch"] == epoch}
+        for epoch in ("epoch_a", "epoch_b")
+    }
+    assert ids_by_epoch["epoch_a"] == ids_a
+    assert ids_by_epoch["epoch_b"]
+    assert ids_by_epoch["epoch_a"].isdisjoint(ids_by_epoch["epoch_b"])
+    assert len(points_b) == len(epoch_a) + len(epoch_b)
+
+    reader = EmbeddingService.__new__(EmbeddingService)
+    reader._qdrant_client = client
+    query = np.array(embedder.embed_texts(["shared collagen moisturizer"])[0])
+    for epoch in ("epoch_a", "epoch_b"):
+        hits = reader.search_qdrant_text(
+            query,
+            collection_name="epoch_test",
+            top_k=10,
+            qdrant_filter=build_qdrant_filter(0, 0, epoch),
+        )
+        assert hits
+        assert {hit["metadata"]["doc_version_epoch"] for hit in hits} == {epoch}
+
+    repeated_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b")
+    points_after_repeat, _ = client.scroll("epoch_test", limit=10, with_payload=True)
+    assert [chunk.chunk_id for chunk in repeated_b] == [chunk.chunk_id for chunk in epoch_b]
+    assert len(points_after_repeat) == len(epoch_a) + len(epoch_b)
+    assert {point.id for point in points_after_repeat if point.payload["doc_version_epoch"] == "epoch_a"} == ids_a
+
+
 def test_reingestion_removes_old_or_emptied_source_chunks(tmp_path):
     client = QdrantClient(":memory:")
     service = TextIngestionService(
@@ -241,9 +287,21 @@ def test_reingestion_removes_old_or_emptied_source_chunks(tmp_path):
     records, _ = client.scroll("replace_test", limit=10, with_payload=True)
     assert [record.payload["content"] for record in records] == ["new content"]
 
+    # Replacing B must not archive or delete A, even for the same logical source.
+    epoch_a = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="epoch_a")
+    epoch_a_records, _ = client.scroll("replace_test", limit=10, with_payload=True)
+    epoch_a_ids = {record.id for record in epoch_a_records if record.payload["doc_version_epoch"] == "epoch_a"}
+    assert len(epoch_a_ids) == len(epoch_a)
+    source.write_text("replacement for B", encoding="utf-8")
+    service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    records, _ = client.scroll("replace_test", limit=10, with_payload=True)
+    assert {record.payload["doc_version_epoch"] for record in records} == {"epoch_a", "phase_1"}
+    assert {record.id for record in records if record.payload["doc_version_epoch"] == "epoch_a"} == {*epoch_a_ids}
+
     source.write_text(" \n", encoding="utf-8")
     assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1") == []
-    assert client.count("replace_test", exact=True).count == 0
+    records, _ = client.scroll("replace_test", limit=10, with_payload=True)
+    assert {record.payload["doc_version_epoch"] for record in records} == {"epoch_a"}
 
 
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):
@@ -302,6 +360,79 @@ def test_replacement_lock_can_use_configured_shared_directory(monkeypatch, tmp_p
     with _local_replacement_lock("document", "epoch"):
         lock_files = list(tmp_path.glob("*.lock"))
     assert len(lock_files) == 1
+
+
+def test_concurrent_writers_tolerate_collection_create_race(tmp_path):
+    import threading
+
+    import httpx
+    from qdrant_client.http.exceptions import UnexpectedResponse
+
+    class CreateRaceClient:
+        def __init__(self, client):
+            self.client = client
+            self.observed_missing = threading.Barrier(2)
+            self.create_lock = threading.Lock()
+
+        def __getattr__(self, name):
+            return getattr(self.client, name)
+
+        def collection_exists(self, collection_name):
+            existed = self.client.collection_exists(collection_name)
+            self.observed_missing.wait(timeout=5)
+            return existed
+
+        def create_collection(self, **kwargs):
+            with self.create_lock:
+                if self.client.collection_exists(kwargs["collection_name"]):
+                    raise UnexpectedResponse(
+                        status_code=409,
+                        reason_phrase="Conflict",
+                        content=b'{"status":{"error":"Collection already exists"}}',
+                        headers=httpx.Headers(),
+                    )
+                return self.client.create_collection(**kwargs)
+
+    qdrant = QdrantClient(":memory:")
+    raced_client = CreateRaceClient(qdrant)
+    embedder = DeterministicTestEmbedder(16)
+    writer = QdrantTextWriter(raced_client, "fresh_race", dimension=16)
+    service = TextIngestionService(DocumentProcessor(), embedder, writer)
+    failures = []
+
+    def ingest(name):
+        try:
+            service.ingest(
+                _write_source(tmp_path, f"{name}.txt", f"document {name}"),
+                role_mask=0,
+                dept_mask=0,
+                doc_version_epoch="epoch_1",
+            )
+        except Exception as exc:  # surfaced after joining both concurrent writers
+            failures.append(exc)
+
+    writers = [threading.Thread(target=ingest, args=(name,)) for name in ("alpha", "beta")]
+    for thread in writers:
+        thread.start()
+    for thread in writers:
+        thread.join(timeout=10)
+    assert not any(thread.is_alive() for thread in writers)
+    assert failures == []
+    assert qdrant.collection_exists("fresh_race")
+    assert qdrant.count("fresh_race", exact=True).count == 2
+
+
+def test_collection_schema_mismatch_fails_clearly():
+    from qdrant_client.http.models import Distance, VectorParams
+
+    client = QdrantClient(":memory:")
+    client.create_collection("wrong_dimension", vectors_config=VectorParams(size=8, distance=Distance.COSINE))
+    with pytest.raises(ValueError, match="dimension"):
+        QdrantTextWriter(client, "wrong_dimension", dimension=16).ensure_collection()
+
+    client.create_collection("wrong_distance", vectors_config=VectorParams(size=16, distance=Distance.DOT))
+    with pytest.raises(ValueError, match="distance must be cosine"):
+        QdrantTextWriter(client, "wrong_distance", dimension=16).ensure_collection()
 
 
 def test_qdrant_filter_includes_active_status_and_epoch():

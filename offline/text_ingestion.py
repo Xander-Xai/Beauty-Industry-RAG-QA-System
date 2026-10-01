@@ -82,6 +82,11 @@ def _validate_epoch(epoch: str) -> None:
         raise ValueError("doc_version_epoch must contain only letters, digits, _ or -")
 
 
+def _versioned_point_id(chunk: TextChunk) -> str:
+    """Return the physical Qdrant identity for a logical chunk in one epoch."""
+    return str(uuid.uuid5(_POINT_NAMESPACE, f"{chunk.chunk_id}:{chunk.doc_version_epoch}"))
+
+
 class DocumentProcessor:
     """Read UTF-8 TXT documents and split them into deterministic character windows."""
 
@@ -244,20 +249,29 @@ class QdrantTextWriter:
         self.replacement_lock = replacement_lock
 
     def ensure_collection(self) -> None:
+        from qdrant_client.http.exceptions import UnexpectedResponse
         from qdrant_client.http.models import Distance, VectorParams
 
         if not self.client.collection_exists(self.collection_name):
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(size=self.dimension, distance=Distance.COSINE),
-            )
-            return
+            try:
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(size=self.dimension, distance=Distance.COSINE),
+                )
+            except UnexpectedResponse as exc:
+                # Qdrant reports a duplicate concurrent create as HTTP 409. Only
+                # treat the explicit already-exists response as a winning race.
+                message = exc.content.decode("utf-8", errors="replace").lower()
+                if exc.status_code != 409 or "already exists" not in message:
+                    raise
         info = self.client.get_collection(self.collection_name)
         vectors = info.config.params.vectors
-        if not isinstance(vectors, dict) and vectors.size != self.dimension:
-            raise ValueError(f"collection dimension does not match configured dimension {self.dimension}")
         if isinstance(vectors, dict):
             raise ValueError("named Qdrant vectors are not supported by the text ingestion slice")
+        if vectors.size != self.dimension:
+            raise ValueError(f"collection dimension does not match configured dimension {self.dimension}")
+        if vectors.distance != Distance.COSINE:
+            raise ValueError("collection distance must be cosine for the text ingestion slice")
 
     def upsert(self, chunks: list[TextChunk], vectors: list[list[float]]) -> None:
         points = self._build_points(chunks, vectors)
@@ -346,7 +360,7 @@ class QdrantTextWriter:
                 "doc_version_epoch": chunk.doc_version_epoch,
                 "metadata": chunk.metadata,
             }
-            points.append(PointStruct(id=chunk.chunk_id, vector=vector, payload=payload))
+            points.append(PointStruct(id=_versioned_point_id(chunk), vector=vector, payload=payload))
         return points
 
 
