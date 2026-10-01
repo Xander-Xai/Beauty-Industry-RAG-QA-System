@@ -16,6 +16,13 @@
 - [RAGAS evaluation guide](ragas-evaluation-guide.md): offline quality-evaluation harness,
   golden set, reporter and CI boundary.
 
+## Validation
+
+- [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md): Redis
+  multi-worker, trusted proxy, authenticated Elasticsearch and Prometheus evidence.
+- [Real RAGAS evaluation](validation/real-ragas-evaluation.md): evaluator dependency
+  isolation, correctness fixes, and the real-evaluation blockers.
+
 ## Interview / Architecture truth
 
 - [Interview architecture baseline](interview-architecture-baseline.md): the current
