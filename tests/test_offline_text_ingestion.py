@@ -498,6 +498,14 @@ def test_qdrant_environment_overrides_connection_config(monkeypatch):
     assert fallback["qdrant"] == {"host": "qdrant", "port": 6333, "grpc_port": 6334}
 
 
+def test_compose_app_uses_internal_qdrant_hostname():
+    import yaml
+
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    app_environment = compose["services"]["app"]["environment"]
+    assert "QDRANT_HOST=qdrant" in app_environment
+
+
 def test_qdrant_text_search_paginates_until_unique_documents_are_filled():
     from qdrant_client.http.models import Distance, PointStruct, VectorParams
 
