@@ -515,7 +515,8 @@ def test_same_content_retry_accepts_qdrant_cosine_normalization(tmp_path):
     retry = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
 
     assert retry == first
-    stored = client.scroll("cosine_normalized_retry", limit=10, with_vectors=True)[0][0].vector
+    records, _ = client.scroll("cosine_normalized_retry", limit=10, with_payload=True, with_vectors=True)
+    stored = next(record.vector for record in records if (record.payload or {}).get("doc_type") == "text")
     assert stored == pytest.approx([0.6, 0.8] + [0.0] * 14)
 
 
