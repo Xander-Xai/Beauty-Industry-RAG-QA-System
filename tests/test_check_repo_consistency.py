@@ -10,6 +10,7 @@ from scripts.check_repo_consistency import (
     check_rbac_mask_contract,
     check_stale_offline_claims,
     check_truth_audit,
+    post_merge_phase_drift_claims,
     run_offline_subcommands,
 )
 
@@ -136,6 +137,57 @@ def test_qdrant_param_disclaimer_is_not_flagged(tmp_path):
     errors: list[str] = []
     check_forbidden_current_claims(disclaimer, errors)
     assert errors == []
+
+
+def test_post_merge_phase_drift_claims_are_flagged(tmp_path):
+    doc = tmp_path / "phase.md"
+    doc.write_text(
+        "The reconciliation candidate must pass the same checks before merge.\n"
+        "PR #9 is awaiting merge.\n"
+        "GitHub Actions on the latest merged `main` (PR #7) are green.\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_forbidden_current_claims(doc, errors)
+    assert errors
+
+    direct = post_merge_phase_drift_claims(doc.read_text(encoding="utf-8"))
+    assert len(direct) == 3
+
+
+def test_post_merge_historical_narration_is_not_flagged(tmp_path):
+    doc = tmp_path / "history.md"
+    doc.write_text(
+        "Historical merges at the original reconciliation: PR #3, PR #4, PR #5.\n"
+        "At that time the reconciliation candidate still had to pass before merge, and the work was awaiting merge.\n"
+        "Before PR #7 merged, the module was absent; the note is retained unchanged as release history.\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_forbidden_current_claims(doc, errors)
+    assert errors == []
+    assert post_merge_phase_drift_claims(doc.read_text(encoding="utf-8")) == []
+
+
+def test_post_merge_truth_statement_is_not_flagged(tmp_path):
+    """Statements that describe completed post-merge truth are not phase drift."""
+    doc = tmp_path / "postmerge.md"
+    doc.write_text(
+        "The PR #9 final head passed before the squash merge; the merged tree matches it.\n"
+        "Reconciled candidate: `HEAD` (resolved at verification time).\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_forbidden_current_claims(doc, errors)
+    assert errors == []
+
+
+def test_current_truth_audit_has_no_reconciliation_phase_drift():
+    from pathlib import Path
+
+    errors: list[str] = []
+    check_forbidden_current_claims(Path("docs/repository-truth-audit.md"), errors)
+    assert [error for error in errors if "reconciliation-phase" in error] == []
 
 
 def test_current_metrics_and_rbac_contracts_pass():

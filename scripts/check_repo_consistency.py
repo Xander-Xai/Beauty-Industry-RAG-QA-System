@@ -4,9 +4,10 @@
 This guard is intentionally conservative: it fails on broken local references,
 runtime-artifact leaks, version drift, documented-but-missing offline CLI
 subcommands, stale "offline ingestion is missing" claims in current operator
-docs, superseded governance/contract claims in canonical docs, and an
-invalid/absent repository truth audit. It does not flag historical CHANGELOG
-text or historical implementation plans.
+docs, superseded governance/contract claims in canonical docs, post-merge
+reconciliation-phase wording (pending candidate / awaiting merge / stale
+latest-merged-main references), and an invalid/absent repository truth audit. It
+does not flag historical CHANGELOG text or historical implementation plans.
 
 The truth audit is expected to resolve its candidate from ``HEAD`` and to carry
 an ISO ``YYYY-MM-DD`` verification date. The date is validated for shape only;
@@ -65,6 +66,24 @@ STALE_GOVERNANCE_CLAIM_PATTERNS = [
     r"#\d+[^\n]{0,20}(仍|尚)(未|待)合并",
     r"Issue\s*#\d+[^\n]{0,30}(is\s+open|未关闭|仍开放)",
 ]
+
+# After a reconciliation PR is squash-merged, current docs must stop describing
+# a pending candidate/merge phase. These patterns are phase-specific on purpose:
+# they never hardcode which PR number is "latest", never call the GitHub API, and
+# never depend on the current date or wall clock. Historical narration that
+# carries an explicit historical marker is exempt.
+POST_MERGE_PHASE_DRIFT_PATTERNS = [
+    r"candidate\b[^\n]{0,80}?\bbefore\s+(?:the\s+)?merge\b",
+    r"\bmust\s+pass\b[^\n]{0,40}?\bbefore\s+(?:the\s+)?merge\b",
+    r"awaiting\s+merge\b",
+    r"latest\s+merged\s+`?main`?\s*\(PR\s*#\d+\)",
+]
+
+POST_MERGE_HISTORICAL_MARKERS = re.compile(
+    r"historical|at\s+that\s+time|release\s+history|before\s+PR\s*#\d+\s+merged|"
+    r"retained\s+unchanged|superseded|历史|当时|发布历史|保留不变",
+    re.IGNORECASE,
+)
 
 # Qdrant IVF tuning parameters (nlist/nprobe) are not part of the implemented
 # collection contract, so current docs must not present them as implemented.
@@ -239,6 +258,26 @@ def non_implemented_qdrant_param_claims(text: str) -> list[str]:
     return claims
 
 
+def post_merge_phase_drift_claims(text: str) -> list[str]:
+    """Return reconciliation-phase claims that should have become post-merge truth.
+
+    A claim is any line matching a phase-specific pattern that is not explicitly
+    marked as historical narration. This is intentionally line-scoped and
+    deterministic: it never hardcodes a specific PR number, calls the GitHub
+    API, reads the clock, or inspects git history.
+    """
+    claims: list[str] = []
+    for line in text.splitlines():
+        if POST_MERGE_HISTORICAL_MARKERS.search(line):
+            continue
+        for pattern in POST_MERGE_PHASE_DRIFT_PATTERNS:
+            match = re.search(pattern, line, flags=re.IGNORECASE)
+            if match:
+                claims.append(match.group(0))
+                break
+    return claims
+
+
 def check_forbidden_current_claims(path: Path, errors: list[str]) -> None:
     """Flag superseded governance claims and non-implemented contract parameters."""
     text = path.read_text(encoding="utf-8")
@@ -249,6 +288,13 @@ def check_forbidden_current_claims(path: Path, errors: list[str]) -> None:
                 errors,
                 f"{_display(path)}: superseded current claim matched {pattern!r}: {match.group(0)!r}",
             )
+
+    phase_claims = post_merge_phase_drift_claims(text)
+    if phase_claims:
+        fail(
+            errors,
+            f"{_display(path)}: reconciliation-phase wording in current docs: {sorted(set(phase_claims))}",
+        )
 
     qdrant_claims = sorted(set(non_implemented_qdrant_param_claims(text)))
     if qdrant_claims:
