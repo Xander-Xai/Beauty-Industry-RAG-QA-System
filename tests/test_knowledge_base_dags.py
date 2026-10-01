@@ -32,7 +32,9 @@ def test_dag_import_succeeds_when_repository_root_is_not_on_sys_path(tmp_path):
         module = importlib.import_module("dags.knowledge_base_dags")
 
         assert str(project_root) in sys.path
-        assert module.INGESTION_AVAILABLE is False
+        # The offline ingestion modules now exist, so the probe succeeds.
+        assert module.INGESTION_AVAILABLE is True
+        # Airflow is not installed, so no DAG objects are registered.
         assert not any(
             name in vars(module)
             for name in ("weekly_incremental_dag", "monthly_full_dag", "feedback_dag")
