@@ -295,6 +295,14 @@ class TestMediaEndpointFailClosed:
         assert resp.status_code == 403
         assert resp.json()["detail"]["error"] == "permission_denied"
 
+    def test_explicit_none_role_mask_denied(self):
+        resp = self._get({"role_mask": None, "dept_mask": 0, "status": "active"})
+        assert resp.status_code == 403
+
+    def test_explicit_none_dept_mask_denied(self):
+        resp = self._get({"role_mask": 0, "dept_mask": None, "status": "active"})
+        assert resp.status_code == 403
+
     def test_malformed_role_mask_denied(self):
         resp = self._get({"role_mask": "0", "dept_mask": 0, "status": "active"})
         assert resp.status_code == 403
