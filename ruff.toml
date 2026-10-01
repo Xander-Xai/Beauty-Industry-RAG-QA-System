@@ -38,6 +38,7 @@ ignore = [
 "api/**/*.py" = ["B008"]
 "api-gateway/routers/generation.py" = ["B008"]
 "tests/test_api.py" = ["B008"]
+"tests/test_auth_identity_resolution.py" = ["B008"]
 "tests/test_llm_client_adapter_integration.py" = ["E402"]
 "tests/test_rerank_fallback.py" = ["E402"]
 # Test fixtures use /tmp strings as fake paths; they don't create insecure files.

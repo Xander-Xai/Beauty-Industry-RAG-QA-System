@@ -232,16 +232,16 @@ async def parse_identity(request: Request) -> UserIdentity:
     """
     cfg = get_config()
 
-    # 1. JWT Bearer token（仅在 JWT 启用时尝试解码）
-    jwt_settings = _get_jwt_settings()
-    if jwt_settings.get("enabled", True):
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            payload = _decode_jwt(token)
-            if payload is not None:
-                return _identity_from_jwt(payload)
-            logger.warning("JWT decode failed, falling back to dev headers")
+    # 1. JWT Bearer token — always attempt verification. RS256 (auth.jwt_auth)
+    # verification is independent of the legacy HS256 secret; the HS256
+    # fallback inside _decode_jwt decides its own compatibility enablement.
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        payload = _decode_jwt(token)
+        if payload is not None:
+            return _identity_from_jwt(payload)
+        logger.warning("JWT decode failed, falling back to dev headers")
 
     # 2. Dev-mode headers — 仅在 dev_mode=True 时信任 Header
     if cfg.auth.dev_mode:
