@@ -60,6 +60,14 @@ Changes present on `main` after the 2.3.0 release entry:
 - AdapterManager and RAGAS test coverage and mock isolation issues.
 - BiEncoder test coverage and configuration.
 
+### Maintenance
+
+- Post-merge repository governance: the repository truth audit now records the PR #9 squash merge
+  and the merged tree, instead of describing a pending reconciliation candidate. The consistency
+  guard rejects reconciliation-phase wording (pending candidate before merge, awaiting merge, stale
+  latest-merged-main PR references) in current docs, while leaving historical changelog and plan
+  text untouched. No runtime version change; this is `[Unreleased]` maintenance.
+
 ### Correction — historical offline capability claim (superseded)
 
 The 2.3.0 entry below says `offline/document_processor.py` was added. At the repository
