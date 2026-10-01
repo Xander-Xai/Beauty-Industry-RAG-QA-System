@@ -367,8 +367,8 @@ class QdrantTextWriter:
                         payload.get("status"),
                     )
 
-                existing_signature = sorted(signature(record.payload or {}) for record in existing_records)
-                desired_signature = sorted(signature(point.payload or {}) for point in points)
+                existing_signature = sorted((signature(record.payload or {}) for record in existing_records), key=repr)
+                desired_signature = sorted((signature(point.payload or {}) for point in points), key=repr)
                 if existing_signature == desired_signature and len(existing_records) == len(points):
                     return
                 raise ValueError(

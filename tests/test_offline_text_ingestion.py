@@ -356,6 +356,47 @@ def test_epoch_snapshots_reject_same_epoch_mutation_and_preserve_old_version(tmp
     assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1", "phase_2"}
 
 
+def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    client = QdrantClient(":memory:")
+    client.create_collection("legacy_default", vectors_config=VectorParams(size=16, distance=Distance.COSINE))
+    source = _write_source(tmp_path, "legacy.txt", "legacy public policy")
+    processor = DocumentProcessor()
+    _, doc_id = processor.document_identity(source)
+    client.upsert(
+        collection_name="legacy_default",
+        points=[
+            PointStruct(
+                id=1,
+                vector=[1.0] + [0.0] * 15,
+                payload={
+                    "doc_id": doc_id,
+                    "chunk_index": 0,
+                    "content": "legacy public policy",
+                    "role_mask": 0,
+                    "dept_mask": 0,
+                    "status": "active",
+                },
+            )
+        ],
+        wait=True,
+    )
+    service = TextIngestionService(
+        processor,
+        DeterministicTestEmbedder(16),
+        QdrantTextWriter(client, "legacy_default", dimension=16),
+    )
+
+    service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default")
+    assert client.count("legacy_default", exact=True).count == 1
+    with pytest.raises(ValueError, match="epochs are immutable"):
+        service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default")
+    points, _ = client.scroll("legacy_default", limit=10, with_payload=True)
+    assert len(points) == 1
+    assert points[0].payload["role_mask"] == 0
+
+
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):
     from contextlib import contextmanager
 
