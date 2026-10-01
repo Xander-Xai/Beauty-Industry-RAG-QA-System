@@ -47,6 +47,33 @@ def test_processor_empty_utf8_and_unsupported_or_malformed_input(tmp_path):
         processor.process(pdf, role_mask=0, dept_mask=0, doc_version_epoch="default")
 
 
+def test_document_size_limits_reject_before_embedding_or_qdrant_write(tmp_path):
+    client = QdrantClient(":memory:")
+
+    class SpyEmbedder:
+        dimension = 16
+
+        def __init__(self):
+            self.called = False
+
+        def embed_texts(self, texts):
+            self.called = True
+            return [[0.0] * self.dimension for _ in texts]
+
+    embedder = SpyEmbedder()
+    writer = QdrantTextWriter(client, "size_limit", dimension=16)
+    service = TextIngestionService(DocumentProcessor(max_document_bytes=8), embedder, writer)
+    source = _write_source(tmp_path, "oversized.txt", "123456789")
+    with pytest.raises(ValueError, match="8-byte ingestion limit"):
+        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1")
+    assert not embedder.called
+    assert not client.collection_exists("size_limit")
+
+    chunk_limited = DocumentProcessor(chunk_size=2, chunk_overlap=0, max_chunks=2)
+    with pytest.raises(ValueError, match="2-chunk ingestion limit"):
+        chunk_limited.process(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1")
+
+
 @pytest.mark.parametrize("role,dept", [(-1, 0), (0, 2**32), (True, 0), (0, "1")])
 def test_invalid_permission_masks_fail_before_ingestion(tmp_path, role, dept):
     path = tmp_path / "restricted.txt"

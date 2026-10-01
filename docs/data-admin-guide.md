@@ -12,7 +12,7 @@
 python3 run_offline.py ingest-text ./data/public-guide.txt --role-mask 0 --dept-mask 0 --epoch default
 ```
 
-该切片按 UTF-8 读取（接受 BOM），按字符窗口切块，并使用稳定 point ID 重复 upsert。BGE 推理使用 `knowledge_base.embedding_batch_size`（默认 32）分批，query 与 document 都使用 attention-mask-aware mean pooling。内容变化会改变内容摘要和 chunk ID；同一来源和 epoch 的替换使用按用户隔离的 POSIX 文件锁串行化，旧点先标记为 archived，再写入新点并清除旧 ID，空文件会清除现存点。默认锁目录位于本机临时目录；容器或进程使用独立临时目录时，可用 `OFFLINE_INGESTION_LOCK_DIR` 指向共享的、权限为当前用户私有的挂载目录。锁不依赖可淘汰的 Redis cache。每条 payload 都包含 `role_mask`、`dept_mask`、`status=active` 和 `doc_version_epoch`；在线 Qdrant 过滤会匹配 active 状态和当前 epoch，RBAC 仍由在线授权路径检查。CI 集成测试使用本地内存 Qdrant 与确定性测试 embedder，不会下载 BGE。
+该切片按 UTF-8 读取（接受 BOM），按字符窗口切块，并使用稳定 point ID 重复 upsert。为限制单文档内存用量，默认文件大小上限为 `knowledge_base.max_document_bytes`（131072 字节），最多 `knowledge_base.max_chunks`（256）个 chunk；超过任一限制会在 embedding 和 Qdrant 写入前拒绝。BGE 推理使用 `knowledge_base.embedding_batch_size`（默认 32）分批，query 与 document 都使用 attention-mask-aware mean pooling。物理 point ID 对 epoch 做版本化，因此同内容可在多个 epoch 并存；同一 epoch 的重跑保持幂等。内容变化会改变内容摘要和 chunk ID；同一来源和 epoch 的替换使用按用户隔离的 POSIX 文件锁串行化，旧点先标记为 archived，再写入新点并清除旧 ID，空文件会清除现存点。默认锁目录位于本机临时目录；容器或进程使用独立临时目录时，可用 `OFFLINE_INGESTION_LOCK_DIR` 指向共享的、权限为当前用户私有的挂载目录。锁不依赖可淘汰的 Redis cache。每条 payload 都包含 `role_mask`、`dept_mask`、`status=active` 和 `doc_version_epoch`；在线 Qdrant 过滤会匹配 active 状态和当前 epoch，RBAC 仍由在线授权路径检查。CI 集成测试使用本地内存 Qdrant 与确定性测试 embedder，不会下载 BGE。
 
 ## 配置来源
 

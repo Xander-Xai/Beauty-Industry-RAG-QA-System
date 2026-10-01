@@ -90,13 +90,25 @@ def _versioned_point_id(chunk: TextChunk) -> str:
 class DocumentProcessor:
     """Read UTF-8 TXT documents and split them into deterministic character windows."""
 
-    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50):
+    def __init__(
+        self,
+        chunk_size: int = 500,
+        chunk_overlap: int = 50,
+        max_document_bytes: int = 131_072,
+        max_chunks: int = 256,
+    ):
         if type(chunk_size) is not int or chunk_size <= 0:
             raise ValueError("chunk_size must be a positive integer")
         if type(chunk_overlap) is not int or not 0 <= chunk_overlap < chunk_size:
             raise ValueError("chunk_overlap must be an integer in [0, chunk_size)")
+        if type(max_document_bytes) is not int or max_document_bytes <= 0:
+            raise ValueError("max_document_bytes must be a positive integer")
+        if type(max_chunks) is not int or max_chunks <= 0:
+            raise ValueError("max_chunks must be a positive integer")
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.max_document_bytes = max_document_bytes
+        self.max_chunks = max_chunks
 
     @staticmethod
     def document_identity(source: str | Path) -> tuple[str, str]:
@@ -118,17 +130,24 @@ class DocumentProcessor:
         if path.suffix.lower() != ".txt":
             raise ValueError(f"unsupported document type {path.suffix or '<none>'}; only .txt is supported")
         try:
-            text = path.read_text(encoding="utf-8-sig")
+            with path.open("rb") as source_file:
+                raw = source_file.read(self.max_document_bytes + 1)
+            if len(raw) > self.max_document_bytes:
+                raise ValueError(f"text document exceeds the {self.max_document_bytes}-byte ingestion limit: {path}")
+            text = raw.decode("utf-8-sig")
         except (OSError, UnicodeError) as exc:
             raise ValueError(f"cannot read UTF-8 text document {path}: {exc}") from exc
 
         text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
         if not text:
             return []
+        step = self.chunk_size - self.chunk_overlap
+        chunk_count = 1 if len(text) <= self.chunk_size else math.ceil((len(text) - self.chunk_size) / step) + 1
+        if chunk_count > self.max_chunks:
+            raise ValueError(f"text document exceeds the {self.max_chunks}-chunk ingestion limit: {path}")
         source_path, doc_id = self.document_identity(path)
         content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         chunks: list[TextChunk] = []
-        step = self.chunk_size - self.chunk_overlap
         for chunk_index, offset in enumerate(range(0, len(text), step)):
             chunk_text = text[offset : offset + self.chunk_size]
             if not chunk_text:
@@ -413,8 +432,15 @@ def configured_text_ingestion_service():
     overlap_ratio = float(knowledge_base.get("chunk_overlap_ratio", 0.1))
     dimension = int(embedding["dimension"])
     embedding_batch_size = int(knowledge_base.get("embedding_batch_size", 32))
+    max_document_bytes = int(knowledge_base.get("max_document_bytes", 131_072))
+    max_chunks = int(knowledge_base.get("max_chunks", 256))
     return TextIngestionService(
-        DocumentProcessor(chunk_size, int(chunk_size * overlap_ratio)),
+        DocumentProcessor(
+            chunk_size,
+            int(chunk_size * overlap_ratio),
+            max_document_bytes,
+            max_chunks,
+        ),
         BGETextEmbedder(embedding["model_path"], dimension, embedding_batch_size),
         QdrantTextWriter(client, collection, dimension),
     )
