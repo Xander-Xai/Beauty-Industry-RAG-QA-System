@@ -52,15 +52,23 @@ class FakeElasticsearchClient:
         sort=None,
         search_after=None,
     ):
+        # Elasticsearch 8 rejects sorting/fielddata on _id; enforce that here so
+        # a regression to `sort=[{"_id": "asc"}]` fails unit tests too.
+        if sort and any("_id" in clause for clause in sort):
+            raise ValueError("Fielddata access on the _id field is disallowed in Elasticsearch 8")
         docs = self.store[index]["docs"]
         hits = [{"_id": doc_id, "_source": document} for doc_id, document in docs.items() if _matches(document, query)]
-        hits.sort(key=lambda hit: hit["_id"])
+
+        def sort_key(hit):
+            return hit["_source"].get("chunk_id") or hit["_id"]
+
+        hits.sort(key=sort_key)
         total = len(hits)
         if search_after is not None:
-            hits = [hit for hit in hits if hit["_id"] > search_after[0]]
+            hits = [hit for hit in hits if sort_key(hit) > search_after[0]]
         page = hits[:size]
         for hit in page:
-            hit["sort"] = [hit["_id"]]
+            hit["sort"] = [sort_key(hit)]
         return {"hits": {"total": {"value": total}, "hits": page}}
 
     def set_mapping_type(self, index: str, field: str, value: str):

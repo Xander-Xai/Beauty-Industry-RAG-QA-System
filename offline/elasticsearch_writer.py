@@ -171,7 +171,9 @@ class ElasticsearchWriter:
                 "query": query,
                 "size": self.page_size,
                 "_source": source,
-                "sort": [{"_id": "asc"}],
+                # Sort on the keyword chunk_id: ES 8 disallows sorting/fielddata
+                # on _id, and chunk_id is unique within an epoch.
+                "sort": [{"chunk_id": "asc"}],
             }
             if search_after is not None:
                 kwargs["search_after"] = search_after
@@ -180,7 +182,8 @@ class ElasticsearchWriter:
             hits.extend(page)
             if len(page) < self.page_size:
                 break
-            search_after = page[-1].get("sort") or [page[-1]["_id"]]
+            last = page[-1]
+            search_after = last.get("sort") or [last["_source"].get("chunk_id")]
         return hits
 
     def count_documents(self, doc_version_epoch: str | None = None) -> int:
