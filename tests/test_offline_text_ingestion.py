@@ -200,6 +200,49 @@ def test_cli_rejects_unimplemented_historical_modes(monkeypatch):
     assert error.value.code == 2
 
 
+def test_cli_seals_requested_epoch(monkeypatch):
+    import sys
+
+    import offline.text_ingestion
+    from run_offline import main
+
+    sealed = []
+
+    class FakeWriter:
+        def seal_epoch(self, epoch):
+            sealed.append(epoch)
+
+    class FakeService:
+        writer = FakeWriter()
+
+    monkeypatch.setattr(offline.text_ingestion, "configured_text_ingestion_service", lambda: FakeService())
+    monkeypatch.setattr(sys, "argv", ["run_offline.py", "seal-epoch", "--epoch", "phase_1"])
+
+    assert main() == 0
+    assert sealed == ["phase_1"]
+
+
+def test_configured_service_seals_current_epoch_on_startup(monkeypatch, tmp_path):
+    import qdrant_client
+
+    from common import config as common_config
+    from offline.text_ingestion import configured_text_ingestion_service
+
+    client = QdrantClient(":memory:")
+    configured = {
+        "embedding": {"text": {"collection": "startup_seal", "dimension": 16, "model_path": "unused"}},
+        "qdrant": {"host": "localhost", "port": 6333, "grpc_port": 6334},
+        "knowledge_base": {"data_dir": str(tmp_path / "data")},
+        "knowledge_version_epoch": "active_v1",
+    }
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: configured)
+    monkeypatch.setattr(qdrant_client, "QdrantClient", lambda **kwargs: client)
+
+    service = configured_text_ingestion_service()
+
+    assert service.writer._is_epoch_sealed("active_v1")
+
+
 def test_qdrant_writer_rejects_missing_permission_and_wrong_vectors(tmp_path):
     chunk = DocumentProcessor().process(
         _write_source(tmp_path, "restricted.txt", "restricted policy"),
@@ -321,7 +364,7 @@ def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
     assert {point.id for point in points_after_repeat if point.payload["doc_version_epoch"] == "epoch_a"} == ids_a
 
 
-def test_epoch_snapshots_reject_same_epoch_mutation_and_preserve_old_version(tmp_path):
+def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_immutable(tmp_path):
     client = QdrantClient(":memory:")
     service = TextIngestionService(
         DocumentProcessor(chunk_size=12, chunk_overlap=0),
@@ -331,29 +374,44 @@ def test_epoch_snapshots_reject_same_epoch_mutation_and_preserve_old_version(tmp
     source = _write_source(tmp_path, "mutable.txt", "old content that spans multiple chunks")
     old_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
     assert len(old_chunks) > 1
-    assert client.count("replace_test", exact=True).count == len(old_chunks)
+    original_ids = {record.id for record in client.scroll("replace_test", limit=10, with_payload=True)[0]}
 
     source.write_text("new content", encoding="utf-8")
-    with pytest.raises(ValueError, match="epochs are immutable"):
-        service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
-    assert client.count("replace_test", exact=True).count == len(old_chunks)
+    phase_1 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    phase_1_records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    phase_1_ids = {record.id for record in phase_1_records}
+    assert len(phase_1) == 1
+    assert len(phase_1_ids) == 1
+    assert original_ids.isdisjoint(phase_1_ids)
+    assert {record.payload["content"] for record in phase_1_records} == {"new content"}
 
-    new_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
-    assert len(new_chunks) == 1
-    assert client.count("replace_test", exact=True).count == len(old_chunks) + 1
-    records, _ = client.scroll("replace_test", limit=10, with_payload=True)
-    assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1", "phase_2"}
-    assert {record.payload["content"] for record in records} == {chunk.text for chunk in old_chunks} | {"new content"}
+    phase_2 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
+    assert len(phase_2) == 1
+    records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    phase_2_ids = {record.id for record in records if record.payload["doc_version_epoch"] == "phase_2"}
+    assert {record.id for record in records if record.payload["doc_version_epoch"] == "phase_1"} == phase_1_ids
+    assert phase_1_ids.isdisjoint(phase_2_ids)
 
-    with pytest.raises(ValueError, match="epochs are immutable"):
-        service.ingest(source, role_mask=8, dept_mask=4, doc_version_epoch="phase_2")
+    source.write_text("replacement for B", encoding="utf-8")
+    replacement_b = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
+    assert replacement_b
+    records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    assert {record.id for record in records if record.payload["doc_version_epoch"] == "phase_1"} == phase_1_ids
+    replacement_b_ids = {record.id for record in records if record.payload["doc_version_epoch"] == "phase_2"}
+    assert {record.payload["content"] for record in records if record.payload["doc_version_epoch"] == "phase_2"} == {
+        chunk.text for chunk in replacement_b
+    }
+    assert phase_2_ids.isdisjoint(replacement_b_ids)
 
     source.write_text(" \n", encoding="utf-8")
-    with pytest.raises(ValueError, match="epochs are immutable"):
-        service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
-    assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_3") == []
-    records, _ = client.scroll("replace_test", limit=10, with_payload=True)
-    assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1", "phase_2"}
+    assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2") == []
+    records = client.scroll("replace_test", limit=10, with_payload=True)[0]
+    assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1"}
+
+    service.writer.seal_epoch("phase_2")
+    another_source = _write_source(tmp_path, "late-addition.txt", "late addition")
+    with pytest.raises(ValueError, match="is sealed"):
+        service.ingest(another_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_2")
 
 
 def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
@@ -390,11 +448,16 @@ def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
 
     service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default")
     assert client.count("legacy_default", exact=True).count == 1
-    with pytest.raises(ValueError, match="epochs are immutable"):
+    service.writer.seal_epoch("default")
+    with pytest.raises(ValueError, match="is sealed"):
         service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default")
-    points, _ = client.scroll("legacy_default", limit=10, with_payload=True)
-    assert len(points) == 1
-    assert points[0].payload["role_mask"] == 0
+    active_points = [
+        record
+        for record in client.scroll("legacy_default", limit=10, with_payload=True)[0]
+        if record.payload.get("doc_id") == doc_id and record.payload.get("status") == "active"
+    ]
+    assert len(active_points) == 1
+    assert active_points[0].payload["role_mask"] == 0
 
 
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):
@@ -416,6 +479,41 @@ def test_document_epoch_replacement_uses_injected_lock(tmp_path):
     source = _write_source(tmp_path, "locked.txt", "serialized replacement")
     chunks = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
     assert lock_calls == [(chunks[0].doc_id, "phase_1")]
+
+
+def test_epoch_sealing_waits_for_inflight_epoch_writer(tmp_path):
+    import threading
+
+    from offline.text_ingestion import _local_epoch_lock
+
+    client = QdrantClient(":memory:")
+    writer = QdrantTextWriter(client, "seal_race", dimension=16)
+    writer.ensure_collection()
+    lock_held = threading.Event()
+    release_writer = threading.Event()
+    seal_finished = threading.Event()
+
+    def hold_write_lock():
+        with _local_epoch_lock("phase_race", shared=True):
+            lock_held.set()
+            release_writer.wait(timeout=2)
+
+    def seal():
+        writer.seal_epoch("phase_race")
+        seal_finished.set()
+
+    writer_thread = threading.Thread(target=hold_write_lock)
+    writer_thread.start()
+    assert lock_held.wait(timeout=1)
+    sealer_thread = threading.Thread(target=seal)
+    sealer_thread.start()
+    assert not seal_finished.wait(timeout=0.05)
+    release_writer.set()
+    writer_thread.join(timeout=2)
+    sealer_thread.join(timeout=2)
+
+    assert seal_finished.is_set()
+    assert writer._is_epoch_sealed("phase_race")
 
 
 def test_default_replacement_lock_serializes_local_writers():
@@ -444,6 +542,37 @@ def test_default_replacement_lock_serializes_local_writers():
     for writer in writers:
         writer.join()
     assert max_active_writers == 1
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [(("doc_a", "epoch_1"), ("doc_b", "epoch_1")), (("doc_a", "epoch_1"), ("doc_a", "epoch_2"))],
+)
+def test_replacement_lock_allows_different_documents_or_epochs(first, second):
+    import threading
+
+    from offline.text_ingestion import _local_replacement_lock
+
+    rendezvous = threading.Barrier(2)
+    errors = []
+
+    def replace(doc_id, epoch):
+        try:
+            with _local_replacement_lock(doc_id, epoch):
+                rendezvous.wait(timeout=1)
+        except Exception as exc:
+            errors.append(exc)
+
+    first_thread = threading.Thread(target=replace, args=first)
+    second_thread = threading.Thread(target=replace, args=second)
+    first_thread.start()
+    second_thread.start()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert not errors
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
 
 
 def test_replacement_lock_can_use_configured_shared_directory(monkeypatch, tmp_path):

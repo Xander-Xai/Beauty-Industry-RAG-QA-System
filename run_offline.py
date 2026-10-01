@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description="Offline knowledge base tools")
-    parser.add_argument("command", nargs="?", choices=["ingest-text"])
+    parser.add_argument("command", nargs="?", choices=["ingest-text", "seal-epoch"])
     parser.add_argument("source", nargs="?", help="Path to a UTF-8 .txt source document")
     parser.add_argument("--role-mask", type=int)
     parser.add_argument("--dept-mask", type=int)
@@ -33,6 +33,18 @@ def main():
         fb = RewriteFeedback()
         fb.run_feedback_cycle()
         logger.info("Rewrite feedback cycle completed")
+        return 0
+
+    if args.command == "seal-epoch":
+        if not args.epoch:
+            parser.error("seal-epoch requires --epoch")
+        from offline.text_ingestion import configured_text_ingestion_service
+
+        configured_text_ingestion_service().writer.seal_epoch(args.epoch)
+        logger.info(
+            "Sealed knowledge epoch %s; update knowledge_version_epoch only after the full snapshot is verified",
+            args.epoch,
+        )
         return 0
 
     if args.command == "ingest-text":

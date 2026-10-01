@@ -12,9 +12,9 @@
 
 当前 `offline/` 包含一个受限的 TXT → text embedding → Qdrant 导入切片，以及 QLoRA 微调脚本、样本数据和独立微调依赖。
 
-**已包含：** `python3 run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 支持 UTF-8 TXT、确定性字符切块、BGE 文本 embedding adapter 和 Qdrant `rag_text_768` 写入。生产 BGE adapter 使用 `config.json` 中配置的模型路径；常规测试使用轻量确定性测试 embedder，不下载模型。该实现没有声称已完成真实 BGE 模型 smoke 验证。
+**已包含：** `python3 run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 支持 UTF-8 TXT、确定性字符切块、BGE 文本 embedding adapter 和 Qdrant `rag_text_768` 写入；`seal-epoch` 封存导入完成的不可变快照。生产 BGE adapter 使用 `config.json` 中配置的模型路径；常规测试使用轻量确定性测试 embedder，不下载模型。该实现没有声称已完成真实 BGE 模型 smoke 验证。
 
-**仍不支持：** PDF、DOCX、XLSX、OCR、CLIP ingestion、Elasticsearch 写入、调度、完整重建和反馈闭环。`run_offline.py` 只开放已实现的 TXT ingestion 命令。后续范围跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+**仍不支持：** PDF、DOCX、XLSX、OCR、CLIP ingestion、Elasticsearch 写入、调度、完整重建和反馈闭环。`run_offline.py` 只开放已实现的 TXT ingestion 与 epoch 封存操作。后续范围跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
 仓库中存在 Airflow DAG 草案；它引用的 scheduler/feedback modules 不存在，因此当前不会注册可用的 ingestion DAG。DAG 文件存在不等同于生产导入管线。需要导入数据时，请连接已准备好的外部 Qdrant/Elasticsearch 索引；本仓库目前没有从原始文档创建该索引的已验证命令。
 

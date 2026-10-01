@@ -48,6 +48,36 @@ def _local_replacement_lock(doc_id: str, epoch: str):
         os.close(file_descriptor)
 
 
+@contextmanager
+def _local_epoch_lock(epoch: str, *, shared: bool):
+    """Coordinate epoch writes with sealing across local CLI processes."""
+    import fcntl
+
+    owner_id = os.getuid() if hasattr(os, "getuid") else os.getpid()
+    configured_lock_dir = os.environ.get("OFFLINE_INGESTION_LOCK_DIR")
+    lock_dir = (
+        Path(configured_lock_dir)
+        if configured_lock_dir
+        else Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
+    )
+    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory_stat = lock_dir.stat()
+    if hasattr(os, "getuid") and directory_stat.st_uid != owner_id:
+        raise PermissionError(f"ingestion lock directory is owned by another user: {lock_dir}")
+    if directory_stat.st_mode & 0o077:
+        raise PermissionError(f"ingestion lock directory must not be accessible by other users: {lock_dir}")
+
+    lock_key = hashlib.sha256(f"epoch:{epoch}".encode()).hexdigest()
+    lock_path = lock_dir / f"{lock_key}.lock"
+    file_descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(file_descriptor, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(file_descriptor, fcntl.LOCK_UN)
+        os.close(file_descriptor)
+
+
 @dataclass(frozen=True)
 class TextChunk:
     """Parsed text fragment plus the storage and authorization contract."""
@@ -328,55 +358,113 @@ class QdrantTextWriter:
         if any(chunk.doc_id != doc_id or chunk.doc_version_epoch != doc_version_epoch for chunk in chunks):
             raise ValueError("replacement chunks must match the requested document and epoch")
 
+        epoch_lock = _local_epoch_lock(doc_version_epoch, shared=True)
         lock_context = (self.replacement_lock or _local_replacement_lock)(doc_id, doc_version_epoch)
-        with lock_context:
-            self.ensure_collection()
-            from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
+        with epoch_lock:
+            with lock_context:
+                self.ensure_collection()
+                from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
 
-            epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=doc_version_epoch))]
-            if doc_version_epoch == "default":
-                # Treat pre-slice points as members of the legacy default snapshot.
-                epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
-            existing_records = []
-            offset = None
-            source_filter = Filter(
-                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))],
-                should=epoch_conditions,
-            )
-            while True:
-                records, offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=source_filter,
-                    limit=256,
-                    with_payload=["chunk_index", "content", "role_mask", "dept_mask", "status"],
-                    with_vectors=False,
-                    offset=offset,
+                epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=doc_version_epoch))]
+                if doc_version_epoch == "default":
+                    # Treat pre-slice points as members of the legacy default snapshot.
+                    epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
+                existing_records = []
+                offset = None
+                source_filter = Filter(
+                    must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))],
+                    should=epoch_conditions,
                 )
-                existing_records.extend(records)
-                if offset is None:
-                    break
-
-            if existing_records:
-
-                def signature(payload):
-                    return (
-                        payload.get("chunk_index"),
-                        payload.get("content"),
-                        payload.get("role_mask"),
-                        payload.get("dept_mask"),
-                        payload.get("status"),
+                while True:
+                    records, offset = self.client.scroll(
+                        collection_name=self.collection_name,
+                        scroll_filter=source_filter,
+                        limit=256,
+                        with_payload=["chunk_index", "content", "role_mask", "dept_mask", "status"],
+                        with_vectors=False,
+                        offset=offset,
                     )
+                    existing_records.extend(records)
+                    if offset is None:
+                        break
 
-                existing_signature = sorted((signature(record.payload or {}) for record in existing_records), key=repr)
-                desired_signature = sorted((signature(point.payload or {}) for point in points), key=repr)
-                if existing_signature == desired_signature and len(existing_records) == len(points):
-                    return
-                raise ValueError(
-                    "knowledge epochs are immutable: changed content, permissions, or deletion requires a new epoch"
-                )
+                sealed = self._is_epoch_sealed(doc_version_epoch)
+                if sealed:
+                    if existing_records:
+                        existing_signature = self._document_signature(
+                            record.payload or {} for record in existing_records
+                        )
+                        desired_signature = self._document_signature(point.payload or {} for point in points)
+                        if existing_signature == desired_signature and len(existing_records) == len(points):
+                            return
+                    if not existing_records and not points:
+                        return
+                    raise ValueError(f"knowledge epoch {doc_version_epoch!r} is sealed; write to a new epoch")
 
-            if points:
-                self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+                existing_ids = [record.id for record in existing_records]
+                if existing_ids:
+                    # Staging snapshots are not queryable as the active epoch; archive first to fail closed.
+                    self.client.set_payload(
+                        collection_name=self.collection_name,
+                        payload={"status": "archived"},
+                        points=existing_ids,
+                        wait=True,
+                    )
+                if points:
+                    self.client.upsert(collection_name=self.collection_name, points=points, wait=True)
+                replacement_ids = {point.id for point in points}
+                stale_ids = [point_id for point_id in existing_ids if point_id not in replacement_ids]
+                if stale_ids:
+                    self.client.delete(collection_name=self.collection_name, points_selector=stale_ids, wait=True)
+
+    @staticmethod
+    def _document_signature(payloads):
+        def signature(payload):
+            return (
+                payload.get("chunk_index"),
+                payload.get("content"),
+                payload.get("role_mask"),
+                payload.get("dept_mask"),
+                payload.get("status"),
+            )
+
+        return sorted((signature(payload) for payload in payloads), key=repr)
+
+    def _epoch_seal_id(self, epoch: str) -> str:
+        return str(uuid.uuid5(_POINT_NAMESPACE, f"epoch-seal:{epoch}"))
+
+    def _is_epoch_sealed(self, epoch: str) -> bool:
+        records = self.client.retrieve(
+            collection_name=self.collection_name,
+            ids=[self._epoch_seal_id(epoch)],
+            with_payload=True,
+            with_vectors=False,
+        )
+        return bool(records and (records[0].payload or {}).get("epoch_state") == "sealed")
+
+    def seal_epoch(self, epoch: str) -> None:
+        """Seal a staged epoch before activating it through application configuration."""
+        _validate_epoch(epoch)
+        with _local_epoch_lock(epoch, shared=False):
+            self.ensure_collection()
+            from qdrant_client.http.models import PointStruct
+
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=[
+                    PointStruct(
+                        id=self._epoch_seal_id(epoch),
+                        vector=[1.0] + [0.0] * (self.dimension - 1),
+                        payload={
+                            "doc_type": "epoch_manifest",
+                            "epoch_state": "sealed",
+                            "doc_version_epoch": epoch,
+                            "status": "archived",
+                        },
+                    )
+                ],
+                wait=True,
+            )
 
     def _build_points(self, chunks: list[TextChunk], vectors: list[list[float]]):
         from qdrant_client.http.models import PointStruct
@@ -462,6 +550,8 @@ def configured_text_ingestion_service():
     embedding_batch_size = int(knowledge_base.get("embedding_batch_size", 32))
     max_document_bytes = int(knowledge_base.get("max_document_bytes", 131_072))
     max_chunks = int(knowledge_base.get("max_chunks", 256))
+    writer = QdrantTextWriter(client, collection, dimension)
+    writer.seal_epoch(config.get("knowledge_version_epoch", "default"))
     return TextIngestionService(
         DocumentProcessor(
             chunk_size,
@@ -471,5 +561,5 @@ def configured_text_ingestion_service():
             knowledge_base.get("data_dir", "./data"),
         ),
         BGETextEmbedder(embedding["model_path"], dimension, embedding_batch_size),
-        QdrantTextWriter(client, collection, dimension),
+        writer,
     )
