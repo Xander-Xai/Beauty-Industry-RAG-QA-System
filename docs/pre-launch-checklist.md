@@ -7,6 +7,8 @@
 - [ ] 准备知识库索引：运行 `run_offline.py create-index`，或确认已存在由其他流程建立的 Qdrant/Elasticsearch 索引
 - [ ] 采用 `app.py` 单体 `/api/*` 主线；微服务目录需要独立验证其与当前前端的契约
 - [ ] 生成并配置 JWT 密钥
+- [ ] 确认生产认证为 RS256（`JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM=RS256`）；仅当需要兼容旧 HS256 token 时才设置 `JWT_SECRET`
+- [ ] 验证 RS256 登录 → refresh → 受保护接口鉴权链路
 - [ ] 设置 `AUTH_DEV_MODE=false`
 - [ ] 设置 `CORS_ORIGINS`
 - [ ] 设置 `REDIS_PASSWORD`
@@ -26,6 +28,7 @@
 - [ ] 验证前端 `Session` 面板对应 `GET /api/dialog_history`
 - [ ] 验证前端 `Stats` 面板对应 `GET /api/stats`
 - [ ] 验证证据文档通过预签名链接打开，而不是直接裸跳转 API
+- [ ] 验证文档或查询权限元数据缺失/非法时 fail closed（拒绝访问，而不是按公开处理）
 - [ ] 验证管理员角色不会被 `rd` 等普通角色误判
 - [ ] 验证前端构建产物可由 FastAPI 正确挂载
 - [ ] 验证 `Dockerfile` 健康检查命中 `/api/health`

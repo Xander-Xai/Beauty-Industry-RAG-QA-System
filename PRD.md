@@ -13,7 +13,7 @@
 | RAGAS | Partial | Harness source and data exist; package is excluded from default dependencies pending an upstream security fix; no quality threshold is certified |
 | QLoRA | Partial | Training utility and example data exist; trained output and reproducible result are not included |
 | AdapterManager | Partial | PEFT lifecycle code integrates with `LLMClient`; actual loading requires configuration, dependencies and adapter assets |
-| RBAC | Partial | Runtime auth/RBAC code exists; deployment policy and end-to-end access still require verification |
+| RBAC | Partial | Runtime auth/RBAC code exists and enforces a uint32 mask contract with fail-closed handling of missing/malformed metadata; deployment policy and end-to-end access still require verification |
 | Cache | Partial | Cache implementations and metrics exist; the complete PRD invalidation design is not certified |
 | KV admission | Partial | Admission control code exists; capacity behavior requires workload-specific measurement |
 | Performance metrics | Design targets | Numerical latency/QPS claims below have no benchmark artifact and are not verified production results |
@@ -75,17 +75,21 @@ JSON Lines 中间产物未采用，解析结果以有序 block（含 page/headin
 采用多 Collection 物理隔离解决维度差异：
 ● rag_text_768：存储文档切块与 OCR 文本向量（768d）。
 ● rag_image_512：存储图片 CLIP 向量（512d），含 image_uri。
-权限字段优化：使用 int32 位图替代数组，单条判断 O(1)，过滤复杂度 O(K)（K 为 ANN 候选数）。Qdrant 使用 Cosine 距离，nlist 自适应策略：nlist ≈ sqrt(N) 或 N/1000，与 nprobe 联动调优。
+权限字段优化：使用 uint32 位图替代数组，单条判断 O(1)，过滤复杂度 O(K)（K 为 ANN 候选数）。RBAC 掩码契约以 uint32 为准（`0` 表示公开/无限制；`0xFFFFFFFF` 为 super_admin 绕过；配置的 `admin` 掩码同样绕过）。Qdrant 使用 Cosine 距离；仓库当前未声明任何 IVF / ANN 调优参数，检索行为以实际 collection 与 writer 为准。
 3.5 Bitmask 编码规则与访问判定
-● 0x00000000：全公开文档，任何用户可访问。
-● 0xFFFFFFFF：超级管理员掩码，绕过所有检查。
-● 普通 RBAC：按位与运算匹配。
-统一访问判断规则（应用层）：
+● 掩码契约：所有 role_mask / dept_mask 均为 uint32（0 ≤ mask ≤ 0xFFFFFFFF）。
+● 0x00000000：公开/无限制；role 与 dept 同时为 0 时为全公开文档，任何用户可访问。
+● 配置的 admin 掩码与 super_admin_mask（0xFFFFFFFF）都绕过所有检查。
+● 普通 RBAC：role 位与 dept 位均需匹配（doc_dept_mask=0 表示不限制部门）。
+● 缺失、类型错误、负数或超过 uint32 的权限元数据必须 fail closed（拒绝），不得当作公开。
+统一访问判断规则（应用层，实现于 common/auth.py）：
 def is_allowed(doc_role_mask, user_role_mask, doc_dept_mask, user_dept_mask):
-    if doc_role_mask == 0:
-        return (doc_dept_mask == 0) or ((doc_dept_mask & user_dept_mask) != 0)
-    if user_role_mask == 0xFFFFFFFF:
+    if is_admin_role_mask(user_role_mask):  # 配置的 admin 或 super_admin_mask
         return True
+    if doc_role_mask == 0:
+        if doc_dept_mask == 0:
+            return True
+        return (doc_dept_mask & user_dept_mask) != 0
     role_ok = (doc_role_mask & user_role_mask) != 0
     dept_ok = (doc_dept_mask == 0) or ((doc_dept_mask & user_dept_mask) != 0)
     return role_ok and dept_ok
