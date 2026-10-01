@@ -12,13 +12,18 @@
 - [ ] 设置 `AUTH_DEV_MODE=false`
 - [ ] 设置 `CORS_ORIGINS`
 - [ ] 设置 `REDIS_PASSWORD`
+- [ ] 设置 `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD`，确认 ES 启用 `xpack.security`
 - [ ] 设置 `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`
 - [ ] 设置 `SERVICE_AUTH_TOKEN`
+- [ ] （反向代理部署）设置 `TRUSTED_PROXIES`，确认代理确实追加 `X-Forwarded-For`
 - [ ] 确认项目根目录 `.env` 已被当前启动进程自动加载
 - [ ] 构建前端，确认 `frontend/dist` 已生成
-- [ ] 验证 `GET /api/health`、`GET /api/stats`、`GET /api/metrics`、`GET /api/auth/metadata`
+- [ ] 验证 `GET /api/health` 公开可访问
+- [ ] 验证 `GET /api/stats`、`GET /api/metrics` 未认证返回 401、带 token 返回 200
+- [ ] 验证 `GET /api/auth/metadata`
 - [ ] 验证管理员可登录、创建用户、更新角色/部门
 - [ ] 验证不同角色访问 `/api/media/{doc_id}` 时权限正确
+- [ ] 验证多 worker 下 Redis 会话/登录限流共享；Redis 停止后降级内存不崩溃
 
 ## P1 联调与功能验证
 
@@ -53,7 +58,7 @@
 ## P2 运维准备
 
 - [ ] 导入 Grafana 仪表盘
-- [ ] 配置 Prometheus 抓取
+- [ ] 配置 Prometheus 抓取（`/api/metrics` 需要 Bearer token）
 - [ ] 制定 Redis / Qdrant / MinIO 备份策略
 - [ ] 准备 HTTPS 与反向代理配置
 - [ ] 组织管理员与运维演练

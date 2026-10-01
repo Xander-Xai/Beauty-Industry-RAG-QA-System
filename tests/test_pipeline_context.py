@@ -10,12 +10,15 @@ Pipeline Context 核心数据结构测试 (core/pipeline_context.py)
 - SessionState.cleanup_expired 过期清理
 """
 
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
+
+import pytest
 
 from core.pipeline_context import (
     AnswerGateResult,
@@ -356,3 +359,161 @@ class TestDataClassStructure:
         """RecallResult 默认 metadata 为空"""
         r = RecallResult(doc_id="d1", content="c", score=0.5, source="dense_bge")
         assert r.metadata == {}
+
+
+# ── Redis 会话持久化 ──
+
+
+class FakeRedis:
+    """最小 Redis 客户端替身，仅覆盖 SessionState 使用的方法。"""
+
+    def __init__(self):
+        self.store: dict[str, str] = {}
+        self.expires: dict[str, int] = {}
+        self.fail = False
+
+    def setex(self, key, ttl, value):
+        if self.fail:
+            raise RuntimeError("redis down")
+        self.store[key] = value
+        self.expires[key] = ttl
+
+    def get(self, key):
+        if self.fail:
+            raise RuntimeError("redis down")
+        return self.store.get(key)
+
+    def expire(self, key, ttl):
+        if self.fail:
+            raise RuntimeError("redis down")
+        self.expires[key] = ttl
+        return True
+
+    def scan(self, cursor=0, match=None, count=100):
+        return 0, list(self.store.keys())
+
+    def delete(self, key):
+        self.store.pop(key, None)
+
+
+@pytest.fixture
+def fake_redis(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr("core.pipeline_context._get_redis_client", lambda: fake)
+    return fake
+
+
+class TestSessionRedisPersistence:
+    """Redis 会话持久化闭环（序列化 / 反序列化 / 降级）。"""
+
+    def setup_method(self):
+        SessionState._sessions.clear()
+
+    def test_to_dict_is_json_serializable_with_pydantic_objects(self):
+        """dialog_rounds / async_clip_results 含 Pydantic 对象时仍可 JSON 序列化。"""
+        state = SessionState(session_id="s")
+        state.add_round(
+            "问",
+            "答",
+            QueryRewriteResult(rewritten_query="重写", business_type="development"),
+        )
+        state.store_async_clip_result([RecallResult(doc_id="img", content="c", score=0.9, source="clip_visual")])
+        # 不抛 TypeError 即为通过
+        json.dumps(state._to_dict())
+
+    def test_empty_session_roundtrip(self, fake_redis):
+        state = SessionState.get_or_create("empty")
+        loaded = SessionState._try_get_redis("empty")
+        assert loaded is not None
+        assert loaded.session_id == "empty"
+        assert loaded.dialog_rounds == []
+        assert loaded.locked_doc_ids == []
+        assert loaded.async_clip_results == []
+        assert loaded.created_at == state.created_at
+
+    def test_dialog_and_rewrite_roundtrip(self, fake_redis):
+        state = SessionState.get_or_create("dialog")
+        rewrite = QueryRewriteResult(
+            rewritten_query="法规查询",
+            business_type="regulation",
+            intent="compliance",
+            confidence=0.8,
+        )
+        state.add_round("法规?", "答案", rewrite)
+
+        loaded = SessionState._try_get_redis("dialog")
+        assert loaded is not None
+        assert len(loaded.dialog_rounds) == 1
+        assert loaded.dialog_rounds[0]["user_input"] == "法规?"
+        assert loaded.dialog_rounds[0]["response"] == "答案"
+        assert isinstance(loaded.dialog_rounds[0]["rewrite"], QueryRewriteResult)
+        assert loaded.dialog_rounds[0]["rewrite"].rewritten_query == "法规查询"
+        assert isinstance(loaded.last_rewrite_result, QueryRewriteResult)
+        assert loaded.last_rewrite_result.business_type == "regulation"
+
+    def test_evidence_lock_roundtrip(self, fake_redis):
+        state = SessionState.get_or_create("lock")
+        state.lock_evidence(["doc_a", "doc_b"])
+
+        loaded = SessionState._try_get_redis("lock")
+        assert loaded is not None
+        assert loaded.locked_doc_ids == ["doc_a", "doc_b"]
+
+    def test_async_clip_recall_roundtrip(self, fake_redis):
+        state = SessionState.get_or_create("clip")
+        state.store_async_clip_result(
+            [
+                RecallResult(
+                    doc_id="img_1",
+                    content="图片",
+                    score=0.7,
+                    source="clip_visual",
+                    metadata={"image_uri": "s3://x"},
+                )
+            ]
+        )
+
+        loaded = SessionState._try_get_redis("clip")
+        assert loaded is not None
+        assert len(loaded.async_clip_results) == 1
+        assert isinstance(loaded.async_clip_results[0], RecallResult)
+        assert loaded.async_clip_results[0].metadata == {"image_uri": "s3://x"}
+
+    def test_ttl_refreshed_on_read(self, fake_redis):
+        SessionState.get_or_create("ttl")
+        fake_redis.expires["session:ttl"] = 1
+        SessionState._try_get_redis("ttl")
+        assert fake_redis.expires["session:ttl"] == SessionState._SESSION_REDIS_TTL
+
+    def test_multiple_instances_share_redis_state(self, fake_redis):
+        first = SessionState.get_or_create("shared")
+        first.add_round("q", "a")
+        second = SessionState._try_get_redis("shared")
+        assert second is not None
+        assert second.dialog_rounds[0]["user_input"] == "q"
+
+    def test_redis_unavailable_falls_back_to_memory(self, monkeypatch):
+        monkeypatch.setattr("core.pipeline_context._get_redis_client", lambda: None)
+        state = SessionState.get_or_create("mem")
+        state.add_round("q", "a")
+        assert SessionState._sessions["mem"] is state
+        assert len(state.dialog_rounds) == 1
+
+    def test_redis_write_failure_does_not_raise(self, fake_redis):
+        fake_redis.fail = True
+        state = SessionState.get_or_create("wfail")
+        state.add_round("q", "a")  # must not raise
+        assert len(state.dialog_rounds) == 1
+
+    def test_malformed_payload_falls_back(self, fake_redis):
+        fake_redis.store["session:bad"] = "{not-json"
+        assert SessionState._try_get_redis("bad") is None
+        # get_or_create still yields a usable memory session
+        state = SessionState.get_or_create("bad")
+        assert state.session_id == "bad"
+
+    def test_incompatible_schema_version_ignored(self, fake_redis):
+        fake_redis.store["session:old"] = json.dumps(
+            {"schema_version": 0, "session_id": "old", "created_at": time.time()}
+        )
+        assert SessionState._try_get_redis("old") is None

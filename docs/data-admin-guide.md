@@ -30,6 +30,10 @@ python3 -m pip install -r offline/requirements-ocr.txt
 - `transformers` / `torch` 在 `requirements.txt` 中；模型在首次使用时懒加载，不在 import
   阶段下载或联网。
 - 真实 BGE smoke：`python3 scripts/smoke_bge_ingestion.py`（缺少模型资产时退出码 3）。
+- Elasticsearch 认证：离线 Elasticsearch writer 与在线 `retrieval/bm25_retriever.py` 都优先读取
+  `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` 环境变量，再回退 `config.json`。Compose 默认
+  启用 `xpack.security.enabled=true`，因此运行离线命令时也必须提供这些凭据；不要把无认证 ES
+  当作生产默认配置。
 
 ## 3. 数据目录与文档身份
 

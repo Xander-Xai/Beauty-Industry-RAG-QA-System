@@ -19,9 +19,13 @@ Evidence Score =
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from common.config import get_config_dict
 from common.models import EvidenceGateResult
+
+if TYPE_CHECKING:
+    from common.models import EvidenceGateResult
 
 config = get_config_dict()
 
@@ -32,9 +36,8 @@ class EvidenceEnsembleGate:
     """
     Evidence Ensemble Gate - 多维度证据投票
 
-    权重 w1-w4 通过离线日志学习得到，
-    优化目标为最大化人工标注的"回答可用性"与"点击率"的相关性，
-    每周更新一次。
+    权重 w1-w4 当前从配置读取，也支持 A/B 覆盖。仓库包含离线反馈
+    调参能力，但没有有效生产反馈数据时不能声称权重已经自动学习。
     """
 
     def __init__(self):

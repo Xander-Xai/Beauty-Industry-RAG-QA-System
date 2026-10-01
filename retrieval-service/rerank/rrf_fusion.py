@@ -21,6 +21,17 @@ from common.models import RecallResult
 logger = logging.getLogger(__name__)
 
 
+def _resolve_path_weight(path_name: str, weights: dict[str, float]) -> float:
+    """Resolve path-specific weights while supporting legacy semantic aliases."""
+    if path_name in weights:
+        return weights[path_name]
+    if path_name == "clip_visual":
+        return weights.get("w_clip", 1.0)
+    if "ocr" in path_name:
+        return weights.get("w_ocr", 0.8)
+    return weights.get("w_text", 1.0)
+
+
 def rrf_fusion(
     results_map: dict[str, list[RecallResult]],
     k: int = 60,
@@ -51,7 +62,7 @@ def rrf_fusion(
     doc_chunks: dict[str, dict[str, dict[str, str]]] = defaultdict(dict)
 
     for path_name, results in results_map.items():
-        path_weight = weights.get(path_name, 1.0)
+        path_weight = _resolve_path_weight(path_name, weights)
         if not results:
             continue
 

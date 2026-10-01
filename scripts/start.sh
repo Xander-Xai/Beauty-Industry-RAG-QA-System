@@ -83,9 +83,9 @@ sleep 3
 # Step 6: 启动应用
 echo "Step 6/6  启动应用服务..."
 if [ "$DEPLOYMENT_MODE" = "production" ]; then
-    docker compose $COMPOSE_FILES up -d app vllm-gen-14b vllm-rewrite vllm-gen-4b
+    docker compose $COMPOSE_FILES up -d app vllm-gen-14b vllm-4b
 elif [ "$DEPLOYMENT_MODE" = "testing" ]; then
-    docker compose $COMPOSE_FILES up -d app vllm-rewrite vllm-gen-4b
+    docker compose $COMPOSE_FILES up -d app vllm-4b
 else
     docker compose $COMPOSE_FILES up -d app
 fi

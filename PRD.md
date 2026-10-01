@@ -21,6 +21,20 @@
 All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Historical implementation plans under `docs/superpowers/` are not current implementation evidence.
 
 化妆品企业级多模态 RAG 智能问答系统（双卡版）
+
+> **注意**：本文档为系统设计阶段的 PRD，描述的是**双卡目标架构**（双 GPU + 微服务）。当前仓库已验证的主线为 **FastAPI 单体后端**（`app.py`），微服务目录保留但尚未完成全链路契约对齐。具体实现以 [`README.md`](README.md) 中的「当前已验证主线」为准。
+
+> **Runtime reconciliation（v2.5）**：以下 PRD 设计与当前实现不一致；正文保留设计意图，但**不得作为当前实现证据**。
+>
+> | PRD 章节 | PRD 设计 | 当前实现（code/config/tests） |
+> |---|---|---|
+> | §4.2 / §5.1 | 历史/目标设计：双 vLLM 实例（独立的 vLLM-Rewrite 与 vLLM-Gen-4B，端口 8101/8102） | **单一共享 4B 端点** `gpu1.models.vllm_4b`（端口 8101）；rewrite 与简单生成共用 `gen_4b` endpoint，复杂查询走 `gen_14b`（Qwen3-14B） |
+> | §3.6 / §10.5 | `knowledge_version_epoch` 由 Airflow 自动 bump / 切换 active epoch | 构建（build/validate/seal）可自动化；**激活 epoch 是显式人工发布动作**，未实现自动 activation |
+> | §13 / §4.1 | 微服务拆分（`/rewrite`、`/generate`、`api-gateway/`）为部署单位 | 已验证主线为 FastAPI 单体 `app.py`；微服务目录保留但未完成与当前前端的全链路契约对齐 |
+> | §2 / §5 / §7 | 延迟/QPS/吞吐数字 | 无 benchmark artifact，均为**设计目标/模型估算**，不是实测生产结果 |
+>
+> **运维契约（v2.5，已实现）**：`GET /api/stats` 与 `GET /api/metrics` 需要身份认证（`require_identity`）；Docker Compose 的 Elasticsearch 启用 `xpack.security.enabled=true` 并要求 `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD`；登录限流仅在配置 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`。操作细节见 [docs/deployment-guide.md](docs/deployment-guide.md) 与 [docs/operations-guide.md](docs/operations-guide.md)。
+
 1. 项目背景
 面向中小型化妆品企业（研发/品质/法规/销售），构建统一知识问答系统，解决成分/法规/配方知识分散、法规体系复杂（8大体系）、非结构化数据占比高、传统知识库不支持多轮与跨模态查询等问题。
 2. 系统目标与指标
@@ -116,17 +130,19 @@ Query → 用户身份解析 → 二级缓存（L1/L2）
 ● L1 HIT：直接返回（仅服务全公开文档，无需二次校验）
 ● L2 HIT：缓存 Key 已包含权限掩码，命中即表示权限通过，直接返回
 ● MISS：复杂度评估 → Query Rewrite（输出 business_type/intent）→ 权限前置绑定 → 双 Embedding 路由（BGE + CLIP Text）→ 并行多路召回（权限与版本下推） → Union 合并与去冗余 → BiEncoder（宽保留）→ Rerank Batch Aggregator（GPU 微批聚合） → CrossEncoder Ensemble → Evidence Ensemble Gate（投票机制） → LLM 生成 → Answer Gate（NLI 校验）
-4.2 执行层隔离（双 vLLM 实例与轻量路由）
+4.2 执行层隔离（当前实现：单一共享 4B 端点；以下双实例为历史/目标设计）
+【当前实现】仓库使用**单一共享 4B vLLM 端点**：`config.json` 的 `gpu1.models.vllm_4b`（端口 8101）同时服务 Query Rewrite 与简单生成（endpoint 键 `gen_4b`），复杂生成路由到 `gpu0.models.gen_14b`（Qwen3-14B，端口 8100）。路由实现见 `router/stateless_router.py`。Compose 覆盖层服务名为 `vllm-4b` / `vllm-gen-14b`。
+【历史/目标设计】以下双 vLLM 实例描述为原始目标设计，**不代表当前实现**：
 设计原则：遵循 vLLM 原生 continuous batching 机制，不在外部实现任何请求队列或优先级抢占逻辑。系统仅做无状态路由分发，所有并发调度完全交由 vLLM 内部 Scheduler 处理。
-● vLLM-Rewrite：Qwen3-4B，max_tokens=192，专用 KV Cache。
-● vLLM-Gen-4B：Qwen3-4B，KV Cache 独立。
-路由规则（Stateless Dispatcher）：
-● Rewrite 请求直接转发至 vLLM-Rewrite 实例，不经过队列排序，不抢占 Gen 资源。
-● Gen 请求直接转发至 vLLM-Gen-4B 或后续 14B 模型实例。
+● vLLM-Rewrite：Qwen3-4B，max_tokens=192，专用 KV Cache。（历史设计）
+● vLLM-Gen-4B：Qwen3-4B，KV Cache 独立。（历史设计）
+路由规则（Stateless Dispatcher，历史设计）：
+● Rewrite 请求直接转发至 vLLM-Rewrite 实例（历史设计），不经过队列排序，不抢占 Gen 资源。
+● Gen 请求直接转发至 vLLM-Gen-4B 或后续 14B 模型实例（历史设计）。
 ● 删除项：原 CPU Orchestrator 中的优先级队列、Redis 排队状态管理、Rewrite 超时降级调度逻辑。
-● 关键修正：Rewrite 定位为轻量预处理阶段，若 vLLM-Rewrite 实例繁忙（由 Admission Control 判断 KV 压力），则直接在应用层触发结构兜底（降级为规则解析），绝不进入阻塞式等待队列，避免破坏 vLLM 的批次合并效率。
+● 关键修正（历史设计）：Rewrite 定位为轻量预处理阶段，若 vLLM-Rewrite 实例繁忙（由 Admission Control 判断 KV 压力），则直接在应用层触发结构兜底（降级为规则解析），绝不进入阻塞式等待队列，避免破坏 vLLM 的批次合并效率。
 4.3 模型分级路由
-● BERT 复杂度评估（0.3B，二分类）：简单问题 → vLLM-Gen-4B；复杂问题 → Qwen3-14B (4-bit NF4)。
+● BERT 复杂度评估（0.3B，二分类）：简单问题 → 共享 4B 端点（`gen_4b`）；复杂问题 → Qwen3-14B (4-bit NF4)（`gen_14b`）。
   状态：仓库包含 QLoRA 训练脚本、样本数据和 PEFT AdapterManager 代码；本 PRD 不据此声称训练已验证。训练产物需单独生成，adapter 加载还依赖运行配置、依赖和模型资产。
 4.4 Query Rewrite（路由增强器，非核心强依赖）
 定位修正：Rewrite 作为“路由增强器”而非必经中心节点，主链路已具备独立检索与生成能力。
@@ -210,7 +226,7 @@ vLLM 的 Prefix Caching 仅用于加速相同前缀的生成请求，不能跨�
 5.1 硬件与组件分配
 层级	硬件	组件	显存/资源
 生成推理层	GPU0	Qwen3-14B (4-bit NF4, vLLM)	~8GB 模型 + ≤8GB KV Cache
-控制与轻推理层	GPU1	vLLM-Rewrite (4B)、vLLM-Gen-4B、BERT (0.3B)、CLIP Image Encoder、Rerank Batch Service（CrossEncoder/NLI/BiEncoder/CLIP Text/BLIP）	~7.0GB + Rerank 动态占用
+控制与轻推理层	GPU1	共享 4B vLLM 端点 (`vllm_4b`，rewrite + 简单生成)、BERT (0.3B)、CLIP Image Encoder、Rerank Batch Service（CrossEncoder/NLI/BiEncoder/CLIP Text/BLIP）	~7.0GB + Rerank 动态占用
 重排序与批处理层	GPU1 (原 CPU 集群迁移)	CrossEncoder Ensemble、BiEncoder、CLIP Text Encoder、NLI、BLIP（GPU Batch + 微批聚合器）	统一 GPU1 调度，CPU 仅负责轻量逻辑
 GPU1 调度（无状态路由 + GPU 批处理模式）：
 ● 架构原则：去除外部 CPU Orchestrator 调度排队。各模型作为独立 vLLM 实例或 GPU Batch Service 运行，系统上层仅包含一个无状态 Router。
@@ -421,7 +437,8 @@ L2 Private Cache	query_hash + version + role_mask + dept_mask	存储特定权限
 10.5 缓存失效策略：版本切换替代主动删除
 ● ❌ 原方案：expiry_date 字段更新 → 相关缓存批量删除 → 引发缓存雪崩。
 ● ✅ 修改后：
-  ○ 知识库发布/文档过期时，Airflow 更新全局 knowledge_version_epoch（如 20260411_02）。
+  ○ 【当前实现】epoch 的**激活是显式人工发布步骤**：调度器最多执行 build/validate/seal，不自动切换生产 `active_epoch`（见 §3.6）。
+  ○ 【历史/目标设计】原设计由 Airflow 在知识库发布/文档过期时自动更新全局 `knowledge_version_epoch`（如 20260411_02）；该自动 activation 未实现。
   ○ 新请求使用新 epoch 生成 Cache Key，旧 epoch 的缓存不再被访问，由 Redis LRU 自然淘汰。
   ○ 无需主动 Invalidate，彻底消除缓存失效风暴。
 10.6 语义安全缓存控制
@@ -479,7 +496,7 @@ KV_Pressure = current_used_kv / max_kv_capacity
 ● /generate：接收 rewrite 结果，执行完整 RAG 流程生成答案，P99≤3.0s。
 核心设计价值总结
 1. Query Rewrite 定位为“路由增强器”而非核心强依赖，失败时降级为规则兜底，消除 503 单点风险。
-2. 双 vLLM 实例 + 无状态轻量路由，废除外部优先级队列调度，将并发控制完全交还给 vLLM 原生 continuous batching，消除双层调度冲突与批次碎片问题。
+2. 无状态轻量路由 + 交给 vLLM 原生 continuous batching（历史设计为双 vLLM 实例；当前实现为单一共享 4B 端点 + 14B），废除外部优先级队列调度，消除双层调度冲突与批次碎片问题。
 3. CLIP 判别式同步路由 + 异步补充，确保多模态召回在首轮生效，同时控制延迟且实现有效预热。
 4. Bitmask 权限前置下推 + 缓存 Key 原子绑定，将权限从运行时过滤上升为索引约束与缓存分区依据，O(1) 复杂度，消除 cache hit ≠ effective hit 的一致性问题。
 5. 文档版本 epoch 化管理，用版本切换替代实时 expiry 判断与缓存主动删除，彻底避免缓存失效风暴。

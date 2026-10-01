@@ -1,6 +1,8 @@
 """Auth API routes -- login, refresh, user management."""
 
+import ipaddress
 import logging
+import os
 import time
 from collections import defaultdict
 
@@ -26,12 +28,120 @@ _login_attempts: dict = defaultdict(list)
 _LOGIN_RATE_LIMIT = 5
 _LOGIN_RATE_WINDOW = 60.0  # 秒
 
+# Redis 备用速率限制客户端（惰性初始化）
+_redis_rate_limiter = None
+
+
+def _get_redis_rate_limiter():
+    """惰性初始化 Redis 速率限制客户端。Redis 不可用时返回 None。"""
+    global _redis_rate_limiter
+    if _redis_rate_limiter is None:
+        try:
+            redis_pw = os.environ.get("REDIS_PASSWORD") or os.environ.get("REDIS_CACHE_PASSWORD", "")
+            if redis_pw:
+                import redis as _redis
+
+                _redis_rate_limiter = _redis.Redis(
+                    host=os.environ.get("REDIS_CACHE_HOST", "localhost"),
+                    port=int(os.environ.get("REDIS_CACHE_PORT", 6379)),
+                    db=int(os.environ.get("REDIS_CACHE_DB", 0)),
+                    password=redis_pw,
+                    decode_responses=True,
+                    socket_connect_timeout=1,
+                )
+                _redis_rate_limiter.ping()
+                logger.info("Redis 速率限制客户端已连接")
+        except Exception:
+            _redis_rate_limiter = None  # 回退到内存限流
+    return _redis_rate_limiter
+
+
+def _check_redis_rate_limit(ip: str) -> bool:
+    """
+    尝试使用 Redis 进行速率限制。
+
+    Returns:
+        True = 使用 Redis 检查成功，False = Redis 不可用，需回退内存。
+    """
+    rl = _get_redis_rate_limiter()
+    if rl is None:
+        return False
+
+    key = f"ratelimit:login:{ip}"
+    try:
+        current = rl.get(key)
+        if current is not None and int(current) >= _LOGIN_RATE_LIMIT:
+            raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后重试")
+        pipe = rl.pipeline()
+        pipe.incr(key, 1)
+        pipe.expire(key, int(_LOGIN_RATE_WINDOW))
+        pipe.execute()
+        return True
+    except HTTPException:
+        raise
+    except Exception:
+        return False
+
+
+def _trusted_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    """解析 TRUSTED_PROXIES（逗号分隔的 IP/CIDR）；未配置时返回空列表。
+
+    安全默认：未显式配置可信代理时，永不信任客户端提供的
+    ``X-Forwarded-For``，只使用 TCP 对端地址。
+    """
+    raw = os.environ.get("TRUSTED_PROXIES", "")
+    networks: list[ipaddress._BaseNetwork] = []
+    for part in raw.split(","):
+        entry = part.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("忽略无效的 TRUSTED_PROXIES 条目: %r", entry)
+    return networks
+
+
+def _is_trusted_proxy(ip: str, networks: list[ipaddress._BaseNetwork]) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in network for network in networks)
+
+
+def _get_client_ip(request: Request) -> str:
+    """获取用于限流的客户端 IP。
+
+    只有当 TCP 对端本身属于 ``TRUSTED_PROXIES`` 时，才解析
+    ``X-Forwarded-For``；从右向左跳过可信代理，返回第一个不可信地址。
+    这样，未受信任的客户端无法通过伪造 XFF 切换限流身份。
+    """
+    peer = request.client.host if request.client else "unknown"
+    networks = _trusted_proxy_networks()
+    if not networks or not _is_trusted_proxy(peer, networks):
+        return peer
+
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if not forwarded:
+        return peer
+
+    chain = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+    for candidate in reversed(chain):
+        if not _is_trusted_proxy(candidate, networks):
+            return candidate
+    return chain[0] if chain else peer
+
 
 def _check_login_rate_limit(ip: str):
-    """检查登录速率限制，超限抛出 HTTPException 429。"""
+    """检查登录速率限制（优先 Redis，兜底内存），超限抛出 HTTPException 429。"""
+    # 先尝试 Redis（多 worker 共享）
+    if _check_redis_rate_limit(ip):
+        return
+
+    # Redis 不可用时，回退到内存限流（单 worker 有效）
     now = time.time()
     attempts = _login_attempts[ip]
-    # 清理过期记录
     _login_attempts[ip] = [t for t in attempts if now - t < _LOGIN_RATE_WINDOW]
     if len(_login_attempts[ip]) >= _LOGIN_RATE_LIMIT:
         raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后重试")
@@ -162,8 +272,8 @@ async def auth_metadata():
 @router.post("/login", response_model=LoginResponse)
 async def login(req: LoginRequest, request: Request):
     """用户登录，返回 JWT token pair。"""
-    # H-4: 登录速率限制
-    client_ip = request.client.host if request.client else "unknown"
+    # H-4: 登录速率限制（支持反向代理 X-Forwarded-For）
+    client_ip = _get_client_ip(request)
     _check_login_rate_limit(client_ip)
 
     store = get_store()

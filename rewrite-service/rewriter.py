@@ -78,7 +78,7 @@ class QueryRewriter:
     """
 
     def __init__(self) -> None:
-        rewrite_cfg = config.get("gpu1", {}).get("models", {}).get("vllm_rewrite", {})
+        rewrite_cfg = config.get("gpu1", {}).get("models", {}).get("vllm_4b", {})
         port = rewrite_cfg.get("port", 8101)
         self._vllm_url = f"http://localhost:{port}/v1/chat/completions"
 

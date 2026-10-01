@@ -335,21 +335,21 @@ def main():
 
     launched = []
 
-    if args.service in ("all", "rewrite"):
-        rw = config["gpu1"]["models"]["vllm_rewrite"]
-        if args.dry_run:
-            logger.info(f"[DRY RUN] vllm-rewrite: port={rw['port']}")
-        else:
-            start_vllm_service("vllm-rewrite", rw["port"], rw["model_path"], rw["max_model_len"])
-            launched.append("vllm-rewrite")
-
     if args.service in ("all", "gen"):
-        gen_4b = config["gpu1"]["models"]["vllm_gen_4b"]
+        # 单 vLLM 4B 实例同时处理 Rewrite + Gen（同模型不同 prompt，无需两个实例）
+        gen_4b = config["gpu1"]["models"]["vllm_4b"]
+        gpu_mem_4b = gen_4b.get("gpu_memory_utilization", 0.4)
         if args.dry_run:
-            logger.info(f"[DRY RUN] vllm-gen-4b: port={gen_4b['port']}")
+            logger.info(f"[DRY RUN] vllm-4b: port={gen_4b['port']}, gpu_mem={gpu_mem_4b}")
         else:
-            start_vllm_service("vllm-gen-4b", gen_4b["port"], gen_4b["model_path"], gen_4b["max_model_len"])
-            launched.append("vllm-gen-4b")
+            start_vllm_service(
+                "vllm-4b",
+                gen_4b["port"],
+                gen_4b["model_path"],
+                gen_4b["max_model_len"],
+                gpu_memory_utilization=gpu_mem_4b,
+            )
+            launched.append("vllm-4b")
 
         # 生产模式才启动 14B；单卡模式跳过（由 llm_client._resolve_endpoint 降级到 4B）
         if is_production:

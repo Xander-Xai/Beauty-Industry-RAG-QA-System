@@ -4,13 +4,17 @@ RAGAS 评估器
 独立离线评估模块，用于基于 RAGAS 框架评估 RAG 系统质量。
 支持 CLI 接口和编程式调用。
 
-如果 RAGAS 未安装，evaluate() 会优雅降级返回全零分数。
+如果 RAGAS 未安装，evaluate() 会优雅降级返回全零分数 + ``_warning``。
+注意：零分是“未运行”的降级标记，不是质量结果。CI / 报告中必须显式标注
+UNAVAILABLE；使用 ``--require-ragas`` 可强制要求真实 RAGAS，缺依赖时直接失败。
 """
 
 import json
 import logging
 import os
+import sys
 from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +34,15 @@ def load_golden_set(path: str) -> list[dict]:
 
     dataset: list[dict] = []
     with open(path, encoding="utf-8") as f:
-        for line in f:
+        for line_num, line in enumerate(f, start=1):
             stripped = line.strip()
             if not stripped:
                 continue
-            dataset.append(json.loads(stripped))
+            try:
+                dataset.append(json.loads(stripped))
+            except json.JSONDecodeError as exc:
+                preview = stripped[:80] + "..." if len(stripped) > 80 else stripped
+                logger.warning("跳过无效 JSON 行 (line %d): %s — 内容: %s", line_num, exc, preview)
     return dataset
 
 
@@ -55,7 +63,7 @@ def format_for_ragas(
     """
     result: dict[str, list] = {
         "question": [item["question"] for item in dataset],
-        "answer": answers or [item["answer"] for item in dataset],
+        "answer": answers if answers is not None else [item["answer"] for item in dataset],
         "contexts": [item["contexts"] for item in dataset],
         "ground_truth": [item["ground_truth"] for item in dataset],
     }
@@ -70,14 +78,33 @@ class RAGASEvaluator:
         results = evaluator.evaluate()
     """
 
-    def __init__(self, dataset_path: str) -> None:
+    def __init__(
+        self,
+        dataset_path: str | None = None,
+        metrics: list[str] | None = None,
+    ) -> None:
         """初始化评估器。
 
         Args:
-            dataset_path: JSONL 黄金测试集路径。
+            dataset_path: JSONL 黄金测试集路径。为 None 时从 config 读取。
+            metrics: 默认指标列表。为 None 时从 config 读取。
         """
-        self._dataset_path = dataset_path
-        self._dataset = load_golden_set(dataset_path)
+        try:
+            from common.config import get_config
+
+            cfg = get_config().ragas
+            self._dataset_path = dataset_path or cfg.dataset_path
+            self._default_metrics = metrics or list(cfg.default_metrics)
+        except Exception:
+            self._dataset_path = dataset_path or "tests/evaluation/golden_set.jsonl"
+            self._default_metrics = metrics or [
+                "faithfulness",
+                "answer_relevancy",
+                "context_precision",
+                "context_recall",
+            ]
+        self._dataset = load_golden_set(self._dataset_path)
+        self._last_raw_result: Any = None  # 存储 RAGAS Result 对象（用于逐条评分提取）
 
     @property
     def dataset(self) -> list[dict]:
@@ -108,6 +135,9 @@ class RAGASEvaluator:
         if not self._dataset:
             logger.warning("数据集为空，跳过评估")
             return {}
+
+        if answers is not None and len(answers) != len(self._dataset):
+            raise ValueError(f"answers 长度 ({len(answers)}) 与数据集 ({len(self._dataset)}) 不匹配")
 
         _ALL_METRIC_NAMES = [
             "faithfulness",
@@ -155,7 +185,8 @@ class RAGASEvaluator:
         dataset = Dataset.from_dict(formatted)
 
         raw = ragas_evaluate(dataset=dataset, metrics=selected_metrics)
-        scores = {metric: getattr(raw, metric, 0.0) for metric in _ALL_METRICS}
+        self._last_raw_result = raw
+        scores = {metric: getattr(raw, metric, 0.0) for metric in selected_metric_names}
         return scores
 
     def evaluate_with_custom_answer_fn(
@@ -175,6 +206,54 @@ class RAGASEvaluator:
         answers = [answer_fn(item["question"], item["contexts"]) for item in self._dataset]
         return self.evaluate(answers=answers, metrics=metrics)
 
+    def evaluate_with_pipeline(
+        self,
+        pipeline,
+        metrics: list[str] | None = None,
+    ) -> dict[str, float]:
+        """使用 RAG 管线的实际输出进行端到端评估。
+
+        遍历数据集中的每个问题，通过管线生成答案，然后用管线答案评估。
+        注意：管线需提前初始化并连接好 vLLM / Qdrant / ES / Redis 等基础设施。
+
+        Args:
+            pipeline: 实现了 process(context) → {"answer": str} 的管线对象。
+            metrics: 要计算的指标列表。
+
+        Returns:
+            指标名称到分数的字典。
+        """
+        pipeline_answers: list[str] = []
+
+        for item in self._dataset:
+            try:
+                from core.pipeline_context import RequestContext
+
+                session_id = f"eval_{hash(item['question'])}"
+                ctx = RequestContext(
+                    user_input=item["question"],
+                    user_id="eval-user",
+                    session_id=session_id,
+                    user_role_mask=0,  # public
+                    user_dept_mask=0,
+                )
+                # 管线 process() 返回包含 answer 的响应
+                response = pipeline.process(ctx)
+                if isinstance(response, dict):
+                    answer = response.get("answer", "")
+                else:
+                    answer = getattr(response, "answer", "")
+                pipeline_answers.append(answer or "")
+            except Exception as exc:
+                logger.warning("管线处理问题 '%s' 失败: %s", item.get("question", "?"), exc)
+                pipeline_answers.append("")
+
+        if not pipeline_answers:
+            logger.warning("管线未生成任何答案，返回空结果")
+            return {}
+
+        return self.evaluate(answers=pipeline_answers, metrics=metrics)
+
 
 def main() -> None:
     """CLI 入口：python -m tests.evaluation.ragas_eval --dataset <path>"""
@@ -184,8 +263,36 @@ def main() -> None:
     parser.add_argument(
         "--dataset",
         type=str,
-        required=True,
-        help="JSONL 黄金测试集路径",
+        help="JSONL 黄金测试集路径（默认从 config.json 读取）",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default="cli",
+        help="评估报告标签（默认: cli）",
+    )
+    parser.add_argument(
+        "--report-dir",
+        type=str,
+        default=None,
+        help="评估报告输出目录（默认从 config.json 读取）",
+    )
+    parser.add_argument(
+        "--pipeline",
+        action="store_true",
+        help="启用管线端到端评估模式",
+    )
+    parser.add_argument(
+        "--metrics",
+        type=str,
+        nargs="*",
+        default=None,
+        help="要计算的指标列表（默认行为从 config.json 读取）",
+    )
+    parser.add_argument(
+        "--require-ragas",
+        action="store_true",
+        help="要求真实 RAGAS 依赖；缺失时以退出码 2 失败，绝不生成零分报告",
     )
     args = parser.parse_args()
 
@@ -194,10 +301,58 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    evaluator = RAGASEvaluator(args.dataset)
+    if args.require_ragas:
+        try:
+            import datasets  # type: ignore[import-untyped]  # noqa: F401
+            import ragas  # type: ignore[import-untyped]  # noqa: F401
+        except ImportError as exc:
+            print(
+                f"RAGAS UNAVAILABLE: {exc}\n真实 RAGAS 依赖未安装（或安全策略禁止安装）；本次运行不生成任何质量报告。",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from exc
+
+    evaluator = RAGASEvaluator(dataset_path=args.dataset)
     logger.info("加载了 %d 条测试数据", len(evaluator.dataset))
-    results = evaluator.evaluate()
-    print(json.dumps(results, ensure_ascii=False, indent=2))
+
+    if args.pipeline:
+        logger.info("管线评估模式 — 初始化 RAG 管线...")
+        try:
+            from core.pipeline import OnlineRAGPipeline
+
+            pipeline = OnlineRAGPipeline()
+        except Exception as exc:
+            logger.error("管线初始化失败: %s。请确保基础设施已就绪。", exc)
+            print(json.dumps({"error": f"管线初始化失败: {exc}"}, ensure_ascii=False, indent=2))
+            return
+        results = evaluator.evaluate_with_pipeline(pipeline, metrics=args.metrics)
+    else:
+        results = evaluator.evaluate(metrics=args.metrics)
+
+    # 尝试生成并保存报告
+    report_path = None
+    try:
+        from tests.evaluation.ragas_report import RAGASReporter
+
+        reporter = RAGASReporter(evaluator)
+        report = reporter.run_and_report(tag=args.tag, metrics=args.metrics)
+
+        if args.report_dir:
+            report_path = reporter.save_report(report, args.report_dir)
+        else:
+            report_path = reporter.save_report(report, "./data/eval/reports")
+
+        # 打印 Markdown 报告
+        print("\n" + "=" * 60)
+        print(reporter.format_report_markdown(report))
+        print("=" * 60)
+    except Exception as exc:
+        logger.warning("报告生成失败（不影响评估结果）: %s", exc)
+        # 降级：直接打印 JSON 结果
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+
+    if report_path:
+        print(f"\n📄 报告已保存: {report_path}")
 
 
 if __name__ == "__main__":

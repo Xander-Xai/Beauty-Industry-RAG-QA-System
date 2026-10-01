@@ -176,14 +176,14 @@ class TestQueryEndpoint:
 
 
 class TestStatsEndpoint:
-    def test_stats_returns_200(self, client):
+    def test_stats_returns_200(self, client, auth_header):
         """GET /api/stats 返回 200"""
-        response = client.get("/api/stats")
+        response = client.get("/api/stats", headers=auth_header)
         assert response.status_code == 200
 
-    def test_stats_structure(self, client):
+    def test_stats_structure(self, client, auth_header):
         """统计响应结构"""
-        response = client.get("/api/stats")
+        response = client.get("/api/stats", headers=auth_header)
         data = response.json()
         assert "uptime_seconds" in data
         assert "cache_hit_rate" in data

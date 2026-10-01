@@ -8,12 +8,15 @@ os.environ["DEPLOYMENT_MODE"] = "development"
 
 import types
 
-_fake_torch = types.ModuleType("torch")
-_fake_cuda = types.ModuleType("torch.cuda")
-_fake_cuda.is_available = lambda: False
-_fake_torch.cuda = _fake_cuda
-sys.modules["torch"] = _fake_torch
-sys.modules["torch.cuda"] = _fake_cuda
+try:
+    import torch  # noqa: F401
+except ImportError:
+    _fake_torch = types.ModuleType("torch")
+    _fake_cuda = types.ModuleType("torch.cuda")
+    _fake_cuda.is_available = lambda: False
+    _fake_torch.cuda = _fake_cuda
+    sys.modules["torch"] = _fake_torch
+    sys.modules["torch.cuda"] = _fake_cuda
 
 import pytest
 

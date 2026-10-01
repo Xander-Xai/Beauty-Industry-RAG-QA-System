@@ -12,6 +12,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import threading
 import time
 import uuid
@@ -26,6 +29,8 @@ from common.models import (
     RecallResult,
     RerankResult,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "AnswerGateResult",
@@ -121,6 +126,43 @@ class RequestContext:
         return sum(self.stage_timings.values())
 
 
+def _get_redis_session_client():
+    """惰性初始化 Redis 会话存储客户端。Redis 不可用时返回 None。"""
+    try:
+        redis_pw = os.environ.get("REDIS_PASSWORD") or os.environ.get("REDIS_CACHE_PASSWORD", "")
+        if not redis_pw:
+            return None
+        import redis as _redis
+
+        client = _redis.Redis(
+            host=os.environ.get("REDIS_CACHE_HOST", "localhost"),
+            port=int(os.environ.get("REDIS_CACHE_PORT", 6379)),
+            db=int(os.environ.get("REDIS_CACHE_DB", 0)),
+            password=redis_pw,
+            decode_responses=True,
+            socket_connect_timeout=1,
+        )
+        client.ping()
+        logger.info("Redis 会话存储客户端已连接")
+        return client
+    except Exception:
+        return None
+
+
+# 模块级 Redis 会话客户端（惰性初始化，最多尝试一次）
+_redis_client = None
+_redis_client_lock = threading.Lock()
+
+
+def _get_redis_client():
+    global _redis_client
+    if _redis_client is None:
+        with _redis_client_lock:
+            if _redis_client is None:
+                _redis_client = _get_redis_session_client()
+    return _redis_client
+
+
 @dataclass
 class SessionState:
     """
@@ -145,6 +187,9 @@ class SessionState:
     _sessions: ClassVar[dict[str, SessionState]] = {}
     _sessions_lock: ClassVar[threading.Lock] = threading.Lock()
 
+    _SESSION_REDIS_TTL = 7200  # Redis 中会话过期时间（2 小时）
+    _SESSION_SCHEMA_VERSION = 1  # Redis payload schema version（用于兼容/降级判断）
+
     def add_round(self, user_input: str, response: str, rewrite: QueryRewriteResult | None = None):
         """添加一轮对话"""
         self.dialog_rounds.append(
@@ -158,31 +203,187 @@ class SessionState:
         if len(self.dialog_rounds) > self.max_rounds:
             self.dialog_rounds = self.dialog_rounds[-self.max_rounds :]
         self.last_rewrite_result = rewrite
+        self._persist_to_redis()
 
     def lock_evidence(self, doc_ids: list[str]):
         """证据锁定 - 续写时禁止重新检索"""
         self.locked_doc_ids = doc_ids
+        self._persist_to_redis()
 
     def get_recent_queries(self, n: int = 6) -> list[str]:
         """获取最近 n 轮的用户查询"""
         return [r["user_input"] for r in self.dialog_rounds[-n:]]
 
     def store_async_clip_result(self, results: list[RecallResult]):
-        """存储异步 CLIP 补充召回结果"""
-        self.async_clip_results = results
+        """存储异步 CLIP 补充召回结果，并同步持久化（跨 worker 可见）。"""
+        self.async_clip_results = list(results)
+        self._persist_to_redis()
+
+    @staticmethod
+    def _dump_rewrite(rewrite: QueryRewriteResult | dict | None) -> dict | None:
+        if rewrite is None:
+            return None
+        if isinstance(rewrite, QueryRewriteResult):
+            return rewrite.model_dump(mode="json")
+        if isinstance(rewrite, dict):
+            return rewrite
+        return None
+
+    @staticmethod
+    def _load_rewrite(data: QueryRewriteResult | dict | None) -> QueryRewriteResult | None:
+        if not data:
+            return None
+        if isinstance(data, QueryRewriteResult):
+            return data
+        try:
+            return QueryRewriteResult.model_validate(data)
+        except Exception:
+            return None
+
+    @classmethod
+    def _dump_recall(cls, result: RecallResult | dict) -> dict:
+        if isinstance(result, RecallResult):
+            return result.model_dump(mode="json")
+        return result if isinstance(result, dict) else {}
+
+    @classmethod
+    def _load_recall(cls, data: dict) -> RecallResult | None:
+        if isinstance(data, RecallResult):
+            return data
+        try:
+            return RecallResult.model_validate(data)
+        except Exception:
+            return None
+
+    def _to_dict(self) -> dict:
+        """序列化为 JSON-safe dict（用于 Redis 存储）。
+
+        Pydantic 对象必须经 ``model_dump(mode="json")`` 转换，否则
+        ``json.dumps`` 会抛 TypeError，导致持久化静默失败。
+        """
+        return {
+            "schema_version": self._SESSION_SCHEMA_VERSION,
+            "session_id": self.session_id,
+            "max_rounds": self.max_rounds,
+            "created_at": self.created_at,
+            "locked_doc_ids": list(self.locked_doc_ids),
+            "last_rewrite_result": self._dump_rewrite(self.last_rewrite_result),
+            "dialog_rounds": [
+                {
+                    "user_input": round_.get("user_input", ""),
+                    "response": round_.get("response", ""),
+                    "rewrite": self._dump_rewrite(round_.get("rewrite")),
+                }
+                for round_ in self.dialog_rounds
+            ],
+            "async_clip_results": [self._dump_recall(result) for result in self.async_clip_results],
+        }
+
+    @classmethod
+    def _from_dict(cls, data: dict) -> SessionState:
+        """从 dict 反序列化（从 Redis 读取），重建 Pydantic 对象。"""
+        session = cls(
+            session_id=data["session_id"],
+            max_rounds=data.get("max_rounds", 6),
+            locked_doc_ids=list(data.get("locked_doc_ids", [])),
+            created_at=data.get("created_at", time.time()),
+        )
+        session.last_rewrite_result = cls._load_rewrite(data.get("last_rewrite_result"))
+        session.dialog_rounds = [
+            {
+                "user_input": round_.get("user_input", ""),
+                "response": round_.get("response", ""),
+                "rewrite": cls._load_rewrite(round_.get("rewrite")),
+            }
+            for round_ in data.get("dialog_rounds", [])
+            if isinstance(round_, dict)
+        ]
+        session.async_clip_results = [
+            result
+            for result in (cls._load_recall(item) for item in data.get("async_clip_results", []))
+            if result is not None
+        ]
+        return session
+
+    def _persist_to_redis(self):
+        """将当前会话状态写入 Redis（异步静默失败）。"""
+        try:
+            client = _get_redis_client()
+            if client is None:
+                return
+            key = f"session:{self.session_id}"
+            client.setex(key, self._SESSION_REDIS_TTL, json.dumps(self._to_dict()))
+        except Exception as exc:
+            logger.debug("会话 Redis 持久化失败（降级内存）: %s", exc)
 
     @classmethod
     def get_or_create(cls, session_id: str) -> SessionState:
-        """线程安全地获取或创建会话状态"""
+        """线程安全地获取或创建会话状态（优先 Redis，兜底内存）。"""
+        # 尝试从 Redis 读取
+        redis_session = cls._try_get_redis(session_id)
+        if redis_session is not None:
+            return redis_session
+
+        # Redis 不可用或未找到，使用内存存储
         with cls._sessions_lock:
             if session_id not in cls._sessions:
-                cls._sessions[session_id] = cls(session_id=session_id)
+                new_session = cls(session_id=session_id)
+                cls._sessions[session_id] = new_session
+                # 新创建的会话写入 Redis 预热
+                new_session._persist_to_redis()
             return cls._sessions[session_id]
 
     @classmethod
+    def _try_get_redis(cls, session_id: str) -> SessionState | None:
+        """尝试从 Redis 获取会话。Redis 不可用或未找到时返回 None。"""
+        try:
+            client = _get_redis_client()
+            if client is None:
+                return None
+            key = f"session:{session_id}"
+            raw = client.get(key)
+            if raw is None:
+                return None
+            data = json.loads(raw)
+            if data.get("schema_version") != cls._SESSION_SCHEMA_VERSION:
+                logger.debug("Redis 会话 schema 不兼容，忽略并降级: %s", key)
+                return None
+            session = cls._from_dict(data)
+            # 刷新 TTL
+            client.expire(key, cls._SESSION_REDIS_TTL)
+            return session
+        except Exception as exc:
+            logger.debug("Redis 会话读取失败，降级内存: %s", exc)
+            return None
+
+    @classmethod
     def cleanup_expired(cls, max_age_seconds: int = 3600):
-        """清理过期会话（需持有 _sessions_lock 或在单线程上下文中调用）"""
+        """清理过期会话（优先 Redis，兜底内存）。"""
         now = time.time()
+
+        # Redis 清理：由 Redis 的 TTL 自动处理，不做额外操作
+        try:
+            client = _get_redis_client()
+            if client is not None:
+                # Redis 会话已有 TTL，但此处可以尝试清理半过期的 key
+                cursor = 0
+                while True:
+                    cursor, keys = client.scan(cursor=cursor, match="session:*", count=100)
+                    for key in keys:
+                        raw = client.get(key)
+                        if raw:
+                            try:
+                                data = json.loads(raw)
+                                if now - data.get("created_at", 0) > max_age_seconds:
+                                    client.delete(key)
+                            except Exception:
+                                client.delete(key)
+                    if cursor == 0:
+                        break
+        except Exception as exc:
+            logger.debug("Redis 过期会话清理跳过: %s", exc)
+
+        # 内存清理
         with cls._sessions_lock:
             expired = [sid for sid, s in cls._sessions.items() if now - s.created_at > max_age_seconds]
             for sid in expired:

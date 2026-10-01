@@ -311,7 +311,9 @@ def health_handler():
     response_model=StatsResponse,
     summary="系统统计指标",
 )
-def stats_handler():
+def stats_handler(
+    identity: UserIdentity = Depends(require_identity),
+):
     """
     系统运行指标端点。
 
@@ -498,11 +500,13 @@ def media_handler(
     summary="Prometheus 文本格式指标",
     response_class=PlainTextResponse,
 )
-def metrics_handler():
+def metrics_handler(
+    identity: UserIdentity = Depends(require_identity),
+):
     """
     PRD §12: 暴露 Prometheus 抓取端点。
 
-    无需鉴权，直接返回 metrics.to_prometheus_text() 输出。
+    需要身份认证。Prometheus 可通过 bearer_token 配置抓取。
     """
     metrics = get_metrics()
     return PlainTextResponse(content=metrics.to_prometheus_text())

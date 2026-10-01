@@ -80,3 +80,6 @@ minio>=7.2.0
 # release currently has an unresolved pip-audit finding. The evaluator keeps
 # its missing-dependency fallback until a patched release is available.
 datasets>=2.20.0
+
+# Phase 6: AWQ INT4 量化（可选，仅 GPU 部署需要）
+# autoawq>=0.2.0  # 正式使用请取消注释，安装依赖见 offline/requirements-awq.txt
