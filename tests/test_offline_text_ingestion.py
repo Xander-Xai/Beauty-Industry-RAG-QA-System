@@ -295,6 +295,15 @@ def test_default_replacement_lock_serializes_local_writers():
     assert max_active_writers == 1
 
 
+def test_replacement_lock_can_use_configured_shared_directory(monkeypatch, tmp_path):
+    from offline.text_ingestion import _local_replacement_lock
+
+    monkeypatch.setenv("OFFLINE_INGESTION_LOCK_DIR", str(tmp_path))
+    with _local_replacement_lock("document", "epoch"):
+        lock_files = list(tmp_path.glob("*.lock"))
+    assert len(lock_files) == 1
+
+
 def test_qdrant_filter_includes_active_status_and_epoch():
     from auth.bitmask_rbac import build_qdrant_filter
 

@@ -24,7 +24,12 @@ def _local_replacement_lock(doc_id: str, epoch: str):
     import fcntl
 
     owner_id = os.getuid() if hasattr(os, "getuid") else os.getpid()
-    lock_dir = Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
+    configured_lock_dir = os.environ.get("OFFLINE_INGESTION_LOCK_DIR")
+    lock_dir = (
+        Path(configured_lock_dir)
+        if configured_lock_dir
+        else Path(tempfile.gettempdir()) / f"beauty-rag-text-ingestion-{owner_id}"
+    )
     lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory_stat = lock_dir.stat()
     if hasattr(os, "getuid") and directory_stat.st_uid != owner_id:
