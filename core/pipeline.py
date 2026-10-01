@@ -396,6 +396,8 @@ class OnlineRAGPipeline:
                             query=ctx.rewrite_result.rewritten_query,
                             qdrant_filter=clip_qdrant_filter,
                             session=session_state_for_clip,
+                            user_role_mask=ctx.user_role_mask,
+                            user_dept_mask=ctx.user_dept_mask,
                         )
                         # 不阻塞主流程：设置超时后放弃
                         try:

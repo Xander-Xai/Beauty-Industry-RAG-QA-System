@@ -186,7 +186,7 @@ class EmbeddingService:
             query_vector=query_embedding.flatten().tolist(),
             limit=top_k,
             query_filter=qdrant_filter,
-            with_payload=["doc_id", "content", "doc_type", "embedding_type"],
+            with_payload=["doc_id", "content", "doc_type", "embedding_type", "role_mask", "dept_mask"],
         )
 
         hits = []
@@ -199,6 +199,8 @@ class EmbeddingService:
                     "metadata": {
                         "doc_type": point.payload.get("doc_type", ""),
                         "embedding_type": point.payload.get("embedding_type", ""),
+                        "role_mask": point.payload.get("role_mask"),
+                        "dept_mask": point.payload.get("dept_mask"),
                     },
                 }
             )
@@ -229,7 +231,7 @@ class EmbeddingService:
             query_vector=query_embedding.flatten().tolist(),
             limit=top_k,
             query_filter=qdrant_filter,
-            with_payload=["doc_id", "content", "image_uri"],
+            with_payload=["doc_id", "content", "image_uri", "role_mask", "dept_mask"],
         )
 
         hits = []
@@ -240,6 +242,10 @@ class EmbeddingService:
                     "content": point.payload.get("content", ""),
                     "image_uri": point.payload.get("image_uri", ""),
                     "score": point.score,
+                    "metadata": {
+                        "role_mask": point.payload.get("role_mask"),
+                        "dept_mask": point.payload.get("dept_mask"),
+                    },
                 }
             )
         return hits

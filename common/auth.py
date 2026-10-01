@@ -182,6 +182,24 @@ def is_allowed(
     return role_ok and dept_ok
 
 
+def is_document_authorized(
+    metadata: dict | None,
+    user_role_mask: int,
+    user_dept_mask: int,
+) -> bool:
+    """Fail closed unless both stored permission masks are valid uint32 values."""
+    if not isinstance(metadata, dict):
+        return False
+
+    doc_role_mask = metadata.get("role_mask")
+    doc_dept_mask = metadata.get("dept_mask")
+    masks = (doc_role_mask, doc_dept_mask, user_role_mask, user_dept_mask)
+    if any(type(mask) is not int or not 0 <= mask <= 0xFFFFFFFF for mask in masks):
+        return False
+
+    return is_allowed(doc_role_mask, user_role_mask, doc_dept_mask, user_dept_mask)
+
+
 def build_qdrant_filter(
     user_role_mask: int,
     user_dept_mask: int,

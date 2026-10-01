@@ -75,13 +75,12 @@ class ParallelRecallManager:
         Qdrant pre-filter 无法处理位掩码运算，因此在 Python 层
         用 is_allowed() 对召回结果进行角色/部门权限过滤。
         """
-        from auth.bitmask_rbac import is_allowed
+        from common.auth import is_document_authorized
 
         filtered = []
         for r in results:
-            doc_role = getattr(r, "role_mask", r.metadata.get("role_mask", 0))
-            doc_dept = getattr(r, "dept_mask", r.metadata.get("dept_mask", 0))
-            if is_allowed(doc_role, user_role_mask, doc_dept, user_dept_mask):
+            metadata = getattr(r, "metadata", None)
+            if is_document_authorized(metadata, user_role_mask, user_dept_mask):
                 filtered.append(r)
         return filtered
 
@@ -170,6 +169,7 @@ class ParallelRecallManager:
                 path_name = futures[future]
                 try:
                     results = future.result()
+                    results = self._apply_rbac_filter(results, user_role_mask, user_dept_mask)
                     path_results[path_name] = results
                     all_results.extend(results)
                     logger.info(f"召回路 [{path_name}] 返回 {len(results)} 条结果")
@@ -217,7 +217,9 @@ class ParallelRecallManager:
             except Exception as e:
                 logger.warning(f"ES Fallback 失败: {e}")
 
-        return all_results, agreement_score
+        # Keep the authorization boundary after fallback and fusion as a final
+        # guard against a retrieval channel returning an unfiltered candidate.
+        return self._apply_rbac_filter(all_results, user_role_mask, user_dept_mask), agreement_score
 
     def _recall_dense(self, query_embedding, qdrant_filter, top_k) -> list:
         """Dense 语义召回"""
@@ -279,7 +281,10 @@ class ParallelRecallManager:
                     content=h.get("content", ""),
                     score=h["score"],
                     source="clip_visual",
-                    metadata={"image_uri": h.get("image_uri", "")},
+                    metadata={
+                        "image_uri": h.get("image_uri", ""),
+                        **(h.get("metadata") or {}),
+                    },
                 )
                 for h in hits
             ]
@@ -309,7 +314,7 @@ class ParallelRecallManager:
                         content=h["content"],
                         score=h["score"],
                         source="rewrite_variant",
-                        metadata={"variant_query": variant},
+                        metadata={"variant_query": variant, **(h.get("metadata") or {})},
                     )
                     for h in hits
                 ]
@@ -325,7 +330,12 @@ class ParallelRecallManager:
         from core.pipeline_context import RecallResult
 
         fallback_top_k = top_k_per_path.get("bm25_es", {}).get("top_k", 50)
-        hits = self.bm25_retriever.fallback_search(query, top_k=fallback_top_k)
+        hits = self.bm25_retriever.fallback_search(
+            query,
+            user_role_mask=user_role_mask,
+            user_dept_mask=user_dept_mask,
+            top_k=fallback_top_k,
+        )
         return [
             RecallResult(
                 doc_id=h["doc_id"],
@@ -410,6 +420,8 @@ class ParallelRecallManager:
         qdrant_filter,
         session: SessionState = None,
         top_k: int = None,
+        user_role_mask: int = 0,
+        user_dept_mask: int = 0,
     ) -> list:
         """
         CLIP 异步补召回（PRD §6 异步机制）
@@ -434,7 +446,7 @@ class ParallelRecallManager:
             cached = session.async_clip_results
             if cached:
                 logger.info(f"CLIP 异步预热命中: {len(cached)} 条")
-                return cached
+                return self._apply_rbac_filter(cached, user_role_mask, user_dept_mask)
 
         top_k = top_k or clip_cfg.get("top_k", 100)
 
@@ -451,7 +463,10 @@ class ParallelRecallManager:
                     content=h.get("content", ""),
                     score=h["score"],
                     source="clip_async",
-                    metadata={"image_uri": h.get("image_uri", "")},
+                    metadata={
+                        "image_uri": h.get("image_uri", ""),
+                        **(h.get("metadata") or {}),
+                    },
                 )
                 for h in hits
             ]
@@ -460,7 +475,7 @@ class ParallelRecallManager:
             if session:
                 session.store_async_clip_result(results)
 
-            return results
+            return self._apply_rbac_filter(results, user_role_mask, user_dept_mask)
 
         except Exception as e:
             logger.warning(f"CLIP 异步补召回失败: {e}")
