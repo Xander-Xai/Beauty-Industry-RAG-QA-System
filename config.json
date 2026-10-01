@@ -166,7 +166,6 @@
     "chunk_overlap_ratio": 0.1,
     "embedding_batch_size": 32,
     "image_batch_size": 16,
-    "ocr_batch_size": 8,
     "max_document_bytes": 131072,
     "max_binary_document_bytes": 67108864,
     "max_chunks": 256,
@@ -189,9 +188,6 @@
       "incremental_cron": "0 2 * * 0",
       "full_rebuild_cron": "0 3 1 * *",
       "auto_seal": false
-    },
-    "validation": {
-      "enabled": true
     },
     "feedback": {
       "store_path": "./data/feedback/feedback.sqlite3",

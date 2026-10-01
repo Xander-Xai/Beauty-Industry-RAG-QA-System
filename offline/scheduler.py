@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from offline.rebuild import run_full_rebuild
 from offline.snapshot_builder import BuildResult, IngestionSource, configured_snapshot_builder
-from offline.source_discovery import discover_sources, resolve_permission
+from offline.source_discovery import discover_sources, resolve_permission, resolve_supported_extensions
 
 
 @dataclass(frozen=True)
@@ -85,9 +85,11 @@ class OfflineScheduler:
 
     def discover_sources(self) -> list[IngestionSource]:
         knowledge_base = self.config.get("knowledge_base", {})
+        extensions = resolve_supported_extensions(knowledge_base.get("supported_extensions"))
         return discover_sources(
             knowledge_base.get("data_dir", "./data"),
             permission_rules=self.config.get("permission_rules", {}),
+            extensions=extensions,
         )
 
     def run_incremental_cycle(

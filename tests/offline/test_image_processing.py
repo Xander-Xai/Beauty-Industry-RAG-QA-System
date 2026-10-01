@@ -145,7 +145,7 @@ def test_image_writer_round_trip_and_rbac_metadata():
         from auth.bitmask_rbac import build_qdrant_image_filter
 
         hits = reader.search_qdrant_image(
-            np.array(record.embedding), top_k=5, qdrant_filter=build_qdrant_image_filter(2, 4)
+            np.array(record.embedding), top_k=5, qdrant_filter=build_qdrant_image_filter(2, 4, "epoch_1")
         )
     finally:
         embedding_module.config = saved
@@ -200,6 +200,93 @@ def test_image_writer_epoch_coexistence_idempotence_and_seal():
     writer.seal_epoch("epoch_a")
     with pytest.raises(ValueError, match="is sealed"):
         _write_image(client, "image_epochs", "epoch_a", index=5)
+
+
+def test_image_filter_epoch_isolation_legacy_default_and_rbac():
+    import numpy as np
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    import models.embedding_service as embedding_module
+    from auth.bitmask_rbac import build_qdrant_image_filter
+    from common.models import RecallResult
+    from models.embedding_service import EmbeddingService
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    client = QdrantClient(":memory:")
+    client.create_collection("img_epoch_filter", vectors_config=VectorParams(size=8, distance=Distance.COSINE))
+    base = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    client.upsert(
+        "img_epoch_filter",
+        points=[
+            PointStruct(
+                id="00000000-0000-0000-0000-0000000000c1",
+                vector=base,
+                payload={
+                    "doc_id": "legacy",
+                    "image_id": "legacy",
+                    "content": "legacy",
+                    "status": "active",
+                    "role_mask": 0,
+                    "dept_mask": 0,
+                },
+            ),
+            PointStruct(
+                id="00000000-0000-0000-0000-0000000000c2",
+                vector=base,
+                payload={
+                    "doc_id": "doc-a",
+                    "image_id": "a",
+                    "content": "a",
+                    "status": "active",
+                    "role_mask": 0,
+                    "dept_mask": 0,
+                    "doc_version_epoch": "epoch_a",
+                },
+            ),
+            PointStruct(
+                id="00000000-0000-0000-0000-0000000000c3",
+                vector=base,
+                payload={
+                    "doc_id": "doc-b",
+                    "image_id": "b",
+                    "content": "b",
+                    "status": "active",
+                    "role_mask": 2,
+                    "dept_mask": 4,
+                    "doc_version_epoch": "epoch_b",
+                },
+            ),
+        ],
+        wait=True,
+    )
+    reader = EmbeddingService.__new__(EmbeddingService)
+    reader._qdrant_client = client
+    saved = embedding_module.config
+    try:
+        embedding_module.config = {
+            **saved,
+            "embedding": {**saved["embedding"], "image_clip": {"collection": "img_epoch_filter"}},
+        }
+
+        def doc_ids(epoch, role=0, dept=0):
+            hits = reader.search_qdrant_image(
+                np.array(base), top_k=10, qdrant_filter=build_qdrant_image_filter(role, dept, epoch)
+            )
+            return [hit["doc_id"] for hit in hits]
+
+        assert doc_ids("epoch_a") == ["doc-a"]
+        assert doc_ids("epoch_b") == ["doc-b"]
+        # Legacy points without an epoch are only visible in the default epoch.
+        assert doc_ids("default") == ["legacy"]
+    finally:
+        embedding_module.config = saved
+
+    manager = ParallelRecallManager()
+    restricted = RecallResult(
+        doc_id="doc-b", content="b", score=1.0, source="clip_visual", metadata={"role_mask": 2, "dept_mask": 4}
+    )
+    assert manager._apply_rbac_filter([restricted], 0, 0) == []
+    assert manager._apply_rbac_filter([restricted], 2, 4) == [restricted]
 
 
 def test_image_writer_rejects_mixed_embedding_version():

@@ -39,15 +39,14 @@ def test_new_unchanged_modified_deleted_detection(tmp_path):
 def test_content_change_with_same_mtime_is_modified(tmp_path):
     store = StateStore(tmp_path / "state.sqlite3")
     store.upsert(_state("doc", "old-hash", size=5, mtime_ns=999))
-    # Same size and mtime (mtime preserved), different content hash.
-    assert store.needs_rehash("doc", file_size=5, mtime_ns=999) is False
+    # Same size and mtime (mtime preserved), different content hash -> MODIFIED.
     assert store.classify("doc", content_hash="new-hash") == MODIFIED
 
 
 def test_mtime_change_with_same_content_is_unchanged(tmp_path):
     store = StateStore(tmp_path / "state.sqlite3")
     store.upsert(_state("doc", "same-hash", size=5, mtime_ns=111))
-    assert store.needs_rehash("doc", file_size=5, mtime_ns=222) is True
+    # mtime differs but the authoritative content hash matches -> UNCHANGED.
     assert store.classify("doc", content_hash="same-hash") == UNCHANGED
 
 

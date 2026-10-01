@@ -208,23 +208,20 @@ def test_cli_rejects_unimplemented_historical_modes(monkeypatch):
 def test_cli_seals_requested_epoch(monkeypatch):
     import sys
 
-    import offline.text_ingestion
+    import offline.snapshot_builder
     from run_offline import main
 
     sealed = []
 
-    class FakeWriter:
-        def seal_epoch(self, epoch):
-            sealed.append(epoch)
+    class FakeBuilder:
+        def seal_epoch(self, epoch, *, validate=True):
+            sealed.append((epoch, validate))
 
-    class FakeService:
-        writer = FakeWriter()
-
-    monkeypatch.setattr(offline.text_ingestion, "configured_text_ingestion_service", lambda: FakeService())
+    monkeypatch.setattr(offline.snapshot_builder, "configured_snapshot_builder", lambda: FakeBuilder())
     monkeypatch.setattr(sys, "argv", ["run_offline.py", "seal-epoch", "--epoch", "phase_1"])
 
     assert main() == 0
-    assert sealed == ["phase_1"]
+    assert sealed == [("phase_1", True)]
 
 
 def test_configured_service_seals_current_epoch_on_startup(monkeypatch, tmp_path):

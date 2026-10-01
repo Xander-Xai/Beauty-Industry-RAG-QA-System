@@ -1,9 +1,10 @@
 """Crash-safe SQLite state store for incremental ingestion detection.
 
-Change detection never trusts ``mtime`` alone: the cheap ``size``+``mtime_ns``
-pre-check only avoids hashing, while the final NEW/UNCHANGED/MODIFIED decision
-uses the content hash. This prevents a preserved ``mtime`` from hiding a real
-content change.
+Change detection is content-hash authoritative: NEW/UNCHANGED/MODIFIED is
+decided by comparing the stored content hash with the current content hash.
+``file_size`` and ``mtime_ns`` are recorded for observability only and are
+never used to skip the hash comparison, so a preserved ``mtime`` with changed
+content is still detected. The snapshot builder hashes every discovered source.
 """
 
 from __future__ import annotations
@@ -128,13 +129,6 @@ class StateStore:
         if state.content_hash == content_hash:
             return UNCHANGED
         return MODIFIED
-
-    def needs_rehash(self, source_id: str, *, file_size: int, mtime_ns: int) -> bool:
-        """Cheap pre-check: only hash when the recorded metadata may have changed."""
-        state = self.get(source_id)
-        if state is None or state.status != "active":
-            return True
-        return state.file_size != file_size or state.mtime_ns != mtime_ns
 
     def diff(self, current: dict[str, dict]) -> ChangeSet:
         """Classify the current source set against stored state.

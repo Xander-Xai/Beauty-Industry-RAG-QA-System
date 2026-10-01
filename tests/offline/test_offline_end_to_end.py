@@ -170,7 +170,7 @@ def test_multiformat_epoch_dense_clip_rbac_and_isolation(tmp_path, monkeypatch):
         image_hits = reader.search_qdrant_image(
             np.array(DeterministicTestImageEmbedder(DIMENSION).embed_images([_png_bytes()])[0]),
             top_k=5,
-            qdrant_filter=build_qdrant_image_filter(0, 0),
+            qdrant_filter=build_qdrant_image_filter(0, 0, "epoch_1"),
         )
     finally:
         embedding_module.config = saved

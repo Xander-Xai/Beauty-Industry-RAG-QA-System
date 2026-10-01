@@ -11,7 +11,11 @@ from __future__ import annotations
 import fnmatch
 from pathlib import Path
 
+from offline.document_processor import SUPPORTED_DOCUMENT_EXTENSIONS
+from offline.image_processor import SUPPORTED_IMAGE_EXTENSIONS
 from offline.snapshot_builder import IngestionSource, classify_source
+
+SUPPORTED_SOURCE_EXTENSIONS = frozenset(SUPPORTED_DOCUMENT_EXTENSIONS) | frozenset(SUPPORTED_IMAGE_EXTENSIONS)
 
 
 def resolve_permission(relative_path: str, permission_rules: dict) -> tuple[int, int]:
@@ -27,6 +31,24 @@ def resolve_permission(relative_path: str, permission_rules: dict) -> tuple[int,
     if default_role is None or default_dept is None:
         raise ValueError("permission rules must define default_role_mask and default_dept_mask")
     return int(default_role), int(default_dept)
+
+
+def resolve_supported_extensions(configured: list[str] | None) -> tuple[str, ...] | None:
+    """Validate a configured extension allowlist against the parsers.
+
+    A configured extension that no parser supports is rejected rather than
+    silently claimed.
+    """
+    if not configured:
+        return None
+    normalized = tuple(extension.lower() for extension in configured)
+    unsupported = [extension for extension in normalized if extension not in SUPPORTED_SOURCE_EXTENSIONS]
+    if unsupported:
+        raise ValueError(
+            f"knowledge_base.supported_extensions contains unsupported formats: {unsupported}; "
+            f"supported: {sorted(SUPPORTED_SOURCE_EXTENSIONS)}"
+        )
+    return normalized
 
 
 def discover_sources(

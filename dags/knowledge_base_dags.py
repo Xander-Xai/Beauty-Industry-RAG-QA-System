@@ -106,37 +106,39 @@ if not AIRFLOW_AVAILABLE or not INGESTION_AVAILABLE:
 if AIRFLOW_AVAILABLE and INGESTION_AVAILABLE:
     _scheduler = _scheduler_config()
 
-    weekly_incremental_dag = DAG(
-        dag_id="weekly_knowledge_incremental",
-        default_args=DEFAULT_ARGS,
-        description="Weekly incremental build: discover → carry forward → process → validate → optional seal",
-        schedule_interval=_scheduler.incremental_cron,
-        start_date=days_ago(1),
-        catchup=False,
-        tags=["knowledge-base", "weekly"],
-    )
-
-    with weekly_incremental_dag:
-        t_incremental = PythonOperator(
-            task_id="incremental_update",
-            python_callable=_task_incremental_update,
+    if _scheduler.incremental_enabled:
+        weekly_incremental_dag = DAG(
+            dag_id="weekly_knowledge_incremental",
+            default_args=DEFAULT_ARGS,
+            description="Weekly incremental build: discover → carry forward → process → validate → optional seal",
+            schedule_interval=_scheduler.incremental_cron,
+            start_date=days_ago(1),
+            catchup=False,
+            tags=["knowledge-base", "weekly"],
         )
 
-    monthly_full_dag = DAG(
-        dag_id="monthly_knowledge_full_rebuild",
-        default_args=DEFAULT_ARGS,
-        description="Monthly full rebuild into a new epoch (manual activation)",
-        schedule_interval=_scheduler.full_rebuild_cron,
-        start_date=days_ago(1),
-        catchup=False,
-        tags=["knowledge-base", "monthly"],
-    )
+        with weekly_incremental_dag:
+            t_incremental = PythonOperator(
+                task_id="incremental_update",
+                python_callable=_task_incremental_update,
+            )
 
-    with monthly_full_dag:
-        t_full_rebuild = PythonOperator(
-            task_id="full_rebuild",
-            python_callable=_task_full_rebuild,
+    if _scheduler.full_rebuild_enabled:
+        monthly_full_dag = DAG(
+            dag_id="monthly_knowledge_full_rebuild",
+            default_args=DEFAULT_ARGS,
+            description="Monthly full rebuild into a new epoch (manual activation)",
+            schedule_interval=_scheduler.full_rebuild_cron,
+            start_date=days_ago(1),
+            catchup=False,
+            tags=["knowledge-base", "monthly"],
         )
+
+        with monthly_full_dag:
+            t_full_rebuild = PythonOperator(
+                task_id="full_rebuild",
+                python_callable=_task_full_rebuild,
+            )
 
     feedback_dag = DAG(
         dag_id="weekly_feedback_loop",

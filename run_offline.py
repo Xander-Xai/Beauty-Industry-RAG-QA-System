@@ -49,23 +49,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_create_index(args) -> int:
-    from offline.elasticsearch_writer import ElasticsearchWriter
-    from offline.qdrant_writer import ensure_cosine_collection
     from offline.snapshot_builder import configured_snapshot_builder
 
-    builder = configured_snapshot_builder()
     if args.recreate and not args.yes:
-        logger.error("create-index --recreate requires --yes")
+        logger.error("create-index --recreate is destructive and requires --yes")
         return 2
-    ensure_cosine_collection(
-        builder.text_writer.client, builder.text_writer.collection_name, builder.text_writer.dimension
-    )
-    ensure_cosine_collection(
-        builder.image_writer.client, builder.image_writer.collection_name, builder.image_writer.dimension
-    )
-    if builder.es_writer is not None and isinstance(builder.es_writer, ElasticsearchWriter):
+
+    builder = configured_snapshot_builder()
+    for writer in (builder.text_writer, builder.image_writer):
+        if args.recreate and writer.client.collection_exists(writer.collection_name):
+            writer.client.delete_collection(writer.collection_name)
+            logger.warning("Deleted Qdrant collection %s", writer.collection_name)
+        writer.ensure_collection()
+    if builder.es_writer is not None:
         builder.es_writer.ensure_index(recreate=args.recreate, confirm=args.yes)
-    logger.info("Indexes verified (text, image, elasticsearch).")
+    action = "recreated" if args.recreate else "verified"
+    logger.info("Indexes %s (Qdrant text, Qdrant image, Elasticsearch).", action)
     return 0
 
 
@@ -131,20 +130,21 @@ def _handle_full_rebuild(args) -> int:
 
 
 def _handle_seal_epoch(args) -> int:
-    from offline.text_ingestion import configured_text_ingestion_service
+    from offline.snapshot_builder import configured_snapshot_builder
 
-    service = configured_text_ingestion_service()
+    builder = configured_snapshot_builder()
     if args.skip_validation:
-        service.writer.seal_epoch(args.epoch)
-        logger.warning("Sealed epoch %s without validation (--skip-validation).", args.epoch)
+        builder.seal(args.epoch)
+        logger.warning(
+            "DANGER: sealed epoch %s WITHOUT snapshot validation (--skip-validation). "
+            "Prefer the normal validate-then-seal path.",
+            args.epoch,
+        )
         return 0
-    validate_and_seal = getattr(service, "validate_and_seal", None)
-    if validate_and_seal is not None:
-        validate_and_seal(args.epoch)
-    else:
-        service.writer.seal_epoch(args.epoch)
+    builder.seal_epoch(args.epoch, validate=True)
     logger.info(
-        "Validated and sealed epoch %s; switch knowledge_version_epoch only after verification.",
+        "Validated and sealed epoch %s (Qdrant text/image + Elasticsearch); "
+        "switch knowledge_version_epoch only after verification.",
         args.epoch,
     )
     return 0

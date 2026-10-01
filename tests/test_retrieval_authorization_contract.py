@@ -117,8 +117,17 @@ def test_parallel_recall_scopes_epoch_only_to_text_collection():
         getattr(condition, "is_empty", None) and condition.is_empty.key == "doc_version_epoch"
         for condition in dense_epoch_conditions
     )
+    # Image retrieval must honour the active epoch exactly like text retrieval.
     assert clip_fields == {("status", "active")}
-    assert not any(key == "doc_version_epoch" for key, _ in clip_fields)
+    clip_epoch_conditions = clip_filters[0].should
+    assert any(
+        condition.key == "doc_version_epoch" and condition.match.value == "default"
+        for condition in clip_epoch_conditions
+    )
+    assert any(
+        getattr(condition, "is_empty", None) and condition.is_empty.key == "doc_version_epoch"
+        for condition in clip_epoch_conditions
+    )
 
 
 def test_parallel_recall_fallback_requires_permission_scoped_search():

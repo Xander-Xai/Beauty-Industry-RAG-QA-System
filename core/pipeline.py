@@ -652,11 +652,11 @@ class OnlineRAGPipeline:
         return hashlib.sha256(json.dumps(scoped, sort_keys=True).encode()).hexdigest()
 
     def _build_clip_filter(self, ctx):
-        """构建 CLIP 异步召回的 Qdrant Filter"""
-        from auth.bitmask_rbac import build_qdrant_filter
+        """构建 CLIP 异步召回的 Qdrant Filter（与文本一致遵循 active epoch）"""
+        from auth.bitmask_rbac import build_qdrant_image_filter
 
         active_epoch = config.get("knowledge_version_epoch", "default")
-        return build_qdrant_filter(ctx.user_role_mask, ctx.user_dept_mask, active_epoch)
+        return build_qdrant_image_filter(ctx.user_role_mask, ctx.user_dept_mask, active_epoch)
 
     def _check_admission(self, ctx) -> tuple[bool, str, str]:
         """KV 准入控制检查 — 返回 (admitted, reason, priority)"""

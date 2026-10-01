@@ -658,30 +658,6 @@ class TextIngestionService:
         self.writer.replace_document(doc_id, doc_version_epoch, chunks, vectors)
         return chunks
 
-    def validate_and_seal(self, epoch: str, *, es_writer=None) -> None:
-        """Validate the epoch snapshot and seal the text (and image) collections."""
-        from common.config import get_config_dict
-        from offline.qdrant_writer import QdrantImageWriter
-        from offline.validator import SnapshotValidator
-
-        config = get_config_dict()
-        image_config = config.get("embedding", {}).get("image_clip", {})
-        image_collection = image_config.get("collection", "rag_image_512")
-        image_dimension = int(image_config.get("dimension", 512))
-        image_writer = QdrantImageWriter(self.writer.client, image_collection, image_dimension)
-        validator = SnapshotValidator(
-            text_client=self.writer.client,
-            text_collection=self.writer.collection_name,
-            image_client=self.writer.client,
-            image_collection=image_collection,
-            es_writer=es_writer,
-            allowed_text_versions={self.writer.embedding_version},
-            allowed_image_versions=None,
-        )
-        validator.validate_or_raise(epoch)
-        self.writer.seal_epoch(epoch)
-        image_writer.seal_epoch(epoch)
-
 
 def configured_text_ingestion_service():
     """Create production adapters from canonical project configuration."""
