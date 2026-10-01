@@ -472,8 +472,17 @@ class QdrantTextWriter:
             current = point_vectors[chunk_index]
             if isinstance(stored, dict) or isinstance(current, dict) or len(stored) != len(current):
                 return False
+            # Qdrant normalizes vectors when storing points in a cosine collection.
+            # Compare their cosine-equivalent unit vectors so unnormalized model
+            # output remains idempotent after a round trip through Qdrant.
+            stored_norm = math.sqrt(sum(float(value) ** 2 for value in stored))
+            current_norm = math.sqrt(sum(float(value) ** 2 for value in current))
+            if stored_norm == 0 or current_norm == 0:
+                if stored_norm != current_norm:
+                    return False
+                continue
             if not all(
-                math.isclose(float(left), float(right), rel_tol=1e-6, abs_tol=1e-7)
+                math.isclose(float(left) / stored_norm, float(right) / current_norm, rel_tol=1e-6, abs_tol=1e-7)
                 for left, right in zip(stored, current, strict=True)
             ):
                 return False

@@ -471,7 +471,7 @@ def test_same_content_with_changed_embedding_vector_requires_new_epoch(tmp_path)
             self.marker = 0.25
 
         def embed_texts(self, texts):
-            return [[self.marker] + [0.0] * 15 for _ in texts]
+            return [[self.marker, 1.0 - self.marker] + [0.0] * 14 for _ in texts]
 
     embedder = MutableEmbedder()
     writer = QdrantTextWriter(client, "embedding_version", dimension=16)
@@ -489,6 +489,29 @@ def test_same_content_with_changed_embedding_vector_requires_new_epoch(tmp_path)
     with pytest.raises(ValueError, match="embedding version changed"):
         revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
     assert revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_2")
+
+
+def test_same_content_retry_accepts_qdrant_cosine_normalization(tmp_path):
+    client = QdrantClient(":memory:")
+
+    class UnnormalizedEmbedder:
+        dimension = 16
+        embedding_version = "unnormalized-model-v1"
+
+        def embed_texts(self, texts):
+            return [[3.0, 4.0] + [0.0] * 14 for _ in texts]
+
+    embedder = UnnormalizedEmbedder()
+    writer = QdrantTextWriter(client, "cosine_normalized_retry", dimension=16)
+    service = TextIngestionService(DocumentProcessor(), embedder, writer)
+    source = _write_source(tmp_path, "cosine.txt", "same content")
+
+    first = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    retry = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+
+    assert retry == first
+    stored = client.scroll("cosine_normalized_retry", limit=10, with_vectors=True)[0][0].vector
+    assert stored == pytest.approx([0.6, 0.8] + [0.0] * 14)
 
 
 def test_document_epoch_replacement_uses_injected_lock(tmp_path):

@@ -16,7 +16,7 @@
 
 **仍不支持：** PDF、DOCX、XLSX、OCR、CLIP ingestion、Elasticsearch 写入、调度、完整重建和反馈闭环。`run_offline.py` 只开放已实现的 TXT ingestion 与 epoch 封存操作。后续范围跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
-仓库中存在 Airflow DAG 草案；它引用的 scheduler/feedback modules 不存在，因此当前不会注册可用的 ingestion DAG。DAG 文件存在不等同于生产导入管线。需要导入数据时，请连接已准备好的外部 Qdrant/Elasticsearch 索引；本仓库目前没有从原始文档创建该索引的已验证命令。
+仓库中存在 Airflow DAG 草案；它引用的 scheduler/feedback modules 不存在，因此当前不会注册可用的 ingestion DAG。DAG 文件存在不等同于生产导入管线。需要导入 UTF-8 TXT 时，可使用上面的 `ingest-text` 命令；更完整的 PDF/DOCX/XLSX、调度与重建能力仍未实现。
 
 ## Quick Start
 
