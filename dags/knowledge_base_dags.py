@@ -17,6 +17,11 @@ import os
 import sys
 from importlib.util import find_spec
 
+# ── 项目根目录 ─────────────────────────────────────────────────────────
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 # ── Airflow 导入（不可用时跳过，仅供人工参考） ──────────────────────
 try:
     from airflow import DAG
@@ -27,21 +32,29 @@ try:
 except ImportError:
     AIRFLOW_AVAILABLE = False
 
-INGESTION_AVAILABLE = all(
-    find_spec(module) is not None
-    for module in (
-        "offline.document_processor",
-        "offline.image_processor",
-        "offline.vectorizer",
-        "offline.scheduler",
-        "offline.feedback_loop",
-    )
-)
 
-# ── 项目根目录 ─────────────────────────────────────────────────────────
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+def _ingestion_modules_available() -> bool:
+    """Return whether all offline ingestion modules can be discovered."""
+    try:
+        if find_spec("offline") is None:
+            return False
+        return all(
+            find_spec(module) is not None
+            for module in (
+                "offline.document_processor",
+                "offline.image_processor",
+                "offline.vectorizer",
+                "offline.scheduler",
+                "offline.feedback_loop",
+            )
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "offline" or (exc.name and exc.name.startswith("offline.")):
+            return False
+        raise
+
+
+INGESTION_AVAILABLE = _ingestion_modules_available()
 
 # ── 默认参数 ───────────────────────────────────────────────────────────
 DEFAULT_ARGS = {
