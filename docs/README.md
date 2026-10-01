@@ -11,13 +11,26 @@
 - [Open-source configuration and hardcoding audit](open-source-hardcoding-audit.md)
 - [Pre-launch checklist](pre-launch-checklist.md)
 
+## Evaluation
+
+- [RAGAS evaluation guide](ragas-evaluation-guide.md): offline quality-evaluation harness,
+  golden set, reporter and CI boundary.
+
+## Interview / Architecture truth
+
+- [Interview architecture baseline](interview-architecture-baseline.md): the current
+  end-to-end retrieval/generation contract an interviewer can hold the code to.
+
 ## Design
 
-- [PRD](../PRD.md): product and architecture design, with implementation status annotated at the top.
+- [PRD](../PRD.md): product and architecture design. It records goals and target design as
+  well as implemented capabilities; the runtime reconciliation table at the top separates
+  current implementation from historical/target design.
 
 ## Historical / Implementation Plans
 
 - [`docs/superpowers/plans/`](superpowers/plans/)
 - [`docs/superpowers/specs/`](superpowers/specs/)
 
-Historical plan ≠ current implementation status. Keep historical plans intact; use the audit and canonical guides for the current repository state.
+Historical plan ≠ current implementation status. Keep historical plans intact; use the audit
+and canonical guides for the current repository state.

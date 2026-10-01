@@ -4,7 +4,7 @@
 
 ## 当前应用入口
 
-- **Canonical application:** `app.py`，FastAPI 单体应用，提供 `/api/*` 路由；React 前端位于 `frontend/`。
+- **Canonical application:** `app.py`，FastAPI 单体应用（使用 `lifespan` 上下文管理器处理启动/关闭，替代已弃用的 `on_event`），提供 `/api/*` 路由；React 前端位于 `frontend/`。
 - 仓库同时保留 `api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/` 等微服务目录。它们是代码组件，不代表已完成与当前前端的端到端生产验证。当前默认主线是单体应用。
 - 后端查询、改写、检索、重排、证据门控和生成代码位于 `core/`、`rewrite/`、`retrieval/`、`models/`。
 
@@ -78,15 +78,27 @@ docker compose up -d
 
 Compose 需要 Redis、Qdrant、Elasticsearch 等服务。启动前检查 compose 文件和环境配置。
 
+安全相关环境变量（Compose 在缺失时会 fail-fast，这是有意行为）：
+
+- `REDIS_PASSWORD`：Redis 启用 `requirepass`。
+- `ELASTICSEARCH_PASSWORD`：Elasticsearch 启用 `xpack.security.enabled=true`，客户端使用 `elastic` 用户 + 该密码（`ELASTICSEARCH_USERNAME` 默认 `elastic`）。
+- `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`、`SERVICE_AUTH_TOKEN`。
+- 生产环境还需 `CORS_ORIGINS`、JWT 密钥（`JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM=RS256`）。
+- 反向代理部署若需按真实客户端 IP 限流，显式设置 `TRUSTED_PROXIES`（逗号分隔的 IP/CIDR）；未设置时不信任 `X-Forwarded-For`。
+
 ## 当前代码能力
 
 - FastAPI 单体入口及 `/api/query`、`/api/chat`、认证、会话、媒体访问和指标路由。
+- 生成拓扑：**单一共享 4B vLLM 端点**（`config.json` → `gpu1.models.vllm_4b`，端口 8101）承担 Query Rewrite 与简单生成（endpoint 键 `gen_4b`）；复杂生成路由到 `gpu0.models.gen_14b`（Qwen3-14B）。详见 [PRD](PRD.md) 的 runtime reconciliation 表。
 - 认证以 RS256 为主：`POST /api/auth/login` 签发 RS256 access/refresh token；`common/auth` 以 RS256 验签，旧 HS256 `JWT_SECRET` 仅为可选兼容回退。
-- 多路召回及 Reciprocal Rank Fusion（RRF）实现。
+- 会话状态 `SessionState` 支持 Redis 持久化（跨 worker，TTL 7200s）；Pydantic 对象经稳定 schema 序列化并在读取时重建；Redis 不可用时**静默降级为进程内内存**（此时不跨 worker 共享）。
+- 登录限流 5 次/分钟：多 worker 走 Redis 计数，Redis 不可用时降级为单进程内存限流；仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才解析 `X-Forwarded-For`，否则一律使用对端地址。
+- `GET /api/stats` 与 `GET /api/metrics` 需要身份认证（`require_identity`）；`GET /api/health` 公开。Prometheus 抓取需配置 Bearer token。
+- 多路召回及 Reciprocal Rank Fusion（RRF）实现；CLIP 同步路由阈值由 `config.json` → `clip_sync` 驱动。
 - 可配置的 BiEncoder rerank 阶段及 CrossEncoder ensemble 代码。
 - PEFT `AdapterManager` 与 `LLMClient` 集成；是否实际加载 adapter 取决于本地模型、依赖和配置。仓库没有随附训练后的 adapter 权重。
 - QLoRA 微调脚本和小型样本数据；脚本存在不代表本仓库已验证训练结果。
-- RAGAS evaluation harness source 与 golden set 存在；RAGAS 不在默认依赖中，等待上游修复当前已知安全问题后再启用安装。评测工具存在不代表模型质量或生产指标已达标。
+- RAGAS evaluation harness / reporter / validator 与 golden set 存在（最初 seed 27 条，当前已扩展到 300+ 条；实际条目数以 `validate_golden_set` 输出和 `golden_set.jsonl` 为准）。RAGAS 不在默认依赖中（等待上游安全修复）。缺失 RAGAS 时 evaluator 返回零分并附 `_warning` 降级标记：**零分表示“未运行”，不是质量结果**，当前没有经过验证的 RAGAS quality score。
 
 这些能力的实现边界和证据列于 [audit](docs/repository-truth-audit.md)。性能数字如未附 benchmark 产物，不视为已验证结果。
 

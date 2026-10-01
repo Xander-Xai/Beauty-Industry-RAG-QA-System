@@ -1,6 +1,6 @@
 # 药妆助手面试架构唯一事实基线
 
-更新时间：2026-07-25
+更新时间：2026-10-02（v2.5 运行时/安全 reconciliation）
 
 本文件是“整体架构”“几路召回”“如何重排”“如何控制幻觉”等面试问题的唯一事实基线。README、PRD、代码注释和历史面试稿发生冲突时，以当前主链路代码、配置和架构契约测试为准。
 
@@ -86,14 +86,23 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 它给出正常生成、增强证据后生成或拒答三种决策。生成后的 Answer Gate 再检查答案与核心证据的一致性，法规类矛盾会拒答。
 
-复杂度路由在代码中支持 Qwen3-4B 和 Qwen3-14B：简单请求走 4B，复杂请求走 14B；KV 压力过高时可以截断、降级或拒绝。当前 `development` 配置会把复杂模型端点降级到 4B，且仓库不包含完整模型权重，因此“双模型已完成生产压测”不属于当前事实。
+生成拓扑当前是**单一共享 4B vLLM 端点**（`gpu1.models.vllm_4b`，端口 8101）：Query Rewrite 与简单生成共用 `gen_4b`，复杂请求走 `gen_14b`（Qwen3-14B）。旧 PRD 中“独立的 vLLM-Rewrite + vLLM-Gen-4B 双实例”是历史/目标设计，不是当前实现。KV 压力过高时可以截断、降级或拒绝。当前 `development` 配置会把复杂模型端点降级到 4B，且仓库不包含完整模型权重，因此“双模型已完成生产压测”不属于当前事实。
+
+## v2.5 运行时与安全契约
+
+- **会话状态**：`SessionState` 在配置 Redis 时跨 worker 持久化（TTL 7200s），Redis 不可用时降级进程内内存。序列化使用稳定 schema，`QueryRewriteResult`/`RecallResult` 会重建；真实多 worker Redis 行为尚待部署验收。
+- **登录限流**：5 次/分钟；多 worker 走 Redis 计数，Redis 不可用降级单进程内存。仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`，否则客户端伪造 XFF 无法绕过限流。
+- **可观测端点**：`GET /api/stats` 与 `GET /api/metrics` 需要认证（`require_identity`）；`GET /api/health` 公开。Prometheus 抓取需 Bearer token。
+- **Elasticsearch 安全**：Compose 启用 `xpack.security.enabled=true`，在线/离线客户端优先读取环境凭据。
+- **知识版本激活**：构建/校验/封存可自动化，但**激活 `knowledge_version_epoch` 是显式人工发布步骤**，没有自动 activation。
+- **外部验收边界**：上述能力均有代码与确定性测试，但真实 Redis 多 worker、反向代理客户端 IP、认证 ES、Prometheus 抓取与单 4B/14B GPU 部署仍需部署环境验收。
 
 ## 可观测性与评测边界
 
 - Prometheus 风格指标、健康检查、系统统计和 OpenTelemetry 追踪代码已经接入。
 - Jaeger 是可选导出器，当前配置默认关闭，不能说成默认运行。
-- RAGAS 工具和 301 条格式校验通过的 Golden Set 已存在。
-- 最新本地 RAGAS 报告因缺少 `ragas` 依赖返回零值，不是有效质量分；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
+- RAGAS harness / reporter / validator 与 Golden Set 已存在：最初 seed 27 条，现 300+ 条，实际条数以 `validate_golden_set` 输出为准。**格式校验通过 ≠ 领域事实正确**。
+- RAGAS 不在默认依赖中；缺少 `ragas` 时 evaluator 返回零分 + `_warning`，**零分表示“未运行”，不是质量结果**。当前没有经过验证的 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
 
 ## Q12 标准回答
 
@@ -105,7 +114,7 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 融合结果经过 BiEncoder 宽保留和双 CrossEncoder 精排。生成前，Evidence Gate 综合 Top 1、Top 3、多路一致性和文档间一致性，决定正常生成、增强证据生成或拒答；生成后，Answer Gate 再校验答案是否忠于核心证据，法规类矛盾会直接拒答。
 
-生成层在生产配置中支持 Qwen3-4B 和 Qwen3-14B 的复杂度路由，并结合 KV 压力做截断、降级或拒绝。工程侧提供健康检查、指标、审计和可选 OpenTelemetry/Jaeger 追踪。需要说明的是，当前仓库默认是开发模式，模型权重、完整基础设施和有效 RAGAS 运行结果仍需在部署环境验收。
+生成层使用单一共享 4B vLLM 端点处理 Query Rewrite 与简单生成，复杂请求路由到 Qwen3-14B，并结合 KV 压力做截断、降级或拒绝。工程侧提供健康检查、指标、审计和可选 OpenTelemetry/Jaeger 追踪，`/api/stats` 与 `/api/metrics` 需要认证。需要说明的是，当前仓库默认是开发模式，模型权重、完整基础设施和有效 RAGAS 运行结果仍需在部署环境验收。
 
 一句话总结：这是一套以 Qdrant 和 Elasticsearch 为多模态知识底座、以动态 2 至 4 路召回和两级重排保障检索质量、以双层 Gate 和 RBAC 保障可信与权限安全的企业内部 RAG 系统。
 

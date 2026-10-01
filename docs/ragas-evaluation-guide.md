@@ -90,8 +90,12 @@ python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden
 - contexts 为字符串列表
 - 无空 question / answer / ground_truth
 - business_type 和 difficulty 在允许集合内
-- 条目数 ≥ 20
+- 条目数 ≥ 300（`validate_golden_set.MIN_ENTRIES`；最初 seed 为 27 条，现已扩展）
 - 分类覆盖完整
+
+> **条目数以工具输出为准**：数据集会持续增长，文档不固化精确条数。以
+> `python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden_set.jsonl`
+> 的输出和 `golden_set.jsonl` 实际行数为准。
 
 ### 3.3 添加新条目
 
@@ -214,38 +218,30 @@ print(reporter.format_comparison_markdown(result))
 
 ## 6. CI 集成
 
-RAGAS 评估在 CI 中作为可选 Job 运行，不阻塞合并：
+CI **分为两个职责分离的 job**（见 `.github/workflows/ci.yml`）：
 
-```yaml
-ragas-eval:
-  name: RAGAS Evaluation (optional)
-  runs-on: ubuntu-latest
-  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-  steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-    - name: Install dependencies
-      run: pip install -r requirements.txt
-    - name: Run RAGAS evaluation
-      if: ${{ secrets.OPENAI_API_KEY != '' }}
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        DEPLOYMENT_MODE: testing
-      run: |
-        python -m tests.evaluation.ragas_eval \
-          --dataset tests/evaluation/golden_set.jsonl \
-          --tag ci-${{ github.sha }} \
-          --report-dir data/eval/reports
-    - name: Upload report artifact
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ragas-eval-report
-        path: data/eval/reports/
+### 6.1 deterministic evaluation guard（始终运行）
+
+不安装 `ragas`，只做与依赖无关的确定性校验：
+
+- golden set schema / 条目数 / 分类校验（`validate_golden_set`）
+- RAGAS harness 与 reporter 单元测试（`pytest tests/evaluation/`）
+
+这保证了“缺依赖时的降级路径”是可测试的、不会被误读为质量结果。
+
+### 6.2 real RAGAS evaluation（显式启用）
+
+默认不运行。仅当仓库变量 `RAGAS_EVAL_ENABLED == 'true'` 且配置了 `OPENAI_API_KEY` 时才运行，并显式安装 `ragas`：
+
+```bash
+python -m tests.evaluation.ragas_eval \
+  --dataset tests/evaluation/golden_set.jsonl \
+  --tag ci-${{ github.sha }} \
+  --report-dir data/eval/reports \
+  --require-ragas
 ```
+
+`--require-ragas` 在缺少 RAGAS 依赖时以退出码 2 失败，**绝不生成零分报告**。这是有意的安全策略：默认依赖集合不安装存在未决安全问题的 RAGAS 包，真实评估必须由维护者显式启用并自行评估依赖/安全策略。
 
 ---
 
@@ -255,7 +251,7 @@ ragas-eval:
 
 ### 开场
 
-> "我使用了 RAGAS 框架对 RAG 系统进行离线评估，覆盖 faithfulness、answer_relevancy、context_precision、context_recall 四个维度。我设计了一个 27 条数据的黄金数据集，覆盖了成分、法规、配方、图像、通用五种业务类型和 easy/medium/hard 三个难度级别。"
+> "我使用了 RAGAS 框架对 RAG 系统进行离线评估，覆盖 faithfulness、answer_relevancy、context_precision、context_recall 四个维度。黄金数据集最初是 27 条 seed，现已扩展到 300+ 条（实际条数以 `validate_golden_set` 输出为准），覆盖成分、法规、配方、图像、通用五种业务类型和 easy/medium/hard 三个难度级别。"
 
 ### 如何计算指标
 
@@ -263,7 +259,9 @@ ragas-eval:
 
 ### 如何做优化
 
-> "我做了基线评估后，通过优化检索策略（调整 BM25 权重、改进 chunk 策略）将 context recall 从 X% 提升到了 Y%。每次优化都通过 RAGAS 报告做对比验证，确保不会顾此失彼。"
+> "我做了基线评估后，通过优化检索策略（调整 BM25 权重、改进 chunk 策略）来提升 context recall。每次优化都通过 RAGAS 报告做对比验证，确保不会顾此失彼。"
+>
+> **示例占位符说明**：不要在未提供真实 RAGAS 报告前声称任何具体提升百分比（如 "从 X% 到 Y%"）。本项目当前没有经过验证的 RAGAS quality score；格式校验通过 ≠ 领域事实正确，golden set 存在 ≠ 质量分数有效。
 
 ### 体系设计
 
@@ -275,8 +273,8 @@ ragas-eval:
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
-| `No module named 'ragas'` | RAGAS 未安装 | `pip install ragas datasets` |
-| 所有分数为 0.0 | RAGAS 未安装（优雅降级） | 同上 |
+| `No module named 'ragas'` | RAGAS 未安装 | `pip install ragas datasets`（先确认依赖/安全策略） |
+| 所有分数为 0.0 | RAGAS 未安装时 evaluator 返回零分 + `_warning` 降级标记；**零分表示“未运行”，不是质量结果** | 安装 RAGAS 后重跑，或用 `--require-ragas` 让缺依赖直接失败 |
 | `AuthenticationError` | API Key 未配置 | `export OPENAI_API_KEY=sk-...` |
 | 管线评估报错 | 基础设施未就绪 | 确保 vLLM / Qdrant / ES / Redis 在运行 |
 | CLI 报 `FileNotFoundError` | 数据集路径错误 | 使用绝对路径或从项目根目录运行 |
@@ -291,6 +289,6 @@ ragas-eval:
 | [tests/evaluation/ragas_eval.py](../tests/evaluation/ragas_eval.py) | RAGAS 评估器 |
 | [tests/evaluation/test_ragas_eval.py](../tests/evaluation/test_ragas_eval.py) | 评估器单元测试 |
 | [tests/evaluation/ragas_report.py](../tests/evaluation/ragas_report.py) | 评估报告生成器 |
-| [tests/evaluation/golden_set.jsonl](../tests/evaluation/golden_set.jsonl) | 黄金数据集（27 条） |
+| [tests/evaluation/golden_set.jsonl](../tests/evaluation/golden_set.jsonl) | 黄金数据集（seed 27 条，现 300+；实际条数以校验工具输出为准） |
 | [tests/evaluation/validate_golden_set.py](../tests/evaluation/validate_golden_set.py) | 数据集验证工具 |
 | [tests/evaluation/sample_golden_set.jsonl](../tests/evaluation/sample_golden_set.jsonl) | 示例数据集（5 条，兼容旧版） |

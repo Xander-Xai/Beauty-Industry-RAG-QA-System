@@ -5,20 +5,22 @@
 当前仓库已经能确认的在线运维对象是单体 FastAPI 应用：
 
 - 入口：`app.py`
-- 健康检查：`GET /api/health`
-- 统计：`GET /api/stats`
-- 指标：`GET /api/metrics`
+- 健康检查：`GET /api/health`（公开）
+- 统计：`GET /api/stats`（需要认证）
+- 指标：`GET /api/metrics`（需要认证，Prometheus 抓取需 Bearer token）
 
 微服务目录仍在仓库中，但不应默认按“已完成整套线上运维验证”处理。
+
+会话状态与登录限流在配置 Redis 时跨 worker 共享；Redis 不可用时降级为进程内内存（此时多 worker 不共享，属于可接受的降级而非故障）。
 
 ## 2. 当前值得盯的指标
 
 ### 应用可用性
 
-- `/api/health`
-- `/api/stats`
-- `/api/metrics`
-- `/api/auth/metadata`
+- `/api/health`（无需认证）
+- `/api/stats`（配置监控账号的 Bearer token）
+- `/api/metrics`（配置监控账号的 Bearer token）
+- `/api/auth/metadata`（公开）
 
 ### 认证与权限
 
@@ -46,6 +48,9 @@
   `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM`，并仅在需要旧 HS256 兼容时设置 `JWT_SECRET`。
 - **开发身份开关**：如果生产环境误保留 `AUTH_DEV_MODE=true`，会形成身份伪造风险。
 - **运行配置来源**：服务现在会自动读取项目根目录 `.env`；排障时要同时检查 `.env` 与进程环境。
+- **Elasticsearch 认证**：Compose 默认启用 `xpack.security.enabled=true`，需要 `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD`。无认证或凭据错误的 ES 请求会失败，不要回退为关闭 security。
+- **登录限流身份**：仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`。反向代理未在允许列表内时，所有请求按代理 IP 计限流（可能误伤）；未配置代理却伪造 XFF 无法绕过限流。
+- **监控端点认证**：`/api/stats`、`/api/metrics` 需要认证，裸 `curl` 会 401；监控系统需配置 token。
 
 ## 4. 生产巡检建议
 
@@ -62,8 +67,9 @@
 ### 每日
 
 1. 检查 Redis / Qdrant / Elasticsearch / MinIO 容器状态
-2. 抽样检查 `/api/stats`
-3. 检查错误日志中的 401 / 403 / 500
+2. 抽样检查 `/api/stats`（带认证 token）
+3. 检查错误日志中的 401 / 403 / 429 / 500
+4. 检查 Redis 不可用时是否频繁出现降级日志（会话/限流内存回退）
 
 ### 离线知识库
 

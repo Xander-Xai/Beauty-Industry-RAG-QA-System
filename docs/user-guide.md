@@ -68,7 +68,7 @@ npm run dev
 页面里的辅助面板：
 
 - `Session`：调用 `GET /api/dialog_history` 查看当前会话轮次和锁定证据
-- `Stats`：调用 `GET /api/stats` 查看缓存命中率、KV 压力、阶段延迟
+- `Stats`：调用 `GET /api/stats` 查看缓存命中率、KV 压力、阶段延迟（该接口需要登录；未登录/Token 过期时会返回 401 并提示重新登录）
 
 ## 5. 证据文档
 

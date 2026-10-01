@@ -27,8 +27,34 @@ Changes present on `main` after the 2.3.0 release entry:
 - PEFT `AdapterManager` and integration with `LLMClient`.
 - Weighted Reciprocal Rank Fusion (RRF) in multi-path retrieval.
 - Dedicated configurable BiEncoder reranker support.
-- RAGAS evaluation harness, golden-set data, and CLI entrypoint.
+- RAGAS evaluation harness, reporter, golden-set validator and CLI entrypoint; golden set
+  expanded to 300+ entries (initial seed was 27; exact count is authoritative from
+  `validate_golden_set`/`golden_set.jsonl`).
+- Deterministic architecture-contract tests (`tests/test_architecture_contract.py`).
+- Redis-backed cross-worker session persistence for `SessionState` with in-memory fallback,
+  including a stable serialization schema for nested Pydantic objects.
+- Redis-backed login rate limiting with in-memory fallback for multi-worker deployments.
 - Prefix-cache hit/miss metrics and Locust report improvements.
+
+### Changed
+
+- FastAPI `on_event` startup/shutdown hooks migrated to a `lifespan` context manager.
+- vLLM topology consolidated to a single shared 4B endpoint (`gpu1.models.vllm_4b`) that
+  serves both Query Rewrite and simple generation; complex requests still route to the
+  14B endpoint (`gen_14b`).
+- CLIP synchronous routing thresholds are now config-driven (`config.json` → `clip_sync`).
+- Docs, README and PRD reconciled against the current code/config/test contracts
+  (single 4B topology, manual epoch activation, authenticated stats/metrics, ES auth).
+
+### Security
+
+- Elasticsearch in Docker Compose enables `xpack.security.enabled=true`; the app receives
+  `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` and the BM25/offline clients prefer the
+  environment credentials over `config.json`.
+- `GET /api/stats` and `GET /api/metrics` require an authenticated identity; `/api/health`
+  remains public.
+- Login rate-limit identity no longer trusts client-supplied `X-Forwarded-For` unless the
+  TCP peer is in `TRUSTED_PROXIES`; forwarded chains are walked right-to-left past trusted hops.
 
 ### Fixed
 
@@ -59,6 +85,14 @@ Changes present on `main` after the 2.3.0 release entry:
 - `elasticsearch` client pinned below 9.x to match the 8.x deployment server.
 - AdapterManager and RAGAS test coverage and mock isolation issues.
 - BiEncoder test coverage and configuration.
+- `SessionState` Redis persistence previously passed Pydantic objects to `json.dumps`, so any
+  session with dialog rounds failed to persist silently; it now uses a versioned schema and
+  reconstructs `QueryRewriteResult`/`RecallResult` on read. `last_rewrite_result` and
+  `store_async_clip_result()` are now persisted too.
+- Test modules no longer leak fake `torch`/`datasets` entries into `sys.modules` during
+  collection, which previously broke RAGAS tests that need the real `torch`.
+- CI no longer emits an all-zero RAGAS fallback as a quality report; real RAGAS evaluation is
+  opt-in and fails fast when the dependency is unavailable.
 
 ### Correction — historical offline capability claim (superseded)
 
