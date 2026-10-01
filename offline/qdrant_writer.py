@@ -338,6 +338,12 @@ class QdrantImageWriter:
                     wait=True,
                 )
 
+    def ensure_epoch_embedding_version(self, epoch: str) -> None:
+        """Pin an epoch to this writer's image embedding version without writing an image."""
+        validate_epoch(epoch)
+        self.ensure_collection()
+        self._ensure_epoch_embedding_version(epoch, "__snapshot__")
+
     def _is_epoch_sealed(self, epoch: str) -> bool:
         records = self.client.retrieve(
             collection_name=self.collection_name,

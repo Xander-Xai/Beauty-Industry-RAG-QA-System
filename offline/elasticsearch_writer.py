@@ -154,6 +154,15 @@ class ElasticsearchWriter:
         for existing_id in self._existing_ids(doc_id, doc_version_epoch):
             self.client.update(index=self.index_name, id=existing_id, doc={"status": "archived"})
 
+    def documents_for_epoch(self, doc_version_epoch: str) -> list[dict]:
+        response = self.client.search(
+            index=self.index_name,
+            query=_epoch_query(doc_version_epoch),
+            size=10000,
+            _source=True,
+        )
+        return [hit["_source"] for hit in response["hits"]["hits"]]
+
     def count_documents(self, doc_version_epoch: str | None = None) -> int:
         query = _epoch_query(doc_version_epoch) if doc_version_epoch is not None else {"match_all": {}}
         response = self.client.search(index=self.index_name, query=query, size=0, track_total_hits=True)
