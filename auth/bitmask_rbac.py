@@ -36,7 +36,7 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
 
     Qdrant pre-filter 不支持位掩码运算（RBAC），因此仅处理状态和版本：
     - status == 'active'（标量精准匹配）
-    - doc_version_epoch == 当前知识库 epoch
+    - doc_version_epoch == 当前知识库 epoch；历史无 epoch 点仅归入 default
 
     RBAC 权限过滤仍在 Python 层通过 is_allowed() 后置执行。
 
@@ -53,13 +53,18 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
     if not _SAFE_VERSION_PATTERN.match(ae_str):
         raise ValueError(f"knowledge_version_epoch 包含非法字符: {ae_str!r}")
 
-    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+    from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
+
+    epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=ae_str))]
+    if ae_str == "default":
+        # Pre-slice points without an epoch are part of the legacy default index.
+        epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
 
     return Filter(
         must=[
             FieldCondition(key="status", match=MatchValue(value="active")),
-            FieldCondition(key="doc_version_epoch", match=MatchValue(value=ae_str)),
-        ]
+        ],
+        should=epoch_conditions,
     )
 
 

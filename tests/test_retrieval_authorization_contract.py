@@ -107,8 +107,16 @@ def test_parallel_recall_scopes_epoch_only_to_text_collection():
 
     dense_fields = {(condition.key, condition.match.value) for condition in dense.qdrant_filter.must}
     clip_fields = {(condition.key, condition.match.value) for condition in clip_filters[0].must}
-    assert ("doc_version_epoch", "default") in dense_fields
     assert ("status", "active") in dense_fields
+    dense_epoch_conditions = dense.qdrant_filter.should
+    assert any(
+        condition.key == "doc_version_epoch" and condition.match.value == "default"
+        for condition in dense_epoch_conditions
+    )
+    assert any(
+        getattr(condition, "is_empty", None) and condition.is_empty.key == "doc_version_epoch"
+        for condition in dense_epoch_conditions
+    )
     assert clip_fields == {("status", "active")}
     assert not any(key == "doc_version_epoch" for key, _ in clip_fields)
 

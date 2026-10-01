@@ -566,4 +566,5 @@ def test_qdrant_filter_includes_active_status_and_epoch():
 
     qdrant_filter = build_qdrant_filter(0, 0, "v2")
     actual = {(item.key, item.match.value) for item in qdrant_filter.must}
-    assert actual == {("status", "active"), ("doc_version_epoch", "v2")}
+    assert actual == {("status", "active")}
+    assert [(item.key, item.match.value) for item in qdrant_filter.should] == [("doc_version_epoch", "v2")]

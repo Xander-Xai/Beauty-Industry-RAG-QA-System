@@ -66,6 +66,47 @@ class TestSuperAdmin:
         assert is_allowed(dr=7, ur=4294967295, dd=15, ud=0) is True
 
 
+def test_legacy_points_are_default_epoch_only():
+    from qdrant_client import QdrantClient
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    client = QdrantClient(":memory:")
+    client.create_collection("legacy_epoch", vectors_config=VectorParams(size=2, distance=Distance.COSINE))
+    client.upsert(
+        collection_name="legacy_epoch",
+        points=[
+            PointStruct(id=1, vector=[1.0, 0.0], payload={"status": "active", "doc_id": "legacy"}),
+            PointStruct(
+                id=2,
+                vector=[0.9, 0.1],
+                payload={"status": "active", "doc_id": "default", "doc_version_epoch": "default"},
+            ),
+            PointStruct(
+                id=3,
+                vector=[0.8, 0.2],
+                payload={"status": "active", "doc_id": "next", "doc_version_epoch": "phase_2"},
+            ),
+        ],
+        wait=True,
+    )
+
+    default_hits = client.query_points(
+        collection_name="legacy_epoch",
+        query=[1.0, 0.0],
+        query_filter=build_qdrant_filter(0, 0, "default"),
+        limit=10,
+    ).points
+    next_hits = client.query_points(
+        collection_name="legacy_epoch",
+        query=[1.0, 0.0],
+        query_filter=build_qdrant_filter(0, 0, "phase_2"),
+        limit=10,
+    ).points
+
+    assert {hit.payload["doc_id"] for hit in default_hits} == {"legacy", "default"}
+    assert {hit.payload["doc_id"] for hit in next_hits} == {"next"}
+
+
 # ── 普通 RBAC 位与匹配 ──
 
 

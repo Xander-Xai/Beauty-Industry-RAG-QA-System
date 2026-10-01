@@ -17,7 +17,7 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
 
 from api.models import (
     CacheHitRate,
@@ -399,14 +399,18 @@ def media_handler(
         active_epoch = _config.get("knowledge_version_epoch", "default")
 
         # Scope metadata authorization to the current version before checking masks.
+        epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=active_epoch))]
+        if active_epoch == "default":
+            # Legacy text points without this field belong to the default epoch.
+            epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
         records, _ = client.scroll(
             collection_name=collection_name,
             scroll_filter=Filter(
                 must=[
                     FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
                     FieldCondition(key="status", match=MatchValue(value="active")),
-                    FieldCondition(key="doc_version_epoch", match=MatchValue(value=active_epoch)),
-                ]
+                ],
+                should=epoch_conditions,
             ),
             limit=1,
             with_payload=["role_mask", "dept_mask", "status", "doc_version_epoch"],

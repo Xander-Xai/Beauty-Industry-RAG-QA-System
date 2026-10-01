@@ -93,11 +93,10 @@ class TestMediaEndpointAllowed:
         assert data["expires_in_seconds"] > 0
         media_filter = mock_qdrant.return_value.scroll.call_args.kwargs["scroll_filter"]
         filter_values = {(condition.key, condition.match.value) for condition in media_filter.must}
-        assert filter_values == {
-            ("doc_id", "pub_doc"),
-            ("status", "active"),
-            ("doc_version_epoch", "default"),
-        }
+        assert filter_values == {("doc_id", "pub_doc"), ("status", "active")}
+        assert media_filter.should[0].key == "doc_version_epoch"
+        assert media_filter.should[0].match.value == "default"
+        assert media_filter.should[1].is_empty.key == "doc_version_epoch"
         app.dependency_overrides.clear()
 
     @patch("api.routes.QdrantClient")
