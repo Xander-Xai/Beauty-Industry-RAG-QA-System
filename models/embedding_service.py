@@ -181,16 +181,40 @@ class EmbeddingService:
         collection_name = collection_name or config["embedding"]["text"]["collection"]
         client = self.qdrant_client
 
-        results = client.search(
-            collection_name=collection_name,
-            query_vector=query_embedding.flatten().tolist(),
-            limit=top_k,
-            query_filter=qdrant_filter,
-            with_payload=["doc_id", "content", "doc_type", "embedding_type", "role_mask", "dept_mask"],
-        )
+        payload_fields = [
+            "doc_id",
+            "chunk_id",
+            "chunk_index",
+            "content",
+            "source_path",
+            "content_hash",
+            "doc_type",
+            "embedding_type",
+            "role_mask",
+            "dept_mask",
+            "status",
+            "doc_version_epoch",
+        ]
+        if hasattr(client, "query_points"):
+            response = client.query_points(
+                collection_name=collection_name,
+                query=query_embedding.flatten().tolist(),
+                limit=top_k,
+                query_filter=qdrant_filter,
+                with_payload=payload_fields,
+            )
+            points = response.points
+        else:  # Compatibility for older clients and repository test doubles.
+            points = client.search(
+                collection_name=collection_name,
+                query_vector=query_embedding.flatten().tolist(),
+                limit=top_k,
+                query_filter=qdrant_filter,
+                with_payload=payload_fields,
+            )
 
         hits = []
-        for point in results:
+        for point in points:
             hits.append(
                 {
                     "doc_id": str(point.payload.get("doc_id", "")),
@@ -199,6 +223,12 @@ class EmbeddingService:
                     "metadata": {
                         "doc_type": point.payload.get("doc_type", ""),
                         "embedding_type": point.payload.get("embedding_type", ""),
+                        "chunk_id": point.payload.get("chunk_id"),
+                        "chunk_index": point.payload.get("chunk_index"),
+                        "source_path": point.payload.get("source_path"),
+                        "content_hash": point.payload.get("content_hash"),
+                        "status": point.payload.get("status"),
+                        "doc_version_epoch": point.payload.get("doc_version_epoch"),
                         "role_mask": point.payload.get("role_mask"),
                         "dept_mask": point.payload.get("dept_mask"),
                     },

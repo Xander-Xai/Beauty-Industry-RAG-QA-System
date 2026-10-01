@@ -10,11 +10,11 @@
 
 ## 离线处理状态
 
-当前 `offline/` 仅包含 QLoRA 微调脚本、样本数据和微调依赖文件。
+当前 `offline/` 包含一个受限的 TXT → text embedding → Qdrant 导入切片，以及 QLoRA 微调脚本、样本数据和独立微调依赖。
 
-**已包含：** QLoRA fine-tuning utility（`offline/finetune_qlora.py`）、fine-tuning sample data、独立依赖清单。
+**已包含：** `python3 run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 支持 UTF-8 TXT、确定性字符切块、BGE 文本 embedding adapter 和 Qdrant `rag_text_768` 写入。生产 BGE adapter 使用 `config.json` 中配置的模型路径；常规测试使用轻量确定性测试 embedder，不下载模型。该实现没有声称已完成真实 BGE 模型 smoke 验证。
 
-**当前不包含：** 文档导入与解析、OCR 导入、向量生成和写入、增量调度、索引创建/重建、反馈闭环。`run_offline.py` 对 ingestion 模式会明确报错。相关设计和验收范围跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+**仍不支持：** PDF、DOCX、XLSX、OCR、CLIP ingestion、Elasticsearch 写入、调度、完整重建和反馈闭环。`run_offline.py` 只开放已实现的 TXT ingestion 命令。后续范围跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
 仓库中存在 Airflow DAG 草案；它引用的 scheduler/feedback modules 不存在，因此当前不会注册可用的 ingestion DAG。DAG 文件存在不等同于生产导入管线。需要导入数据时，请连接已准备好的外部 Qdrant/Elasticsearch 索引；本仓库目前没有从原始文档创建该索引的已验证命令。
 
@@ -85,8 +85,8 @@ api/                      /api/* routes
 core/                     Online RAG pipeline
 retrieval/                Retrieval, RRF, BiEncoder and reranking
 models/                   Model clients and AdapterManager
-offline/                  QLoRA utility, sample data and dependencies only
-run_offline.py            Explicitly rejects unavailable ingestion modes
+offline/                  TXT ingestion slice and QLoRA utility
+run_offline.py            TXT ingestion and rewrite-feedback entrypoint
 frontend/                 React application
 api-gateway/              Microservice code; separate integration status
 retrieval-service/        Microservice code; separate integration status

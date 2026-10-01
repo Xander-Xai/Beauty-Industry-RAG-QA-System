@@ -2,9 +2,17 @@
 
 ## 当前能力边界
 
-在线检索代码会读取已存在的向量/搜索服务数据。仓库目前没有生产级原始文档导入管线：`offline/` 仅包含 QLoRA 微调脚本、样本数据和独立依赖；PDF/DOCX/XLSX/TXT 解析、OCR 导入、BGE/CLIP 向量写入、增量调度和反馈闭环尚未包含。完整后续范围见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
+在线检索代码会读取 Qdrant 和搜索服务中的数据。当前 Phase 1 只支持 UTF-8 TXT → 确定性字符切块 → BGE 文本 embedding adapter → Qdrant text collection；真实 BGE 模型 smoke test 尚未验证。PDF/DOCX/XLSX、OCR、CLIP、Elasticsearch 写入、调度、完整重建和反馈闭环尚未实现。完整后续范围见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
-`run_offline.py --mode create-index|incremental|full|feedback` 会给出“Offline ingestion pipeline is not currently included in this repository.”并以非零状态退出。这些命令不是可用的数据管理操作。
+`run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 是当前唯一支持的文档 ingestion 命令。它要求显式给出权限掩码和知识版本 epoch；掩码必须是 uint32。公开内容使用两个掩码 `0`，受限内容使用对应的非零角色和部门掩码。命令使用 `config.json` 中的 BGE 模型路径、768 维度、`rag_text_768` collection 和 Qdrant 连接配置。
+
+示例：
+
+```bash
+python3 run_offline.py ingest-text ./data/public-guide.txt --role-mask 0 --dept-mask 0 --epoch default
+```
+
+该切片按 UTF-8 读取（接受 BOM），按字符窗口切块，并使用稳定 point ID 重复 upsert。内容变化会改变内容摘要和 chunk ID。每条 payload 都包含 `role_mask`、`dept_mask`、`status=active` 和 `doc_version_epoch`；在线 Qdrant 过滤会匹配 active 状态和当前 epoch，RBAC 仍由在线授权路径检查。CI 集成测试使用本地内存 Qdrant 与确定性测试 embedder，不会下载 BGE。
 
 ## 配置来源
 
@@ -31,6 +39,6 @@
 
 `offline/finetune_data.json` 是 QLoRA 脚本的示例训练数据；`offline/requirements-finetune.txt` 是可选依赖。示例文件不代表企业知识库数据集，也不代表已经生成了模型 adapter。微调脚本不能替代文档 ingestion。
 
-## 未来 ingestion 验收范围
+## 后续 ingestion 范围
 
 文档解析、图像/OCR、BGE/CLIP embeddings、Qdrant/Elasticsearch writers、增量状态、调度、建索引/全量重建、反馈闭环及相应测试和评估均在 [独立 feature issue](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2) 中跟踪。

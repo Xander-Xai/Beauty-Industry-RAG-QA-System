@@ -1,19 +1,8 @@
-"""
-离线管线入口脚本
-
-用法：
-    python3 run_offline.py --mode incremental      # 增量更新
-    python3 run_offline.py --mode full             # 全量重建
-    python3 run_offline.py --mode create-index     # 创建 Qdrant Collection
-    python3 run_offline.py --mode feedback         # 离线反馈闭环（日志采样 + 参数更新）
-    python3 run_offline.py --mode rewrite-feedback # Query Rewrite 反馈闭环
-"""
+"""Offline text ingestion and supported feedback utility commands."""
 
 import argparse
 import logging
 import sys
-
-from common.config import get_config_dict
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,24 +12,18 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="离线知识库工具")
-    parser.add_argument(
-        "--mode",
-        choices=[
-            "incremental",
-            "full",
-            "create-index",
-            "feedback",
-            "rewrite-feedback",
-        ],
-        default="incremental",
-        help="运行模式",
-    )
-    parser.add_argument("--data-dir", default=None, help="数据目录（覆盖 config）")
-    parser.add_argument("--force-full", action="store_true", help="强制全量更新（增量模式下忽略增量状态）")
+    parser = argparse.ArgumentParser(description="Offline knowledge base tools")
+    parser.add_argument("command", nargs="?", choices=["ingest-text"])
+    parser.add_argument("source", nargs="?", help="Path to a UTF-8 .txt source document")
+    parser.add_argument("--role-mask", type=int)
+    parser.add_argument("--dept-mask", type=int)
+    parser.add_argument("--epoch")
+    parser.add_argument("--mode", choices=["rewrite-feedback"], help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.mode == "rewrite-feedback":
+        from common.config import get_config_dict
+
         get_config_dict()
         from rewrite.feedback import RewriteFeedback
 
@@ -49,8 +32,22 @@ def main():
         logger.info("Rewrite feedback cycle completed")
         return 0
 
+    if args.command == "ingest-text":
+        if not args.source or args.role_mask is None or args.dept_mask is None or not args.epoch:
+            parser.error("ingest-text requires SOURCE, --role-mask, --dept-mask, and --epoch")
+        from offline.text_ingestion import configured_text_ingestion_service
+
+        chunks = configured_text_ingestion_service().ingest(
+            args.source,
+            role_mask=args.role_mask,
+            dept_mask=args.dept_mask,
+            doc_version_epoch=args.epoch,
+        )
+        logger.info("Ingested %d text chunks", len(chunks))
+        return 0
+
     print(
-        "Offline ingestion pipeline is not currently included in this repository.",
+        "No offline ingestion command selected; only 'ingest-text' is supported.",
         file=sys.stderr,
     )
     return 2
