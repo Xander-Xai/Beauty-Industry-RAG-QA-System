@@ -60,6 +60,7 @@ ALL_QUERIES = QUERIES_REGULATION + QUERIES_INGREDIENT + QUERIES_GENERAL
 @dataclass
 class LatencyStats:
     """延迟统计"""
+
     values: list[float] = field(default_factory=list)
 
     def add(self, ms: float) -> None:
@@ -103,8 +104,8 @@ class LatencyStats:
 
 # 全局统计收集器（跨所有 Locust worker）
 query_latencies = LatencyStats()
-cache_hits = 0        # 占位：未来逐请求缓存命中追踪
-cache_misses = 0      # 占位：未来逐请求缓存未命中追踪
+cache_hits = 0  # 占位：未来逐请求缓存命中追踪
+cache_misses = 0  # 占位：未来逐请求缓存未命中追踪
 errors = 0
 
 
@@ -162,7 +163,7 @@ class RAGUser(HttpUser):
 
     @task(40)
     def single_query(self):
-        query = random.choice(ALL_QUERIES)
+        query = random.choice(ALL_QUERIES)  # noqa: S311 - randomized benchmark workload, not security token generation
         self.client.post(
             "/api/query",
             json={"query": query},
@@ -190,14 +191,10 @@ def build_report(environment, system_stats) -> dict:
     return {
         "benchmark": {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "duration_seconds": round(
-                environment.runner.stats.total.time if environment.runner else 0, 2
-            ),
+            "duration_seconds": round(environment.runner.stats.total.time if environment.runner else 0, 2),
             "total_attempts": total_attempts,
             "successful_requests": successful,
-            "concurrent_users": (
-                environment.runner.target_user_count if environment.runner else 0
-            ),
+            "concurrent_users": (environment.runner.target_user_count if environment.runner else 0),
             "api_base": API_BASE,
         },
         "latency_ms": {
@@ -211,16 +208,12 @@ def build_report(environment, system_stats) -> dict:
         "cache": {
             "client_cache_hits": cache_hits,
             "client_cache_misses": cache_misses,
-            "client_cache_hit_rate_pct": round(
-                cache_hits / max(cache_hits + cache_misses, 1) * 100, 2
-            ),
+            "client_cache_hit_rate_pct": round(cache_hits / max(cache_hits + cache_misses, 1) * 100, 2),
         },
         "system_stats": system_stats,
         "errors": {
             "total": errors,
-            "error_rate_pct": round(
-                total_errors / max(total_attempts, 1) * 100, 2
-            ),
+            "error_rate_pct": round(total_errors / max(total_attempts, 1) * 100, 2),
         },
     }
 
@@ -241,12 +234,12 @@ def aggregate_history() -> dict:
     total_errs = 0
     for rp in existing_reports:
         try:
-            with open(rp, "r") as f:
+            with open(rp) as f:
                 data = json.load(f)
             total_reqs += data.get("benchmark", {}).get("total_attempts", 0)
             total_errs += data.get("errors", {}).get("total", 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not collect server stats for report: %s", exc)
     return {
         "report_count": len(existing_reports),
         "total_requests_historical": total_reqs,
@@ -260,15 +253,14 @@ def print_summary(report: dict, system_stats: dict, report_path: Path, history: 
     print(f"📊 Benchmark 报告已保存: {report_path}")
     print(f"{'=' * 60}")
     bm = report["benchmark"]
-    print(f"  运行参数:")
+    print("  运行参数:")
     print(f"    并发用户数: {bm['concurrent_users']}")
     print(f"    运行时长: {bm['duration_seconds']:.0f}s")
     print(f"    总请求: {bm['total_attempts']} (成功: {bm['successful_requests']}, 失败: {report['errors']['total']})")
-    print(f"  延迟 (ms):")
+    print("  延迟 (ms):")
     lat = report["latency_ms"]
-    print(f"    Avg: {lat['avg']} | P50: {lat['p50']} | "
-          f"P95: {lat['p95']} | P99: {lat['p99']}")
-    print(f"  缓存:")
+    print(f"    Avg: {lat['avg']} | P50: {lat['p50']} | P95: {lat['p95']} | P99: {lat['p99']}")
+    print("  缓存:")
     cache_rates = system_stats.get("cache_hit_rate", {})
     l1 = cache_rates.get("L1", "N/A")
     l2 = cache_rates.get("L2", "N/A")
@@ -278,8 +270,7 @@ def print_summary(report: dict, system_stats: dict, report_path: Path, history: 
     print(f"  错误率: {report['errors']['error_rate_pct']}%")
     print(f"{'=' * 60}")
     print(f"📁 历史报告: {REPORT_DIR} 下共有 {history['report_count']} 份报告")
-    print(f"   累计请求: {history['total_requests_historical']} | "
-          f"累计错误: {history['total_errors_historical']}")
+    print(f"   累计请求: {history['total_requests_historical']} | 累计错误: {history['total_errors_historical']}")
     print(f"{'=' * 60}")
 
 

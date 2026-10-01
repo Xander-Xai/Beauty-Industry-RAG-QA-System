@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -143,9 +142,7 @@ class AdapterManager:
         logger.info("发现 %d 个 adapter", len(self._adapters))
         return list(self._adapters.values())
 
-    def _parse_adapter_config(
-        self, name: str, path: str, config_file: Path
-    ) -> AdapterInfo | None:
+    def _parse_adapter_config(self, name: str, path: str, config_file: Path) -> AdapterInfo | None:
         """解析单个 adapter_config.json 为 AdapterInfo"""
         try:
             with open(config_file, encoding="utf-8") as fh:
@@ -157,22 +154,9 @@ class AdapterManager:
         base_model = cfg.get("base_model_name_or_path", "")
         peft_version = cfg.get("peft_version", "")
         lora_config = cfg.get("lora", {}) or {}
-        rank = (
-            cfg.get("r")
-            or lora_config.get("r")
-            or cfg.get("lora_r")
-            or 0
-        )
-        alpha = (
-            cfg.get("lora_alpha")
-            or lora_config.get("lora_alpha")
-            or 0
-        )
-        target_modules: list[str] = (
-            cfg.get("target_modules")
-            or lora_config.get("target_modules")
-            or []
-        )
+        rank = cfg.get("r") or lora_config.get("r") or cfg.get("lora_r") or 0
+        alpha = cfg.get("lora_alpha") or lora_config.get("lora_alpha") or 0
+        target_modules: list[str] = cfg.get("target_modules") or lora_config.get("target_modules") or []
 
         return AdapterInfo(
             name=name,
@@ -242,8 +226,7 @@ class AdapterManager:
         configured_base = cfg.get("base_model_name_or_path", "")
         if configured_base and configured_base != self._base_model_name:
             warnings.append(
-                f"Base model 不匹配: adapter 配置为 '{configured_base}', "
-                f"当前 manager 配置为 '{self._base_model_name}'"
+                f"Base model 不匹配: adapter 配置为 '{configured_base}', 当前 manager 配置为 '{self._base_model_name}'"
             )
 
         # 4. 权重文件存在
@@ -253,9 +236,7 @@ class AdapterManager:
                 found_weight = True
                 break
         if not found_weight:
-            errors.append(
-                f"未找到权重文件 (试过: {', '.join(self._WEIGHT_FILES)})"
-            )
+            errors.append(f"未找到权重文件 (试过: {', '.join(self._WEIGHT_FILES)})")
 
         is_valid = len(errors) == 0
         return ValidationResult(
@@ -298,9 +279,7 @@ class AdapterManager:
 
         # 非生产模式: 优雅降级（返回 None）
         if not is_production_mode():
-            logger.info(
-                "非生产模式，跳过 adapter 加载: %s (path=%s)", adapter_name, info.path
-            )
+            logger.info("非生产模式，跳过 adapter 加载: %s (path=%s)", adapter_name, info.path)
             self._current_adapter_name = adapter_name
             return None
 

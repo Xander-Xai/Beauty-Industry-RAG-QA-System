@@ -10,7 +10,7 @@ RAGAS 评估器
 import json
 import logging
 import os
-from typing import Any, Callable
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def load_golden_set(path: str) -> list[dict]:
         raise FileNotFoundError(f"数据集文件未找到: {path}")
 
     dataset: list[dict] = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
             if not stripped:
@@ -127,20 +127,18 @@ class RAGASEvaluator:
             return {}
 
         try:
+            from datasets import Dataset  # type: ignore[import-untyped]
             from ragas import evaluate as ragas_evaluate  # type: ignore[import-untyped]
-            from ragas.metrics import (                   # type: ignore[import-untyped]
+            from ragas.metrics import (  # type: ignore[import-untyped]
                 answer_relevancy,
                 context_precision,
                 context_recall,
                 faithfulness,
             )
-            from datasets import Dataset                 # type: ignore[import-untyped]
         except ImportError as exc:
             msg = f"RAGAS 或 datasets 未安装: {exc}。返回默认零值。"
             logger.warning(msg)
-            result: dict[str, float] = {
-                name: 0.0 for name in selected_metric_names
-            }
+            result: dict[str, float] = {name: 0.0 for name in selected_metric_names}
             result["_warning"] = msg  # type: ignore[assignment]
             return result
 
@@ -174,10 +172,7 @@ class RAGASEvaluator:
         Returns:
             指标名称到分数的字典。
         """
-        answers = [
-            answer_fn(item["question"], item["contexts"])
-            for item in self._dataset
-        ]
+        answers = [answer_fn(item["question"], item["contexts"]) for item in self._dataset]
         return self.evaluate(answers=answers, metrics=metrics)
 
 

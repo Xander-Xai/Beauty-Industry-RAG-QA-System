@@ -24,6 +24,7 @@ import pytest
 # Lightweight torch mock (enough for softmax + tensor slicing)
 # ---------------------------------------------------------------------------
 
+
 class _FakeTensor:
     """Minimal tensor shim that supports item(), indexing, and shape."""
 
@@ -69,6 +70,7 @@ class _FakeTensorOps:
     class _NoGrad:
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             pass
 
@@ -119,6 +121,7 @@ def _restore_real_torch():
 # Helper: build a minimal FastAPI TestClient from the inline service code
 # ---------------------------------------------------------------------------
 
+
 def _make_app(nli_model=None, nli_tokenizer=None, aggregator_ready=True):
     """
     Dynamically construct the FastAPI app with controllable NLI model state.
@@ -160,12 +163,17 @@ def _make_app(nli_model=None, nli_tokenizer=None, aggregator_ready=True):
 
         try:
             import torch
+
             premises = [pair[0] for pair in req.pairs]
             hypotheses = [pair[1] for pair in req.pairs]
 
             inputs = _nli_tokenizer(
-                premises, hypotheses,
-                return_tensors="pt", truncation=True, max_length=512, padding=True,
+                premises,
+                hypotheses,
+                return_tensors="pt",
+                truncation=True,
+                max_length=512,
+                padding=True,
             )
 
             with torch.no_grad():
@@ -174,14 +182,16 @@ def _make_app(nli_model=None, nli_tokenizer=None, aggregator_ready=True):
 
             results = []
             for i in range(len(req.pairs)):
-                results.append({
-                    "contradiction": round(probs[i][0].item(), 6),
-                    "entailment":    round(probs[i][1].item(), 6),
-                    "neutral":       round(probs[i][2].item(), 6),
-                })
+                results.append(
+                    {
+                        "contradiction": round(probs[i][0].item(), 6),
+                        "entailment": round(probs[i][1].item(), 6),
+                        "neutral": round(probs[i][2].item(), 6),
+                    }
+                )
             return {"results": results, "count": len(results)}
         except Exception as e:
-            raise HTTPException(500, str(e))
+            raise HTTPException(500, str(e)) from e
 
     @app.get("/health")
     def health():
@@ -226,7 +236,8 @@ def _make_fake_nli_model(*scores_per_pair):
                 "attention_mask": _FakeTensor([[1] * 10] * n),
             }
 
-    model = FakeModel()
+    FakeModel()
+
     # The endpoint calls model(**inputs), so make the model callable
     class CallableFakeModel(FakeModel):
         def __call__(self, **kwargs):
@@ -239,13 +250,14 @@ def _make_fake_nli_model(*scores_per_pair):
 # Test 1: Real NLI model inference (mocked torch + transformers-style model)
 # ---------------------------------------------------------------------------
 
+
 class TestNLIRealInference:
     """POST /rerank/nli with a working NLI model returns actual probabilities."""
 
     def test_single_pair_inference(self):
         """Single pair: model logits are softmaxed into 3-class probabilities."""
         fake_model, fake_tokenizer = _make_fake_nli_model(
-            (0.05, 0.90, 0.05),   # pair 0: high entailment
+            (0.05, 0.90, 0.05),  # pair 0: high entailment
         )
         _, client = _make_app(nli_model=fake_model, nli_tokenizer=fake_tokenizer)
 
@@ -265,8 +277,8 @@ class TestNLIRealInference:
     def test_multiple_pairs_inference(self):
         """Multiple pairs: each pair gets its own softmaxed result."""
         fake_model, fake_tokenizer = _make_fake_nli_model(
-            (0.0, 1.0, 0.0),    # pair 0: strong entailment
-            (1.0, 0.0, 0.0),    # pair 1: strong contradiction
+            (0.0, 1.0, 0.0),  # pair 0: strong entailment
+            (1.0, 0.0, 0.0),  # pair 1: strong contradiction
         )
         _, client = _make_app(nli_model=fake_model, nli_tokenizer=fake_tokenizer)
 
@@ -316,6 +328,7 @@ class TestNLIRealInference:
 # Test 2: NLI model unavailable -- HTTP 501 with contract message
 # ---------------------------------------------------------------------------
 
+
 class TestNLIMissingFallback:
     """When the NLI model failed to load at startup, the endpoint returns 501."""
 
@@ -346,6 +359,7 @@ class TestNLIMissingFallback:
 # Test 3: Aggregator not initialized -- HTTP 503
 # ---------------------------------------------------------------------------
 
+
 class TestAggregatorNotInitialized:
     """503 is returned when the aggregator singleton was not set."""
 
@@ -359,6 +373,7 @@ class TestAggregatorNotInitialized:
 # ---------------------------------------------------------------------------
 # Test 4: Model inference raises an exception -- HTTP 500
 # ---------------------------------------------------------------------------
+
 
 class TestNLIInferenceError:
     """If the model throws during inference the endpoint returns 500."""
@@ -382,6 +397,7 @@ class TestNLIInferenceError:
 # ---------------------------------------------------------------------------
 # Test 5: Health endpoint still works
 # ---------------------------------------------------------------------------
+
 
 class TestHealthEndpoint:
     def test_health_returns_200(self):

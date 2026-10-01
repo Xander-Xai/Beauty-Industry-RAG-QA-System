@@ -2,6 +2,7 @@
 test_llm_client_full.py — 新增测试: LLMClient 的 httpx 调用、超时处理、
 fallback 逻辑、不同 business_type 的 max_output_tokens 差异。
 """
+
 import os
 import sys
 import types
@@ -29,8 +30,10 @@ except ImportError:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_client():
     from models.llm_client import LLMClient
+
     client = LLMClient.__new__(LLMClient)
     client._router = MagicMock()
     client.max_conversation_rounds = 6
@@ -51,6 +54,7 @@ def _make_ctx(
         RequestContext,
         RerankResult,
     )
+
     ctx = RequestContext(
         user_input=query,
         session_id=session_id,
@@ -68,9 +72,13 @@ def _make_ctx(
         RerankResult(doc_id="doc_3", content="维生素E抗氧化", final_score=0.70),
     ]
     ctx.evidence_result = EvidenceGateResult(
-        evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-        retrieval_agreement_score=0.8, doc_consistency_score=0.9,
-        decision=evidence_decision, top_docs=ctx.rerank_results,
+        evidence_score=0.85,
+        ce_top1_score=0.9,
+        ce_top3_mean_score=0.85,
+        retrieval_agreement_score=0.8,
+        doc_consistency_score=0.9,
+        decision=evidence_decision,
+        top_docs=ctx.rerank_results,
     )
     ctx.user_role_mask = 0
     ctx.user_dept_mask = 0
@@ -81,6 +89,7 @@ def _make_ctx(
 # ===========================================================================
 # 1. Successful Generation
 # ===========================================================================
+
 
 class TestLLMClientSuccessfulGeneration:
     """LLMClient 成功生成测试。"""
@@ -117,9 +126,11 @@ class TestLLMClientSuccessfulGeneration:
         """generate 构建的 messages 应包含 system 和 user 角色。"""
         client = _make_client()
         captured = []
+
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
             return {"content": "回答", "prefix_cache_hit": None}
+
         client.router.route_chat.side_effect = capture
 
         ctx = _make_ctx()
@@ -135,9 +146,11 @@ class TestLLMClientSuccessfulGeneration:
         """generate 应将 rerank 结果格式化为证据文本。"""
         client = _make_client()
         captured = []
+
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
             return {"content": "回答", "prefix_cache_hit": None}
+
         client.router.route_chat.side_effect = capture
 
         ctx = _make_ctx()
@@ -152,9 +165,11 @@ class TestLLMClientSuccessfulGeneration:
         """Evidence Gate decision=enhanced_generate 时应注入增强提示。"""
         client = _make_client()
         captured = []
+
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
             return {"content": "回答", "prefix_cache_hit": None}
+
         client.router.route_chat.side_effect = capture
 
         ctx = _make_ctx(evidence_decision="enhanced_generate")
@@ -167,6 +182,7 @@ class TestLLMClientSuccessfulGeneration:
 # ===========================================================================
 # 2. Timeout / Error Handling
 # ===========================================================================
+
 
 class TestLLMClientErrorHandling:
     """LLMClient 错误处理测试。"""
@@ -205,6 +221,7 @@ class TestLLMClientErrorHandling:
 # 3. Fallback on Error
 # ===========================================================================
 
+
 class TestLLMClientFallback:
     """LLMClient fallback / 降级逻辑测试。"""
 
@@ -233,6 +250,7 @@ class TestLLMClientFallback:
         """法规类查询的系统提示应包含法规相关指引。"""
         client = _make_client()
         from core.pipeline_context import QueryRewriteResult
+
         rewrite = QueryRewriteResult(
             rewritten_query="铅含量标准",
             business_type="regulation",
@@ -246,6 +264,7 @@ class TestLLMClientFallback:
         """研发类查询的系统提示应包含配方/工艺相关指引。"""
         client = _make_client()
         from core.pipeline_context import QueryRewriteResult
+
         rewrite = QueryRewriteResult(
             rewritten_query="烟酰胺配方",
             business_type="development",
@@ -259,6 +278,7 @@ class TestLLMClientFallback:
         """通用查询的系统提示不应包含特定业务指引。"""
         client = _make_client()
         from core.pipeline_context import QueryRewriteResult
+
         rewrite = QueryRewriteResult(
             rewritten_query="什么是护肤",
             business_type="general",
@@ -280,10 +300,7 @@ class TestLLMClientFallback:
         """evidence 格式化应限制为 top-3 文档。"""
         client = _make_client()
         ctx = _make_ctx()
-        ctx.rerank_results = [
-            MagicMock(ce_score_ensemble=0.9, bi_score=0.0, content=f"doc{i}")
-            for i in range(10)
-        ]
+        ctx.rerank_results = [MagicMock(ce_score_ensemble=0.9, bi_score=0.0, content=f"doc{i}") for i in range(10)]
         result = client._format_evidence(ctx)
         # 应只包含 [证据1], [证据2], [证据3]
         assert "证据3" in result
@@ -293,6 +310,7 @@ class TestLLMClientFallback:
 # ===========================================================================
 # 4. Different Business Types Use Different max_output_tokens
 # ===========================================================================
+
 
 class TestLLMClientBusinessTypeTokens:
     """不同 business_type 应使用不同的 max_output_tokens 配置。"""
@@ -342,9 +360,7 @@ class TestLLMClientBusinessTypeTokens:
         client.router.route_chat.return_value = {"content": "续写内容", "prefix_cache_hit": None}
 
         ctx = _make_ctx()
-        client.generate_continuation(
-            ctx, session_state=None, already_generated="前半部分", target_model="qwen3-14b"
-        )
+        client.generate_continuation(ctx, session_state=None, already_generated="前半部分", target_model="qwen3-14b")
 
         call_kwargs = client.router.route_chat.call_args
         assert call_kwargs[1]["temperature"] == 0.0
@@ -352,6 +368,7 @@ class TestLLMClientBusinessTypeTokens:
     def test_generate_conversation_history_limit(self):
         """多轮对话应限制历史轮数。"""
         from core.pipeline_context import SessionState
+
         client = _make_client()
         client.max_conversation_rounds = 3  # 限制为 3 轮
         client.router.route_chat.return_value = {"content": "回答", "prefix_cache_hit": None}
@@ -359,15 +376,19 @@ class TestLLMClientBusinessTypeTokens:
         ctx = _make_ctx(session_id="test_hist_limit")
         session = SessionState.get_or_create("test_hist_limit")
         for i in range(10):
-            session.dialog_rounds.append({
-                "user_input": f"问题{i}",
-                "response": f"回答{i}",
-            })
+            session.dialog_rounds.append(
+                {
+                    "user_input": f"问题{i}",
+                    "response": f"回答{i}",
+                }
+            )
 
         captured = []
+
         def capture(endpoint, messages, **kw):
             captured.extend(messages)
             return {"content": "回答", "prefix_cache_hit": None}
+
         client.router.route_chat.side_effect = capture
 
         client.generate(ctx)

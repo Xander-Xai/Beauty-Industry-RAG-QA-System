@@ -151,7 +151,7 @@ class TestAdapterManagerDiscover:
 
     def test_discover_finds_adapter(self, base_model, adapter_config):
         """发现包含 config 的目录应返回 AdapterInfo 并填充正确字段"""
-        from models.adapter_manager import AdapterManager, AdapterInfo
+        from models.adapter_manager import AdapterInfo, AdapterManager
 
         with tempfile.TemporaryDirectory() as tmp:
             adapter_path = Path(tmp) / "regulation-lora"
@@ -526,11 +526,11 @@ class TestAdapterManagerUnload:
 
     def test_load_production_mode_peft_not_installed(self, base_model, adapter_config, monkeypatch):
         """生产模式下 PEFT 未安装时应返回 False"""
-        from common.config import is_production_mode
         from models.adapter_manager import AdapterManager
 
         # 模拟生产模式：直接 mock common.config.is_production_mode
         monkeypatch.setattr("common.config.is_production_mode", lambda: True)
+        monkeypatch.setitem(sys.modules, "peft", None)
 
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp) / "prod-lora"
@@ -575,6 +575,7 @@ class TestAdapterManagerUnload:
 
             # 切换到第二个（生产模式，PEFT 未安装 → 失败 → 回滚）
             monkeypatch.setattr("common.config.is_production_mode", lambda: True)
+            monkeypatch.setitem(sys.modules, "peft", None)
             result = mgr.switch("lora-b")
             assert result is False
             # 回滚到 lora-a（非生产模式加载的，所以 current_adapter 保持 lora-a）

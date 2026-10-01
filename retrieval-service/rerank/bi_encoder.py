@@ -40,7 +40,9 @@ class BiEncoderReranker:
         self._bi_encoder_model = None
         self._bi_encoder_tokenizer = None
         self._embedding_service = None
-        self._bi_encoder_model_path = config.get("gpu1", {}).get("models", {}).get("bi_encoder", {}).get("model_path", None)
+        self._bi_encoder_model_path = (
+            config.get("gpu1", {}).get("models", {}).get("bi_encoder", {}).get("model_path", None)
+        )
         self._dedicated_model = None
         logger.info("BiEncoderReranker initialised")
 
@@ -48,6 +50,7 @@ class BiEncoderReranker:
     def embedding_service(self):
         if self._embedding_service is None:
             from models.embedding_service import EmbeddingService
+
             self._embedding_service = EmbeddingService()
         return self._embedding_service
 
@@ -107,11 +110,13 @@ class BiEncoderReranker:
             results = []
             for idx in top_indices:
                 candidate = candidates[idx]
-                results.append(RerankResult(
-                    doc_id=candidate.doc_id,
-                    content=candidate.content,
-                    bi_score=float(similarities[idx]),
-                ))
+                results.append(
+                    RerankResult(
+                        doc_id=candidate.doc_id,
+                        content=candidate.content,
+                        bi_score=float(similarities[idx]),
+                    )
+                )
 
             logger.info(f"BiEncoder rerank complete: {len(candidates)} -> {len(results)}")
             return results
@@ -119,10 +124,7 @@ class BiEncoderReranker:
         except Exception as e:
             logger.error(f"BiEncoder rerank failed: {e}")
             # Degradation: return original candidates top_k
-            return [
-                RerankResult(doc_id=c.doc_id, content=c.content, bi_score=0.0)
-                for c in candidates[:top_k]
-            ]
+            return [RerankResult(doc_id=c.doc_id, content=c.content, bi_score=0.0) for c in candidates[:top_k]]
 
     def _rerank_with_dedicated_model(self, query: str, candidates: list, top_k: int) -> list:
         """使用专用 BiEncoder 模型进行重排序（不同于共享 EmbeddingService）"""
@@ -130,6 +132,7 @@ class BiEncoderReranker:
 
         if self._dedicated_model is None and self._bi_encoder_model_path:
             from sentence_transformers import SentenceTransformer
+
             self._dedicated_model = SentenceTransformer(self._bi_encoder_model_path)
 
         if self._dedicated_model is None:
@@ -147,9 +150,11 @@ class BiEncoderReranker:
         results = []
         for idx in top_indices:
             candidate = candidates[idx]
-            results.append(RerankResult(
-                doc_id=candidate.doc_id,
-                content=candidate.content,
-                bi_score=float(similarities[idx]),
-            ))
+            results.append(
+                RerankResult(
+                    doc_id=candidate.doc_id,
+                    content=candidate.content,
+                    bi_score=float(similarities[idx]),
+                )
+            )
         return results

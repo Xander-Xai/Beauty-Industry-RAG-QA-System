@@ -29,6 +29,7 @@ from core.pipeline_context import (
 
 # ── RequestContext 测试 ──
 
+
 class TestRequestContext:
     """测试 RequestContext 的创建和生命周期"""
 
@@ -123,6 +124,7 @@ class TestRequestContext:
 
 # ── SessionState 多轮对话管理 ──
 
+
 class TestSessionStateDialogRounds:
     """测试 SessionState 的多轮对话管理"""
 
@@ -188,8 +190,12 @@ class TestSessionStateDialogRounds:
     def test_last_rewrite_updated(self):
         """last_rewrite_result 跟随最新一轮更新"""
         state = SessionState(session_id="s1")
-        rewrite1 = QueryRewriteResult(rewritten_query="q1", business_type="general", intent="general", requires_context=True)
-        rewrite2 = QueryRewriteResult(rewritten_query="q2", business_type="regulation", intent="compliance", requires_context=True)
+        rewrite1 = QueryRewriteResult(
+            rewritten_query="q1", business_type="general", intent="general", requires_context=True
+        )
+        rewrite2 = QueryRewriteResult(
+            rewritten_query="q2", business_type="regulation", intent="compliance", requires_context=True
+        )
         state.add_round("问题1", "回答1", rewrite=rewrite1)
         assert state.last_rewrite_result is rewrite1
         state.add_round("问题2", "回答2", rewrite=rewrite2)
@@ -197,6 +203,7 @@ class TestSessionStateDialogRounds:
 
 
 # ── Evidence Locking ──
+
 
 class TestEvidenceLocking:
     """测试证据锁定机制"""
@@ -221,6 +228,7 @@ class TestEvidenceLocking:
 
 
 # ── get_recent_queries ──
+
 
 class TestGetRecentQueries:
     """测试获取最近查询"""
@@ -251,6 +259,7 @@ class TestGetRecentQueries:
 
 
 # ── get_or_create / cleanup ──
+
 
 class TestSessionManagement:
     """测试会话管理的 get_or_create 和 cleanup"""
@@ -294,6 +303,7 @@ class TestSessionManagement:
 
 # ── Async CLIP Results ──
 
+
 class TestAsyncClipResults:
     """测试异步 CLIP 补充召回结果存储"""
 
@@ -310,6 +320,7 @@ class TestAsyncClipResults:
 
 
 # ── 数据类结构验证 ──
+
 
 class TestDataClassStructure:
     """验证各数据类字段定义正确"""

@@ -19,6 +19,7 @@ from collections import OrderedDict
 
 try:
     from common.config import get_config_dict
+
     config = get_config_dict()
 except Exception:
     config = {
@@ -71,6 +72,7 @@ class RedisCache:
         """尝试连接 Redis"""
         try:
             import redis
+
             rc = config["redis"]["cache"]
             # 支持密码认证：优先从环境变量读取，其次从配置读取
             redis_password = os.environ.get("REDIS_CACHE_PASSWORD") or rc.get("password")
@@ -126,9 +128,9 @@ class RedisCache:
 
     def _ensure_counters(self):
         """确保 hit/miss 计数器存在（兼容部分初始化场景）。"""
-        if not hasattr(self, '_hit_count'):
+        if not hasattr(self, "_hit_count"):
             self._hit_count = 0
-        if not hasattr(self, '_miss_count'):
+        if not hasattr(self, "_miss_count"):
             self._miss_count = 0
 
     def get(self, key: str, role_mask: int = 0, dept_mask: int = 0):

@@ -30,6 +30,7 @@ from cache.redis_cache import RedisCache
 
 # ── Cache Key 计算 ──
 
+
 class TestCacheKey:
     """验证 cache key 的确定性与组成"""
 
@@ -78,8 +79,13 @@ class TestCacheKey:
     def test_key_deterministic(self):
         """key 计算与 Python dict 序列化一致"""
         key_data = {
-            "q": "query", "ev": "ev1", "ke": "ke1",
-            "pv": "pv1", "sv": "sv1", "rm": 1, "dm": 2,
+            "q": "query",
+            "ev": "ev1",
+            "ke": "ke1",
+            "pv": "pv1",
+            "sv": "sv1",
+            "rm": 1,
+            "dm": 2,
         }
         expected = hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
         actual = RedisCache.compute_cache_key("query", "ev1", "ke1", "pv1", "sv1", 1, 2)
@@ -87,6 +93,7 @@ class TestCacheKey:
 
 
 # ── L1 内存缓存 ──
+
 
 class TestL1Cache:
     """L1 内存缓存：仅服务公开文档"""
@@ -155,6 +162,7 @@ class TestL1Cache:
 
 # ── L2 Redis 缓存 ──
 
+
 class TestL2Cache:
     """L2 Redis 缓存：权限分区"""
 
@@ -221,6 +229,7 @@ class TestL2Cache:
 
 # ── Epoch 版本失效 ──
 
+
 class TestEpochInvalidation:
     """测试 epoch 版本滚动导致的缓存失效"""
 
@@ -245,6 +254,7 @@ class TestEpochInvalidation:
 
 
 # ── 降级模式 ──
+
 
 class TestDegradedMode:
     """测试 Redis 降级模式"""
@@ -276,6 +286,7 @@ class TestDegradedMode:
 
 
 # ── 统计信息 ──
+
 
 class TestStats:
     """测试缓存统计"""

@@ -73,8 +73,8 @@ class ServiceTracer:
             if provider is not None and hasattr(provider, "add_span_processor"):
                 self._otel_tracer = otel_trace.get_tracer("rag-microservices")
                 self._use_otel = True
-        except Exception:
-            pass  # OTel not configured -- perfectly fine
+        except Exception as exc:
+            logger.debug("OpenTelemetry is unavailable; using local tracing: %s", exc)
 
     # -- public API --------------------------------------------------------
 
@@ -120,7 +120,7 @@ class ServiceTracer:
             with _global_lock:
                 self._spans.append(span)
                 if len(self._spans) > self._max_spans:
-                    self._spans = self._spans[-self._max_spans:]
+                    self._spans = self._spans[-self._max_spans :]
 
     def _trace_otel(
         self,
@@ -189,7 +189,7 @@ class MetricsCollector:
             bucket = self._histograms[name]
             bucket.append(value)
             if len(bucket) > self._histogram_cap:
-                self._histograms[name] = bucket[-self._histogram_cap:]
+                self._histograms[name] = bucket[-self._histogram_cap :]
 
     def get_counter(self, name: str) -> int:
         with _global_lock:
@@ -217,9 +217,7 @@ class MetricsCollector:
             histograms = dict(self._histograms)
 
         total_req = counters.get("cache.total", 1) or 1
-        rewrite_total = (
-            counters.get("rewrite.success", 0) + counters.get("rewrite.fail", 0)
-        ) or 1
+        rewrite_total = (counters.get("rewrite.success", 0) + counters.get("rewrite.fail", 0)) or 1
 
         stats: dict[str, Any] = {
             "uptime_seconds": round(time.time() - self._start_time, 1),
@@ -270,16 +268,46 @@ class AlertingManager:
     @staticmethod
     def _load_rules() -> list[dict[str, Any]]:
         defaults = [
-            {"name": "kv_pressure_critical", "metric": "kv_pressure", "threshold": 0.9,
-             "duration_s": 30, "severity": "critical", "comparison": "gt"},
-            {"name": "kv_cache_high", "metric": "kv_utilization", "threshold": 0.85,
-             "duration_s": 60, "severity": "warning", "comparison": "gt"},
-            {"name": "rerank_batch_delay", "metric": "rerank_batch_queue_delay_p99", "threshold": 50,
-             "duration_s": 30, "severity": "warning", "comparison": "gt"},
-            {"name": "rewrite_fallback_high", "metric": "rewrite_fallback_rate", "threshold": 0.3,
-             "duration_s": 300, "severity": "warning", "comparison": "gt"},
-            {"name": "degradation_spike", "metric": "degradation.total", "threshold": 10,
-             "duration_s": 300, "severity": "critical", "comparison": "gt"},
+            {
+                "name": "kv_pressure_critical",
+                "metric": "kv_pressure",
+                "threshold": 0.9,
+                "duration_s": 30,
+                "severity": "critical",
+                "comparison": "gt",
+            },
+            {
+                "name": "kv_cache_high",
+                "metric": "kv_utilization",
+                "threshold": 0.85,
+                "duration_s": 60,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "rerank_batch_delay",
+                "metric": "rerank_batch_queue_delay_p99",
+                "threshold": 50,
+                "duration_s": 30,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "rewrite_fallback_high",
+                "metric": "rewrite_fallback_rate",
+                "threshold": 0.3,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "degradation_spike",
+                "metric": "degradation.total",
+                "threshold": 10,
+                "duration_s": 300,
+                "severity": "critical",
+                "comparison": "gt",
+            },
         ]
         try:
             custom = get_config().alerting.rules
@@ -295,8 +323,8 @@ class AlertingManager:
                         "comparison": r.comparison,
                     }
                 return list(merged.values())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not load configured alert rules: %s", exc)
         return defaults
 
     # -- evaluation --------------------------------------------------------
@@ -314,10 +342,7 @@ class AlertingManager:
 
         # Derived: rewrite_fallback_rate
         if metric_name == "rewrite_fallback_rate":
-            total = (
-                self.metrics.get_counter("rewrite.success")
-                + self.metrics.get_counter("rewrite.fail")
-            )
+            total = self.metrics.get_counter("rewrite.success") + self.metrics.get_counter("rewrite.fail")
             if total > 0:
                 return self.metrics.get_counter("rewrite.fallback") / total
             return 0.0

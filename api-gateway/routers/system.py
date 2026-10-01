@@ -46,6 +46,7 @@ HEALTH_CHECK_TIMEOUT_S = 3.0
 # ---------------------------------------------------------------------------
 class ServiceHealth(BaseModel):
     """单个服务的健康状态。"""
+
     name: str
     url: str
     status: str = "unknown"  # "healthy" / "unhealthy" / "unknown"
@@ -55,14 +56,16 @@ class ServiceHealth(BaseModel):
 
 class HealthResponse(BaseModel):
     """聚合健康检查响应。"""
+
     gateway: str = "healthy"
-    overall: str = "healthy"     # "healthy" / "degraded" / "unhealthy"
+    overall: str = "healthy"  # "healthy" / "degraded" / "unhealthy"
     services: list[ServiceHealth] = Field(default_factory=list)
     uptime_s: float = 0.0
 
 
 class MetricsResponse(BaseModel):
     """监控统计响应。"""
+
     success: bool = True
     data: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
@@ -70,6 +73,7 @@ class MetricsResponse(BaseModel):
 
 class AlertItem(BaseModel):
     """单条告警。"""
+
     name: str = ""
     severity: str = "warning"
     message: str = ""
@@ -78,6 +82,7 @@ class AlertItem(BaseModel):
 
 class AlertsResponse(BaseModel):
     """告警列表响应。"""
+
     success: bool = True
     alerts: list[AlertItem] = Field(default_factory=list)
     total: int = 0
@@ -173,22 +178,22 @@ async def health_check():
 
     async with httpx.AsyncClient() as client:
         # 并发检查所有下游服务
-        tasks = [
-            _check_service_health(client, name, url)
-            for name, url in _SERVICES.items()
-        ]
+        tasks = [_check_service_health(client, name, url) for name, url in _SERVICES.items()]
         # 使用 gather 并发执行（任何一个超时不影响其他）
         import asyncio
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for result in results:
             if isinstance(result, Exception):
-                services.append(ServiceHealth(
-                    name="unknown",
-                    url="unknown",
-                    status="unhealthy",
-                    detail=str(result),
-                ))
+                services.append(
+                    ServiceHealth(
+                        name="unknown",
+                        url="unknown",
+                        status="unhealthy",
+                        detail=str(result),
+                    )
+                )
             else:
                 services.append(result)
 
@@ -207,7 +212,9 @@ async def health_check():
 
     logger.debug(
         "健康检查: %d/%d 服务正常, 整体状态: %s",
-        healthy_count, total_count, overall,
+        healthy_count,
+        total_count,
+        overall,
     )
 
     return HealthResponse(
@@ -300,12 +307,14 @@ async def alerts():
             raw_alerts = data.get("alerts", [])
             alert_items = []
             for alert in raw_alerts:
-                alert_items.append(AlertItem(
-                    name=alert.get("name", ""),
-                    severity=alert.get("severity", "warning"),
-                    message=alert.get("message", ""),
-                    timestamp=alert.get("timestamp", 0.0),
-                ))
+                alert_items.append(
+                    AlertItem(
+                        name=alert.get("name", ""),
+                        severity=alert.get("severity", "warning"),
+                        message=alert.get("message", ""),
+                        timestamp=alert.get("timestamp", 0.0),
+                    )
+                )
 
             return AlertsResponse(
                 success=True,

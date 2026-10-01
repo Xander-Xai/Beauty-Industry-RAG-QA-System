@@ -1,127 +1,34 @@
-# 化妆品行业 RAG 问答系统数据管理员手册
+# 化妆品行业 RAG 问答系统数据管理手册
 
-## 1. 当前仓库状态
+## 当前能力边界
 
-当前 checkout 中，在线查询链路完整，**离线建库管线也已完成实现**：
+在线检索代码会读取已存在的向量/搜索服务数据。仓库目前没有生产级原始文档导入管线：`offline/` 仅包含 QLoRA 微调脚本、样本数据和独立依赖；PDF/DOCX/XLSX/TXT 解析、OCR 导入、BGE/CLIP 向量写入、增量调度和反馈闭环尚未包含。完整后续范围见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
-- `run_offline.py` 是预期入口，支持 `incremental`/`full`/`create-index`/`feedback`/`rewrite-feedback` 五种模式
-- `offline/` 包包含完整实现：
-  - `document_processor.py` — PDF/Word/Excel/TXT 文档清洗、切块
-  - `image_processor.py` — 图像增强、PaddleOCR、CLIP 向量化
-  - `vectorizer.py` — BGE 文本向量化、CLIP 图像向量化、Qdrant/ES 写入
-  - `scheduler.py` — Airflow 风格调度（增量更新/全量重建/版本滚动/过期归档）
-  - `feedback_loop.py` — RRF 权重优化、Evidence Gate 阈值调整、A/B 实验分析
-  - `finetune_qlora.py` — 可选 QLoRA 微调管线
+`run_offline.py --mode create-index|incremental|full|feedback` 会给出“Offline ingestion pipeline is not currently included in this repository.”并以非零状态退出。这些命令不是可用的数据管理操作。
 
-注意：首次部署需先下载模型权重（PaddleOCR、CLIP-ViT、BGE 等）至 `models/` 目录。
+## 配置来源
 
-## 2. 当前可以确认的数据约束
+`config.json` 保存应用配置，包括 Qdrant、Elasticsearch、向量维度/集合和知识库目录等声明；实际连接地址和凭据需结合环境配置。修改前确认正在运行的服务拓扑与本地 `config.json` 一致。
 
-### 2.1 向量与索引配置
+## 使用现有外部知识库
 
-`config.json` 中当前约定：
+要联调在线问答，可配置并连接已经由其他流程建立的 Qdrant/Elasticsearch 数据。建议核对：
 
-- 文本向量集合：`rag_text_768`
-- 图像向量集合：`rag_image_512`
-- Qdrant 主机：`qdrant:6333`
-- Elasticsearch 索引：`cosmetics_docs`
+1. 服务地址、集合名、索引名及向量维度。
+2. 文档 payload 中的 `doc_id`、`role_mask`、`dept_mask` 和状态字段。
+3. 管理员及不同权限用户对同一文档的访问边界。
+4. 证据文件链接对应的对象存储配置及权限。
 
-### 2.2 权限模型
+该操作不会由本仓库自动导入原始文档。
 
-后端使用 `role_mask + dept_mask` 控制文档访问。
+## 权限与媒体访问
 
-默认角色：
+应用配置中的角色/部门映射及 `config.json.permission_rules` 是权限规则的输入。`/api/media/{doc_id}` 路由对请求和文档元数据执行访问检查，并依赖对象存储配置生成访问地址。请以实际运行配置和接口行为验证权限，不要把 PRD 中的位运算示例当作数据迁移工具。
 
-| 角色 | bit |
-|------|-----|
-| `admin` | `0x7FFFFFFF` |
-| `rd` | `0x01` |
-| `quality` | `0x02` |
-| `regulation` | `0x04` |
-| `sales` | `0x08` |
+## 微调数据
 
-默认部门：
+`offline/finetune_data.json` 是 QLoRA 脚本的示例训练数据；`offline/requirements-finetune.txt` 是可选依赖。示例文件不代表企业知识库数据集，也不代表已经生成了模型 adapter。微调脚本不能替代文档 ingestion。
 
-| 部门 | bit |
-|------|-----|
-| `rd_dept` | `0x01` |
-| `quality_dept` | `0x02` |
-| `regulation_dept` | `0x04` |
-| `sales_dept` | `0x08` |
+## 未来 ingestion 验收范围
 
-`config.json.permission_rules.rules` 仍然是当前仓库里最接近真实导入规则的来源。
-
-### 2.3 文档状态
-
-媒体访问接口 `/api/media/{doc_id}` 当前会校验：
-
-- `doc_id`
-- `role_mask`
-- `dept_mask`
-- `status`
-
-其中：
-
-- `status=active` 才允许取预签名链接
-- `status=archived` 会被当作不可访问文档
-
-## 3. 当前可执行的离线导入动作
-
-以下命令对应离线管线入口，已通过 `run_offline.py` 和 `offline/` 模块实现：
-
-### 3.1 创建集合与索引（首次部署）
-
-```bash
-python3 run_offline.py --mode create-index
-```
-
-此命令创建 Qdrant Collection（`rag_text_768`、`rag_image_512`）和 ES 索引（`cosmetics_docs`）。
-
-### 3.2 增量更新
-
-```bash
-python3 run_offline.py --mode incremental
-```
-
-基于文件 mtime+size 指纹检测新增/修改的文档，仅处理发生变化的部分，支持 `--force-full` 强制全量处理。
-
-### 3.3 全量重建
-
-```bash
-python3 run_offline.py --mode full
-```
-
-清空现有 Collection 后重新处理所有文档，适用于月度重建。
-
-### 3.4 反馈闭环
-
-```bash
-python3 run_offline.py --mode feedback          # RRF 权重与 Evidence Gate 阈值优化
-python3 run_offline.py --mode rewrite-feedback  # Query Rewrite 反馈闭环
-```
-
-## 4. 如果现在要做数据管理
-
-### 方案 A：使用已存在的外部知识库
-
-适用场景：
-
-- 已经有可用的 Qdrant / Elasticsearch 数据
-- 当前目标是联调在线问答，而不是补离线管线
-
-建议动作：
-
-1. 确认 `config.json` 中集合名、索引名、主机地址与现网一致。
-2. 抽样验证 `doc_id / role_mask / dept_mask / status` 元数据是否齐全。
-3. 用管理员账号和不同角色账号分别验证文档访问边界。
-
-### 方案 B：使用本仓库离线管线
-
-本仓库已提供完整离线管线实现：
-
-1. 下载模型权重（PaddleOCR、CLIP-ViT、BGE 等）至 `models/` 目录
-2. 准备原始文档至 `data/` 目录
-3. `python3 run_offline.py --mode create-index`
-4. `python3 run_offline.py --mode incremental`
-
-注意：部分模型（PaddleOCR）依赖 `requirements.txt` 之外的可选依赖，需单独安装。图像处理管线需要 GPU 支持以加速 CLIP 向量化。
+文档解析、图像/OCR、BGE/CLIP embeddings、Qdrant/Elasticsearch writers、增量状态、调度、建索引/全量重建、反馈闭环及相应测试和评估均在 [独立 feature issue](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2) 中跟踪。

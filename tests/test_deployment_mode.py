@@ -11,7 +11,10 @@ def _restore_config():
     for key in ("CONFIG_PATH", "DEPLOYMENT_MODE", "AUTH_DEV_MODE"):
         os.environ.pop(key, None)
     from common.config import reload_config as _reload
+
     _reload()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -57,6 +60,7 @@ def test_production_mode_requires_dual_gpu():
 def test_development_mode_skips_gpu():
     """开发模式下应能正确识别。"""
     from common.config import is_development_mode, is_production_mode, is_testing_mode
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         config_data = json.load(open("config.json"))
         config_data["deployment_mode"] = "development"

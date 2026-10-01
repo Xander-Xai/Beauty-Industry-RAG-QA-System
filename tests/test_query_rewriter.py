@@ -25,6 +25,7 @@ from rewrite.query_rewriter import REWRITE_SCHEMA, QueryRewriter
 
 # ── 模拟 Rewrite 测试 ──
 
+
 class TestSimulateRewrite:
     """测试 _simulate_rewrite 关键词识别（无需 LLM）"""
 
@@ -99,19 +100,23 @@ class TestSimulateRewrite:
 
 # ── JSON 解析测试 ──
 
+
 class TestParseResponse:
     """测试 _parse_response JSON Schema 解析"""
 
     def test_parse_valid_json(self):
         """解析有效 JSON 字符串"""
         rewriter = QueryRewriter()
-        text = json.dumps({
-            "rewritten_query": "改写后的查询",
-            "business_type": "regulation",
-            "intent": "compliance",
-            "requires_context": True,
-            "standardized_entities": ["烟酰胺"],
-        }, ensure_ascii=False)
+        text = json.dumps(
+            {
+                "rewritten_query": "改写后的查询",
+                "business_type": "regulation",
+                "intent": "compliance",
+                "requires_context": True,
+                "standardized_entities": ["烟酰胺"],
+            },
+            ensure_ascii=False,
+        )
         result = rewriter._parse_response(text, "原始查询")
         assert result is not None
         assert result.rewritten_query == "改写后的查询"
@@ -142,12 +147,14 @@ class TestParseResponse:
     def test_parse_missing_required_field_uses_default(self):
         """缺少可选字段时使用默认值"""
         rewriter = QueryRewriter()
-        text = json.dumps({
-            "rewritten_query": "test",
-            "business_type": "general",
-            "intent": "general",
-            "requires_context": True,
-        })
+        text = json.dumps(
+            {
+                "rewritten_query": "test",
+                "business_type": "general",
+                "intent": "general",
+                "requires_context": True,
+            }
+        )
         result = rewriter._parse_response(text, "query")
         assert result is not None
         assert result.standardized_entities == []  # 默认空列表
@@ -156,17 +163,20 @@ class TestParseResponse:
     def test_parse_incomplete_json_missing_rewritten_query(self):
         """缺少 rewritten_query 字段时返回默认值"""
         rewriter = QueryRewriter()
-        text = json.dumps({
-            "business_type": "ingredient",
-            "intent": "ingredient",
-            "requires_context": False,
-        })
+        text = json.dumps(
+            {
+                "business_type": "ingredient",
+                "intent": "ingredient",
+                "requires_context": False,
+            }
+        )
         result = rewriter._parse_response(text, "fallback_query")
         assert result is not None
         assert result.rewritten_query == "fallback_query"  # 使用原始查询作为兜底
 
 
 # ── 逻辑一致性修正 ──
+
 
 class TestLogicConsistencyFix:
     """测试 rewrite 方法中的逻辑一致性修正"""
@@ -175,12 +185,14 @@ class TestLogicConsistencyFix:
         """regulation + ingredient intent 修正为 compliance"""
         rewriter = QueryRewriter()
         # 直接调用 rewrite，mock _call_llm 返回一个 regulation+ingredient 的结果
-        mock_response = json.dumps({
-            "rewritten_query": "test",
-            "business_type": "regulation",
-            "intent": "ingredient",
-            "requires_context": True,
-        })
+        mock_response = json.dumps(
+            {
+                "rewritten_query": "test",
+                "business_type": "regulation",
+                "intent": "ingredient",
+                "requires_context": True,
+            }
+        )
         with patch.object(rewriter, "_call_llm", return_value=mock_response):
             result = rewriter.rewrite("测试法规")
         assert result.intent == "compliance"
@@ -188,12 +200,14 @@ class TestLogicConsistencyFix:
     def test_regulation_formulation_intent_fixed_to_compliance(self):
         """regulation + formulation intent 修正为 compliance"""
         rewriter = QueryRewriter()
-        mock_response = json.dumps({
-            "rewritten_query": "test",
-            "business_type": "regulation",
-            "intent": "formulation",
-            "requires_context": True,
-        })
+        mock_response = json.dumps(
+            {
+                "rewritten_query": "test",
+                "business_type": "regulation",
+                "intent": "formulation",
+                "requires_context": True,
+            }
+        )
         with patch.object(rewriter, "_call_llm", return_value=mock_response):
             result = rewriter.rewrite("测试法规配方")
         assert result.intent == "compliance"
@@ -201,18 +215,21 @@ class TestLogicConsistencyFix:
     def test_non_regulation_intent_not_modified(self):
         """非 regulation 类型的 intent 不被修正"""
         rewriter = QueryRewriter()
-        mock_response = json.dumps({
-            "rewritten_query": "test",
-            "business_type": "ingredient",
-            "intent": "formulation",
-            "requires_context": True,
-        })
+        mock_response = json.dumps(
+            {
+                "rewritten_query": "test",
+                "business_type": "ingredient",
+                "intent": "formulation",
+                "requires_context": True,
+            }
+        )
         with patch.object(rewriter, "_call_llm", return_value=mock_response):
             result = rewriter.rewrite("测试成分")
         assert result.intent == "formulation"  # 不被修正
 
 
 # ── 降级兜底逻辑 ──
+
 
 class TestFallbackLogic:
     """测试 JSON 解析失败时的降级策略"""
@@ -221,12 +238,14 @@ class TestFallbackLogic:
         """第一次解析失败时重试一次（temperature=0）"""
         rewriter = QueryRewriter()
         fail_response = "这不是有效 JSON"
-        success_response = json.dumps({
-            "rewritten_query": "retry_ok",
-            "business_type": "general",
-            "intent": "general",
-            "requires_context": True,
-        })
+        success_response = json.dumps(
+            {
+                "rewritten_query": "retry_ok",
+                "business_type": "general",
+                "intent": "general",
+                "requires_context": True,
+            }
+        )
         mock_obj = patch.object(rewriter, "_call_llm", side_effect=[fail_response, success_response])
         mock = mock_obj.start()
         try:
@@ -248,7 +267,14 @@ class TestFallbackLogic:
     def test_retry_uses_temperature_zero(self):
         """重试时使用 temperature=0"""
         rewriter = QueryRewriter()
-        mock_obj = patch.object(rewriter, "_call_llm", side_effect=["bad", '{"rewritten_query":"ok","business_type":"general","intent":"general","requires_context":true}'])
+        mock_obj = patch.object(
+            rewriter,
+            "_call_llm",
+            side_effect=[
+                "bad",
+                '{"rewritten_query":"ok","business_type":"general","intent":"general","requires_context":true}',
+            ],
+        )
         mock = mock_obj.start()
         try:
             rewriter.rewrite("测试")
@@ -260,6 +286,7 @@ class TestFallbackLogic:
 
 
 # ── Schema 验证 ──
+
 
 class TestSchemaDefinition:
     """验证 REWRITE_SCHEMA 的完整性"""
@@ -286,19 +313,22 @@ class TestSchemaDefinition:
 
 # ── Rewrite 端到端 ──
 
+
 class TestRewriteEndToEnd:
     """端到端 rewrite 测试（mock LLM 调用）"""
 
     def test_rewrite_returns_query_rewrite_result(self):
         """rewrite 返回正确类型的 QueryRewriteResult"""
         rewriter = QueryRewriter()
-        mock_response = json.dumps({
-            "rewritten_query": "改写后的成分查询",
-            "business_type": "ingredient",
-            "intent": "ingredient",
-            "requires_context": True,
-            "standardized_entities": ["烟酰胺", "玻色因"],
-        })
+        mock_response = json.dumps(
+            {
+                "rewritten_query": "改写后的成分查询",
+                "business_type": "ingredient",
+                "intent": "ingredient",
+                "requires_context": True,
+                "standardized_entities": ["烟酰胺", "玻色因"],
+            }
+        )
         with patch.object(rewriter, "_call_llm", return_value=mock_response):
             result = rewriter.rewrite("烟酰胺和玻色因的区别？")
         assert isinstance(result, QueryRewriteResult)
@@ -307,12 +337,14 @@ class TestRewriteEndToEnd:
     def test_rewrite_with_dialog_history(self):
         """rewrite 传递对话历史给 LLM"""
         rewriter = QueryRewriter()
-        mock_response = json.dumps({
-            "rewritten_query": "ok",
-            "business_type": "general",
-            "intent": "general",
-            "requires_context": True,
-        })
+        mock_response = json.dumps(
+            {
+                "rewritten_query": "ok",
+                "business_type": "general",
+                "intent": "general",
+                "requires_context": True,
+            }
+        )
         dialogs = ["第1轮对话", "第2轮对话", "第3轮对话"]
         with patch.object(rewriter, "_call_llm", return_value=mock_response) as mock:
             rewriter.rewrite("新问题", recent_dialogs=dialogs)

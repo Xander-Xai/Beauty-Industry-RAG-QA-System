@@ -1,3 +1,25 @@
+# Document Type: Product / Architecture Design
+
+**Implementation Status:** mixed — this document records goals and design proposals as well as capabilities whose code has since been added. A PRD statement is not evidence of implementation.
+
+**Canonical Runtime Status:** [README.md](README.md) + [docs/repository-truth-audit.md](docs/repository-truth-audit.md).
+
+| Topic | Current classification | Evidence / boundary |
+|---|---|---|
+| Offline ingestion and OCR | Planned | No production parser, OCR ingestion, vector writer or scheduler under `offline/`; see audit and Issue #2 |
+| Airflow ingestion | Planned | Design reference only; no end-to-end production ingestion is established |
+| RRF | Implemented in code | Fusion implementation exists; production relevance/quality is not implied |
+| BiEncoder | Partial | Reranker and pipeline integration exist; model assets and evaluation are separate |
+| RAGAS | Partial | Harness source and data exist; package is excluded from default dependencies pending an upstream security fix; no quality threshold is certified |
+| QLoRA | Partial | Training utility and example data exist; trained output and reproducible result are not included |
+| AdapterManager | Partial | PEFT lifecycle code integrates with `LLMClient`; actual loading requires configuration, dependencies and adapter assets |
+| RBAC | Partial | Runtime auth/RBAC code exists; deployment policy and end-to-end access still require verification |
+| Cache | Partial | Cache implementations and metrics exist; the complete PRD invalidation design is not certified |
+| KV admission | Partial | Admission control code exists; capacity behavior requires workload-specific measurement |
+| Performance metrics | Design targets | Numerical latency/QPS claims below have no benchmark artifact and are not verified production results |
+
+All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Historical implementation plans under `docs/superpowers/` are not current implementation evidence.
+
 化妆品企业级多模态 RAG 智能问答系统（双卡版）
 1. 项目背景
 面向中小型化妆品企业（研发/品质/法规/销售），构建统一知识问答系统，解决成分/法规/配方知识分散、法规体系复杂（8大体系）、非结构化数据占比高、传统知识库不支持多轮与跨模态查询等问题。
@@ -19,15 +41,15 @@ NLI / Gate（GPU Batch）	10–25ms
 LLM Decode（含 Prefill）	900–2000ms
 合计（全链路 RAG）	1.1s – 2.3s
 P99 波动（长尾 Decode）	2.5s – 3.2s
-修正说明：CrossEncoder 与 NLI 已由 CPU 串行迁移至 GPU 批处理，延迟从 150–250ms + 20–50ms 降低至 30–60ms + 10–25ms，且支持跨请求 batch 聚合，QPS 得到根本性提升。
+设计说明（未实测）：目标架构拟将 CrossEncoder 与 NLI 从 CPU 串行处理调整为 GPU 批处理，并支持跨请求 batch 聚合。此处延迟区间和吞吐改善均为未验证目标；仓库没有可复现 benchmark artifact，不能据此声称生产性能提升。
 2.2 吞吐模型（Capacity Model）
 系统性能由以下核心关系约束：
 QPS ≈ 有效并发 / 平均延迟
 有效并发 = KV_Budget / E[KV_per_active_sequence(t)] × safety_factor
 ● KV_Budget：GPU0 为 14B 模型预留的 KV Cache 总量（≤8GB）× 安全系数 0.7。
 ● E[KV_per_active_sequence]：基于请求序列长度分布（长尾分布）计算的 KV 成本期望值，非固定均值常数。
-● QPS 推导：以 Avg latency=1.6s、有效并发=25 计，QPS≈15.6，波动区间 12–18。
-注：QPS 为推导值而非固定配置，实际承载能力随 workload mix、序列长度分布、KV 动态占用而变化。轻量 rewrite 场景可承载 25–60 QPS。
+● QPS 模型示例：若假设 Avg latency=1.6s、有效并发=25，则数学推导 QPS≈15.6；这是未经 workload benchmark 验证的估算，不是生产结果。
+注：QPS 为推导值而非固定配置，实际承载能力随 workload mix、序列长度分布、KV 动态占用而变化。轻量 rewrite 的 25–60 QPS 也是设计估值，未经可复现实测。
 3. 离线知识库构建
 3.1 数据范围
 500+ 文档（PDF/Word/Excel）、包装图片/扫描件，覆盖 2000+ 成分、3000+ 配方（原料研发配方种类）、1500+ 产品（实际制造产品）、8 大法规体系。
@@ -69,11 +91,11 @@ AND status == 'active'
 3.6 文档生命周期与版本化管理（核心修订）
 引入基于 doc_version_epoch 的版本化管控替代实时时间判断，消除因 expiry_date 变更引发的缓存全量失效问题：
 ● 元数据扩展：effective_epoch（生效版本）、expiry_epoch（过期版本）、status（active/archived）。
-● 版本滚动规则：由 Airflow 每日/每小时生成新的 active_epoch 增量值（如 20260411_01），或由发布系统触发 bump 版本号。
+● 设计目标：由 Airflow 每日/每小时生成新的 active_epoch 增量值（如 20260411_01），或由发布系统触发 bump 版本号。当前仓库未验证此 ingestion workflow。
 ● 检索过滤逻辑：所有检索（Qdrant/ES）均使用 doc_version_epoch == {active_epoch} 作为硬性约束，不再依赖 expiry_date > current_timestamp() 运行时判断。
-● 过期处理：Airflow 每日任务将 expiry_epoch < active_epoch 的文档标记为 archived，并更新状态；前端可开启“包含历史版本”开关，此时替换 active_epoch 为历史区间查询。
+● 设计目标：定时任务将 expiry_epoch < active_epoch 的文档标记为 archived，并更新状态；前端历史区间查询尚需按实际代码验证。
 3.7 离线调度
-Apache Airflow 每周增量更新，每月全量重建。根据 embedding_type 分流写入对应 Collection。
+设计目标：Apache Airflow 每周增量更新、每月全量重建，并根据 embedding_type 分流写入对应 Collection。当前仓库不含已验证的生产 ingestion pipeline。
 4. 在线推理架构
 4.1 核心链路
 Query → 用户身份解析 → 二级缓存（L1/L2）
@@ -91,7 +113,7 @@ Query → 用户身份解析 → 二级缓存（L1/L2）
 ● 关键修正：Rewrite 定位为轻量预处理阶段，若 vLLM-Rewrite 实例繁忙（由 Admission Control 判断 KV 压力），则直接在应用层触发结构兜底（降级为规则解析），绝不进入阻塞式等待队列，避免破坏 vLLM 的批次合并效率。
 4.3 模型分级路由
 ● BERT 复杂度评估（0.3B，二分类）：简单问题 → vLLM-Gen-4B；复杂问题 → Qwen3-14B (4-bit NF4)。
-  注：QLoRA 领域微调训练脚本已跑通（rank=16, alpha=32），adapter 加载逻辑已实现，实际 adapter 权重需单独训练生成。
+  状态：仓库包含 QLoRA 训练脚本、样本数据和 PEFT AdapterManager 代码；本 PRD 不据此声称训练已验证。训练产物需单独生成，adapter 加载还依赖运行配置、依赖和模型资产。
 4.4 Query Rewrite（路由增强器，非核心强依赖）
 定位修正：Rewrite 作为“路由增强器”而非必经中心节点，主链路已具备独立检索与生成能力。
 ● 输入：原始 query + 最近 6 轮对话。
@@ -460,8 +482,8 @@ KV_Pressure = current_used_kv / max_kv_capacity
   ○ CrossEncoder Ensemble 与 Evidence Ensemble Gate 取代单点判决，引入检索一致性评分与多维度投票机制，将系统从“串行过滤链”升级为“并行证据系统”。
   ○ 实体识别召回能力通过离线评估集（Recall@K、F1）量化监控，保证召回稳定性可验证。
 12. 文档生命周期闭环与稀疏权限召回兜底，保障召回质量与合规性。
-13. 重模型推理 GPU 批处理化（关键架构修正）：
-  ○ 将 CrossEncoder、NLI、BiEncoder、CLIP Text Encoder、BLIP 从 CPU 串行迁移至 GPU1 统一批处理，引入 Rerank Batch Aggregator 实现微批聚合，单请求等效延迟由 200–400ms 降至 30–60ms，QPS 瓶颈彻底解除。
+13. 重模型推理 GPU 批处理化（设计目标，尚无可复现性能验证）：
+  ○ 目标是在 GPU1 批处理 CrossEncoder、NLI、BiEncoder、CLIP Text Encoder、BLIP，并用 Rerank Batch Aggregator 聚合微批。200–400ms、30–60ms 和 QPS 改善均为设计估值，不代表当前生产实测。
   ○ CPU 回归轻量逻辑层（routing/feature assembly/metadata filter/cache lookup），系统从“GPU 闲置 + CPU 爆炸”的反模式转变为“GPU 计算 + CPU 编排”的最佳实践。
   ○ 批处理参数（窗口时间、batch size）纳入离线反馈闭环，实现数据驱动的持续优化。
 14. 数据驱动闭环：所有关键策略（RRF 权重、Evidence Gate 阈值、Rewrite Prompt、Rerank Batch 参数）均通过日志采集、人工标注、离线评估与 A/B 实验进行迭代优化，系统从“规则完备”升级为“规则 + 统计反馈 + 可校准参数的检索学习系统”。

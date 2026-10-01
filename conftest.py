@@ -1,4 +1,5 @@
 """根 conftest.py — 配置测试收集行为"""
+
 import os
 
 # 默认忽略 e2e_remote 测试目录（需要外部 API key，且 session-scoped patches 会泄漏）

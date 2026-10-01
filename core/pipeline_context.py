@@ -50,6 +50,7 @@ class RequestContext:
         pipeline.process(ctx)
         # 结果存储在 ctx 的各阶段字段中
     """
+
     # === 输入 ===
     request_id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
     user_input: str = ""
@@ -92,7 +93,7 @@ class RequestContext:
     kv_pressure_at_entry: float = 0.0
     cache_hit_level: str | None = None  # L1 / L2 / MISS
     prefix_cache_hit: bool | None = None  # vLLM Prefix Cache 命中标记
-    kv_cache_utilization: float = 0.0     # vLLM KV Cache 利用率（0.0~1.0）
+    kv_cache_utilization: float = 0.0  # vLLM KV Cache 利用率（0.0~1.0）
 
     # === 降级标记 ===
     degraded: bool = False
@@ -106,11 +107,11 @@ class RequestContext:
     blip_triggered: bool = False
 
     # === CLIP 异步/贡献度指标（PRD §4.5 / GAP-20） ===
-    clip_use: bool = False                 # CLIP 是否被激活（图像 query 标记）
-    clip_top_k: int = 0                    # CLIP 召回 top_k（50=全量, 20=降级, 0=跳过）
-    clip_sync_timeout: bool = False        # CLIP 同步召回是否超时
-    clip_async_hit: bool = False           # CLIP 异步补充召回是否命中
-    clip_contribution_ratio: float = 0.0   # CLIP 来源文档在 Rerank Top-K 中的占比
+    clip_use: bool = False  # CLIP 是否被激活（图像 query 标记）
+    clip_top_k: int = 0  # CLIP 召回 top_k（50=全量, 20=降级, 0=跳过）
+    clip_sync_timeout: bool = False  # CLIP 同步召回是否超时
+    clip_async_hit: bool = False  # CLIP 异步补充召回是否命中
+    clip_contribution_ratio: float = 0.0  # CLIP 来源文档在 Rerank Top-K 中的占比
 
     def record_timing(self, stage: str, duration_ms: float):
         """记录各阶段延迟"""
@@ -131,9 +132,10 @@ class SessionState:
         state.add_round(user_input, response)
         state.lock_evidence(doc_ids)
     """
+
     session_id: str
     dialog_rounds: list[dict] = field(default_factory=list)  # [{user_input, response, rewrite}]
-    max_rounds: int = 6                                      # readme 4.4: 最近6轮
+    max_rounds: int = 6  # readme 4.4: 最近6轮
     locked_doc_ids: list[str] = field(default_factory=list)  # 证据锁定
     last_rewrite_result: QueryRewriteResult | None = None
     async_clip_results: list[RecallResult] = field(default_factory=list)  # 异步 CLIP 预热结果
@@ -145,14 +147,16 @@ class SessionState:
 
     def add_round(self, user_input: str, response: str, rewrite: QueryRewriteResult | None = None):
         """添加一轮对话"""
-        self.dialog_rounds.append({
-            "user_input": user_input,
-            "response": response,
-            "rewrite": rewrite,
-        })
+        self.dialog_rounds.append(
+            {
+                "user_input": user_input,
+                "response": response,
+                "rewrite": rewrite,
+            }
+        )
         # FIFO 保持最近 N 轮
         if len(self.dialog_rounds) > self.max_rounds:
-            self.dialog_rounds = self.dialog_rounds[-self.max_rounds:]
+            self.dialog_rounds = self.dialog_rounds[-self.max_rounds :]
         self.last_rewrite_result = rewrite
 
     def lock_evidence(self, doc_ids: list[str]):

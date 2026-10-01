@@ -44,9 +44,7 @@ logger = logging.getLogger("api-gateway")
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title=os.environ.get("API_GATEWAY_TITLE", f"{get_config().system.name} API Gateway"),
-    description=(
-        "统一 API 网关，聚合 rewrite、retrieval、generation、cache、monitoring 等微服务。"
-    ),
+    description=("统一 API 网关，聚合 rewrite、retrieval、generation、cache、monitoring 等微服务。"),
     version=get_config().system.version,
 )
 
@@ -60,6 +58,7 @@ else:
     # H-10: 生产模式下 CORS_ORIGINS 必须显式设置
     try:
         from common.config import is_production_mode
+
         if is_production_mode():
             raise RuntimeError("生产模式下必须通过 CORS_ORIGINS 环境变量设置允许的来源")
     except (ImportError, RuntimeError):
@@ -72,6 +71,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-User-ID", "X-Role-Mask", "X-Dept-Mask"],
 )
+
 
 # ---------------------------------------------------------------------------
 # 全局异常处理器
@@ -88,6 +88,7 @@ async def global_exception_handler(request: Request, exc: Exception):
             "detail": "服务暂时不可用，请稍后重试",
         },
     )
+
 
 # ---------------------------------------------------------------------------
 # 请求日志中间件
@@ -107,6 +108,7 @@ async def log_requests(request: Request, call_next):
     )
     return response
 
+
 # ---------------------------------------------------------------------------
 # 安全响应头中间件
 # ---------------------------------------------------------------------------
@@ -119,6 +121,7 @@ async def security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
+
 
 # ---------------------------------------------------------------------------
 # 挂载路由
@@ -134,6 +137,7 @@ app.include_router(auth.router, tags=["auth"])
 # 已挂载完毕：/v1/rewrite, /v1/recall, /v1/rerank, /v1/evidence-gate,
 # /v1/generate, /api/continuation, /api/dialog_history, /api/media/{doc_id},
 # /v1/health, /v1/metrics, /v1/alerts
+
 
 # ---------------------------------------------------------------------------
 # 启动事件
@@ -161,13 +165,14 @@ async def on_startup():
         logger.info("  %s -> %s", name, url)
     logger.info("=" * 60)
 
+
 # ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     uvicorn.run(
         "api-gateway.main:app",
-        host="0.0.0.0",
+        host="0.0.0.0",  # noqa: S104 -- container service intentionally binds all interfaces
         port=int(os.environ.get("API_GATEWAY_PORT", 8000)),
         reload=True,
         log_level="info",

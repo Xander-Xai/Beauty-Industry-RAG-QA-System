@@ -4,6 +4,7 @@
 使用共享密钥（通过环境变量 SERVICE_AUTH_TOKEN 传入）进行服务间认证。
 每个请求需携带 X-Service-Token Header。
 """
+
 import hmac
 import logging
 import os

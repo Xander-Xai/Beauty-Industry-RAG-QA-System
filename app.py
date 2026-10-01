@@ -25,8 +25,8 @@ from fastapi.staticfiles import StaticFiles
 
 from api.middleware import setup_middleware
 from api.routes import get_metrics, get_pipeline, router
-from common.config import get_config_dict
 from common.config import get_config as _get_sys_config
+from common.config import get_config_dict
 
 # H-7: 显式导入 SessionState，避免延迟导入导致清理任务 NameError
 from core.pipeline_context import SessionState
@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
 
     from api.routes_auth import router as auth_router
+
     app.include_router(auth_router)
 
     # ── 静态文件 & 首页（最后注册，避免拦截 API 路由）───
@@ -102,13 +103,13 @@ def create_app() -> FastAPI:
 
         # 预初始化 pipeline 和 metrics（触发懒加载以尽早发现配置问题）
         try:
-            pipeline = get_pipeline()
+            get_pipeline()
             logger.info("OnlineRAGPipeline 初始化完成")
         except Exception as e:
             logger.error("OnlineRAGPipeline 初始化失败: %s", e)
 
         try:
-            metrics = get_metrics()
+            get_metrics()
             logger.info("MetricsCollector 初始化完成")
         except Exception as e:
             logger.error("MetricsCollector 初始化失败: %s", e)
@@ -135,6 +136,7 @@ def create_app() -> FastAPI:
         import os
 
         from auth.jwt_auth import generate_keypair, get_jwt_config
+
         config = get_jwt_config()
         if config.enabled and config.private_key_path:
             if not os.path.isfile(config.private_key_path):
@@ -150,6 +152,7 @@ def create_app() -> FastAPI:
         # 清理过期会话
         try:
             from core.pipeline_context import SessionState
+
             SessionState.cleanup_expired()
         except Exception as e:
             logger.warning("会话清理失败: %s", e)
@@ -170,7 +173,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "app:app",
-        host="0.0.0.0",
+        host="0.0.0.0",  # noqa: S104 -- container service intentionally binds all interfaces
         port=int(os.environ.get("API_PORT", 8000)),
         reload=True,
         log_level="info",

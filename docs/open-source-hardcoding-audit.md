@@ -1,103 +1,35 @@
-# Open-Source Hardcoding Audit and Frontend/Backend Contract
+# Open-source configuration and frontend/backend contract audit
 
-This project is domain-configurable. The default configuration still models a cosmetics-industry RAG assistant, but deployers should be able to rebrand and reshape roles without editing source code.
+Audit base: `7b03267` (`origin/main`), 2026-10-01. This is a static source audit, not proof of a deployed frontend/backend integration. Run the pre-launch checks against each deployment.
 
-## Current Remediation
+## Configuration sources
 
-| Area | Previous hardcoding | Current adjustment |
-|------|---------------------|--------------------|
-| Frontend title/subtitle | React literals such as `RAG 智能问答` | Loaded from `GET /api/auth/metadata`, backed by `config.json.ui` |
-| Frontend role list | Fixed admin/R&D/quality/regulatory/sales options in `App.jsx` | Loaded from `config.json.ui.role_options` |
-| Browser identity | Fixed `X-User-ID: web_user` | Uses JWT in production; only uses configured anonymous user and role masks when `auth.dev_mode=true` |
-| Auth contract | Frontend did not know whether JWT or dev headers were expected | `GET /api/auth/metadata` exposes `auth.dev_mode`, `auth_required`, `jwt_enabled`, `login_enabled`, and configured role metadata |
-| Runtime env loading | Docs required `.env`, but plain `python3 app.py` did not load it | `common.config.py` now auto-loads project-root `.env` before parsing config |
-| Frontend coverage | `/api/query` / `/api/dialog_history` / `/api/stats` existed only on backend | React page now exposes `Single Query`, `Session`, and `Stats` entry points |
-| Config path | Some backend routes read `config.json` directly | Main app and RAG routes now use `common.config.get_config_dict()` and honor `CONFIG_PATH` |
-| Service config path | Several service/helper modules opened project-root `config.json` directly | Gateway generation, admission, cache, rerank service files, offline runner, Airflow DAG, auth helpers, and alerting now use shared config helpers or safe defaults |
-| Browser tab title | Static `index.html` title | React sets `document.title` from backend metadata at runtime |
-| Media route query | Raw `doc_id` interpolated into Qdrant scroll filter | Reuses `common.auth.validate_doc_id()` before querying |
-| Alert footer | Email alerts used a fixed product name | Alert emails now use `system.name` |
+| Area | Current source observation | Status |
+|---|---|---|
+| Runtime settings | `common/config.py` loads root `config.json`, honors `CONFIG_PATH`, and reads environment overrides | VERIFIED in source |
+| Direct config access | `common/audit.py` independently opens root `config.json`; this path does not use the shared `CONFIG_PATH` resolver | PARTIAL; consider consolidating |
+| Secrets | `.env.example` documents environment settings; real secrets must not be committed | Requires deployment configuration |
+| Runtime version | `config.json` → `system.version` is canonical and is checked against the latest dated changelog heading | Guarded |
+| Service URLs | Shell scripts and service modules contain local/container defaults; deployment-specific values must be checked before use | Defaults, not universal endpoints |
+| Model paths | `config.json` contains local model paths; model weights are not included in the repository | Requires operator-provided assets |
 
-## Runtime Contract
+## Browser/API contract observed in source
 
-The browser client should discover runtime metadata before sending chat requests:
+The React app requests `GET /api/auth/metadata`, reads configured role options where available, and calls `/api/query`, `/api/chat`, `/api/dialog_history`, and `/api/stats`. Corresponding routes are present in the FastAPI `api/` package. `frontend/src/App.jsx` also has fallback metadata and development identity headers; those fallbacks are not evidence that every deployment enables the same auth mode.
 
-```http
-GET /api/auth/metadata
-```
+The canonical application entrypoint is `app.py`. The presence of microservice directories does not prove those services implement the same contract or have been verified end to end with this frontend.
 
-Response shape:
+## Remaining hardcoding and integration risks
 
-```json
-{
-  "app": {
-    "title": "化妆品行业知识问答助手",
-    "subtitle": "面向化妆品行业知识库的检索增强问答助手",
-    "version": "2.0.0"
-  },
-  "auth": {
-    "dev_mode": false,
-    "auth_required": true,
-    "jwt_enabled": true,
-    "login_enabled": true,
-    "anonymous_user_id": "web-user"
-  },
-  "rbac": {
-    "default_role": "public",
-    "roles": { "admin": 2147483647 },
-    "departments": { "all": 0 },
-    "role_options": [
-      { "key": "public", "label": "Public Visitor", "role_mask": 0, "dept_mask": 0 }
-    ]
-  }
-}
-```
+- `common/audit.py` resolves root `config.json` directly and may ignore `CONFIG_PATH`.
+- `scripts/fault-injection.sh`, `scripts/start.sh`, and `scripts/verify-deployment.sh` use local URL defaults; the verification script accepts `BASE_URL`, while other scripts should be checked before use outside local development.
+- React retains fallback title, role and development-auth metadata when the API does not provide values.
+- Model names and local paths in `config.json` require external model assets.
+- Auth headers such as `X-User-ID` are permitted for development flows; production must use the configured JWT path and disable development mode.
 
-Production calls to `/api/query`, `/api/chat`, and `/api/media/{doc_id}` must use:
+## Verification references
 
-```http
-Authorization: Bearer <access_token>
-```
-
-Development-only calls may use `X-User-ID`, `X-Role-Mask`, and `X-Dept-Mask` when `config.json.auth.dev_mode=true`.
-
-Current frontend alignment additions:
-
-1. The browser now uses `auth_required` and `login_enabled` to decide whether sign-in is mandatory and whether the backend is actually ready to issue JWTs.
-2. `POST /api/query`, `GET /api/dialog_history`, and `GET /api/stats` now have first-class UI entry points instead of being backend-only capabilities.
-3. The default development role has been lowered to `public` instead of `admin`.
-
-## Configuration Fields for Open Source Deployments
-
-Update these fields before publishing a demo or deploying a fork:
-
-| Config path | Purpose |
-|-------------|---------|
-| `system.name` | API and logs system name |
-| `ui.app_title` | Browser title and app header |
-| `ui.subtitle` | Browser app subtitle |
-| `ui.anonymous_user_id` | Development-only anonymous identity |
-| `ui.default_role` | Default development role key |
-| `ui.role_options` | Browser-visible role/dept choices |
-| `rbac.roles` | Backend role bitmask definitions |
-| `rbac.departments` | Backend department bitmask definitions |
-| `domain_keywords` | Domain routing keywords |
-| `prompts.system_prompt` | Domain prompt override |
-| `permission_rules.rules` | Offline document permission mapping |
-
-## Remaining Brainstorming Backlog
-
-These are real-world hardcoding risks that should be addressed next, but were not all changed in this pass:
-
-1. Move service URL defaults such as `http://rewrite-service:8101` into a single service-discovery config helper shared by the API gateway routers.
-2. Convert shell scripts that call `http://localhost:8000` into `BASE_URL=${BASE_URL:-http://localhost:8000}` style parameters.
-3. Add a `config.example.json` for open-source users and document when to copy it to `config.json`.
-4. Add a setup command for creating the first admin user instead of relying on manual database operations.
-5. Review model names and local paths so all deployment-specific values are either documented defaults or environment overrides.
-6. Make Grafana/Prometheus dashboard titles configurable or replace them with neutral defaults.
-
-## Verification Checklist
-
-- Backend metadata endpoint: `pytest tests/test_auth_metadata.py -q`
-- Frontend contract build: `cd frontend && npm run build`
-- Static hardcoding scan: search source for fixed user IDs, role labels, product names, and direct `open("config.json")`.
+- Backend metadata, auth and route tests live under `tests/`; test presence alone does not establish deployed integration.
+- Frontend build: `cd frontend && npm ci && npm run build`.
+- Source audit commands used: `rg` for direct config reads, local URLs, identity defaults, frontend metadata and route strings across `app.py`, `common/`, `api/`, `frontend/src/` and `scripts/`.
+- Full capability evidence and limitations: [repository truth audit](repository-truth-audit.md).

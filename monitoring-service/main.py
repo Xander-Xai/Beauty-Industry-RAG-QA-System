@@ -71,7 +71,7 @@ async def record_metrics(req: RecordMetricsRequest, _auth: None = Depends(verify
         return {"status": "recorded", "request_id": req.request_id}
     except Exception as e:
         logger.error(f"Failed to record metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/metrics/stats")
@@ -140,7 +140,11 @@ async def prometheus_metrics():
     for name, pcts in stats.get("latency_percentiles", {}).items():
         safe_name = name.replace(".", "_").replace("-", "_")
         lines.append(f"# TYPE rag_latency_{safe_name}_seconds summary")
-        for quantile, value in [("0.5", pcts.get("p50", 0)), ("0.95", pcts.get("p95", 0)), ("0.99", pcts.get("p99", 0))]:
+        for quantile, value in [
+            ("0.5", pcts.get("p50", 0)),
+            ("0.95", pcts.get("p95", 0)),
+            ("0.99", pcts.get("p99", 0)),
+        ]:
             lines.append(f'rag_latency_{safe_name}_seconds{{quantile="{quantile}"}} {value / 1000:.6f}')
         lines.append(f"rag_latency_{safe_name}_seconds_count {pcts.get('count', 0)}")
 
@@ -157,4 +161,4 @@ if __name__ == "__main__":
     import uvicorn
 
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=8400)
+    uvicorn.run(app, host="0.0.0.0", port=8400)  # noqa: S104 -- container service intentionally binds all interfaces

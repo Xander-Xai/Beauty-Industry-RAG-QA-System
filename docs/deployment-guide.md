@@ -16,7 +16,7 @@
 cp .env.example .env
 ```
 
-应用现在会自动加载项目根目录下的 `.env`，所以直接执行 `python3 app.py` 或 `python3 run_offline.py` 即可读取这份配置。
+`common/config.py` 负责读取应用配置。按 `.env.example` 准备环境；运行单体应用使用 `python3 app.py`。`run_offline.py` 不提供原始文档 ingestion。
 
 生产环境至少明确设置：
 
@@ -74,18 +74,9 @@ docker compose up -d
 - `http://localhost:8000/api/auth/metadata`
 - `http://localhost:8000/`
 
-## 4. 知识库初始化现状
+## 4. 知识库现状
 
-当前仓库 `offline/` 包已包含完整离线管线实现（文档处理、图像 OCR、向量化、调度），`run_offline.py` 可直接执行增量更新/全量重建/创建索引等操作。
-
-首次部署时，根据数据集情况选择：
-
-1. **使用外部已有数据**：确认 `config.json` 中 Qdrant/ES 集合名与现网一致，直接启动在线服务。
-2. **使用本仓库离线管线**：先下载模型权重至 `models/` 目录（PaddleOCR、CLIP-ViT、BGE base zh v1.5 等），然后执行：
-   ```bash
-   python3 run_offline.py --mode create-index   # 创建 Qdrant Collection + ES 索引
-   python3 run_offline.py --mode incremental    # 导入 data/ 目录文档
-   ```
+`offline/` 目前只包含 QLoRA 微调工具、样本和依赖。文档解析、OCR 导入、embedding writer、索引创建、增量调度和全量重建均未包含；下载模型权重不会补齐缺失代码。需要在线试用时，请配置外部已建好的 Qdrant/Elasticsearch 索引。未来 ingestion 工作跟踪在 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
 ## 5. 当前已对齐的前后端能力
 

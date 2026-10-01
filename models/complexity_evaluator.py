@@ -44,6 +44,7 @@ class ComplexityEvaluator:
 
         # 非生产模式直接使用规则，跳过模型加载（延迟优化：节省 ~17s）
         from common.config import is_production_mode
+
         if is_production_mode():
             self._try_load_model()
         else:
@@ -91,9 +92,12 @@ class ComplexityEvaluator:
     def _evaluate_with_model(self, query: str) -> bool:
         """使用 BERT 模型评估"""
         import torch
+
         inputs = self._tokenizer(
-            query, return_tensors="pt",
-            truncation=True, max_length=128,
+            query,
+            return_tensors="pt",
+            truncation=True,
+            max_length=128,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():
@@ -112,16 +116,46 @@ class ComplexityEvaluator:
         """
         complex_keywords = [
             # 法规类
-            "法规", "合规", "标准", "备案", "许可", "禁用", "安全评估", "毒理",
-            "功效评价", "原料安全", "禁限用", "化妆品安全技术规范",
+            "法规",
+            "合规",
+            "标准",
+            "备案",
+            "许可",
+            "禁用",
+            "安全评估",
+            "毒理",
+            "功效评价",
+            "原料安全",
+            "禁限用",
+            "化妆品安全技术规范",
             # 研发类
-            "配方", "复配", "工艺", "稳定性", "相容性", "防腐体系", "功效宣称",
+            "配方",
+            "复配",
+            "工艺",
+            "稳定性",
+            "相容性",
+            "防腐体系",
+            "功效宣称",
             # 成分交叉
-            "多成分", "交叉", "综合", "对比", "分析", "评估",
+            "多成分",
+            "交叉",
+            "综合",
+            "对比",
+            "分析",
+            "评估",
             # 条款引用
-            "依据", "引用", "条款", "第", "条", "号",
+            "依据",
+            "引用",
+            "条款",
+            "第",
+            "条",
+            "号",
             # 专业术语
-            "INCI", "分子量", "浓度阈值", "PH范围", "使用量",
+            "INCI",
+            "分子量",
+            "浓度阈值",
+            "PH范围",
+            "使用量",
         ]
         score = sum(1 for kw in complex_keywords if kw in query)
         return score >= 2

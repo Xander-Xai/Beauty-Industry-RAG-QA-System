@@ -55,11 +55,7 @@ def _load_project_dotenv() -> None:
         cleaned = value.strip()
         if cleaned and cleaned[0] not in {'"', "'"} and " #" in cleaned:
             cleaned = cleaned.split(" #", 1)[0].rstrip()
-        if (
-            len(cleaned) >= 2
-            and cleaned[0] == cleaned[-1]
-            and cleaned[0] in {'"', "'"}
-        ):
+        if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
             cleaned = cleaned[1:-1]
         os.environ[key] = cleaned
 
@@ -141,6 +137,7 @@ class BertModelConfig:
 @dataclass(frozen=True)
 class GpuModelsConfig:
     """Holds the two possible model sub-sections under a GPU config."""
+
     gen_14b: VllmModelConfig | None = None
     vllm_rewrite: VllmModelConfig | None = None
     vllm_gen_4b: VllmModelConfig | None = None
@@ -391,6 +388,7 @@ class CacheConfig:
 @dataclass(frozen=True)
 class AppConfig:
     """Top-level configuration dataclass, mirrors config.json structure."""
+
     system: SystemConfig = field(default_factory=SystemConfig)
     gpu0: GpuConfig = field(default_factory=GpuConfig)
     gpu1: GpuConfig = field(default_factory=GpuConfig)
@@ -451,15 +449,14 @@ def _unwrap_optional(tp) -> type:
 def _resolve_type_str(type_str: str):
     """Resolve a string type annotation like 'Optional[BertModelConfig]'."""
     import sys
-    import typing
 
     type_str = type_str.strip()
 
     # Handle Optional[X] string pattern
     if type_str.startswith("Optional[") and type_str.endswith("]"):
-        inner = type_str[len("Optional["):-1]
+        inner = type_str[len("Optional[") : -1]
         inner_cls = _resolve_type_str(inner)
-        return typing.Optional[inner_cls] if inner_cls is not None else type(None)
+        return inner_cls | None if inner_cls is not None else type(None)
 
     # Bare class name
     cls = sys.modules[__name__].__dict__.get(type_str)
@@ -469,6 +466,7 @@ def _resolve_type_str(type_str: str):
 def _parse_dict(cls, data: dict):
     """Best-effort recursive dict-to-dataclass conversion."""
     import dataclasses as dc
+
     if not dc.is_dataclass(cls):
         return data
     fieldtypes = {f.name: f.type for f in dc.fields(cls)}

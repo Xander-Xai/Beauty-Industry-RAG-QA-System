@@ -40,6 +40,7 @@ class BM25Retriever:
         if self._es_client is None and self.enabled:
             try:
                 from elasticsearch import Elasticsearch
+
                 es_cfg = config.get("elasticsearch", {})
                 kwargs = {"hosts": [es_cfg.get("host", "http://localhost:9200")]}
                 username = es_cfg.get("username", "")
@@ -86,15 +87,17 @@ class BM25Retriever:
 
             hits = []
             for hit in response["hits"]["hits"]:
-                hits.append({
-                    "doc_id": hit["_id"],
-                    "content": hit["_source"].get("content", ""),
-                    "score": hit["_score"],
-                    "metadata": {
-                        "doc_type": hit["_source"].get("doc_type", ""),
-                        "law_id": hit["_source"].get("law_id", ""),
-                    },
-                })
+                hits.append(
+                    {
+                        "doc_id": hit["_id"],
+                        "content": hit["_source"].get("content", ""),
+                        "score": hit["_score"],
+                        "metadata": {
+                            "doc_type": hit["_source"].get("doc_type", ""),
+                            "law_id": hit["_source"].get("law_id", ""),
+                        },
+                    }
+                )
             return hits
 
         except Exception as e:
@@ -133,58 +136,70 @@ class BM25Retriever:
 
         if use_script_filter and user_role_mask != self._super_admin_mask():
             # ES >= 8.0: painless script_score 位运算过滤
-            must_filters.append({
-                "bool": {
-                    "should": [
-                        {"term": {"role_mask": 0}},  # 公开文档
-                        {"script": {
-                            "script": {
-                                "source": f"doc['role_mask'].value & {user_role_mask} != 0",
-                                "lang": "painless",
-                            }
-                        }},
-                    ],
-                    "minimum_should_match": 1,
-                }
-            })
-
-            if user_dept_mask != 0:
-                must_filters.append({
+            must_filters.append(
+                {
                     "bool": {
                         "should": [
-                            {"term": {"dept_mask": 0}},  # 全部门可见
-                            {"script": {
+                            {"term": {"role_mask": 0}},  # 公开文档
+                            {
                                 "script": {
-                                    "source": f"doc['dept_mask'].value & {user_dept_mask} != 0",
-                                    "lang": "painless",
+                                    "script": {
+                                        "source": f"doc['role_mask'].value & {user_role_mask} != 0",
+                                        "lang": "painless",
+                                    }
                                 }
-                            }},
+                            },
                         ],
                         "minimum_should_match": 1,
                     }
-                })
+                }
+            )
+
+            if user_dept_mask != 0:
+                must_filters.append(
+                    {
+                        "bool": {
+                            "should": [
+                                {"term": {"dept_mask": 0}},  # 全部门可见
+                                {
+                                    "script": {
+                                        "script": {
+                                            "source": f"doc['dept_mask'].value & {user_dept_mask} != 0",
+                                            "lang": "painless",
+                                        }
+                                    }
+                                },
+                            ],
+                            "minimum_should_match": 1,
+                        }
+                    }
+                )
         else:
             # ES < 8.0 或超级管理员: 使用预计算的 role_bucket / dept_bucket 字段
-            must_filters.append({
-                "bool": {
-                    "should": [
-                        {"term": {"role_bucket": user_role_mask}},
-                        {"term": {"role_mask": 0}},  # 兜底公开文档
-                    ],
-                    "minimum_should_match": 1,
-                }
-            })
-
-            if user_dept_mask != 0:
-                must_filters.append({
+            must_filters.append(
+                {
                     "bool": {
                         "should": [
-                            {"term": {"dept_bucket": user_dept_mask}},
-                            {"term": {"dept_mask": 0}},
+                            {"term": {"role_bucket": user_role_mask}},
+                            {"term": {"role_mask": 0}},  # 兜底公开文档
                         ],
                         "minimum_should_match": 1,
                     }
-                })
+                }
+            )
+
+            if user_dept_mask != 0:
+                must_filters.append(
+                    {
+                        "bool": {
+                            "should": [
+                                {"term": {"dept_bucket": user_dept_mask}},
+                                {"term": {"dept_mask": 0}},
+                            ],
+                            "minimum_should_match": 1,
+                        }
+                    }
+                )
 
         # 版本过滤
         active_epoch = config.get("knowledge_version_epoch", "")

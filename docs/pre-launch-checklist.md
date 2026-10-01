@@ -4,8 +4,8 @@
 
 ## P0 阻塞项
 
-- [ ] 下载模型权重（PaddleOCR、CLIP、BGE 等）至 `models/` 目录；离线导入命令：`python3 run_offline.py --mode create-index` 创建 Qdrant Collection/ES 索引，`python3 run_offline.py --mode incremental` 导入文档
-- [ ] 明确上线主线是 `app.py` 单体还是微服务网关；当前前端只按单体 `/api/*` 主线验证过
+- [ ] 确认已准备外部 Qdrant/Elasticsearch 索引；本仓库不含文档 ingestion，实现状态跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)
+- [ ] 采用 `app.py` 单体 `/api/*` 主线；微服务目录需要独立验证其与当前前端的契约
 - [ ] 生成并配置 JWT 密钥
 - [ ] 设置 `AUTH_DEV_MODE=false`
 - [ ] 设置 `CORS_ORIGINS`
@@ -45,24 +45,6 @@
 - [ ] 准备 HTTPS 与反向代理配置
 - [ ] 组织管理员与运维演练
 
-## 当前可用的离线命令
+## 离线管线状态
 
-以下离线命令已通过 `offline/` 模块实现，可直接执行：
-
-```bash
-# 创建 Qdrant Collection 与 ES 索引
-python3 run_offline.py --mode create-index
-
-# 增量更新（基于文件指纹检测新增/修改文档）
-python3 run_offline.py --mode incremental
-
-# 全量重建
-python3 run_offline.py --mode full
-
-# 反馈闭环（参数优化）
-python3 run_offline.py --mode feedback
-python3 run_offline.py --mode rewrite-feedback
-
-# 生成 Mock 数据
-python3 -m data.mock_generator data/mock_data
-```
+`run_offline.py` ingestion modes 会明确失败，不能作为部署或上线验证步骤。`rewrite-feedback` 对应独立的 rewrite feedback utility，但不提供文档导入或索引构建。上线前需验证外部知识库流程及数据；不能把入口脚本存在视为管线已验证。

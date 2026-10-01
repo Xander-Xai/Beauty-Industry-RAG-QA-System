@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 from common.config import get_config_dict
+from common.models import AnswerGateResult
 
 config = get_config_dict()
 
@@ -45,6 +46,7 @@ class AnswerGate:
             nli_model_path = config["gpu1"]["models"]["nli_model"]["model_path"]
 
             import os
+
             if not os.path.exists(nli_model_path):
                 logger.info(f"NLI 模型不存在 ({nli_model_path})，使用文本相似度兜底")
                 return
@@ -61,6 +63,7 @@ class AnswerGate:
     @property
     def device(self):
         import torch
+
         return "cuda:1" if torch.cuda.is_available() else "cpu"
 
     def verify(
@@ -118,9 +121,7 @@ class AnswerGate:
 
         # 中间地带 → 走完整 NLI 推理
         # NLI 推理
-        contradiction_score, entailment_score = self._nli_inference(
-            top_doc.content, answer
-        )
+        contradiction_score, entailment_score = self._nli_inference(top_doc.content, answer)
 
         # 决策逻辑
         warning = contradiction_score > 0.5
@@ -129,15 +130,11 @@ class AnswerGate:
         if is_regulation and contradiction_score > 0.5:
             # 法规类强制拒答
             passed = False
-            logger.warning(
-                f"Answer Gate: 法规类答案与证据矛盾 "
-                f"(contradiction={contradiction_score:.3f})，强制拒答"
-            )
+            logger.warning(f"Answer Gate: 法规类答案与证据矛盾 (contradiction={contradiction_score:.3f})，强制拒答")
         elif contradiction_score > self.nli_threshold:
             passed = False
             logger.warning(
-                f"Answer Gate: 答案与证据矛盾 "
-                f"(contradiction={contradiction_score:.3f} > {self.nli_threshold})"
+                f"Answer Gate: 答案与证据矛盾 (contradiction={contradiction_score:.3f} > {self.nli_threshold})"
             )
 
         return AnswerGateResult(
@@ -185,9 +182,11 @@ class AnswerGate:
         """Jaccard 字符级相似度（快速路径，<1ms）"""
         if not text_a or not text_b:
             return 0.0
+
         # 按字符 3-gram 切分
         def ngrams(text, n=3):
-            return set(text[i:i+n] for i in range(max(0, len(text) - n + 1)))
+            return set(text[i : i + n] for i in range(max(0, len(text) - n + 1)))
+
         a = ngrams(text_a[:500])
         b = ngrams(text_b[:500])
         if not a or not b:
@@ -222,6 +221,7 @@ class AnswerGate:
         # PRD §5.1: 优先通过 RerankBatchAggregator 批处理
         try:
             from retrieval.rerank_batch_aggregator import RerankBatchAggregator
+
             aggregator = RerankBatchAggregator()
             batch_results = aggregator.batch_predict_nli(self._nli_model, pairs)
             if batch_results and len(batch_results) == len(pairs) and batch_results[0]:
@@ -238,8 +238,11 @@ class AnswerGate:
         import torch
 
         inputs = self._nli_tokenizer(
-            premise, hypothesis,
-            return_tensors="pt", truncation=True, max_length=512,
+            premise,
+            hypothesis,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
@@ -262,8 +265,11 @@ class AnswerGate:
         hypotheses = [p[1] for p in pairs]
 
         inputs = self._nli_tokenizer(
-            premises, hypotheses,
-            return_tensors="pt", truncation=True, max_length=512,
+            premises,
+            hypotheses,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
             padding=True,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}

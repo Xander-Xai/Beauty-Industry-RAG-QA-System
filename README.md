@@ -1,268 +1,102 @@
 # 化妆品行业 RAG 问答系统
 
-面向化妆品行业知识库的 RAG 问答系统。当前仓库里，已验证的主线是 `FastAPI 单体后端 + React 前端`；同时保留了一套微服务目录，但它不是当前前端默认联调目标。
+面向化妆品行业知识库的 FastAPI + React RAG 问答项目。README 描述仓库当前状态；设计目标与实现差距见 [PRD](PRD.md) 和 [Repository Truth Audit](docs/repository-truth-audit.md)。
 
-## 当前已验证主线
+## 当前应用入口
 
-- 后端入口：`python3 app.py`
-- 前端入口：`frontend/`，构建后产物位于 `frontend/dist`
-- 页面能力：登录、Token 刷新、单轮查询、多轮对话、会话历史查看、系统统计查看、证据文件打开、管理员用户创建、管理员角色/部门更新
-- 核心接口：`/api/chat`、`/api/media/{doc_id}`、`/api/auth/*`、`/api/health`、`/api/stats`、`/api/metrics`
-- 健康检查：`GET /api/health`
+- **Canonical application:** `app.py`，FastAPI 单体应用，提供 `/api/*` 路由；React 前端位于 `frontend/`。
+- 仓库同时保留 `api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/` 等微服务目录。它们是代码组件，不代表已完成与当前前端的端到端生产验证。当前默认主线是单体应用。
+- 后端查询、改写、检索、重排、证据门控和生成代码位于 `core/`、`rewrite/`、`retrieval/`、`models/`。
 
-## 当前未闭环的上线阻塞
+## 离线处理状态
 
-- 离线建库管线 (`offline/` 包) 已实现（含文档处理、图像OCR、向量化、调度、反馈闭环），但缺少 PaddleOCR、CLIP 等模型权重文件。首次部署需先下载模型权重或切换至已有外部数据集。
-- 单体后端与微服务目录并存；如果要走微服务部署，需要单独补一轮契约校验，不应默认视为与当前前端完全一致。
-- 默认运行安全策略依赖环境变量覆盖：生产环境必须显式设置 `AUTH_DEV_MODE=false`、JWT 密钥、CORS、Redis/MinIO 等密钥。
+当前 `offline/` 仅包含 QLoRA 微调脚本、样本数据和微调依赖文件。
 
----
+**已包含：** QLoRA fine-tuning utility（`offline/finetune_qlora.py`）、fine-tuning sample data、独立依赖清单。
 
-## 快速启动
+**当前不包含：** 文档导入与解析、OCR 导入、向量生成和写入、增量调度、索引创建/重建、反馈闭环。`run_offline.py` 对 ingestion 模式会明确报错。相关设计和验收范围跟踪于 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
-### 1. 配置环境变量
+仓库中存在 Airflow DAG 草案；它引用的 scheduler/feedback modules 不存在，因此当前不会注册可用的 ingestion DAG。DAG 文件存在不等同于生产导入管线。需要导入数据时，请连接已准备好的外部 Qdrant/Elasticsearch 索引；本仓库目前没有从原始文档创建该索引的已验证命令。
+
+## Quick Start
+
+### 依赖与配置
 
 ```bash
+python3 -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`common/config.py` 现在会自动加载项目根目录下的 `.env`，因此 `python3 app.py`、`pytest` 和 `python3 run_offline.py` 都会直接读取这份文件。
+运行时配置由根目录 `config.json` 和 `common/config.py` 管理；敏感值应通过环境变量提供。请先检查 `.env.example`，并在生产环境显式配置认证、CORS 和服务凭据。
 
-至少确认这些配置：
-
-- `DEPLOYMENT_MODE=development|testing|production`
-- `AUTH_DEV_MODE=false|true`
-- `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH`
-- `REDIS_PASSWORD`
-- `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`
-- `SERVICE_AUTH_TOKEN`
-- `CORS_ORIGINS`（生产环境必须设置）
-
-`common/config.py` 现在会优先读取 `.env` / 进程环境里的 `DEPLOYMENT_MODE` 和 `AUTH_DEV_MODE`，避免 `.env` 与 `config.json` 脱节。
-
-### 2. 前端构建
-
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
-构建完成后，`app.py` 会优先挂载 `frontend/dist`。
-
-### 3. 本地单体启动
+### 启动 API
 
 ```bash
 python3 app.py
 ```
 
-访问地址：
+默认地址为 `http://localhost:8000`。API 文档在 `/docs`，健康检查为 `/api/health`。前端源码在 `frontend/`；构建命令为：
 
-- API 文档：http://localhost:8000/docs
-- 健康检查：http://localhost:8000/api/health
-- 统计指标：http://localhost:8000/api/stats
-- Prometheus 指标：http://localhost:8000/api/metrics
-- 前端运行时元数据：http://localhost:8000/api/auth/metadata
+```bash
+cd frontend
+npm ci
+npm run build
+```
 
-### 4. Docker Compose 启动
+### Docker Compose
 
 ```bash
 docker compose up -d
 ```
 
-`Dockerfile` 当前健康检查路径为 `/api/health`，与应用真实路由一致。
+Compose 需要 Redis、Qdrant、Elasticsearch 等服务。启动前检查 compose 文件和环境配置。
 
-### 5. 知识库导入现状
+## 当前代码能力
 
-当前仓库 `run_offline.py` 是预期入口，`offline/` 包已包含完整实现（文档处理、图像OCR、向量化、调度增量更新、全量重建、反馈闭环）。
-但缺少 PaddleOCR 模型和 CLIP/BLIP/BGE 等模型权重文件，首次部署需先下载模型权重：
+- FastAPI 单体入口及 `/api/query`、`/api/chat`、认证、会话、媒体访问和指标路由。
+- 多路召回及 Reciprocal Rank Fusion（RRF）实现。
+- 可配置的 BiEncoder rerank 阶段及 CrossEncoder ensemble 代码。
+- PEFT `AdapterManager` 与 `LLMClient` 集成；是否实际加载 adapter 取决于本地模型、依赖和配置。仓库没有随附训练后的 adapter 权重。
+- QLoRA 微调脚本和小型样本数据；脚本存在不代表本仓库已验证训练结果。
+- RAGAS evaluation harness source 与 golden set 存在；RAGAS 不在默认依赖中，等待上游修复当前已知安全问题后再启用安装。评测工具存在不代表模型质量或生产指标已达标。
 
-```bash
-python3 run_offline.py --mode create-index   # 创建 Qdrant Collection 与 ES 索引
-python3 run_offline.py --mode incremental    # 增量处理 data/ 目录下文档
-```
+这些能力的实现边界和证据列于 [audit](docs/repository-truth-audit.md)。性能数字如未附 benchmark 产物，不视为已验证结果。
 
-离线管线依赖以下模型权重，需提前下载至 `models/` 目录：
-- `bge-base-zh-v1.5` (文本向量化)
-- `clip-vit-base-patch16` (图像向量化)
-- `PaddleOCR` (OCR 文字识别)
-- BLIP (离线可选)
-- QLoRA 微调权重（可选，`offline/finetune_qlora.py`）
+## 文档入口
 
----
+请从 [docs/README.md](docs/README.md) 查找当前操作指南、设计文档和历史计划。历史计划不代表当前实现状态。
 
-## Auth & RBAC
-
-The system uses **JWT + RBAC Bitmask** for authentication and authorization.
-
-### 获取 Token
+## 开发与检查
 
 ```bash
-curl -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "your_password"}'
+python3 -m pytest tests/ -v --tb=short
+ruff check .
+ruff format --check .
+python3 scripts/check_repo_consistency.py
 ```
 
-### RBAC Roles
+CI 工作流会运行测试和 Ruff；安全扫描是独立工作流，结果以 GitHub Actions 中的实际运行状态为准。
 
-Configurable in `config.json` under `rbac.roles` and `rbac.departments`.
+## 主要目录
 
-Default roles (integer bitmask values):
-
-| Role | Mask | Description |
-|------|------|-------------|
-| `admin` | `0x7FFFFFFF` | Super admin |
-| `rd` | `0x01` | R&D |
-| `quality` | `0x02` | Quality |
-| `regulation` | `0x04` | Compliance |
-| `sales` | `0x08` | Sales |
-
-### API Endpoints
-
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| POST | `/api/query` | 单轮查询 API（前端已接入 `Single Query` 模式） | JWT |
-| POST | `/api/chat` | 多轮对话 | JWT |
-| POST | `/api/continuation` | 长文续写占位接口（当前仍为空桩） | JWT |
-| GET | `/api/dialog_history` | 会话历史查询（前端 `Session` 面板已接入） | JWT |
-| GET | `/api/media/{doc_id}` | Document presigned URL | JWT |
-| GET | `/api/health` | Health check | None |
-| GET | `/api/stats` | System statistics | None |
-| GET | `/api/metrics` | Prometheus metrics | None |
-| POST | `/api/auth/login` | Login | None |
-| POST | `/api/auth/refresh` | Refresh token | None |
-| GET | `/api/auth/metadata` | UI/auth/RBAC metadata for browser clients | None |
-| GET | `/api/auth/users` | List users | Admin |
-| POST | `/api/auth/users` | Create user | Admin |
-| PUT | `/api/auth/users/{id}/roles` | Update roles | Admin |
-
----
-
-## 前后端契约说明
-
-- 前端默认通过 `GET /api/auth/metadata` 读取标题、副标题、角色选项、是否启用 JWT、是否必须登录、匿名开发身份。
-- 前端支持切换 `Single Query`（`POST /api/query`）和 `Multi-turn Chat`（`POST /api/chat`）。
-- 前端 `Session` 面板对应 `GET /api/dialog_history`，`Stats` 面板对应 `GET /api/stats`。
-- 管理员面板现在已对齐后端：
-  - `GET /api/auth/users`
-  - `POST /api/auth/users`
-  - `PUT /api/auth/users/{user_id}/roles`
-- 证据文档不会再直接裸跳转 `/api/media/{doc_id}`，而是先按当前身份获取预签名 URL，再打开真实对象地址。
-- 管理员判定改为读取配置中的 `admin` 角色掩码，不再把 `rd` 角色误判成管理员。
-
-## Configuration Guide
-
-All runtime configuration is in `config.json`. Key sections:
-
-### `domain_keywords`
-Domain-specific keywords for business-type classification during query rewrite fallback.
-
-```json
-"domain_keywords": {
-    "regulation": ["compliance", "standard", "permit"],
-    "development": ["formula", "R&D", "process"],
-    "ingredient": ["component", "concentration", "efficacy"],
-    "product": ["brand", "price", "skin type"],
-    "visual": ["image", "package", "label", "photo"]
-}
+```text
+app.py                    FastAPI monolith entrypoint
+api/                      /api/* routes
+core/                     Online RAG pipeline
+retrieval/                Retrieval, RRF, BiEncoder and reranking
+models/                   Model clients and AdapterManager
+offline/                  QLoRA utility, sample data and dependencies only
+run_offline.py            Explicitly rejects unavailable ingestion modes
+frontend/                 React application
+api-gateway/              Microservice code; separate integration status
+retrieval-service/        Microservice code; separate integration status
+generation-service/       Microservice code; separate integration status
+monitoring-service/       Microservice code; separate integration status
+tests/                    Runtime tests and non-collected planned contracts
+docs/                     User, operator, design and audit documentation
+config.json               Runtime configuration; system.version is 2.3.0
 ```
-
-### `prompts`
-Customize LLM system prompts. Leave empty (`""`) to use built-in defaults.
-
-### `model_routing`
-Map logical tiers to actual model endpoints. Supports multi-model deployments.
-
-### `ui`
-Frontend runtime metadata. The React client reads this through `GET /api/auth/metadata`, so deployments can rebrand the app and change visible role options without editing `frontend/src/App.jsx`.
-
-See [`docs/open-source-hardcoding-audit.md`](docs/open-source-hardcoding-audit.md) for the current hardcoding audit, frontend/backend contract, and remaining open-source cleanup backlog.
-
----
-
-## Security Features
-
-| Feature | Description |
-|---------|-------------|
-| **JWT Auth** | All API endpoints enforce Bearer token validation |
-| **RBAC Bitmask** | Fine-grained role + department bitmask permissions |
-| **Password Hashing** | bcrypt (SHA-256 fallback for legacy migration) |
-| **Password Policy** | Min 8 chars, max 128 chars |
-| **Login Rate Limit** | 5 req/min/IP |
-| **Timing Safety** | `hmac.compare_digest` for inter-service auth |
-| **Anti-Enumeration** | Dummy bcrypt for non-existent users |
-| **Audit Logging** | All admin operations logged |
-| **Input Validation** | Injection prevention via `validate_doc_id()`, MIME whitelist |
-
----
-
-## Monitoring
-
-- **Prometheus Metrics**: `GET /api/metrics` (no auth)
-- **Health Check**: `GET /api/health` (Redis/Qdrant/ES connectivity)
-- **System Stats**: `GET /api/stats` (cache hit rate, latency percentiles, KV pressure)
-- **Distributed Tracing**: OpenTelemetry + Jaeger (optional)
-- **Alerting**: Configurable rules + Webhook/Slack/Email notifications
-
----
-
-## Development
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run full test suite
-pytest tests/ -v
-
-# Local monolith mode
-python3 app.py
-
-# Local microservices mode (需单独验证，不是当前前端默认联调主线)
-python3 run_services.py
-```
-
----
-
-## Directory Structure
-
-```
-.
-├── api/                  # FastAPI routing + dependency injection
-├── auth/                 # JWT auth + user store + RBAC
-├── common/               # Shared modules (config, auth, audit, models)
-├── core/                 # Pipeline orchestrator (OnlineRAGPipeline)
-├── rewrite/              # Query rewrite + feedback
-├── admission/            # KV admission control
-├── retrieval/            # Retrieval modules (Dense/BM25/CLIP/Rerank)
-├── models/               # Model wrappers (Embedding/LLM/NLI/BLIP)
-├── cache/                # L1 memory / L2 Redis cache
-├── router/               # Stateless request router
-├── monitoring/           # OpenTelemetry + MetricsCollector
-├── offline/              # Offline pipeline: doc processing, OCR, vectorization, feedback loop, scheduling
-├── monitoring-service/   # Alert management + metrics collection
-├── dags/                 # Airflow DAG scripts (knowledge base refresh)
-├── data/                 # Mock data, eval set generation, text mapping
-├── run_offline.py        # Offline pipeline entry (incremental/full/create-index/feedback modes)
-├── api-gateway/          # Microservice: API Gateway
-├── rewrite-service/      # Microservice: Query Rewrite
-├── retrieval-service/    # Microservice: Retrieval
-├── generation-service/   # Microservice: Generation
-├── cache-service/        # Microservice: Cache
-├── frontend/             # React SPA frontend
-├── nginx/                # Nginx reverse proxy config
-├── deploy/               # Prometheus, Grafana configs
-├── tests/                # Test suite
-├── config.json           # Runtime configuration
-├── app.py                # FastAPI entry (Monolith mode)
-├── docker-compose.yml    # Production deployment
-├── docker-compose.microservices.yml  # Microservices deployment
-└── requirements.txt      # Python dependencies
-```
-
----
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -13,20 +13,18 @@ AlertingManager -- 告警规则引擎
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import sys
 import time
 from typing import Any
+from urllib.parse import urlparse
 
-sys_path_done = False
-try:
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    sys_path_done = True
-except Exception:
-    pass
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from metrics_collector import MetricsCollector
+
 from common.config import get_config_dict
 
 config = get_config_dict()
@@ -74,16 +72,46 @@ class AlertingManager:
         """
         # 默认规则
         default_rules = [
-            {"name": "kv_pressure_critical", "metric": "kv_pressure", "threshold": 0.9,
-             "duration_s": 30, "severity": "critical", "comparison": "gt"},
-            {"name": "kv_cache_high", "metric": "kv_utilization", "threshold": 0.85,
-             "duration_s": 60, "severity": "warning", "comparison": "gt"},
-            {"name": "rerank_batch_delay", "metric": "rerank_batch_queue_delay_p99", "threshold": 50,
-             "duration_s": 30, "severity": "warning", "comparison": "gt"},
-            {"name": "rewrite_fallback_high", "metric": "rewrite_fallback_rate", "threshold": 0.3,
-             "duration_s": 300, "severity": "warning", "comparison": "gt"},
-            {"name": "degradation_spike", "metric": "degradation.total", "threshold": 10,
-             "duration_s": 300, "severity": "critical", "comparison": "gt"},
+            {
+                "name": "kv_pressure_critical",
+                "metric": "kv_pressure",
+                "threshold": 0.9,
+                "duration_s": 30,
+                "severity": "critical",
+                "comparison": "gt",
+            },
+            {
+                "name": "kv_cache_high",
+                "metric": "kv_utilization",
+                "threshold": 0.85,
+                "duration_s": 60,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "rerank_batch_delay",
+                "metric": "rerank_batch_queue_delay_p99",
+                "threshold": 50,
+                "duration_s": 30,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "rewrite_fallback_high",
+                "metric": "rewrite_fallback_rate",
+                "threshold": 0.3,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "degradation_spike",
+                "metric": "degradation.total",
+                "threshold": 10,
+                "duration_s": 300,
+                "severity": "critical",
+                "comparison": "gt",
+            },
         ]
 
         # 从 config 加载自定义规则（覆盖默认）
@@ -149,8 +177,8 @@ class AlertingManager:
                         "triggered_at": self._alert_timestamps[rule_name],
                         "duration_s": round(elapsed, 1),
                         "message": f"{rule_name}: {metric_name}={current_value:.4f} "
-                                   f"{'>' if comparison == 'gt' else '<'} {threshold} "
-                                   f"持续 {elapsed:.0f}s",
+                        f"{'>' if comparison == 'gt' else '<'} {threshold} "
+                        f"持续 {elapsed:.0f}s",
                     }
                     logger.warning(f"告警触发: {self._active_alerts[rule_name]['message']}")
 
@@ -164,10 +192,7 @@ class AlertingManager:
             else:
                 # 条件恢复，清除告警
                 if rule_name in self._active_alerts:
-                    logger.info(
-                        f"告警恢复: {rule_name} "
-                        f"(metric={metric_name}, value={current_value:.4f})"
-                    )
+                    logger.info(f"告警恢复: {rule_name} (metric={metric_name}, value={current_value:.4f})")
                     del self._active_alerts[rule_name]
                 if rule_name in self._alert_timestamps:
                     del self._alert_timestamps[rule_name]
@@ -186,10 +211,7 @@ class AlertingManager:
 
         # 特殊计算：fallback_rate
         if metric_name == "rewrite_fallback_rate":
-            total = (
-                self.metrics._counters.get("rewrite.success", 0)
-                + self.metrics._counters.get("rewrite.fail", 0)
-            )
+            total = self.metrics._counters.get("rewrite.success", 0) + self.metrics._counters.get("rewrite.fail", 0)
             if total > 0:
                 return self.metrics._counters.get("rewrite.fallback", 0) / total
             return 0.0
@@ -249,7 +271,7 @@ class AlertingManager:
         - email: SMTP 邮件通知（PRD §12）
         """
         severity = alert.get("severity", "warning")
-        message = alert.get("message", alert.get("name", "unknown alert"))
+        alert.get("message", alert.get("name", "unknown alert"))
 
         for channel in self._notification_channels:
             channel_type = channel.get("type", "webhook")
@@ -280,21 +302,29 @@ class AlertingManager:
     def _send_webhook(self, url: str, alert: dict):
         """发送 Webhook 通知"""
         import urllib.request
-        payload = json.dumps({
-            "alert": alert["name"],
-            "severity": alert.get("severity", "warning"),
-            "message": alert.get("message", ""),
-            "metric": alert.get("metric", ""),
-            "current_value": alert.get("current_value"),
-            "threshold": alert.get("threshold"),
-            "triggered_at": alert.get("triggered_at"),
-        }).encode("utf-8")
-        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=10)
+
+        self._validate_notification_url(url)
+
+        payload = json.dumps(
+            {
+                "alert": alert["name"],
+                "severity": alert.get("severity", "warning"),
+                "message": alert.get("message", ""),
+                "metric": alert.get("metric", ""),
+                "current_value": alert.get("current_value"),
+                "threshold": alert.get("threshold"),
+                "triggered_at": alert.get("triggered_at"),
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})  # noqa: S310
+        urllib.request.urlopen(req, timeout=10)  # noqa: S310
 
     def _send_slack(self, webhook_url: str, alert: dict):
         """发送 Slack 通知"""
         import urllib.request
+
+        self._validate_notification_url(webhook_url)
+
         severity_emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}
         emoji = severity_emoji.get(alert.get("severity", "warning"), "⚪")
         text = (
@@ -304,8 +334,15 @@ class AlertingManager:
             f"(threshold: `{alert.get('threshold', '')}`)"
         )
         payload = json.dumps({"text": text}).encode("utf-8")
-        req = urllib.request.Request(webhook_url, data=payload, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=10)
+        req = urllib.request.Request(webhook_url, data=payload, headers={"Content-Type": "application/json"})  # noqa: S310
+        urllib.request.urlopen(req, timeout=10)  # noqa: S310
+
+    @staticmethod
+    def _validate_notification_url(url: str) -> None:
+        """Reject non-network URL schemes for configured notification hooks."""
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Notification URL must use HTTP or HTTPS")
 
     def _send_email(self, channel: dict, alert: dict):
         """

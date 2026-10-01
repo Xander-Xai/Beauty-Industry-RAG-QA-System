@@ -5,6 +5,7 @@ GAP-15: 核心管线变量排序修复测试
 1) is_complex 在使用前已赋值（无 NameError）
 2) 复杂度评估失败时降级为简单模型
 """
+
 import os
 import sys
 
@@ -143,9 +144,7 @@ class TestPipelineVariableOrdering:
         _setup_pipeline_mocks(pipeline)
         # 模拟复杂度评估失败
         pipeline._complexity_evaluator = MagicMock()
-        pipeline._complexity_evaluator.evaluate.side_effect = RuntimeError(
-            "BERT model load failed"
-        )
+        pipeline._complexity_evaluator.evaluate.side_effect = RuntimeError("BERT model load failed")
 
         ctx = _make_ctx()
         pipeline.process(ctx)

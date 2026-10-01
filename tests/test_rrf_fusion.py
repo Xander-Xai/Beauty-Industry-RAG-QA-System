@@ -18,11 +18,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 
 from common.models import RecallResult
 from retrieval_service.rerank.rrf_fusion import rrf_fusion
-
 
 # ── Helper factories ──
 
