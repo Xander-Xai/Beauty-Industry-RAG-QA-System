@@ -462,6 +462,30 @@ def test_collection_schema_mismatch_fails_clearly():
         QdrantTextWriter(client, "wrong_distance", dimension=16).ensure_collection()
 
 
+def test_qdrant_environment_overrides_connection_config(monkeypatch):
+    from offline.text_ingestion import _qdrant_connection_kwargs
+
+    monkeypatch.setenv("QDRANT_HOST", "127.0.0.1")
+    monkeypatch.setenv("QDRANT_PORT", "7333")
+    monkeypatch.setenv("QDRANT_GRPC_PORT", "7334")
+    assert _qdrant_connection_kwargs({"host": "qdrant", "port": 6333, "grpc_port": 6334}) == {
+        "host": "127.0.0.1",
+        "port": 7333,
+        "grpc_port": 7334,
+        "prefer_grpc": False,
+    }
+
+    monkeypatch.delenv("QDRANT_HOST")
+    monkeypatch.delenv("QDRANT_PORT")
+    monkeypatch.delenv("QDRANT_GRPC_PORT")
+    assert _qdrant_connection_kwargs({"host": "qdrant", "port": 6333, "grpc_port": 6334}) == {
+        "host": "qdrant",
+        "port": 6333,
+        "grpc_port": 6334,
+        "prefer_grpc": False,
+    }
+
+
 def test_qdrant_filter_includes_active_status_and_epoch():
     from auth.bitmask_rbac import build_qdrant_filter
 

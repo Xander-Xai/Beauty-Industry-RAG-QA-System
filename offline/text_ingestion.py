@@ -421,12 +421,7 @@ def configured_text_ingestion_service():
     embedding = config["embedding"]["text"]
     collection = embedding["collection"]
     qdrant = config["qdrant"]
-    client = QdrantClient(
-        host=qdrant["host"],
-        port=qdrant["port"],
-        grpc_port=qdrant.get("grpc_port"),
-        prefer_grpc=False,
-    )
+    client = QdrantClient(**_qdrant_connection_kwargs(qdrant))
     knowledge_base = config.get("knowledge_base", {})
     chunk_size = int(knowledge_base.get("chunk_size", 500))
     overlap_ratio = float(knowledge_base.get("chunk_overlap_ratio", 0.1))
@@ -444,3 +439,12 @@ def configured_text_ingestion_service():
         BGETextEmbedder(embedding["model_path"], dimension, embedding_batch_size),
         QdrantTextWriter(client, collection, dimension),
     )
+
+
+def _qdrant_connection_kwargs(qdrant_config: dict) -> dict:
+    """Use documented Qdrant environment values before config.json defaults."""
+    host = os.environ.get("QDRANT_HOST") or qdrant_config["host"]
+    port = int(os.environ.get("QDRANT_PORT") or qdrant_config["port"])
+    grpc_port_value = os.environ.get("QDRANT_GRPC_PORT")
+    grpc_port = int(grpc_port_value) if grpc_port_value else qdrant_config.get("grpc_port")
+    return {"host": host, "port": port, "grpc_port": grpc_port, "prefer_grpc": False}

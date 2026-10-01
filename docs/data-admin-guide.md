@@ -4,7 +4,7 @@
 
 在线检索代码会读取 Qdrant 和搜索服务中的数据。当前 Phase 1 只支持 UTF-8 TXT → 确定性字符切块 → BGE 文本 embedding adapter → Qdrant text collection；真实 BGE 模型 smoke test 尚未验证。PDF/DOCX/XLSX、OCR、CLIP、Elasticsearch 写入、调度、完整重建和反馈闭环尚未实现。完整后续范围见 [Issue #2](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/2)。
 
-`run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 是当前唯一支持的文档 ingestion 命令。它要求显式给出权限掩码和知识版本 epoch；掩码必须是 uint32。公开内容使用两个掩码 `0`，受限内容使用对应的非零角色和部门掩码。命令使用 `config.json` 中的 BGE 模型路径、768 维度、`rag_text_768` collection 和 Qdrant 连接配置。
+`run_offline.py ingest-text SOURCE --role-mask N --dept-mask N --epoch EPOCH` 是当前唯一支持的文档 ingestion 命令。它要求显式给出权限掩码和知识版本 epoch；掩码必须是 uint32。公开内容使用两个掩码 `0`，受限内容使用对应的非零角色和部门掩码。命令使用 `config.json` 中的 BGE 模型路径、768 维度和 `rag_text_768` collection；Qdrant 地址优先读取 `.env`/环境变量 `QDRANT_HOST`、`QDRANT_PORT` 和 `QDRANT_GRPC_PORT`，否则回退到 `config.json`。
 
 示例：
 
