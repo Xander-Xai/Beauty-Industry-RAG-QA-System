@@ -98,7 +98,7 @@ def load_training_data(data_path: str, tokenizer) -> Dataset:
     每个 JSON 记录必须包含 instruction / input / output 三个字段。
     缺失字段时抛出清晰的 KeyError。
     """
-    with open(data_path, "r", encoding="utf-8") as f:
+    with open(data_path, encoding="utf-8") as f:
         raw_data = json.load(f)
 
     required_keys = {"instruction", "input", "output"}

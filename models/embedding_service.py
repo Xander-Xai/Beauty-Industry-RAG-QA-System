@@ -299,14 +299,26 @@ class EmbeddingService:
         """
         collection_name = config["embedding"]["image_clip"]["collection"]
         client = self.qdrant_client
+        query_vector = query_embedding.flatten().tolist()
+        payload_fields = ["doc_id", "content", "ocr_full_text", "image_uri", "role_mask", "dept_mask"]
 
-        results = client.search(
-            collection_name=collection_name,
-            query_vector=query_embedding.flatten().tolist(),
-            limit=top_k,
-            query_filter=qdrant_filter,
-            with_payload=["doc_id", "content", "image_uri", "role_mask", "dept_mask"],
-        )
+        if hasattr(client, "query_points"):
+            response = client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                limit=top_k,
+                query_filter=qdrant_filter,
+                with_payload=payload_fields,
+            )
+            results = response.points
+        else:  # Compatibility for older clients and repository test doubles.
+            results = client.search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=top_k,
+                query_filter=qdrant_filter,
+                with_payload=payload_fields,
+            )
 
         hits = []
         for point in results:
