@@ -4,6 +4,7 @@ Tests for GET /api/media/{doc_id} endpoint (GAP-16)
 Covers:
 - Allowed access: presigned URL returned with correct structure
 - Denied access: 403 when user lacks document permissions
+- Fail closed: 403 when role_mask/dept_mask are missing or malformed
 - Not found: 404 for missing document
 - Archived document: 404 when status is 'archived'
 - MinIO unavailable: 503 when storage service is down
@@ -28,12 +29,21 @@ from common.models import UserIdentity
 
 class _FakeQdrantRecord:
     """模拟 Qdrant 查询返回的 Record 对象"""
-    def __init__(self, doc_id, role_mask=0, dept_mask=0, status="active"):
+
+    def __init__(self, doc_id, role_mask=0, dept_mask=0, status="active", epoch="default"):
         self.payload = {
             "role_mask": role_mask,
             "dept_mask": dept_mask,
             "status": status,
+            "doc_version_epoch": epoch,
         }
+
+
+class _RawQdrantRecord:
+    """Record whose payload is supplied verbatim (for malformed-metadata cases)."""
+
+    def __init__(self, payload):
+        self.payload = payload
 
 
 def _setup_qdrant_scroll(*records):
@@ -89,6 +99,12 @@ class TestMediaEndpointAllowed:
         assert data["doc_id"] == "pub_doc"
         assert data["url"] == "https://minio.example.com/signed/pub_doc"
         assert data["expires_in_seconds"] > 0
+        media_filter = mock_qdrant.return_value.scroll.call_args.kwargs["scroll_filter"]
+        filter_values = {(condition.key, condition.match.value) for condition in media_filter.must}
+        assert filter_values == {("doc_id", "pub_doc"), ("status", "active")}
+        assert media_filter.should[0].key == "doc_version_epoch"
+        assert media_filter.should[0].match.value == "default"
+        assert media_filter.should[1].is_empty.key == "doc_version_epoch"
         app.dependency_overrides.clear()
 
     @patch("api.routes.QdrantClient")
@@ -162,6 +178,28 @@ class TestMediaEndpointAllowed:
 
     @patch("api.routes.QdrantClient")
     @patch("common.minio_client.get_minio_client")
+    def test_super_admin_mask_bypasses_all_restrictions(self, mock_get_minio, mock_qdrant):
+        """Configured super_admin_mask (uint32 max) can access any document."""
+        app.dependency_overrides[require_identity] = lambda: _make_identity(
+            user_id="super_admin", user_role_mask=0xFFFFFFFF, user_dept_mask=0
+        )
+        mock_qdrant.return_value = _setup_qdrant_scroll(
+            _FakeQdrantRecord(doc_id="super_secret_doc", role_mask=8, dept_mask=8, status="active")
+        )
+        mock_get_minio.return_value = _mock_minio(
+            available=True,
+            url="https://minio.example.com/signed/super_secret_doc",
+        )
+
+        client = TestClient(app)
+        resp = client.get("/api/media/super_secret_doc")
+
+        assert resp.status_code == 200
+        assert resp.json()["doc_id"] == "super_secret_doc"
+        app.dependency_overrides.clear()
+
+    @patch("api.routes.QdrantClient")
+    @patch("common.minio_client.get_minio_client")
     def test_dept_restricted_doc_accessible_by_matching_dept(self, mock_get_minio, mock_qdrant):
         """Document with only dept restriction: user with matching dept can access."""
         app.dependency_overrides[require_identity] = lambda: _make_identity(
@@ -225,6 +263,73 @@ class TestMediaEndpointDenied:
         data = resp.json()
         assert data["detail"]["error"] == "permission_denied"
         app.dependency_overrides.clear()
+
+
+# ── Fail closed on missing / malformed metadata ──────────────────────────────
+
+
+class TestMediaEndpointFailClosed:
+    """Missing or malformed permission metadata must be denied, never public."""
+
+    def _get(self, payload, identity_kwargs=None):
+        app.dependency_overrides[require_identity] = lambda: _make_identity(**(identity_kwargs or {}))
+        with patch("api.routes.QdrantClient") as mock_qdrant:
+            mock_qdrant.return_value = _setup_qdrant_scroll(_RawQdrantRecord(payload))
+            try:
+                return TestClient(app).get("/api/media/fail_closed_doc")
+            finally:
+                app.dependency_overrides.clear()
+
+    def test_missing_role_mask_denied(self):
+        resp = self._get({"dept_mask": 0, "status": "active"})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"] == "permission_denied"
+
+    def test_missing_dept_mask_denied(self):
+        resp = self._get({"role_mask": 0, "status": "active"})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"] == "permission_denied"
+
+    def test_missing_both_masks_denied(self):
+        resp = self._get({"status": "active"})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["error"] == "permission_denied"
+
+    def test_explicit_none_role_mask_denied(self):
+        resp = self._get({"role_mask": None, "dept_mask": 0, "status": "active"})
+        assert resp.status_code == 403
+
+    def test_explicit_none_dept_mask_denied(self):
+        resp = self._get({"role_mask": 0, "dept_mask": None, "status": "active"})
+        assert resp.status_code == 403
+
+    def test_malformed_role_mask_denied(self):
+        resp = self._get({"role_mask": "0", "dept_mask": 0, "status": "active"})
+        assert resp.status_code == 403
+
+    def test_negative_role_mask_denied(self):
+        resp = self._get({"role_mask": -1, "dept_mask": 0, "status": "active"})
+        assert resp.status_code == 403
+
+    def test_role_mask_above_uint32_denied(self):
+        resp = self._get({"role_mask": 0x1_0000_0000, "dept_mask": 0, "status": "active"})
+        assert resp.status_code == 403
+
+    def test_malformed_dept_mask_denied(self):
+        resp = self._get({"role_mask": 0, "dept_mask": 1.0, "status": "active"})
+        assert resp.status_code == 403
+
+    def test_none_metadata_denied(self):
+        resp = self._get(None)
+        assert resp.status_code == 403
+
+    def test_valid_public_masks_allowed(self):
+        with patch("common.minio_client.get_minio_client") as mock_get_minio:
+            mock_get_minio.return_value = _mock_minio(
+                available=True, url="https://minio.example.com/signed/fail_closed_doc"
+            )
+            resp = self._get({"role_mask": 0, "dept_mask": 0, "status": "active"})
+        assert resp.status_code == 200
 
 
 # ── Not found ───────────────────────────────────────────────────────────────

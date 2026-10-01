@@ -31,6 +31,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from common.config import get_config_dict
+from common.models import EvidenceGateResult
 
 config = get_config_dict()
 
@@ -57,6 +58,7 @@ class EvidenceEnsembleGate:
         """Reuse AnswerGate's NLI model instance."""
         if self._answer_gate is None:
             from retrieval_service.rerank.answer_gate import AnswerGate
+
             self._answer_gate = AnswerGate()
         return self._answer_gate
 
@@ -104,10 +106,10 @@ class EvidenceEnsembleGate:
 
         # Composite Evidence Score
         evidence_score = (
-            self.weights["w1"] * ce_top1_score +
-            self.weights["w2"] * ce_top3_mean_score +
-            self.weights["w3"] * retrieval_agreement_score +
-            self.weights["w4"] * doc_consistency_score
+            self.weights["w1"] * ce_top1_score
+            + self.weights["w2"] * ce_top3_mean_score
+            + self.weights["w3"] * retrieval_agreement_score
+            + self.weights["w4"] * doc_consistency_score
         )
 
         # Decision
@@ -155,9 +157,7 @@ class EvidenceEnsembleGate:
             for i in range(len(doc_texts)):
                 for j in range(i + 1, len(doc_texts)):
                     # NLI: premise=doc_i, hypothesis=doc_j
-                    contradiction, entailment = self.answer_gate._nli_inference(
-                        doc_texts[i], doc_texts[j]
-                    )
+                    contradiction, entailment = self.answer_gate._nli_inference(doc_texts[i], doc_texts[j])
                     if contradiction > 0.5:
                         contradiction_count += 1
                     total_pairs += 1

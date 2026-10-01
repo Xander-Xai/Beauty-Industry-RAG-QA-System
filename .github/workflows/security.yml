@@ -32,8 +32,9 @@ jobs:
           pip install pip-audit
           pip install -r requirements.txt
 
-      - name: Run pip-audit
-        run: pip-audit --strict --desc
+      # This workflow runs on pull requests and is a merge check. Fail on findings.
+      - name: Run pip-audit (merge gate)
+        run: pip-audit --strict --desc --requirement requirements.txt
 
   secret-scan:
     name: 敏感信息扫描
@@ -45,7 +46,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: TruffleHog secret scan
-        uses: trufflesecurity/trufflehog@main
+      # Pin to a published release tag instead of a floating branch.
+      - name: TruffleHog secret scan (merge gate)
+        uses: trufflesecurity/trufflehog@v3.97.9
         with:
           extra_args: --only-verified

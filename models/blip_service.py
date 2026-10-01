@@ -30,11 +30,30 @@ logger = logging.getLogger(__name__)
 
 # 视觉相关关键词（与 pipeline._should_use_clip_sync 共用词表）
 VISUAL_KEYWORDS = {
-    "图片", "包装", "外观", "照片", "扫描", "标签",
-    "成分表", "配方", "图像", "图像识别", "OCR",
-    "说明书", "瓶身", "外盒", "瓶盖", "瓶贴",
-    "生产日期", "保质期", "批号", "条形码",
-    "产品图", "实物图", "对比图", "展示图",
+    "图片",
+    "包装",
+    "外观",
+    "照片",
+    "扫描",
+    "标签",
+    "成分表",
+    "配方",
+    "图像",
+    "图像识别",
+    "OCR",
+    "说明书",
+    "瓶身",
+    "外盒",
+    "瓶盖",
+    "瓶贴",
+    "生产日期",
+    "保质期",
+    "批号",
+    "条形码",
+    "产品图",
+    "实物图",
+    "对比图",
+    "展示图",
 }
 
 
@@ -124,9 +143,7 @@ class BLIPTargetDetector:
         try:
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-            bert_cfg = config.get("gpu1", {}).get("models", {}).get(
-                "bert_blip_intent", {}
-            )
+            bert_cfg = config.get("gpu1", {}).get("models", {}).get("bert_blip_intent", {})
             model_path = bert_cfg.get("model_path", "")
             if not model_path:
                 return False
@@ -156,9 +173,8 @@ class BLIPTargetDetector:
         """使用 BERT 模型进行意图分类推理"""
         try:
             import torch
-            inputs = self._bert_tokenizer(
-                query, return_tensors="pt", truncation=True, max_length=128, padding=True
-            )
+
+            inputs = self._bert_tokenizer(query, return_tensors="pt", truncation=True, max_length=128, padding=True)
             device = next(self._bert_model.parameters()).device
             inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
@@ -226,9 +242,12 @@ class BLIPInferenceService:
         try:
             from transformers import BlipForConditionalGeneration, BlipProcessor
 
-            model_path = config.get("gpu1", {}).get("models", {}).get(
-                "blip", {}
-            ).get("model_path", "blip-image-captioning-large")
+            model_path = (
+                config.get("gpu1", {})
+                .get("models", {})
+                .get("blip", {})
+                .get("model_path", "blip-image-captioning-large")
+            )
 
             # 支持相对路径和绝对路径
             if not os.path.isabs(model_path):
@@ -280,7 +299,9 @@ class BLIPInferenceService:
             # 加载图像
             if image_uri.startswith(("http://", "https://")):
                 import urllib.request
-                with urllib.request.urlopen(image_uri, timeout=5) as response:
+
+                # image_uri is restricted to HTTP(S) by the branch above.
+                with urllib.request.urlopen(image_uri, timeout=5) as response:  # noqa: S310
                     image = Image.open(response).convert("RGB")
             elif os.path.exists(image_uri):
                 image = Image.open(image_uri).convert("RGB")
@@ -355,7 +376,7 @@ class BLIPInferenceService:
         image_uris = uncached_uris
 
         # PRD §6: BLIP 推理超时保护（120ms）
-        blip_timeout_ms = config.get("gpu1", {}).get("models", {}).get("blip", {}).get("timeout_ms", 120)
+        config.get("gpu1", {}).get("models", {}).get("blip", {}).get("timeout_ms", 120)
 
         results = {}
         uncached_uris = []
@@ -385,7 +406,9 @@ class BLIPInferenceService:
                 try:
                     if uri.startswith(("http://", "https://")):
                         import urllib.request
-                        with urllib.request.urlopen(uri, timeout=5) as response:
+
+                        # uri is restricted to HTTP(S) by the branch above.
+                        with urllib.request.urlopen(uri, timeout=5) as response:  # noqa: S310
                             images.append(Image.open(response).convert("RGB"))
                     elif os.path.exists(uri):
                         images.append(Image.open(uri).convert("RGB"))
@@ -403,16 +426,11 @@ class BLIPInferenceService:
             t_start = time.time()
             if query:
                 # 条件批处理：每个图片 + 同一个 query
-                inputs = self.processor(
-                    images, [query] * len(images),
-                    return_tensors="pt", padding=True
-                )
+                inputs = self.processor(images, [query] * len(images), return_tensors="pt", padding=True)
             else:
-                inputs = self.processor(
-                    images, return_tensors="pt", padding=True
-                )
+                inputs = self.processor(images, return_tensors="pt", padding=True)
 
-            device = next(self.model.parameters()).device if hasattr(self.model, 'parameters') else "cpu"
+            device = next(self.model.parameters()).device if hasattr(self.model, "parameters") else "cpu"
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
             with torch.no_grad():
@@ -427,10 +445,7 @@ class BLIPInferenceService:
 
             batch_ms = (time.time() - t_start) * 1000
             if batch_ms > 120:
-                logger.warning(
-                    f"BLIP batch 推理超时: {batch_ms:.0f}ms > 120ms "
-                    f"({len(valid_uris)} images)"
-                )
+                logger.warning(f"BLIP batch 推理超时: {batch_ms:.0f}ms > 120ms ({len(valid_uris)} images)")
             else:
                 logger.debug(f"BLIP batch: {len(valid_uris)} images, {batch_ms:.0f}ms")
 

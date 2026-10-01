@@ -16,12 +16,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-
 # ── 使用 bitmask_rbac 模块（依赖 config.json 已在项目根目录） ──
 
 from auth.bitmask_rbac import build_qdrant_filter, encode_dept_mask, encode_role_mask, is_allowed
 
 # ── 公开文档访问控制 ──
+
 
 class TestPublicDocAccess:
     """公开文档 (doc_role_mask=0) 应对所有用户开放"""
@@ -48,6 +48,7 @@ class TestPublicDocAccess:
 
 # ── 超级管理员绕过 ──
 
+
 class TestSuperAdmin:
     """超级管理员 (role_mask=0xFFFFFFFF=4294967295) 应绕过所有权限检查"""
 
@@ -65,7 +66,49 @@ class TestSuperAdmin:
         assert is_allowed(dr=7, ur=4294967295, dd=15, ud=0) is True
 
 
+def test_legacy_points_are_default_epoch_only():
+    from qdrant_client import QdrantClient
+    from qdrant_client.http.models import Distance, PointStruct, VectorParams
+
+    client = QdrantClient(":memory:")
+    client.create_collection("legacy_epoch", vectors_config=VectorParams(size=2, distance=Distance.COSINE))
+    client.upsert(
+        collection_name="legacy_epoch",
+        points=[
+            PointStruct(id=1, vector=[1.0, 0.0], payload={"status": "active", "doc_id": "legacy"}),
+            PointStruct(
+                id=2,
+                vector=[0.9, 0.1],
+                payload={"status": "active", "doc_id": "default", "doc_version_epoch": "default"},
+            ),
+            PointStruct(
+                id=3,
+                vector=[0.8, 0.2],
+                payload={"status": "active", "doc_id": "next", "doc_version_epoch": "phase_2"},
+            ),
+        ],
+        wait=True,
+    )
+
+    default_hits = client.query_points(
+        collection_name="legacy_epoch",
+        query=[1.0, 0.0],
+        query_filter=build_qdrant_filter(0, 0, "default"),
+        limit=10,
+    ).points
+    next_hits = client.query_points(
+        collection_name="legacy_epoch",
+        query=[1.0, 0.0],
+        query_filter=build_qdrant_filter(0, 0, "phase_2"),
+        limit=10,
+    ).points
+
+    assert {hit.payload["doc_id"] for hit in default_hits} == {"legacy", "default"}
+    assert {hit.payload["doc_id"] for hit in next_hits} == {"next"}
+
+
 # ── 普通 RBAC 位与匹配 ──
+
 
 class TestNormalRBAC:
     """普通角色/部门的位与匹配逻辑"""
@@ -114,6 +157,7 @@ class TestNormalRBAC:
 
 # ── encode_role_mask / encode_dept_mask ──
 
+
 class TestEncodeMasks:
     """验证角色/部门名称到 bitmask 的编码"""
 
@@ -160,33 +204,33 @@ class TestEncodeMasks:
 
 # ── Qdrant Filter 生成 ──
 
+
 class TestQdrantFilter:
     """验证 build_qdrant_filter 返回 Qdrant Filter 对象"""
 
     def test_returns_filter_object(self):
         """build_qdrant_filter 返回 Qdrant Filter 对象"""
-        from auth.bitmask_rbac import build_qdrant_filter
         from qdrant_client.http.models import Filter
+
         f = build_qdrant_filter(ur=1, ue=2, ae="20260601")
         assert isinstance(f, Filter)
 
     def test_filter_contains_status_active(self):
         """Filter 包含 status == active 条件"""
-        from auth.bitmask_rbac import build_qdrant_filter
-        from qdrant_client.http.models import FieldCondition, MatchValue
+        from qdrant_client.http.models import MatchValue
+
         f = build_qdrant_filter(ur=1, ue=0, ae="v1")
         assert f.must is not None
         status_cond = any(
-            c.key == "status" and isinstance(c.match, MatchValue) and c.match.value == "active"
-            for c in f.must
+            c.key == "status" and isinstance(c.match, MatchValue) and c.match.value == "active" for c in f.must
         )
         assert status_cond, "Filter 应包含 status == active"
 
     def test_filter_input_validation(self):
         """非法输入应抛出 ValueError"""
-        from auth.bitmask_rbac import build_qdrant_filter
 
         import pytest
+
         with pytest.raises(ValueError):
             build_qdrant_filter(ur=-1, ue=0, ae="v1")
         with pytest.raises(ValueError):
@@ -196,7 +240,7 @@ class TestQdrantFilter:
 
     def test_filter_validation_passes(self):
         """合法输入不抛出异常"""
-        from auth.bitmask_rbac import build_qdrant_filter
         from qdrant_client.http.models import Filter
+
         f = build_qdrant_filter(ur=1, ue=1, ae="v1")
         assert isinstance(f, Filter)

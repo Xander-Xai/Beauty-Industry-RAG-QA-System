@@ -25,7 +25,16 @@ milvus/
 data/
 !data/__init__.py
 !data/mock_generator.py
-offline/
+# Offline pipeline source modules are tracked; only generated artifacts are ignored.
+offline/*.pt
+offline/*.bin
+offline/*.safetensors
+offline/*.onnx
+offline/data/
+offline/output/
+offline/.offline_state.sqlite3
+.superpowers/**/state/server.pid
+.superpowers/**/state/server-stopped
 
 # IDE
 .vscode/

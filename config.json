@@ -2,7 +2,7 @@
   "deployment_mode": "development",
   "system": {
     "name": "化妆品行业RAG问答系统",
-    "version": "2.0.0",
+    "version": "2.3.0",
     "dual_gpu": true
   },
   "gpu0": {
@@ -119,11 +119,13 @@
   "embedding": {
     "text": {
       "model_path": "./models/bge-base-zh-v1.5",
+      "model_revision": "bge-base-zh-v1.5",
       "dimension": 768,
       "collection": "rag_text_768"
     },
     "image_clip": {
       "model_path": "./models/clip-vit-base-patch16",
+      "model_revision": "clip-vit-base-patch16",
       "dimension": 512,
       "collection": "rag_image_512"
     }
@@ -167,10 +169,34 @@
     "data_dir": "./data",
     "chunk_size": 500,
     "chunk_overlap_ratio": 0.1,
+    "embedding_batch_size": 32,
+    "image_batch_size": 16,
+    "max_document_bytes": 131072,
+    "max_binary_document_bytes": 67108864,
+    "max_chunks": 256,
+    "max_images_per_document": 100,
+    "ocr_min_text_chars": 20,
+    "pdf_render_dpi": 150,
+    "xlsx_rows_per_block": 50,
+    "state_db_path": "./data/offline_state.sqlite3",
+    "supported_extensions": [".txt", ".pdf", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"],
     "ocr": {
       "engine": "paddleocr",
       "language": "ch",
       "visual_weight_repeat": 3
+    }
+  },
+  "offline": {
+    "scheduler": {
+      "incremental_enabled": true,
+      "full_rebuild_enabled": true,
+      "incremental_cron": "0 2 * * 0",
+      "full_rebuild_cron": "0 3 1 * *",
+      "auto_seal": false
+    },
+    "feedback": {
+      "store_path": "./data/feedback/feedback.sqlite3",
+      "output_dir": "./data/feedback"
     }
   },
   "knowledge_version_epoch": "default",

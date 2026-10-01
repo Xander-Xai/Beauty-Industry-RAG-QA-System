@@ -16,7 +16,9 @@ qdrant-client>=1.18.0
 faiss-cpu>=1.8.0
 
 # === Search Engine ===
-elasticsearch>=8.14.0
+# Pin below 9.x: the deployment Elasticsearch server is 8.x and the 9.x
+# python client sends a compatible-with=9 media header the 8.x server rejects.
+elasticsearch>=8.14.0,<9
 
 # === Cache ===
 redis>=5.0.0
@@ -32,9 +34,10 @@ pandas>=2.2.0
 openpyxl>=3.1.0
 Pillow>=10.4.0
 
-# === OCR ===
-# paddleocr>=2.7.0
-# paddlepaddle>=2.6.0
+# === OCR (optional, not installed by default) ===
+# The OCR adapter is always importable; the PaddleOCR runtime is external.
+# Install only where scanned documents/images are processed:
+#   python3 -m pip install -r offline/requirements-ocr.txt
 
 # === Image Processing ===
 opencv-python>=4.9.0
@@ -73,6 +76,7 @@ sqlalchemy>=2.0.0
 # Phase 11: MinIO 签名 URL (PRD §10)
 minio>=7.2.0
 
-# RAGAS evaluation framework
-ragas>=0.2.0
+# RAGAS is intentionally not installed by default: the latest published
+# release currently has an unresolved pip-audit finding. The evaluator keeps
+# its missing-dependency fallback until a patched release is available.
 datasets>=2.20.0

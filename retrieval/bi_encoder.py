@@ -38,6 +38,7 @@ class BiEncoderReranker:
     def embedding_service(self):
         if self._embedding_service is None:
             from models.embedding_service import EmbeddingService
+
             self._embedding_service = EmbeddingService()
         return self._embedding_service
 
@@ -80,12 +81,14 @@ class BiEncoderReranker:
             results = []
             for idx in top_indices:
                 candidate = candidates[idx]
-                results.append(RerankResult(
-                    doc_id=candidate.doc_id,
-                    content=candidate.content,
-                    source=getattr(candidate, 'source', ''),
-                    bi_score=float(similarities[idx]),
-                ))
+                results.append(
+                    RerankResult(
+                        doc_id=candidate.doc_id,
+                        content=candidate.content,
+                        source=getattr(candidate, "source", ""),
+                        bi_score=float(similarities[idx]),
+                    )
+                )
 
             logger.info(f"BiEncoder 重排完成: {len(candidates)} → {len(results)}")
             return results
@@ -94,6 +97,6 @@ class BiEncoderReranker:
             logger.error(f"BiEncoder 重排失败: {e}")
             # 降级：返回原始候选的前 top_k 条
             return [
-                RerankResult(doc_id=c.doc_id, content=c.content, source=getattr(c, 'source', ''), bi_score=0.0)
+                RerankResult(doc_id=c.doc_id, content=c.content, source=getattr(c, "source", ""), bi_score=0.0)
                 for c in candidates[:top_k]
             ]

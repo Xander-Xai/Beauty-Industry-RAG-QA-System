@@ -20,6 +20,7 @@ import logging
 import re
 
 from common.config import get_config_dict
+from common.models import QueryRewriteResult
 
 config = get_config_dict()
 
@@ -31,12 +32,9 @@ REWRITE_SCHEMA = {
         "rewritten_query": {"type": "string"},
         "business_type": {
             "type": "string",
-            "enum": ["regulation", "development", "ingredient", "product", "general", "short"]
+            "enum": ["regulation", "development", "ingredient", "product", "general", "short"],
         },
-        "intent": {
-            "type": "string",
-            "enum": ["compliance", "formulation", "ingredient", "product", "general"]
-        },
+        "intent": {"type": "string", "enum": ["compliance", "formulation", "ingredient", "product", "general"]},
         "requires_context": {"type": "boolean"},
         "standardized_entities": {"type": "array", "items": {"type": "string"}},
     },
@@ -106,6 +104,7 @@ class QueryRewriter:
     def router(self):
         if self._router is None:
             from router.stateless_router import StatelessRouter
+
             self._router = StatelessRouter()
         return self._router
 
@@ -121,6 +120,7 @@ class QueryRewriter:
 
         try:
             from rewrite.feedback import RewriteFeedback
+
             feedback = RewriteFeedback()
             active_version = feedback.get_active_prompt_version()
             if active_version and active_version.get("prompt_text"):
@@ -156,7 +156,7 @@ class QueryRewriter:
         # 构造对话历史
         dialog_text = ""
         if recent_dialogs:
-            for i, d in enumerate(recent_dialogs[-self.dialog_rounds:], 1):
+            for i, d in enumerate(recent_dialogs[-self.dialog_rounds :], 1):
                 dialog_text += f"第{i}轮: {d}\n"
 
         # 构造 prompt（使用活跃的 Prompt 版本）
@@ -201,7 +201,7 @@ class QueryRewriter:
             response = self._call_llm(variant_prompt, temperature=0.7)
             variants = [line.strip() for line in response.strip().split("\n") if line.strip()]
             # 去掉可能的编号前缀
-            variants = [re.sub(r'^\d+[\.\)、]\s*', '', v) for v in variants]
+            variants = [re.sub(r"^\d+[\.\)、]\s*", "", v) for v in variants]
             variants = [v for v in variants if v and v != rewritten_query]
             return variants[:3]
         except Exception as e:
@@ -229,9 +229,10 @@ class QueryRewriter:
     def _parse_response(self, text: str, original_query: str) -> QueryRewriteResult | None:
         """解析 vLLM 输出为 QueryRewriteResult"""
         from core.pipeline_context import QueryRewriteResult
+
         try:
             # 尝试从文本中提取 JSON
-            json_match = re.search(r'\{.*\}', text, re.DOTALL)
+            json_match = re.search(r"\{.*\}", text, re.DOTALL)
             if not json_match:
                 return None
             data = json.loads(json_match.group())
@@ -273,10 +274,13 @@ class QueryRewriter:
             biz_type = "product"
             intent = "product"
 
-        return json.dumps({
-            "rewritten_query": query,
-            "business_type": biz_type,
-            "intent": intent,
-            "requires_context": True,
-            "standardized_entities": [],
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "rewritten_query": query,
+                "business_type": biz_type,
+                "intent": intent,
+                "requires_context": True,
+                "standardized_entities": [],
+            },
+            ensure_ascii=False,
+        )

@@ -18,11 +18,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 
 from common.models import RecallResult
 from retrieval_service.rerank.rrf_fusion import rrf_fusion
-
 
 # ── Helper factories ──
 
@@ -219,6 +217,41 @@ class TestDeduplication:
         assert len(result) == 1
         expected_score = 3.0 / 61
         assert math.isclose(result[0].score, expected_score, rel_tol=1e-6)
+
+    def test_chunks_of_one_source_count_once_per_path_and_distinct_evidence_is_kept(self):
+        dense_chunk = RecallResult(
+            doc_id="source_doc",
+            content="dense passage",
+            score=0.9,
+            source="dense_bge",
+            metadata={"chunk_id": "chunk-1"},
+        )
+        another_chunk_same_path = RecallResult(
+            doc_id="source_doc",
+            content="extra dense passage",
+            score=0.8,
+            source="dense_bge",
+            metadata={"chunk_id": "chunk-2"},
+        )
+        bm25_chunk = RecallResult(
+            doc_id="source_doc",
+            content="keyword passage",
+            score=0.7,
+            source="bm25_es",
+            metadata={"chunk_id": "chunk-3"},
+        )
+
+        fused = rrf_fusion(
+            {
+                "dense_bge": [dense_chunk, another_chunk_same_path],
+                "bm25_es": [bm25_chunk],
+            }
+        )
+
+        assert len(fused) == 1
+        assert math.isclose(fused[0].score, 2 / 61, rel_tol=1e-6)
+        assert fused[0].content == "dense passage\n\nkeyword passage"
+        assert [chunk["chunk_id"] for chunk in fused[0].metadata["retrieved_chunks"]] == ["chunk-1", "chunk-3"]
 
     def test_preserves_first_seen_source(self):
         """重复文档保留第一次出现的 source 信息"""

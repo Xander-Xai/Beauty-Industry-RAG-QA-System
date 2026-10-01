@@ -16,7 +16,7 @@
 cp .env.example .env
 ```
 
-应用现在会自动加载项目根目录下的 `.env`，所以直接执行 `python3 app.py` 或 `python3 run_offline.py` 即可读取这份配置。
+`common/config.py` 负责读取应用配置。按 `.env.example` 准备环境；运行单体应用使用 `python3 app.py`。离线知识库由 `run_offline.py` 子命令构建（`create-index` / `ingest` / `incremental-build` / `full-rebuild` / `seal-epoch`），操作细节见 [数据管理手册](data-admin-guide.md)。
 
 生产环境至少明确设置：
 
@@ -25,6 +25,7 @@ cp .env.example .env
 - `CORS_ORIGINS=https://your-frontend.example.com`
 - `JWT_PRIVATE_KEY_PATH`
 - `JWT_PUBLIC_KEY_PATH`
+- `JWT_ALGORITHM=RS256`
 - `REDIS_PASSWORD`
 - `MINIO_ACCESS_KEY`
 - `MINIO_SECRET_KEY`
@@ -34,6 +35,7 @@ cp .env.example .env
 
 - `common/config.py` 会优先读取 `.env` / 进程环境中的 `DEPLOYMENT_MODE` 和 `AUTH_DEV_MODE`。
 - 如果生产环境仍保留 `AUTH_DEV_MODE=true`，任意客户端都可伪造 `X-User-*` 头部，不符合真实上线要求。
+- 认证算法边界：浏览器登录由 `POST /api/auth/login` 签发 RS256 access/refresh token，`common/auth.parse_identity` 以 RS256 验签为主。RS256 验签不依赖 legacy `JWT_SECRET`；`JWT_SECRET`（HS256）仅为可选向后兼容回退，只有需要继续接受旧 HS256 token 时才设置。生产环境只需 `JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM`。
 
 ### 2.2 前端构建
 
@@ -74,18 +76,23 @@ docker compose up -d
 - `http://localhost:8000/api/auth/metadata`
 - `http://localhost:8000/`
 
-## 4. 知识库初始化现状
+## 4. 离线知识库部署要求
 
-当前仓库 `offline/` 包已包含完整离线管线实现（文档处理、图像 OCR、向量化、调度），`run_offline.py` 可直接执行增量更新/全量重建/创建索引等操作。
+离线管线代码位于 `offline/`，入口为 `run_offline.py`。部署时需要区分：
 
-首次部署时，根据数据集情况选择：
+- **默认应用部署**：`python3 app.py` 或 `docker compose up -d`，提供在线问答；不包含 Airflow，
+  也不自动运行离线构建。
+- **离线 ingestion 依赖**：PDF/DOCX/XLSX 解析库已包含在 `requirements.txt`
+  （PyMuPDF / python-docx / openpyxl / pandas）。
+- **可选 OCR 运行时**：处理扫描件或图片时安装 `offline/requirements-ocr.txt`
+  （PaddleOCR / PaddlePaddle）。默认不安装，CI 不依赖它。
+- **可选 Airflow 部署**：`dags/knowledge_base_dags.py` 仅在 Airflow 已安装且离线模块可发现时
+  注册 DAG。默认 `docker compose` 不启动 Airflow；DAG 代码存在不等于调度器在运行。
+- **外部模型资产**：真实 BGE/CLIP 权重需由操作者按 `config.json` 准备；仓库不随附，也不在
+  import 阶段下载。缺少资产时真实模型 smoke 状态为 `EXTERNAL_MODEL_ASSET_REQUIRED`。
 
-1. **使用外部已有数据**：确认 `config.json` 中 Qdrant/ES 集合名与现网一致，直接启动在线服务。
-2. **使用本仓库离线管线**：先下载模型权重至 `models/` 目录（PaddleOCR、CLIP-ViT、BGE base zh v1.5 等），然后执行：
-   ```bash
-   python3 run_offline.py --mode create-index   # 创建 Qdrant Collection + ES 索引
-   python3 run_offline.py --mode incremental    # 导入 data/ 目录文档
-   ```
+离线构建、校验与封存命令见 [数据管理手册](data-admin-guide.md)。构建出的 epoch 需要操作者
+手动切换 `config.json` 的 `knowledge_version_epoch` 才会对在线检索生效。
 
 ## 5. 当前已对齐的前后端能力
 

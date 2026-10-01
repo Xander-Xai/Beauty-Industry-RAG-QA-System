@@ -1,5 +1,80 @@
 # Changelog
 
+## [Unreleased]
+
+Changes present on `main` after the 2.3.0 release entry:
+
+### Added
+
+- Full offline ingestion pipeline under `offline/` (reintroduced after the 2.3.0
+  capability correction below):
+  - Multi-format `DocumentProcessor` for TXT/PDF/DOCX/XLSX with scanned-page OCR routing.
+  - Deterministic structured chunking with stable logical `doc_id`/`chunk_id`/`image_id`.
+  - OCR/image pipeline with pluggable `OCRProvider`/`ImageEmbedder` and a deterministic
+    visual-weight rule.
+  - CLIP image embedding adapter (512d) sharing the online preprocessing contract.
+  - Epoch-aware Qdrant image writer; legacy image points remain retrievable in `default`.
+  - Elasticsearch `cosmetics_docs` writer with explicit mapping.
+  - SQLite incremental source state (content-hash authoritative).
+  - Snapshot carry-forward, full rebuild, snapshot validator, and validate-then-seal CLI.
+  - Lifecycle CLI: `create-index`, `ingest`, `incremental-build`, `full-rebuild`, `seal-epoch`
+    (legacy `ingest-text` preserved).
+  - Framework-independent scheduler and config-driven Airflow DAG definitions.
+  - Unified, review-gated feedback pipeline.
+  - Cross-platform file lock adapter (POSIX `fcntl` / Windows `msvcrt`).
+  - Real BGE smoke harness (`scripts/smoke_bge_ingestion.py`, `@pytest.mark.model_smoke`).
+- QLoRA fine-tuning utility, sample data, and separate fine-tuning dependencies.
+- PEFT `AdapterManager` and integration with `LLMClient`.
+- Weighted Reciprocal Rank Fusion (RRF) in multi-path retrieval.
+- Dedicated configurable BiEncoder reranker support.
+- RAGAS evaluation harness, golden-set data, and CLI entrypoint.
+- Prefix-cache hit/miss metrics and Locust report improvements.
+
+### Fixed
+
+- Source state is committed only after the whole snapshot (validate + optional seal) succeeds, so a
+  failed multi-source build cannot mark sources as processed.
+- Incremental change detection now also compares resolved permission masks, so a permission change
+  reprocesses the document even when the file bytes are unchanged.
+- Re-ingesting a document that no longer has images now removes its stale image points.
+- Snapshot validation treats unexpected document IDs as errors, so a full snapshot cannot be sealed
+  with documents outside the current source set.
+- BM25 results expose the source-level `doc_id` (and `chunk_id`) so they merge with Qdrant results
+  in RRF instead of using the ES `_id`.
+- Elasticsearch epoch reads use `search_after` pagination past the 10,000-document window.
+- Elasticsearch epoch pagination now sorts `search_after` reads on the unique keyword
+  `chunk_id` rather than `_id`, because Elasticsearch 8 disables sorting/fielddata on
+  `_id` by default. The earlier pagination path existed but could not run against the
+  real service until this sort field was corrected.
+- The Elasticsearch test fake now rejects `_id` sorting so this real-service
+  incompatibility is covered by regression tests.
+- Airflow `DEFAULT_ARGS` uses valid `BaseOperator` timeout keys and task callables return
+  JSON-serializable dictionaries.
+- Image retrieval (sync and async CLIP) now respects the active `knowledge_version_epoch`
+  exactly like text retrieval; legacy missing-epoch points no longer leak into a non-default epoch.
+- `seal-epoch` now runs the canonical snapshot validator (Qdrant text/image + Elasticsearch)
+  before sealing.
+- `create-index --recreate --yes` now recreates Qdrant text/image collections and the ES index
+  consistently with its help text.
+- `elasticsearch` client pinned below 9.x to match the 8.x deployment server.
+- AdapterManager and RAGAS test coverage and mock isolation issues.
+- BiEncoder test coverage and configuration.
+
+### Correction — historical offline capability claim (superseded)
+
+The 2.3.0 entry below says `offline/document_processor.py` was added. At the repository
+reconciliation point, that file and the related ingestion modules were absent, and
+`git log --all` contained no implementation history for them; the `offline/` directory
+contained only QLoRA utility assets. That correction was accurate for its point in time.
+
+The full offline pipeline has since been implemented in code (see the Added section above).
+The historical 2.3.0 entry is retained unchanged as release history; the new implementation
+does not retroactively make the original 2.3.0 claim true.
+
+### Version policy
+
+`config.json` → `system.version` is the canonical runtime version and must match the latest dated release heading below. `Unreleased` records changes without assigning a new version. A changelog version does not imply a GitHub Release or tag; no GitHub Release existed at the reconciliation base.
+
 ## [2.3.0] - 2026-06-06
 
 ### Fixed — 矛盾统一 + Bug 修复 + GAP 补全 (16 项)

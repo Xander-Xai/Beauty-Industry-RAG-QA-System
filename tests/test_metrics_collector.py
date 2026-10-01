@@ -1,4 +1,5 @@
 """MetricsCollector 测试 — 计数器、仪表盘、直方图、请求记录。"""
+
 import os
 import sys
 import types
@@ -24,6 +25,7 @@ class TestMetricsCollector:
 
     def _make_collector(self):
         from monitoring.otel_tracer import MetricsCollector
+
         return MetricsCollector()
 
     def test_increment_counter(self):
@@ -66,6 +68,7 @@ class TestMetricsCollector:
             QueryRewriteResult,
             RequestContext,
         )
+
         ctx = RequestContext(
             user_input="测试查询",
             session_id="test",
@@ -74,11 +77,15 @@ class TestMetricsCollector:
         ctx.rewrite_result = QueryRewriteResult(
             rewritten_query="测试查询",
             requires_context=True,
-            business_type="development", intent="ingredient",
+            business_type="development",
+            intent="ingredient",
         )
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_score=0.9,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_score=0.9,
             decision="pass",
         )
         ctx.cache_hit_level = "L1"

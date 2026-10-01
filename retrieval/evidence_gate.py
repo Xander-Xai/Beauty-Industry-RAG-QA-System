@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 
 from common.config import get_config_dict
+from common.models import EvidenceGateResult
 
 config = get_config_dict()
 
@@ -47,6 +48,7 @@ class EvidenceEnsembleGate:
         """复用 AnswerGate 的 NLI 模型实例"""
         if self._answer_gate is None:
             from retrieval.answer_gate import AnswerGate
+
             self._answer_gate = AnswerGate()
         return self._answer_gate
 
@@ -124,10 +126,10 @@ class EvidenceEnsembleGate:
 
         # 综合 Evidence Score
         evidence_score = (
-            w.get("w1", 0) * ce_top1_score +
-            w.get("w2", 0) * ce_top3_mean_score +
-            w.get("w3", 0) * retrieval_agreement_score +
-            w.get("w4", 0) * doc_consistency_score
+            w.get("w1", 0) * ce_top1_score
+            + w.get("w2", 0) * ce_top3_mean_score
+            + w.get("w3", 0) * retrieval_agreement_score
+            + w.get("w4", 0) * doc_consistency_score
         )
 
         # 决策
@@ -184,10 +186,7 @@ class EvidenceEnsembleGate:
                 batch_results = self.answer_gate._batch_nli_inference(
                     [(p[0], p[1]) for p in pairs],
                 )
-                contradiction_count = sum(
-                    1 for (contradiction, _entailment) in batch_results
-                    if contradiction > 0.5
-                )
+                contradiction_count = sum(1 for (contradiction, _entailment) in batch_results if contradiction > 0.5)
             except (AttributeError, Exception):
                 # 降级为逐条推理
                 contradiction_count = 0

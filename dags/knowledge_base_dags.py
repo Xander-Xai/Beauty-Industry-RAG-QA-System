@@ -1,17 +1,10 @@
-"""
-Apache Airflow DAG — 离线知识库构建调度（PRD §3.7）
+"""Airflow DAG definitions for the offline ingestion pipeline.
 
-调度策略：
-- 每周日 02:00 执行增量更新（weekly_incremental）
-- 每月 1 日 03:00 执行全量重建（monthly_full_rebuild）
-- 每次构建完成后自动版本滚动 + 过期文档归档
-
-使用方式：
-1. 将本文件放入 Airflow DAGs 目录（或通过 airflow.cfg 指定 dags_folder）
-2. 确保 AIRFLOW_HOME 环境变量指向 airflow 安装目录
-3. airflow scheduler 自动按 cron 调度
-
-如未安装 Airflow，可通过 run_offline.py 手动执行等效操作。
+Scheduling cadence is read from ``config.json`` (``offline.scheduler``) rather
+than hardcoded. Airflow is optional: when it is not installed, or the offline
+modules are unavailable, no DAG is registered and importing this module still
+succeeds. The scheduler builds, validates and optionally seals epochs; it never
+switches the active ``knowledge_version_epoch`` automatically.
 """
 
 from __future__ import annotations
@@ -19,171 +12,141 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import timedelta
+from importlib.util import find_spec
 
-# ── Airflow 导入（不可用时跳过，仅供人工参考） ──────────────────────
-try:
-    from airflow import DAG
-    from airflow.operators.bash import BashOperator
-    from airflow.operators.python import PythonOperator
-    from airflow.utils.dates import days_ago
-    AIRFLOW_AVAILABLE = True
-except ImportError:
-    AIRFLOW_AVAILABLE = False
-
-# ── 项目根目录 ─────────────────────────────────────────────────────────
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-# ── 默认参数 ───────────────────────────────────────────────────────────
+try:
+    from airflow import DAG
+    from airflow.operators.python import PythonOperator
+    from airflow.utils.dates import days_ago
+
+    AIRFLOW_AVAILABLE = True
+except ImportError:
+    AIRFLOW_AVAILABLE = False
+
+
+def _ingestion_modules_available() -> bool:
+    """Return whether all offline ingestion modules can be discovered."""
+    try:
+        if find_spec("offline") is None:
+            return False
+        return all(
+            find_spec(module) is not None
+            for module in (
+                "offline.document_processor",
+                "offline.image_processor",
+                "offline.vectorizer",
+                "offline.scheduler",
+                "offline.feedback_loop",
+            )
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "offline" or (exc.name and exc.name.startswith("offline.")):
+            return False
+        raise
+
+
+INGESTION_AVAILABLE = _ingestion_modules_available()
+
+
+def _scheduler_config():
+    from common.config import get_config_dict
+    from offline.scheduler import load_scheduler_config
+
+    return load_scheduler_config(get_config_dict())
+
+
 DEFAULT_ARGS = {
     "owner": "rag-admin",
     "depends_on_past": False,
     "email_on_failure": True,
     "email_on_retry": False,
     "retries": 1,
-    "retry_delay_minutes": 30,
-    "execution_timeout_minutes": 120,
+    "retry_delay": timedelta(minutes=30),
+    "execution_timeout": timedelta(minutes=120),
 }
 
 
-# ── 任务函数 ───────────────────────────────────────────────────────────
 def _task_incremental_update():
-    """每周增量更新"""
     from offline.scheduler import OfflineScheduler
-    scheduler = OfflineScheduler()
-    result = scheduler.run_incremental_update()
-    print(f"增量更新完成: {json.dumps(result, ensure_ascii=False)}")
+
+    # XCom/serialization-safe dict result; see OfflineScheduler.run_incremental_update.
+    result = OfflineScheduler().run_incremental_update()
+    print(f"incremental cycle complete: {json.dumps(result, ensure_ascii=False)}")
     return result
 
 
 def _task_full_rebuild():
-    """每月全量重建"""
     from offline.scheduler import OfflineScheduler
-    scheduler = OfflineScheduler()
-    result = scheduler.run_full_rebuild()
-    print(f"全量重建完成: {json.dumps(result, ensure_ascii=False)}")
+
+    result = OfflineScheduler().run_full_rebuild()
+    print(f"full rebuild complete: {json.dumps(result, ensure_ascii=False)}")
     return result
-
-
-def _task_bump_version_epoch():
-    """版本滚动"""
-    from offline.scheduler import OfflineScheduler
-    scheduler = OfflineScheduler()
-    new_epoch = scheduler.bump_version_epoch()
-    print(f"版本滚动完成: {new_epoch}")
-    return new_epoch
-
-
-def _task_archive_expired(current_epoch: str = None):
-    """过期文档归档"""
-    from common.config import get_config_dict
-    from offline.scheduler import OfflineScheduler
-
-    # 从 config.json 读取当前 epoch
-    cfg = get_config_dict()
-    epoch = current_epoch or cfg.get("knowledge_version_epoch", "")
-
-    scheduler = OfflineScheduler()
-    scheduler.archive_expired_documents(epoch)
-    print(f"过期文档归档完成: epoch={epoch}")
 
 
 def _task_feedback_loop():
-    """离线反馈闭环 — 参数更新"""
+    from common.config import get_config_dict
     from offline.feedback_loop import FeedbackLoop
-    loop = FeedbackLoop()
+
+    config = get_config_dict()
+    feedback_config = config.get("offline", {}).get("feedback", {})
+    store_path = feedback_config.get("store_path", "data/feedback/feedback.sqlite3")
+    loop = FeedbackLoop(store_path, output_dir=feedback_config.get("output_dir", "./data/feedback"))
     result = loop.run_full_feedback_cycle()
-    print(f"反馈闭环完成: {json.dumps(result, ensure_ascii=False)}")
+    print(f"feedback cycle complete: {json.dumps(result, ensure_ascii=False)}")
     return result
 
 
-# ── 如果 Airflow 不可用，生成参考配置 ─────────────────────────────────
-if not AIRFLOW_AVAILABLE:
-    # 打印 cron 调度信息供人工参考
-    print("=" * 70)
-    print("Apache Airflow 未安装，以下为调度参考配置：")
-    print("=" * 70)
-    print()
-    print("每周增量更新 (每周日 02:00):")
-    print("  cron: 0 2 * * 0")
-    print("  命令: python run_offline.py --mode incremental")
-    print("  然后: python -c 'from offline.scheduler import OfflineScheduler; ...'")
-    print()
-    print("每月全量重建 (每月 1 日 03:00):")
-    print("  cron: 0 3 1 * *")
-    print("  命令: python run_offline.py --mode full")
-    print()
-    print("每周反馈闭环 (每周一 04:00):")
-    print("  cron: 0 4 * * 1")
-    print("  命令: python -c 'from offline.feedback_loop import FeedbackLoop; ...'")
-    print()
-    print("安装 Airflow: pip install apache-airflow>=2.8.0")
-    print("然后将本文件放入 DAGs 目录即可自动调度。")
-    print("=" * 70)
+if not AIRFLOW_AVAILABLE or not INGESTION_AVAILABLE:
+    print("Offline ingestion modules or Airflow are not available; no active Airflow DAGs are registered.")
 
 
-# ── DAG 定义（仅在 Airflow 可用时生效） ────────────────────────────────
-if AIRFLOW_AVAILABLE:
+if AIRFLOW_AVAILABLE and INGESTION_AVAILABLE:
+    _scheduler = _scheduler_config()
 
-    # DAG 1: 每周增量更新
-    weekly_incremental_dag = DAG(
-        dag_id="weekly_knowledge_incremental",
-        default_args=DEFAULT_ARGS,
-        description="每周增量更新：扫描新文档 → 向量化 → 版本滚动 → 归档过期",
-        schedule_interval="0 2 * * 0",  # 每周日 02:00
-        start_date=days_ago(1),
-        catchup=False,
-        tags=["knowledge-base", "weekly"],
-    )
-
-    with weekly_incremental_dag:
-        t_incremental = PythonOperator(
-            task_id="incremental_update",
-            python_callable=_task_incremental_update,
+    if _scheduler.incremental_enabled:
+        weekly_incremental_dag = DAG(
+            dag_id="weekly_knowledge_incremental",
+            default_args=DEFAULT_ARGS,
+            description="Weekly incremental build: discover → carry forward → process → validate → optional seal",
+            schedule_interval=_scheduler.incremental_cron,
+            start_date=days_ago(1),
+            catchup=False,
+            tags=["knowledge-base", "weekly"],
         )
-        t_bump_epoch = PythonOperator(
-            task_id="bump_version_epoch",
-            python_callable=_task_bump_version_epoch,
-        )
-        t_archive = PythonOperator(
-            task_id="archive_expired",
-            python_callable=_task_archive_expired,
-        )
-        t_incremental >> t_bump_epoch >> t_archive
 
-    # DAG 2: 每月全量重建
-    monthly_full_dag = DAG(
-        dag_id="monthly_knowledge_full_rebuild",
-        default_args=DEFAULT_ARGS,
-        description="每月全量重建：清空 Collection → 全量处理 → 版本滚动 → 归档",
-        schedule_interval="0 3 1 * *",  # 每月 1 日 03:00
-        start_date=days_ago(1),
-        catchup=False,
-        tags=["knowledge-base", "monthly"],
-    )
+        with weekly_incremental_dag:
+            t_incremental = PythonOperator(
+                task_id="incremental_update",
+                python_callable=_task_incremental_update,
+            )
 
-    with monthly_full_dag:
-        t_full_rebuild = PythonOperator(
-            task_id="full_rebuild",
-            python_callable=_task_full_rebuild,
+    if _scheduler.full_rebuild_enabled:
+        monthly_full_dag = DAG(
+            dag_id="monthly_knowledge_full_rebuild",
+            default_args=DEFAULT_ARGS,
+            description="Monthly full rebuild into a new epoch (manual activation)",
+            schedule_interval=_scheduler.full_rebuild_cron,
+            start_date=days_ago(1),
+            catchup=False,
+            tags=["knowledge-base", "monthly"],
         )
-        t_bump_epoch_m = PythonOperator(
-            task_id="bump_version_epoch",
-            python_callable=_task_bump_version_epoch,
-        )
-        t_archive_m = PythonOperator(
-            task_id="archive_expired",
-            python_callable=_task_archive_expired,
-        )
-        t_full_rebuild >> t_bump_epoch_m >> t_archive_m
 
-    # DAG 3: 每周反馈闭环
+        with monthly_full_dag:
+            t_full_rebuild = PythonOperator(
+                task_id="full_rebuild",
+                python_callable=_task_full_rebuild,
+            )
+
     feedback_dag = DAG(
         dag_id="weekly_feedback_loop",
         default_args=DEFAULT_ARGS,
-        description="每周反馈闭环：日志采样 → 参数更新（RRF/Evidence Gate）",
-        schedule_interval="0 4 * * 1",  # 每周一 04:00
+        description="Weekly feedback collection and review-gated dataset export",
+        schedule_interval="0 4 * * 1",
         start_date=days_ago(1),
         catchup=False,
         tags=["feedback", "weekly"],

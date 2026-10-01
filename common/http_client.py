@@ -68,10 +68,7 @@ class ServiceRegistry:
         """Return the base URL for *service_name*."""
         url = self._urls.get(service_name)
         if url is None:
-            raise ValueError(
-                f"Unknown service '{service_name}'. "
-                f"Known: {list(self._urls.keys())}"
-            )
+            raise ValueError(f"Unknown service '{service_name}'. Known: {list(self._urls.keys())}")
         return url.rstrip("/")
 
     def register(self, service_name: str, base_url: str) -> None:
@@ -178,8 +175,12 @@ class ServiceClient:
                     retry_after = float(response.headers.get("Retry-After", "1"))
                     logger.warning(
                         "[%s] %s %s -> %d (attempt %d/%d), retrying in %.1fs",
-                        service_name, method, path,
-                        response.status_code, attempt, self._max_retries,
+                        service_name,
+                        method,
+                        path,
+                        response.status_code,
+                        attempt,
+                        self._max_retries,
                         retry_after,
                     )
                     await asyncio.sleep(min(retry_after, self._retry_max_delay))
@@ -195,8 +196,12 @@ class ServiceClient:
                 )
                 logger.warning(
                     "[%s] %s %s -> %s (attempt %d/%d), retrying in %.1fs",
-                    service_name, method, path,
-                    exc.__class__.__name__, attempt, self._max_retries,
+                    service_name,
+                    method,
+                    path,
+                    exc.__class__.__name__,
+                    attempt,
+                    self._max_retries,
                     delay,
                 )
                 await asyncio.sleep(delay)

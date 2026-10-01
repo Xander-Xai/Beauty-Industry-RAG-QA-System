@@ -1,3 +1,25 @@
+# Document Type: Product / Architecture Design
+
+**Implementation Status:** mixed — this document records goals and design proposals as well as capabilities whose code has since been added. A PRD statement is not evidence of implementation.
+
+**Canonical Runtime Status:** [README.md](README.md) + [docs/repository-truth-audit.md](docs/repository-truth-audit.md).
+
+| Topic | Current classification | Evidence / boundary |
+|---|---|---|
+| Offline ingestion and OCR | Implemented (external validation pending) | `offline/` implements TXT/PDF/DOCX/XLSX parsing, OCR/image pipeline, BGE/CLIP adapters, Qdrant text/image and Elasticsearch writers, incremental/carry-forward/full-rebuild, validator, epoch seal, scheduler and feedback; real model/OCR smoke is pending external assets (see audit) |
+| Airflow ingestion | Implemented in code; runtime optional | Config-driven DAGs register only when Airflow and offline modules are available; no real Airflow execution is verified and default Compose does not run Airflow |
+| RRF | Implemented in code | Fusion implementation exists; production relevance/quality is not implied |
+| BiEncoder | Partial | Reranker and pipeline integration exist; model assets and evaluation are separate |
+| RAGAS | Partial | Harness source and data exist; package is excluded from default dependencies pending an upstream security fix; no quality threshold is certified |
+| QLoRA | Partial | Training utility and example data exist; trained output and reproducible result are not included |
+| AdapterManager | Partial | PEFT lifecycle code integrates with `LLMClient`; actual loading requires configuration, dependencies and adapter assets |
+| RBAC | Partial | Runtime auth/RBAC code exists and enforces a uint32 mask contract with fail-closed handling of missing/malformed metadata; deployment policy and end-to-end access still require verification |
+| Cache | Partial | Cache implementations and metrics exist; the complete PRD invalidation design is not certified |
+| KV admission | Partial | Admission control code exists; capacity behavior requires workload-specific measurement |
+| Performance metrics | Design targets | Numerical latency/QPS claims below have no benchmark artifact and are not verified production results |
+
+All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Historical implementation plans under `docs/superpowers/` are not current implementation evidence.
+
 化妆品企业级多模态 RAG 智能问答系统（双卡版）
 1. 项目背景
 面向中小型化妆品企业（研发/品质/法规/销售），构建统一知识问答系统，解决成分/法规/配方知识分散、法规体系复杂（8大体系）、非结构化数据占比高、传统知识库不支持多轮与跨模态查询等问题。
@@ -19,44 +41,55 @@ NLI / Gate（GPU Batch）	10–25ms
 LLM Decode（含 Prefill）	900–2000ms
 合计（全链路 RAG）	1.1s – 2.3s
 P99 波动（长尾 Decode）	2.5s – 3.2s
-修正说明：CrossEncoder 与 NLI 已由 CPU 串行迁移至 GPU 批处理，延迟从 150–250ms + 20–50ms 降低至 30–60ms + 10–25ms，且支持跨请求 batch 聚合，QPS 得到根本性提升。
+设计说明（未实测）：目标架构拟将 CrossEncoder 与 NLI 从 CPU 串行处理调整为 GPU 批处理，并支持跨请求 batch 聚合。此处延迟区间和吞吐改善均为未验证目标；仓库没有可复现 benchmark artifact，不能据此声称生产性能提升。
 2.2 吞吐模型（Capacity Model）
 系统性能由以下核心关系约束：
 QPS ≈ 有效并发 / 平均延迟
 有效并发 = KV_Budget / E[KV_per_active_sequence(t)] × safety_factor
 ● KV_Budget：GPU0 为 14B 模型预留的 KV Cache 总量（≤8GB）× 安全系数 0.7。
 ● E[KV_per_active_sequence]：基于请求序列长度分布（长尾分布）计算的 KV 成本期望值，非固定均值常数。
-● QPS 推导：以 Avg latency=1.6s、有效并发=25 计，QPS≈15.6，波动区间 12–18。
-注：QPS 为推导值而非固定配置，实际承载能力随 workload mix、序列长度分布、KV 动态占用而变化。轻量 rewrite 场景可承载 25–60 QPS。
+● QPS 模型示例：若假设 Avg latency=1.6s、有效并发=25，则数学推导 QPS≈15.6；这是未经 workload benchmark 验证的估算，不是生产结果。
+注：QPS 为推导值而非固定配置，实际承载能力随 workload mix、序列长度分布、KV 动态占用而变化。轻量 rewrite 的 25–60 QPS 也是设计估值，未经可复现实测。
 3. 离线知识库构建
 3.1 数据范围
 500+ 文档（PDF/Word/Excel）、包装图片/扫描件，覆盖 2000+ 成分、3000+ 配方（原料研发配方种类）、1500+ 产品（实际制造产品）、8 大法规体系。
 3.2 文档处理
-● 文本清洗去噪 → 结构化（JSON Lines）→ 语义切块（≈500 tokens，重叠 10%）。
+**实现状态：** 当前实现按**字符**切块（默认 500 字符、10% 重叠），不是 tokenizer 切块；设计中的
+JSON Lines 中间产物未采用，解析结果以有序 block（含 page/heading/paragraph/table/row_window
+元数据）直接进入 chunker。
+● 文本清洗去噪 → 有序结构化 block → 字符切块（≈500 字符，重叠 10%）。
 ● 向量化：bge-base-zh-v1.5 生成 768 维向量。
-● 元数据记录：doc_type, law_id, ingredient_id 等。
-● 权限字段注入（Bitmask）：离线计算 role_mask 和 dept_mask。
+● 元数据记录：doc_type、page_number、heading_level、sheet_name、row_start/row_end 等。
+● 权限字段注入（Bitmask）：离线按 `permission_rules` 计算 role_mask 和 dept_mask。
 3.3 图像处理
+**实现状态：** OCR provider 与 CLIP 图像 encoder 已实现并解耦（可注入）；PaddleOCR 为可选外部
+运行时，默认不安装。视觉权重规则已实现且确定性可测。**注意：** 当前 OCR 文本通过文本 writer
+写入，`embedding_type` 记录为 `"bge"`，尚未单独标记为设计中的 `"image_ocr"` 类型。
 ● 图像增强（二值化、去噪、倾斜校正）→ PaddleOCR 中文模型输出带坐标/字号/置信度的文本块。
-● 视觉权重注入：对核心区域（居中、大字号）文本按权重重复（如 3 次），拼接为 ocr_main_text 用于向量化；保留完整 ocr_full_text 用于溯源。
-● BGE 向量化 ocr_main_text，embedding_type = "image_ocr"。
+● 视觉权重注入：对核心区域（居中、大字号、高置信度）文本按权重重复（如 3 次），拼接为
+  ocr_main_text 用于向量化；保留完整 ocr_full_text 用于溯源。
+● BGE 向量化 OCR 文本（当前 embedding_type = "bge"）。
 ● CLIP-ViT-B/16 离线生成 512 维图像向量，embedding_type = "image_clip"。
 ● BLIP 不在离线阶段执行，仅在线按需触发。
 3.4 向量存储与权限标签（Bitmask）
 采用多 Collection 物理隔离解决维度差异：
 ● rag_text_768：存储文档切块与 OCR 文本向量（768d）。
 ● rag_image_512：存储图片 CLIP 向量（512d），含 image_uri。
-权限字段优化：使用 int32 位图替代数组，单条判断 O(1)，过滤复杂度 O(K)（K 为 ANN 候选数）。Qdrant 使用 Cosine 距离，nlist 自适应策略：nlist ≈ sqrt(N) 或 N/1000，与 nprobe 联动调优。
+权限字段优化：使用 uint32 位图替代数组，单条判断 O(1)，过滤复杂度 O(K)（K 为 ANN 候选数）。RBAC 掩码契约以 uint32 为准（`0` 表示公开/无限制；`0xFFFFFFFF` 为 super_admin 绕过；配置的 `admin` 掩码同样绕过）。Qdrant 使用 Cosine 距离；仓库当前未声明任何 IVF / ANN 调优参数，检索行为以实际 collection 与 writer 为准。
 3.5 Bitmask 编码规则与访问判定
-● 0x00000000：全公开文档，任何用户可访问。
-● 0xFFFFFFFF：超级管理员掩码，绕过所有检查。
-● 普通 RBAC：按位与运算匹配。
-统一访问判断规则（应用层）：
+● 掩码契约：所有 role_mask / dept_mask 均为 uint32（0 ≤ mask ≤ 0xFFFFFFFF）。
+● 0x00000000：公开/无限制；role 与 dept 同时为 0 时为全公开文档，任何用户可访问。
+● 配置的 admin 掩码与 super_admin_mask（0xFFFFFFFF）都绕过所有检查。
+● 普通 RBAC：role 位与 dept 位均需匹配（doc_dept_mask=0 表示不限制部门）。
+● 缺失、类型错误、负数或超过 uint32 的权限元数据必须 fail closed（拒绝），不得当作公开。
+统一访问判断规则（应用层，实现于 common/auth.py）：
 def is_allowed(doc_role_mask, user_role_mask, doc_dept_mask, user_dept_mask):
-    if doc_role_mask == 0:
-        return (doc_dept_mask == 0) or ((doc_dept_mask & user_dept_mask) != 0)
-    if user_role_mask == 0xFFFFFFFF:
+    if is_admin_role_mask(user_role_mask):  # 配置的 admin 或 super_admin_mask
         return True
+    if doc_role_mask == 0:
+        if doc_dept_mask == 0:
+            return True
+        return (doc_dept_mask & user_dept_mask) != 0
     role_ok = (doc_role_mask & user_role_mask) != 0
     dept_ok = (doc_dept_mask == 0) or ((doc_dept_mask & user_dept_mask) != 0)
     return role_ok and dept_ok
@@ -69,11 +102,14 @@ AND status == 'active'
 3.6 文档生命周期与版本化管理（核心修订）
 引入基于 doc_version_epoch 的版本化管控替代实时时间判断，消除因 expiry_date 变更引发的缓存全量失效问题：
 ● 元数据扩展：effective_epoch（生效版本）、expiry_epoch（过期版本）、status（active/archived）。
-● 版本滚动规则：由 Airflow 每日/每小时生成新的 active_epoch 增量值（如 20260411_01），或由发布系统触发 bump 版本号。
+● 实现状态：epoch 由 CLI/调度器构建并封存；**不会自动切换生产 active_epoch**。`knowledge_version_epoch` 的切换是明确的人工发布动作。设计中“Airflow 自动 bump”未实现。
 ● 检索过滤逻辑：所有检索（Qdrant/ES）均使用 doc_version_epoch == {active_epoch} 作为硬性约束，不再依赖 expiry_date > current_timestamp() 运行时判断。
-● 过期处理：Airflow 每日任务将 expiry_epoch < active_epoch 的文档标记为 archived，并更新状态；前端可开启“包含历史版本”开关，此时替换 active_epoch 为历史区间查询。
+● 设计目标：定时任务将 expiry_epoch < active_epoch 的文档标记为 archived，并更新状态；前端历史区间查询尚需按实际代码验证。
 3.7 离线调度
-Apache Airflow 每周增量更新，每月全量重建。根据 embedding_type 分流写入对应 Collection。
+实现状态：业务逻辑位于 `offline/scheduler.py`（cron/Airflow/CLI 共用），频率来自
+`config.json` 的 `offline.scheduler`。`dags/knowledge_base_dags.py` 在 Airflow 可用且离线模块
+可发现时注册增量/全量/反馈 DAG。默认 Compose 不启动 Airflow；真实 Airflow 执行未验证。调度器
+最多 build/validate/seal，不自动激活 epoch。
 4. 在线推理架构
 4.1 核心链路
 Query → 用户身份解析 → 二级缓存（L1/L2）
@@ -91,7 +127,7 @@ Query → 用户身份解析 → 二级缓存（L1/L2）
 ● 关键修正：Rewrite 定位为轻量预处理阶段，若 vLLM-Rewrite 实例繁忙（由 Admission Control 判断 KV 压力），则直接在应用层触发结构兜底（降级为规则解析），绝不进入阻塞式等待队列，避免破坏 vLLM 的批次合并效率。
 4.3 模型分级路由
 ● BERT 复杂度评估（0.3B，二分类）：简单问题 → vLLM-Gen-4B；复杂问题 → Qwen3-14B (4-bit NF4)。
-  注：QLoRA 领域微调训练脚本已跑通（rank=16, alpha=32），adapter 加载逻辑已实现，实际 adapter 权重需单独训练生成。
+  状态：仓库包含 QLoRA 训练脚本、样本数据和 PEFT AdapterManager 代码；本 PRD 不据此声称训练已验证。训练产物需单独生成，adapter 加载还依赖运行配置、依赖和模型资产。
 4.4 Query Rewrite（路由增强器，非核心强依赖）
 定位修正：Rewrite 作为“路由增强器”而非必经中心节点，主链路已具备独立检索与生成能力。
 ● 输入：原始 query + 最近 6 轮对话。
@@ -460,8 +496,8 @@ KV_Pressure = current_used_kv / max_kv_capacity
   ○ CrossEncoder Ensemble 与 Evidence Ensemble Gate 取代单点判决，引入检索一致性评分与多维度投票机制，将系统从“串行过滤链”升级为“并行证据系统”。
   ○ 实体识别召回能力通过离线评估集（Recall@K、F1）量化监控，保证召回稳定性可验证。
 12. 文档生命周期闭环与稀疏权限召回兜底，保障召回质量与合规性。
-13. 重模型推理 GPU 批处理化（关键架构修正）：
-  ○ 将 CrossEncoder、NLI、BiEncoder、CLIP Text Encoder、BLIP 从 CPU 串行迁移至 GPU1 统一批处理，引入 Rerank Batch Aggregator 实现微批聚合，单请求等效延迟由 200–400ms 降至 30–60ms，QPS 瓶颈彻底解除。
+13. 重模型推理 GPU 批处理化（设计目标，尚无可复现性能验证）：
+  ○ 目标是在 GPU1 批处理 CrossEncoder、NLI、BiEncoder、CLIP Text Encoder、BLIP，并用 Rerank Batch Aggregator 聚合微批。200–400ms、30–60ms 和 QPS 改善均为设计估值，不代表当前生产实测。
   ○ CPU 回归轻量逻辑层（routing/feature assembly/metadata filter/cache lookup），系统从“GPU 闲置 + CPU 爆炸”的反模式转变为“GPU 计算 + CPU 编排”的最佳实践。
   ○ 批处理参数（窗口时间、batch size）纳入离线反馈闭环，实现数据驱动的持续优化。
 14. 数据驱动闭环：所有关键策略（RRF 权重、Evidence Gate 阈值、Rewrite Prompt、Rerank Batch 参数）均通过日志采集、人工标注、离线评估与 A/B 实验进行迭代优化，系统从“规则完备”升级为“规则 + 统计反馈 + 可校准参数的检索学习系统”。

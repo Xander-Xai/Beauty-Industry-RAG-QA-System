@@ -39,6 +39,7 @@ from transformers import (
 try:
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from trl import SFTTrainer
+
     PEFT_AVAILABLE = True
 except ImportError:
     PEFT_AVAILABLE = False
@@ -98,7 +99,7 @@ def load_training_data(data_path: str, tokenizer) -> Dataset:
     每个 JSON 记录必须包含 instruction / input / output 三个字段。
     缺失字段时抛出清晰的 KeyError。
     """
-    with open(data_path, "r", encoding="utf-8") as f:
+    with open(data_path, encoding="utf-8") as f:
         raw_data = json.load(f)
 
     required_keys = {"instruction", "input", "output"}
@@ -107,8 +108,7 @@ def load_training_data(data_path: str, tokenizer) -> Dataset:
         missing = required_keys - set(example.keys())
         if missing:
             raise KeyError(
-                f"Record {idx} is missing required keys: {missing}. "
-                f"Each record needs: instruction, input, output"
+                f"Record {idx} is missing required keys: {missing}. Each record needs: instruction, input, output"
             )
 
         messages = [
@@ -116,9 +116,11 @@ def load_training_data(data_path: str, tokenizer) -> Dataset:
             {"role": "user", "content": example["input"]},
             {"role": "assistant", "content": example["output"]},
         ]
-        formatted.append({
-            "text": tokenizer.apply_chat_template(messages, tokenize=False),
-        })
+        formatted.append(
+            {
+                "text": tokenizer.apply_chat_template(messages, tokenize=False),
+            }
+        )
 
     dataset = Dataset.from_list(formatted)
     logger.info("Loaded %d training examples from %s", len(dataset), data_path)
@@ -161,15 +163,11 @@ def main():
     model_args, lora_args, data_args = parser.parse_args_into_dataclasses()
 
     if not PEFT_AVAILABLE:
-        logger.error(
-            "peft and trl are required. Install with:\n"
-            "  pip install -r offline/requirements-finetune.txt"
-        )
+        logger.error("peft and trl are required. Install with:\n  pip install -r offline/requirements-finetune.txt")
         sys.exit(1)
 
     # 1. 量化配置
-    logger.info("Creating %d-bit %s quantization config...",
-                model_args.quantization_bits, model_args.quant_type)
+    logger.info("Creating %d-bit %s quantization config...", model_args.quantization_bits, model_args.quant_type)
     bnb_config = create_bnb_config(model_args)
 
     # 2. 加载模型 (4-bit)
@@ -192,14 +190,15 @@ def main():
     # 打印可训练参数量
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
-    logger.info("Trainable params: %d / %d (%.2f%%)",
-                trainable_params, total_params,
-                100.0 * trainable_params / total_params)
+    logger.info(
+        "Trainable params: %d / %d (%.2f%%)", trainable_params, total_params, 100.0 * trainable_params / total_params
+    )
 
     # 4. Tokenizer
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_path, trust_remote_code=True,
+        model_args.model_path,
+        trust_remote_code=True,
     )
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"

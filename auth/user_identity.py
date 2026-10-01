@@ -26,9 +26,7 @@ JWT_EXPIRY_HOURS = config.get("auth", {}).get("jwt_expiry_hours", 24)
 _deploy_mode = config.get("deployment_mode", "development")
 if _deploy_mode == "production":
     if not JWT_SECRET or JWT_SECRET.startswith("dev-"):
-        raise RuntimeError(
-            "生产模式下必须设置强 JWT_SECRET 环境变量（不得以 'dev-' 开头）"
-        )
+        raise RuntimeError("生产模式下必须设置强 JWT_SECRET 环境变量（不得以 'dev-' 开头）")
     # H-2 修复: 生产模式下禁止 dev_mode
     if config.get("auth", {}).get("dev_mode", False):
         raise RuntimeError("生产模式下不允许 dev_mode=true")
@@ -119,6 +117,7 @@ class UserIdentity:
         # 优先尝试 RS256 验证（PRD §11 统一 JWT）
         try:
             from auth.jwt_auth import verify_token
+
             payload = verify_token(token, "access")
             if payload:
                 return self._extract_identity_from_payload(payload)
@@ -215,8 +214,8 @@ class UserIdentity:
             token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
             return token
 
-        except ImportError:
-            raise RuntimeError("PyJWT 未安装，无法生成 JWT Token")
+        except ImportError as _exc_ruf:
+            raise RuntimeError("PyJWT 未安装，无法生成 JWT Token") from _exc_ruf
 
     def _encode_roles(self, roles: list[str]) -> int:
         """角色列表编码为位掩码"""

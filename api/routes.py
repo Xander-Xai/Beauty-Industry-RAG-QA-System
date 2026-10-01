@@ -16,9 +16,8 @@ import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
-
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
 
 from api.models import (
     CacheHitRate,
@@ -33,8 +32,7 @@ from api.models import (
     QueryResponse,
     StatsResponse,
 )
-from common.auth import require_identity
-from common.auth import validate_doc_id
+from common.auth import is_document_authorized, require_identity, validate_doc_id
 from common.config import get_config_dict
 from common.models import UserIdentity
 from core.pipeline import OnlineRAGPipeline
@@ -68,6 +66,7 @@ def get_metrics():
     global _metrics
     if _metrics is None:
         from monitoring.otel_tracer import MetricsCollector
+
         _metrics = MetricsCollector()
     return _metrics
 
@@ -130,9 +129,7 @@ def query_handler(
     return QueryResponse(
         answer=ctx.final_response,
         session_id=ctx.session_id,
-        business_type=(
-            ctx.rewrite_result.business_type if ctx.rewrite_result else None
-        ),
+        business_type=(ctx.rewrite_result.business_type if ctx.rewrite_result else None),
         intent=ctx.rewrite_result.intent if ctx.rewrite_result else None,
         evidence_doc_ids=ctx.evidence_locked_doc_ids,
         latency_ms=round(ctx.get_total_latency_ms(), 2),
@@ -190,9 +187,7 @@ def chat_handler(
         answer=ctx.final_response,
         session_id=req.session_id,
         history=history,
-        business_type=(
-            ctx.rewrite_result.business_type if ctx.rewrite_result else None
-        ),
+        business_type=(ctx.rewrite_result.business_type if ctx.rewrite_result else None),
         intent=ctx.rewrite_result.intent if ctx.rewrite_result else None,
         evidence_doc_ids=ctx.evidence_locked_doc_ids or [],
         latency_ms=round(ctx.get_total_latency_ms(), 2),
@@ -216,7 +211,7 @@ def continuation_handler(
 
     完整续写逻辑需要微服务架构支持，此处返回空桩响应。
     """
-    session = SessionState.get_or_create(req.session_id)
+    SessionState.get_or_create(req.session_id)
     return {
         "answer": "",
         "has_more": False,
@@ -271,6 +266,7 @@ def health_handler():
     # Redis
     try:
         from cache.redis_cache import RedisCache
+
         rc = RedisCache()
         checks["redis"] = rc.enabled
     except Exception as e:
@@ -279,6 +275,7 @@ def health_handler():
     # Qdrant
     try:
         from common.config import get_config_dict
+
         _cfg = get_config_dict()
         _qc = QdrantClient(
             host=_cfg["qdrant"]["host"],
@@ -291,6 +288,7 @@ def health_handler():
     # Elasticsearch
     try:
         from elasticsearch import Elasticsearch
+
         es = Elasticsearch([_config["elasticsearch"]["host"]])
         checks["elasticsearch"] = es.ping()
     except Exception as e:
@@ -371,7 +369,7 @@ def media_handler(
     PRD §10: 资源访问安全
 
     流程：
-    1. 通过 Qdrant 查询 doc_id 的元数据（role_mask, dept_mask, status）
+    1. 通过 Qdrant 查询当前 active epoch 中 doc_id 的元数据
     2. 使用 common/auth.is_allowed 进行权限二次校验
     3. 通过 common/minio_client 生成 60s 有效 presigned URL
     4. 返回 {doc_id, url, expires_in_seconds}
@@ -385,8 +383,7 @@ def media_handler(
         ) from exc
 
     # ── 1. 查询 Qdrant 获取文档元数据 ──
-    doc_role_mask = 0
-    doc_dept_mask = 0
+    metadata: dict | None = None
     doc_status = "active"
     found = False
 
@@ -397,26 +394,31 @@ def media_handler(
             host=qdrant_cfg.get("host", "localhost"),
             port=qdrant_cfg.get("port", 6333),
         )
-        collection_name = _config.get("embedding", {}).get("text", {}).get(
-            "collection", "rag_text_768"
-        )
+        collection_name = _config.get("embedding", {}).get("text", {}).get("collection", "rag_text_768")
+        active_epoch = _config.get("knowledge_version_epoch", "default")
 
-        # 使用 scroll 按 doc_id 过滤
+        # Scope metadata authorization to the current version before checking masks.
+        epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=active_epoch))]
+        if active_epoch == "default":
+            # Legacy text points without this field belong to the default epoch.
+            epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
         records, _ = client.scroll(
             collection_name=collection_name,
             scroll_filter=Filter(
-                must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
+                must=[
+                    FieldCondition(key="doc_id", match=MatchValue(value=doc_id)),
+                    FieldCondition(key="status", match=MatchValue(value="active")),
+                ],
+                should=epoch_conditions,
             ),
             limit=1,
-            with_payload=["role_mask", "dept_mask", "status"],
+            with_payload=["role_mask", "dept_mask", "status", "doc_version_epoch"],
         )
 
         if records:
             found = True
-            payload = records[0].payload or {}
-            doc_role_mask = payload.get("role_mask", 0)
-            doc_dept_mask = payload.get("dept_mask", 0)
-            doc_status = payload.get("status", "active")
+            metadata = records[0].payload or {}
+            doc_status = metadata.get("status", "active")
 
     except Exception as e:
         logger.warning(f"Qdrant 查询 doc_id={doc_id} 失败: {e}")
@@ -440,14 +442,13 @@ def media_handler(
             },
         )
 
-    # ── 3. 权限二次校验 ──
-    from common.auth import is_allowed
-
-    if not is_allowed(
-        doc_role_mask=doc_role_mask,
-        user_role_mask=identity.user_role_mask,
-        doc_dept_mask=doc_dept_mask,
-        user_dept_mask=identity.user_dept_mask,
+    # ── 3. 权限二次校验（统一 fail-closed helper）──
+    # is_document_authorized denies when role_mask/dept_mask are missing,
+    # malformed, negative or outside uint32, instead of treating them as public.
+    if not is_document_authorized(
+        metadata,
+        identity.user_role_mask,
+        identity.user_dept_mask,
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

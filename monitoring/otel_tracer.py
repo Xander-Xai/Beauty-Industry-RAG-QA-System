@@ -41,6 +41,7 @@ class OpenTelemetryTracer:
 
     def __init__(self):
         import threading
+
         self._spans = []
         self._max_spans = 1000
         self._thread_lock = threading.Lock()
@@ -65,6 +66,7 @@ class OpenTelemetryTracer:
             if jaeger_config.get("enabled", False):
                 try:
                     from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+
                     jaeger_exporter = JaegerExporter(
                         agent_host_name=jaeger_config.get("agent_host", "localhost"),
                         agent_port=jaeger_config.get("agent_port", 6831),
@@ -118,7 +120,7 @@ class OpenTelemetryTracer:
             with self._lock():
                 self._spans.append(span)
                 if len(self._spans) > self._max_spans:
-                    self._spans = self._spans[-self._max_spans:]
+                    self._spans = self._spans[-self._max_spans :]
 
     def _trace_with_otel(self, span_name: str, attributes: dict):
         """OpenTelemetry 追踪（防御性实现）"""
@@ -136,8 +138,8 @@ class OpenTelemetryTracer:
             if otel_span and hasattr(otel_span, "set_attribute"):
                 for k, v in attributes.items():
                     otel_span.set_attribute(k, str(v))
-        except Exception:
-            pass  # OTel 不可用时静默降级
+        except Exception as exc:
+            logger.debug("OpenTelemetry span setup failed; continuing with local span: %s", exc)
 
         try:
             yield span
@@ -147,8 +149,8 @@ class OpenTelemetryTracer:
             if otel_span and hasattr(otel_span, "set_status"):
                 try:
                     otel_span.set_status({"status_code": "ERROR", "description": str(e)})
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Could not mark OpenTelemetry span as failed: %s", exc)
             raise
         finally:
             span["end_time"] = time.time()
@@ -157,8 +159,8 @@ class OpenTelemetryTracer:
             try:
                 if otel_span is not None:
                     ctx_mgr.__exit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not close OpenTelemetry span: %s", exc)
 
     def _lock(self):
         """简单线程安全"""
@@ -234,7 +236,7 @@ class MetricsCollector:
             self.increment("degradation.total")
 
         # BLIP 触发统计
-        if hasattr(ctx, 'blip_triggered') and ctx.blip_triggered:
+        if hasattr(ctx, "blip_triggered") and ctx.blip_triggered:
             self.increment("blip.triggered")
         self.increment("blip.total")
 
@@ -243,7 +245,7 @@ class MetricsCollector:
             self.set_gauge("kv_pressure", ctx.kv_pressure_at_entry)
 
         # PRD §12: NLI 矛盾比例（Answer Gate）
-        if hasattr(ctx, 'answer_gate_result') and ctx.answer_gate_result:
+        if hasattr(ctx, "answer_gate_result") and ctx.answer_gate_result:
             nli_score = ctx.answer_gate_result.nli_contradiction_score
             self.observe_histogram("nli.contradiction_score", nli_score)
             if nli_score > 0.5:
@@ -259,10 +261,10 @@ class MetricsCollector:
             self.increment("prefix_cache.miss")
 
         # PRD §12: Admission Control 拒绝/排队计数
-        if hasattr(ctx, 'kv_pressure_at_entry'):
+        if hasattr(ctx, "kv_pressure_at_entry"):
             self.increment("admission.total")
             # 在 pipeline 中 admission_reason 已记录到 audit log，此处统计通过/拒绝
-            if hasattr(ctx, '_admission_admitted'):
+            if hasattr(ctx, "_admission_admitted"):
                 if ctx._admission_admitted:
                     self.increment("admission.admitted")
                 else:
@@ -290,6 +292,7 @@ class MetricsCollector:
 
     def get_stats(self) -> dict:
         """获取统计摘要"""
+
         def _percentile(values, p):
             if not values:
                 return 0.0
@@ -304,19 +307,17 @@ class MetricsCollector:
             "cache_hit_rate": {
                 "L1": self._counters.get("cache.hit.L1", 0) / max(self._counters.get("cache.total", 1), 1),
                 "L2": self._counters.get("cache.hit.L2", 0) / max(self._counters.get("cache.total", 1), 1),
-                "L2_SESSION": self._counters.get("cache.hit.L2_SESSION", 0) / max(self._counters.get("cache.total", 1), 1),
+                "L2_SESSION": self._counters.get("cache.hit.L2_SESSION", 0)
+                / max(self._counters.get("cache.total", 1), 1),
             },
-            "rewrite_fallback_rate": self._counters.get("rewrite.fallback", 0) / max(
-                self._counters.get("rewrite.success", 0) + self._counters.get("rewrite.fail", 0), 1
-            ),
+            "rewrite_fallback_rate": self._counters.get("rewrite.fallback", 0)
+            / max(self._counters.get("rewrite.success", 0) + self._counters.get("rewrite.fail", 0), 1),
             # PRD §12: NLI 矛盾比例
-            "nli_contradiction_rate": self._counters.get("nli.contradiction_high", 0) / max(
-                self._counters.get("answer_gate.total", 1), 1
-            ),
+            "nli_contradiction_rate": self._counters.get("nli.contradiction_high", 0)
+            / max(self._counters.get("answer_gate.total", 1), 1),
             # PRD §12: Prefix Caching 命中率
-            "prefix_cache_hit_rate": self._counters.get("prefix_cache.hit", 0) / max(
-                self._counters.get("prefix_cache.hit", 0) + self._counters.get("prefix_cache.miss", 0), 1
-            ),
+            "prefix_cache_hit_rate": self._counters.get("prefix_cache.hit", 0)
+            / max(self._counters.get("prefix_cache.hit", 0) + self._counters.get("prefix_cache.miss", 0), 1),
             # PRD §12: Redis 降级状态
             "redis_degraded": self._counters.get("redis.degraded_events", 0),
             # PRD §12: 缓存版本切换次数
@@ -369,9 +370,9 @@ class MetricsCollector:
             sorted_v = sorted(values)
             n = len(sorted_v)
 
-            def _pct(p):
-                idx = int(n * p)
-                return sorted_v[min(idx, n - 1)]
+            def _pct(p, values=sorted_v, count=n):
+                idx = int(count * p)
+                return values[min(idx, count - 1)]
 
             lines.append(f"# TYPE rag_{safe_name}_seconds summary")
             lines.append(f'rag_{safe_name}_seconds{{quantile="0.5"}} {_pct(0.5) / 1000:.6f}')
@@ -420,29 +421,95 @@ class AlertingManager:
         """
         # 默认规则（PRD §12 完整告警清单）
         default_rules = [
-            {"name": "kv_pressure_critical", "metric": "kv_pressure", "threshold": 0.9,
-             "duration_s": 30, "severity": "critical", "comparison": "gt"},
-            {"name": "kv_cache_high", "metric": "kv_utilization", "threshold": 0.85,
-             "duration_s": 60, "severity": "warning", "comparison": "gt"},
-            {"name": "rerank_batch_delay", "metric": "rerank_batch_queue_delay_p99", "threshold": 50,
-             "duration_s": 30, "severity": "warning", "comparison": "gt"},
-            {"name": "rewrite_fallback_high", "metric": "rewrite_fallback_rate", "threshold": 0.3,
-             "duration_s": 300, "severity": "warning", "comparison": "gt"},
-            {"name": "degradation_spike", "metric": "degradation.total", "threshold": 10,
-             "duration_s": 300, "severity": "critical", "comparison": "gt"},
-            {"name": "blip_trigger_rate_high", "metric": "blip_trigger_rate", "threshold": 0.10,
-             "duration_s": 300, "severity": "warning", "comparison": "gt"},
+            {
+                "name": "kv_pressure_critical",
+                "metric": "kv_pressure",
+                "threshold": 0.9,
+                "duration_s": 30,
+                "severity": "critical",
+                "comparison": "gt",
+            },
+            {
+                "name": "kv_cache_high",
+                "metric": "kv_utilization",
+                "threshold": 0.85,
+                "duration_s": 60,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "rerank_batch_delay",
+                "metric": "rerank_batch_queue_delay_p99",
+                "threshold": 50,
+                "duration_s": 30,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "rewrite_fallback_high",
+                "metric": "rewrite_fallback_rate",
+                "threshold": 0.3,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "degradation_spike",
+                "metric": "degradation.total",
+                "threshold": 10,
+                "duration_s": 300,
+                "severity": "critical",
+                "comparison": "gt",
+            },
+            {
+                "name": "blip_trigger_rate_high",
+                "metric": "blip_trigger_rate",
+                "threshold": 0.10,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "gt",
+            },
             # PRD §12 新增告警规则
-            {"name": "prefix_cache_drop", "metric": "prefix_cache_hit_rate", "threshold": 0.5,
-             "duration_s": 300, "severity": "warning", "comparison": "lt"},
-            {"name": "redis_degraded_long", "metric": "redis.degraded_events", "threshold": 5,
-             "duration_s": 300, "severity": "warning", "comparison": "gt"},
-            {"name": "l1_hit_rate_drop", "metric": "cache_hit_rate_L1", "threshold": 0.3,
-             "duration_s": 300, "severity": "warning", "comparison": "lt"},
-            {"name": "l2_hit_rate_drop", "metric": "cache_hit_rate_L2", "threshold": 0.3,
-             "duration_s": 300, "severity": "warning", "comparison": "lt"},
-            {"name": "cache_failure_spike", "metric": "cache.failure_rate", "threshold": 0.1,
-             "duration_s": 300, "severity": "critical", "comparison": "gt"},
+            {
+                "name": "prefix_cache_drop",
+                "metric": "prefix_cache_hit_rate",
+                "threshold": 0.5,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "lt",
+            },
+            {
+                "name": "redis_degraded_long",
+                "metric": "redis.degraded_events",
+                "threshold": 5,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "gt",
+            },
+            {
+                "name": "l1_hit_rate_drop",
+                "metric": "cache_hit_rate_L1",
+                "threshold": 0.3,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "lt",
+            },
+            {
+                "name": "l2_hit_rate_drop",
+                "metric": "cache_hit_rate_L2",
+                "threshold": 0.3,
+                "duration_s": 300,
+                "severity": "warning",
+                "comparison": "lt",
+            },
+            {
+                "name": "cache_failure_spike",
+                "metric": "cache.failure_rate",
+                "threshold": 0.1,
+                "duration_s": 300,
+                "severity": "critical",
+                "comparison": "gt",
+            },
         ]
 
         # 从 config 加载自定义规则（覆盖默认）
@@ -508,8 +575,8 @@ class AlertingManager:
                         "triggered_at": self._alert_timestamps[rule_name],
                         "duration_s": round(elapsed, 1),
                         "message": f"{rule_name}: {metric_name}={current_value:.4f} "
-                                   f"{'>' if comparison == 'gt' else '<'} {threshold} "
-                                   f"持续 {elapsed:.0f}s",
+                        f"{'>' if comparison == 'gt' else '<'} {threshold} "
+                        f"持续 {elapsed:.0f}s",
                     }
                     logger.warning(f"告警触发: {self._active_alerts[rule_name]['message']}")
             else:
@@ -532,8 +599,7 @@ class AlertingManager:
 
         # 特殊计算：fallback_rate
         if metric_name == "rewrite_fallback_rate":
-            total = self.metrics._counters.get("rewrite.success", 0) + \
-                    self.metrics._counters.get("rewrite.fail", 0)
+            total = self.metrics._counters.get("rewrite.success", 0) + self.metrics._counters.get("rewrite.fail", 0)
             if total > 0:
                 return self.metrics._counters.get("rewrite.fallback", 0) / total
             return 0.0

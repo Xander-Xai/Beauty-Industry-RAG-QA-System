@@ -45,6 +45,7 @@ EVIDENCE_GATE_TIMEOUT_S = float(os.environ.get("EVIDENCE_GATE_TIMEOUT_S", "5"))
 # ---------------------------------------------------------------------------
 class RecallRequest(BaseModel):
     """召回请求体。"""
+
     query: str = Field(..., description="检索查询文本")
     rewritten_query: str = Field(default="", description="改写后的查询文本")
     top_k: int = Field(default=50, description="每个召回路径的最大返回数")
@@ -56,6 +57,7 @@ class RecallRequest(BaseModel):
 
 class RerankRequest(BaseModel):
     """重排请求体。"""
+
     query: str = Field(..., description="检索查询文本")
     candidates: list[dict[str, Any]] = Field(default_factory=list, description="待重排的候选文档列表")
     top_k: int = Field(default=10, description="最终保留的文档数")
@@ -64,6 +66,7 @@ class RerankRequest(BaseModel):
 
 class EvidenceGateRequest(BaseModel):
     """证据门控请求体。"""
+
     query: str = Field(..., description="检索查询文本")
     candidates: list[dict[str, Any]] = Field(default_factory=list, description="重排后的候选文档")
     business_type: str = Field(default="general", description="业务类型")
@@ -93,27 +96,27 @@ async def recall(body: RecallRequest):
             logger.info("召回完成: %.1fms, 查询: %s", elapsed_ms, body.query[:50])
             return resp.json()
 
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as _exc_ruf:
         elapsed_ms = (time.monotonic() - start_time) * 1000
         logger.error("召回超时 (%.1fms): %s", elapsed_ms, body.query[:50])
         raise HTTPException(
             status_code=504,
             detail=f"召回服务超时 ({elapsed_ms:.0f}ms)",
-        )
+        ) from _exc_ruf
 
-    except httpx.ConnectError:
+    except httpx.ConnectError as _exc_ruf:
         logger.error("召回服务不可用: %s", RETRIEVAL_SERVICE_URL)
         raise HTTPException(
             status_code=503,
             detail="召回服务不可用",
-        )
+        ) from _exc_ruf
 
     except httpx.HTTPStatusError as exc:
         logger.error("召回服务返回错误: %d %s", exc.response.status_code, exc.response.text)
         raise HTTPException(
             status_code=exc.response.status_code,
             detail="召回服务暂时不可用，请稍后重试",
-        )
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -139,27 +142,27 @@ async def rerank(body: RerankRequest):
             logger.info("重排完成: %.1fms, 候选数: %d", elapsed_ms, len(body.candidates))
             return resp.json()
 
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as _exc_ruf:
         elapsed_ms = (time.monotonic() - start_time) * 1000
         logger.error("重排超时 (%.1fms), 候选数: %d", elapsed_ms, len(body.candidates))
         raise HTTPException(
             status_code=504,
             detail=f"重排服务超时 ({elapsed_ms:.0f}ms)",
-        )
+        ) from _exc_ruf
 
-    except httpx.ConnectError:
+    except httpx.ConnectError as _exc_ruf:
         logger.error("重排服务不可用: %s", RETRIEVAL_SERVICE_URL)
         raise HTTPException(
             status_code=503,
             detail="重排服务不可用",
-        )
+        ) from _exc_ruf
 
     except httpx.HTTPStatusError as exc:
         logger.error("重排服务返回错误: %d %s", exc.response.status_code, exc.response.text)
         raise HTTPException(
             status_code=exc.response.status_code,
             detail="重排服务暂时不可用，请稍后重试",
-        )
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -186,24 +189,24 @@ async def evidence_gate(body: EvidenceGateRequest):
             logger.info("证据门控完成: %.1fms", elapsed_ms)
             return resp.json()
 
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as _exc_ruf:
         elapsed_ms = (time.monotonic() - start_time) * 1000
         logger.error("证据门控超时 (%.1fms)", elapsed_ms)
         raise HTTPException(
             status_code=504,
             detail=f"证据门控服务超时 ({elapsed_ms:.0f}ms)",
-        )
+        ) from _exc_ruf
 
-    except httpx.ConnectError:
+    except httpx.ConnectError as _exc_ruf:
         logger.error("证据门控服务不可用: %s", RETRIEVAL_SERVICE_URL)
         raise HTTPException(
             status_code=503,
             detail="证据门控服务不可用",
-        )
+        ) from _exc_ruf
 
     except httpx.HTTPStatusError as exc:
         logger.error("证据门控服务返回错误: %d %s", exc.response.status_code, exc.response.text)
         raise HTTPException(
             status_code=exc.response.status_code,
             detail="证据门控服务暂时不可用，请稍后重试",
-        )
+        ) from exc

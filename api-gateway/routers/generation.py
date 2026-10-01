@@ -20,6 +20,7 @@ Generation 路由模块 — 主编排路由器.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import sys
@@ -44,13 +45,13 @@ from middleware.auth_middleware import get_current_user, require_current_user
 from middleware.rate_limiter import rate_limit_dependency
 from pydantic import BaseModel, Field
 
+from common.config import get_config_dict
 from common.models import (
     EvidenceGateResult,
     GenerationResult,
     QueryRewriteResult,
     UserIdentity,
 )
-from common.config import get_config_dict
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +90,11 @@ _DEFAULT_MAX_OUTPUT_TOKENS = {
 _MAX_OUTPUT_TOKENS_MAP: dict[str, int] = _DEFAULT_MAX_OUTPUT_TOKENS.copy()
 try:
     _CFG = get_config_dict()
-    _MAX_OUTPUT_TOKENS_MAP = _CFG.get("gpu0", {}).get("models", {}).get(
-        "gen_14b", {}
-    ).get("max_output_tokens", _DEFAULT_MAX_OUTPUT_TOKENS)
-except Exception:
-    pass
+    _MAX_OUTPUT_TOKENS_MAP = (
+        _CFG.get("gpu0", {}).get("models", {}).get("gen_14b", {}).get("max_output_tokens", _DEFAULT_MAX_OUTPUT_TOKENS)
+    )
+except Exception as exc:
+    logger.debug("Failed to load gateway token configuration: %s", exc)
 
 
 def _get_max_output_tokens(business_type: str) -> int:
@@ -106,6 +107,7 @@ def _get_max_output_tokens(business_type: str) -> int:
 # ---------------------------------------------------------------------------
 class GenerateRequest(BaseModel):
     """主生成请求体。"""
+
     query: str = Field(..., description="用户查询")
     session_id: str | None = Field(default=None, description="会话 ID（用于多轮对话）")
     recent_dialogs: list[str] = Field(default_factory=list, description="近期对话历史")
@@ -114,6 +116,7 @@ class GenerateRequest(BaseModel):
 
 class GenerateResponse(BaseModel):
     """主生成响应体。"""
+
     request_id: str = ""
     success: bool = True
     answer: str = ""
@@ -132,12 +135,14 @@ class GenerateResponse(BaseModel):
 
 class ContinuationRequest(BaseModel):
     """长文续写请求体。"""
+
     session_id: str = Field(..., description="会话 ID")
     outline_index: int = Field(default=0, description="续写大纲索引")
 
 
 class MediaResponse(BaseModel):
     """媒体访问响应体。"""
+
     doc_id: str
     media_type: str = ""
     url: str = ""
@@ -149,6 +154,7 @@ class MediaResponse(BaseModel):
 
 class QueryRequest(BaseModel):
     """单轮查询请求（前端 → 网关）."""
+
     query: str = Field(..., min_length=1, max_length=2000, description="用户查询文本")
     session_id: str | None = Field(None, max_length=64, description="会话 ID（可选）")
     user_id: str | None = Field(None, max_length=64, description="用户 ID（可选）")
@@ -157,6 +163,7 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     """单轮查询响应（网关 → 前端）."""
+
     answer: str = ""
     session_id: str | None = None
     business_type: str | None = None
@@ -168,18 +175,21 @@ class QueryResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     """多轮对话请求（前端 → 网关）."""
+
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
     session_id: str = Field(..., min_length=1, max_length=64, description="会话 ID")
 
 
 class ChatMessage(BaseModel):
     """对话历史中的单条消息."""
+
     role: str = Field(..., description="user 或 assistant")
     content: str = Field(..., description="消息内容")
 
 
 class ChatResponse(BaseModel):
     """多轮对话响应（网关 → 前端）."""
+
     answer: str = ""
     session_id: str = ""
     history: list[ChatMessage] = Field(default_factory=list)
@@ -226,13 +236,13 @@ async def _call_service(
             resp = await client.post(url, json=json_body, timeout=timeout)
         return resp
 
-    except httpx.TimeoutException:
+    except httpx.TimeoutException as _exc_ruf:
         logger.error("服务调用超时: %s (超时: %.1fs)", url, timeout)
-        raise HTTPException(status_code=504, detail="下游服务超时")
+        raise HTTPException(status_code=504, detail="下游服务超时") from _exc_ruf
 
-    except httpx.ConnectError:
+    except httpx.ConnectError as _exc_ruf:
         logger.error("无法连接下游服务: %s", url)
-        raise HTTPException(status_code=502, detail="下游服务不可达")
+        raise HTTPException(status_code=502, detail="下游服务不可达") from _exc_ruf
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +283,7 @@ def _compute_cache_key(
 
 def _estimate_tokens(text: str) -> int:
     """Rough token count estimate (approx 1 token per 2 CJK chars or 4 ASCII chars)."""
-    cjk_count = sum(1 for ch in text if '一' <= ch <= '鿿' or '㐀' <= ch <= '䶿')
+    cjk_count = sum(1 for ch in text if "一" <= ch <= "鿿" or "㐀" <= ch <= "䶿")
     ascii_count = len(text) - cjk_count
     return max(1, cjk_count + ascii_count // 4)
 
@@ -298,7 +308,6 @@ async def generate(
     logger.info("[%s] 开始 RAG 管线, 用户: %s, 查询: %s", request_id, user.user_id, body.query[:80])
 
     async with httpx.AsyncClient() as client:
-
         # ── 步骤 1: 缓存查询 ────────────────────────────────────────────
         cache_result = None
         try:
@@ -308,7 +317,8 @@ async def generate(
                 dept_mask=user.user_dept_mask,
             )
             resp = await _call_service(
-                client, "GET",
+                client,
+                "GET",
                 f"{CACHE_SERVICE_URL}/api/cache",
                 params={
                     "key": cache_key,
@@ -340,7 +350,8 @@ async def generate(
         rewrite_result = QueryRewriteResult(rewritten_query=body.query)
         try:
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{REWRITE_SERVICE_URL}/api/rewrite",
                 json_body={"query": body.query, "recent_dialogs": body.recent_dialogs},
                 timeout=REWRITE_TIMEOUT_S,
@@ -359,7 +370,8 @@ async def generate(
         target_model = "qwen3-4b"  # 默认简单模型
         try:
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{GENERATION_SERVICE_URL}/api/complexity",
                 json_body={"query": effective_query},
                 timeout=COMPLEXITY_TIMEOUT_S,
@@ -368,8 +380,7 @@ async def generate(
                 complexity_data = resp.json()
                 is_complex = complexity_data.get("is_complex", False)
                 target_model = "qwen3-14b" if is_complex else "qwen3-4b"
-                logger.info("[%s] 复杂度评估: is_complex=%s, target_model=%s",
-                            request_id, is_complex, target_model)
+                logger.info("[%s] 复杂度评估: is_complex=%s, target_model=%s", request_id, is_complex, target_model)
         except HTTPException:
             logger.warning("[%s] 复杂度评估失败，使用默认模型 4B", request_id)
 
@@ -381,7 +392,8 @@ async def generate(
         try:
             input_tokens = _estimate_tokens(body.query)
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{GENERATION_SERVICE_URL}/api/admission-check",
                 json_body={
                     "request_id": request_id,
@@ -407,12 +419,17 @@ async def generate(
         except HTTPException:
             logger.warning("[%s] 准入控制检查失败，继续管线", request_id)
 
-        logger.info("[%s] business_type=%s, max_output_tokens=%d, target_model=%s",
-                    request_id, business_type, max_output_tokens, target_model)
+        logger.info(
+            "[%s] business_type=%s, max_output_tokens=%d, target_model=%s",
+            request_id,
+            business_type,
+            max_output_tokens,
+            target_model,
+        )
 
         # GAP-18: PRD §10.6 — requires_context=true 的缓存仅限同 session 复用
         # 改写完成后，若 requires_context=true，用 session-scoped key 重新查缓存
-        requires_context = getattr(rewrite_result, 'requires_context', False) or False
+        requires_context = getattr(rewrite_result, "requires_context", False) or False
         if requires_context and body.session_id:
             session_scoped_key = _compute_cache_key(
                 effective_query,
@@ -422,7 +439,8 @@ async def generate(
             )
             try:
                 resp = await _call_service(
-                    client, "GET",
+                    client,
+                    "GET",
                     f"{CACHE_SERVICE_URL}/api/cache",
                     params={
                         "key": session_scoped_key,
@@ -453,7 +471,8 @@ async def generate(
         recall_candidates: list[dict[str, Any]] = []
         try:
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{RETRIEVAL_SERVICE_URL}/api/recall",
                 json_body={
                     "query": effective_query,
@@ -473,8 +492,13 @@ async def generate(
             logger.warning("[%s] 召回无结果: %.1fms", request_id, elapsed_ms)
             # 尝试无检索生成（仅用 LLM 知识）
             return await _generate_without_context(
-                client, request_id, body, user, pipeline_start,
-                rewrite_result, admission_request_id,
+                client,
+                request_id,
+                body,
+                user,
+                pipeline_start,
+                rewrite_result,
+                admission_request_id,
                 target_model=target_model,
                 max_output_tokens=max_output_tokens,
                 business_type=business_type,
@@ -484,7 +508,8 @@ async def generate(
         reranked_candidates: list[dict[str, Any]] = recall_candidates
         try:
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{RETRIEVAL_SERVICE_URL}/api/rerank",
                 json_body={
                     "query": effective_query,
@@ -503,7 +528,8 @@ async def generate(
         evidence_result = EvidenceGateResult(decision="high_confidence")
         try:
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{RETRIEVAL_SERVICE_URL}/api/evidence-gate",
                 json_body={
                     "query": effective_query,
@@ -536,7 +562,8 @@ async def generate(
         generation_result = GenerationResult()
         try:
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{GENERATION_SERVICE_URL}/api/generate",
                 json_body={
                     "ctx": {
@@ -559,13 +586,14 @@ async def generate(
             raise HTTPException(
                 status_code=500,
                 detail="答案生成服务返回错误",
-            )
+            ) from exc
 
         # ── 步骤 8: 准入释放 ─────────────────────────────────────────────
         if admission_request_id:
             try:
                 await _call_service(
-                    client, "POST",
+                    client,
+                    "POST",
                     f"{GENERATION_SERVICE_URL}/api/admission-release",
                     json_body={"request_id": admission_request_id},
                     timeout=ADMISSION_RELEASE_TIMEOUT_S,
@@ -590,7 +618,8 @@ async def generate(
                     dept_mask=user.user_dept_mask,
                 )
             await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{CACHE_SERVICE_URL}/api/cache",
                 json_body={
                     "key": cache_key_write,
@@ -610,7 +639,9 @@ async def generate(
         elapsed_ms = (time.monotonic() - pipeline_start) * 1000
         logger.info(
             "[%s] RAG 管线完成: %.1fms, 模型: %s",
-            request_id, elapsed_ms, generation_result.model_used,
+            request_id,
+            elapsed_ms,
+            generation_result.model_used,
         )
 
         return GenerateResponse(
@@ -651,7 +682,8 @@ async def _generate_without_context(
 
     try:
         resp = await _call_service(
-            client, "POST",
+            client,
+            "POST",
             f"{GENERATION_SERVICE_URL}/api/generate",
             json_body={
                 "ctx": {
@@ -688,7 +720,8 @@ async def _generate_without_context(
     if admission_request_id:
         try:
             await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{GENERATION_SERVICE_URL}/api/admission-release",
                 json_body={"request_id": admission_request_id},
                 timeout=ADMISSION_RELEASE_TIMEOUT_S,
@@ -730,7 +763,8 @@ async def continuation(
     try:
         async with httpx.AsyncClient() as client:
             resp = await _call_service(
-                client, "POST",
+                client,
+                "POST",
                 f"{GENERATION_SERVICE_URL}/api/continuation",
                 json_body={
                     "session_id": body.session_id,
@@ -746,7 +780,7 @@ async def continuation(
         raise
     except Exception as exc:
         logger.exception("续写请求失败: %s", exc)
-        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试") from exc
 
 
 # ===========================================================================
@@ -765,7 +799,8 @@ async def dialog_history(
     try:
         async with httpx.AsyncClient() as client:
             resp = await _call_service(
-                client, "GET",
+                client,
+                "GET",
                 f"{GENERATION_SERVICE_URL}/api/dialog_history",
                 params={"session_id": session_id, "user_id": user.user_id},
                 timeout=10.0,
@@ -777,7 +812,7 @@ async def dialog_history(
         raise
     except Exception as exc:
         logger.exception("对话历史查询失败: %s", exc)
-        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试") from exc
 
 
 # ===========================================================================
@@ -798,6 +833,7 @@ async def media_access(
     try:
         # SEC-3: 校验 doc_id 格式，防止查询注入
         from common.auth import validate_doc_id
+
         validate_doc_id(doc_id)
     except ValueError:
         return JSONResponse(status_code=400, content={"error": "invalid_doc_id", "detail": "doc_id 格式不合法"})
@@ -805,10 +841,12 @@ async def media_access(
     try:
         # ① Qdrant 文档权限二次校验（PRD §6 / §10）
         try:
-            from auth.bitmask_rbac import is_allowed
             from qdrant_client import QdrantClient
-            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+
+            from auth.bitmask_rbac import is_allowed
             from common.config import get_config_dict
+
             _cfg = get_config_dict()
 
             _qc = QdrantClient(
@@ -818,9 +856,7 @@ async def media_access(
 
             records, _ = _qc.scroll(
                 collection_name="rag_text_768",
-                scroll_filter=Filter(
-                    must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]
-                ),
+                scroll_filter=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))]),
                 limit=1,
                 with_payload=["role_mask", "dept_mask", "status"],
             )
@@ -841,7 +877,8 @@ async def media_access(
         # ② RBAC 权限校验（通过 generation-service 代理）
         async with httpx.AsyncClient() as client:
             resp = await _call_service(
-                client, "GET",
+                client,
+                "GET",
                 f"{GENERATION_SERVICE_URL}/api/media/{doc_id}",
                 params={"user_role_mask": user.user_role_mask, "user_dept_mask": user.user_dept_mask},
                 timeout=10.0,
@@ -857,6 +894,7 @@ async def media_access(
         # ② MinIO 临时签名 URL（PRD §10: 60s TTL）
         try:
             from common.minio_client import get_minio_client
+
             minio = get_minio_client()
             presigned_url = minio.get_presigned_url(doc_id)
             if presigned_url:
@@ -871,7 +909,7 @@ async def media_access(
         raise
     except Exception as exc:
         logger.exception("媒体访问失败: %s", exc)
-        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试") from exc
 
 
 # ===========================================================================
@@ -888,8 +926,8 @@ async def query_handler(
     将 QueryRequest 映射为 GenerateRequest，调用内部 /v1/generate 管线，
     返回前端期望的 QueryResponse 格式。
     """
-    from httpx import ASGITransport, AsyncClient
     from api_gateway.main import app as gateway_app
+    from httpx import ASGITransport, AsyncClient
 
     transport = ASGITransport(app=gateway_app)
     async with AsyncClient(transport=transport, base_url="http://gateway") as client:
@@ -937,8 +975,8 @@ async def chat_handler(
     将 ChatRequest 映射为 GenerateRequest，调用内部 /v1/generate 管线，
     返回前端期望的 ChatResponse 格式。
     """
-    from httpx import ASGITransport, AsyncClient
     from api_gateway.main import app as gateway_app
+    from httpx import ASGITransport, AsyncClient
 
     transport = ASGITransport(app=gateway_app)
     async with AsyncClient(transport=transport, base_url="http://gateway") as client:

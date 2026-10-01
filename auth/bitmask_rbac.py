@@ -4,7 +4,7 @@ import re
 logger = logging.getLogger(__name__)
 
 # 输入验证正则：仅允许字母、数字、下划线、连字符（用于 knowledge_version_epoch）
-_SAFE_VERSION_PATTERN = re.compile(r'^[a-zA-Z0-9_\-]+$')
+_SAFE_VERSION_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 # 输入验证：整数范围校验（32位无符号）
 _MAX_UINT32 = 0xFFFFFFFF
@@ -12,6 +12,7 @@ _MAX_UINT32 = 0xFFFFFFFF
 # 优先使用 common.config 统一配置，失败时使用最小安全默认值
 try:
     from common.config import get_config as _get_config
+
     _cfg = _get_config()
     _ROLE = _cfg.rbac.roles
     _DEPT = _cfg.rbac.departments
@@ -23,32 +24,28 @@ except Exception:
 
 
 def is_allowed(dr, ur, dd, ud):
-    if dr == 0:
-        if dd == 0:
-            return True
-        return (dd & ud) != 0
-    if ur == _SUPER:
-        return True
-    role_ok = (dr & ur) != 0
-    dept_ok = dd == 0 or (dd & ud) != 0
-    return role_ok and dept_ok
+    """Compatibility wrapper for the canonical service-layer RBAC predicate."""
+    from common.auth import is_allowed as _is_allowed
+
+    return _is_allowed(dr, ur, dd, ud)
 
 
 def build_qdrant_filter(ur: int, ue: int, ae: str):
     """
     构建 Qdrant Filter 对象。
 
-    Qdrant pre-filter 不支持位掩码运算（RBAC），因此仅处理：
+    Qdrant pre-filter 不支持位掩码运算（RBAC），因此仅处理状态和版本：
     - status == 'active'（标量精准匹配）
+    - doc_version_epoch == 当前知识库 epoch；历史无 epoch 点仅归入 default
 
-    RBAC 权限过滤和版本门控在 Python 层通过 is_allowed() 后置执行。
+    RBAC 权限过滤仍在 Python 层通过 is_allowed() 后置执行。
 
     安全：对所有输入进行类型和范围验证，防止过滤器注入。
     """
     # 输入验证：确保整数在 uint32 范围内
-    if not isinstance(ur, int) or not (0 <= ur <= _MAX_UINT32):
+    if type(ur) is not int or not (0 <= ur <= _MAX_UINT32):
         raise ValueError(f"user_role_mask 必须为 uint32 整数，收到: {ur!r}")
-    if not isinstance(ue, int) or not (0 <= ue <= _MAX_UINT32):
+    if type(ue) is not int or not (0 <= ue <= _MAX_UINT32):
         raise ValueError(f"user_dept_mask 必须为 uint32 整数，收到: {ue!r}")
 
     # 输入验证：knowledge_version_epoch 仅允许安全字符
@@ -56,22 +53,42 @@ def build_qdrant_filter(ur: int, ue: int, ae: str):
     if not _SAFE_VERSION_PATTERN.match(ae_str):
         raise ValueError(f"knowledge_version_epoch 包含非法字符: {ae_str!r}")
 
-    from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+    from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
+
+    epoch_conditions = [FieldCondition(key="doc_version_epoch", match=MatchValue(value=ae_str))]
+    if ae_str == "default":
+        # Pre-slice points without an epoch are part of the legacy default index.
+        epoch_conditions.append(IsEmptyCondition(is_empty=PayloadField(key="doc_version_epoch")))
 
     return Filter(
         must=[
             FieldCondition(key="status", match=MatchValue(value="active")),
-        ]
+        ],
+        should=epoch_conditions,
     )
+
+
+def build_qdrant_image_filter(ur: int, ue: int, ae: str = "default"):
+    """Build the CLIP image filter with the same epoch contract as text.
+
+    Text and image retrieval must both respect the active knowledge epoch. For
+    ``default`` the filter also matches legacy points that predate the epoch
+    field; those legacy points are excluded from every non-default epoch.
+    """
+    return build_qdrant_filter(ur, ue, ae)
+
 
 def encode_role_mask(roles):
     m = 0
     for r in roles:
-        if r in _ROLE: m = m | _ROLE[r]
+        if r in _ROLE:
+            m = m | _ROLE[r]
     return m
+
 
 def encode_dept_mask(depts):
     m = 0
     for d in depts:
-        if d in _DEPT: m = m | _DEPT[d]
+        if d in _DEPT:
+            m = m | _DEPT[d]
     return m

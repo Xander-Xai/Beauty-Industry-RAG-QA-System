@@ -23,6 +23,7 @@ import time
 from fastapi import HTTPException, Request, status
 from fastapi.security import HTTPBearer
 
+from auth.jwt_auth import get_jwt_config as get_rs256_jwt_config
 from auth.jwt_auth import verify_token as verify_rs256_token
 from common.config import get_config
 from common.models import UserIdentity
@@ -49,6 +50,7 @@ def is_admin_role_mask(user_role_mask: int) -> bool:
         cfg.super_admin_mask,
         admin_mask,
     }
+
 
 _security = HTTPBearer(auto_error=False)
 
@@ -80,10 +82,17 @@ def _get_jwt_settings() -> dict:
 
 
 def _decode_jwt(token: str) -> dict | None:
-    """Decode and validate a JWT, preferring the RS256 browser auth contract."""
-    rs256_payload = verify_rs256_token(token, "access")
-    if rs256_payload is not None:
-        return rs256_payload
+    """Decode and validate a JWT, preferring the RS256 browser auth contract.
+
+    RS256 verification is independent of the legacy HS256 secret, but it still
+    honors its own enable switch: ``JWT_ALGORITHM`` must be configured. Unsetting
+    the algorithm disables the RS256 path, matching ``/api/auth/metadata`` and the
+    login/refresh endpoints, which report JWT auth as disabled.
+    """
+    if get_rs256_jwt_config().enabled:
+        rs256_payload = verify_rs256_token(token, "access")
+        if rs256_payload is not None:
+            return rs256_payload
 
     settings = _get_jwt_settings()
     if not settings["enabled"]:
@@ -170,7 +179,6 @@ def is_allowed(
     - Otherwise: role bits must overlap AND dept bits must overlap
       (doc_dept_mask == 0 means no dept restriction).
     """
-    cfg = get_config().rbac
     if is_admin_role_mask(user_role_mask):
         return True
     if doc_role_mask == 0:
@@ -180,6 +188,24 @@ def is_allowed(
     role_ok = (doc_role_mask & user_role_mask) != 0
     dept_ok = doc_dept_mask == 0 or (doc_dept_mask & user_dept_mask) != 0
     return role_ok and dept_ok
+
+
+def is_document_authorized(
+    metadata: dict | None,
+    user_role_mask: int,
+    user_dept_mask: int,
+) -> bool:
+    """Fail closed unless both stored permission masks are valid uint32 values."""
+    if not isinstance(metadata, dict):
+        return False
+
+    doc_role_mask = metadata.get("role_mask")
+    doc_dept_mask = metadata.get("dept_mask")
+    masks = (doc_role_mask, doc_dept_mask, user_role_mask, user_dept_mask)
+    if any(type(mask) is not int or not 0 <= mask <= 0xFFFFFFFF for mask in masks):
+        return False
+
+    return is_allowed(doc_role_mask, user_role_mask, doc_dept_mask, user_dept_mask)
 
 
 def build_qdrant_filter(
@@ -196,6 +222,7 @@ def build_qdrant_filter(
     安全：对所有输入进行类型和范围验证。
     """
     from auth.bitmask_rbac import build_qdrant_filter as _build
+
     return _build(user_role_mask, user_dept_mask, knowledge_version_epoch)
 
 
@@ -213,16 +240,16 @@ async def parse_identity(request: Request) -> UserIdentity:
     """
     cfg = get_config()
 
-    # 1. JWT Bearer token（仅在 JWT 启用时尝试解码）
-    jwt_settings = _get_jwt_settings()
-    if jwt_settings.get("enabled", True):
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            payload = _decode_jwt(token)
-            if payload is not None:
-                return _identity_from_jwt(payload)
-            logger.warning("JWT decode failed, falling back to dev headers")
+    # 1. JWT Bearer token — always attempt decoding. _decode_jwt gates the RS256
+    # path on its own JWT_ALGORITHM enable switch (independent of the legacy
+    # HS256 secret) and falls back to HS256 only when that secret is enabled.
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        payload = _decode_jwt(token)
+        if payload is not None:
+            return _identity_from_jwt(payload)
+        logger.warning("JWT decode failed, falling back to dev headers")
 
     # 2. Dev-mode headers — 仅在 dev_mode=True 时信任 Header
     if cfg.auth.dev_mode:
@@ -275,8 +302,8 @@ def generate_token(
     """
     try:
         import jwt as _jwt
-    except ImportError:
-        raise RuntimeError("PyJWT is not installed -- cannot generate tokens")
+    except ImportError as _exc_ruf:
+        raise RuntimeError("PyJWT is not installed -- cannot generate tokens") from _exc_ruf
 
     cfg = get_config()
     now = int(time.time())

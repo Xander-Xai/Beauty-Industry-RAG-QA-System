@@ -1,4 +1,5 @@
 """Parallel Recall 测试 — 去冗、合并、一致性评分、权限过滤构建。"""
+
 import os
 import sys
 import types
@@ -25,6 +26,7 @@ class TestParallelRecallHelpers:
     def _make_manager(self):
         """创建不连接外部服务的 ParallelRecallManager。"""
         from retrieval.parallel_recall import ParallelRecallManager
+
         mgr = ParallelRecallManager.__new__(ParallelRecallManager)
         mgr._dense_retriever = None
         mgr._bm25_retriever = None
@@ -37,12 +39,13 @@ class TestParallelRecallHelpers:
         """去冗应合并同一 doc_id 的多路结果。"""
         mgr = self._make_manager()
         from core.pipeline_context import RerankResult
+
         results = [
             RerankResult(doc_id="doc_1", content="内容A", final_score=0.9, source="dense"),
             RerankResult(doc_id="doc_1", content="内容A", final_score=0.8, source="bm25"),
             RerankResult(doc_id="doc_2", content="内容B", final_score=0.85, source="dense"),
         ]
-        if hasattr(mgr, '_dedup_results'):
+        if hasattr(mgr, "_dedup_results"):
             deduped = mgr._dedup_results(results)
             doc_ids = [r.doc_id for r in deduped]
             assert len(doc_ids) == 2
@@ -58,8 +61,9 @@ class TestParallelRecallHelpers:
 
     def test_dedup_preserves_highest_score(self):
         """去冗应保留最高分数。"""
-        mgr = self._make_manager()
+        self._make_manager()
         from core.pipeline_context import RerankResult
+
         results = [
             RerankResult(doc_id="doc_1", content="内容", final_score=0.7, source="bm25"),
             RerankResult(doc_id="doc_1", content="内容", final_score=0.95, source="dense"),
@@ -87,25 +91,28 @@ class TestParallelRecallHelpers:
 
     def test_build_qdrant_filter_basic(self):
         """build_qdrant_filter 应返回 Qdrant Filter 对象。"""
+        from qdrant_client.http.models import Filter, MatchValue
+
         from common.auth import build_qdrant_filter
-        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
 
         qf = build_qdrant_filter(
-            user_role_mask=5, user_dept_mask=3, knowledge_version_epoch="20260603_00",
+            user_role_mask=5,
+            user_dept_mask=3,
+            knowledge_version_epoch="20260603_00",
         )
         assert isinstance(qf, Filter)
         assert qf.must is not None
         status_cond = any(
-            c.key == "status" and isinstance(c.match, MatchValue) and c.match.value == "active"
-            for c in qf.must
+            c.key == "status" and isinstance(c.match, MatchValue) and c.match.value == "active" for c in qf.must
         )
         assert status_cond, "Filter 应包含 status == active"
 
     def test_build_qdrant_filter_validation(self):
         """非法输入应抛出 ValueError（负 role_mask 或超长 mask）。"""
+        import pytest
+
         from common.auth import build_qdrant_filter
 
-        import pytest
         with pytest.raises(ValueError):
             build_qdrant_filter(-1, 3, "v1")
 
@@ -115,6 +122,7 @@ class TestRRFFusion:
 
     def _make_manager(self):
         from retrieval.parallel_recall import ParallelRecallManager
+
         mgr = ParallelRecallManager.__new__(ParallelRecallManager)
         mgr._dense_retriever = None
         mgr._bm25_retriever = None
@@ -125,8 +133,9 @@ class TestRRFFusion:
 
     def test_rrf_merges_multiple_sources(self):
         """RRF 融合应合并多路结果并按融合分数排序。"""
-        mgr = self._make_manager()
+        self._make_manager()
         from core.pipeline_context import RerankResult
+
         dense_results = [
             RerankResult(doc_id="doc_1", content="A", final_score=0.9, source="dense"),
             RerankResult(doc_id="doc_2", content="B", final_score=0.8, source="dense"),
@@ -154,6 +163,7 @@ class TestRRFFusion:
     def test_rrf_single_source_passthrough(self):
         """单路结果 RRF 融合应直接返回。"""
         from core.pipeline_context import RerankResult
+
         results = [RerankResult(doc_id="doc_1", content="A", final_score=0.9, source="dense")]
         # 单路时 RRF 简化为原始排序
         assert len(results) == 1

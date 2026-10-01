@@ -4,9 +4,11 @@
 
 ## P0 阻塞项
 
-- [ ] 下载模型权重（PaddleOCR、CLIP、BGE 等）至 `models/` 目录；离线导入命令：`python3 run_offline.py --mode create-index` 创建 Qdrant Collection/ES 索引，`python3 run_offline.py --mode incremental` 导入文档
-- [ ] 明确上线主线是 `app.py` 单体还是微服务网关；当前前端只按单体 `/api/*` 主线验证过
+- [ ] 准备知识库索引：运行 `run_offline.py create-index`，或确认已存在由其他流程建立的 Qdrant/Elasticsearch 索引
+- [ ] 采用 `app.py` 单体 `/api/*` 主线；微服务目录需要独立验证其与当前前端的契约
 - [ ] 生成并配置 JWT 密钥
+- [ ] 确认生产认证为 RS256（`JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM=RS256`）；仅当需要兼容旧 HS256 token 时才设置 `JWT_SECRET`
+- [ ] 验证 RS256 登录 → refresh → 受保护接口鉴权链路
 - [ ] 设置 `AUTH_DEV_MODE=false`
 - [ ] 设置 `CORS_ORIGINS`
 - [ ] 设置 `REDIS_PASSWORD`
@@ -26,6 +28,7 @@
 - [ ] 验证前端 `Session` 面板对应 `GET /api/dialog_history`
 - [ ] 验证前端 `Stats` 面板对应 `GET /api/stats`
 - [ ] 验证证据文档通过预签名链接打开，而不是直接裸跳转 API
+- [ ] 验证文档或查询权限元数据缺失/非法时 fail closed（拒绝访问，而不是按公开处理）
 - [ ] 验证管理员角色不会被 `rd` 等普通角色误判
 - [ ] 验证前端构建产物可由 FastAPI 正确挂载
 - [ ] 验证 `Dockerfile` 健康检查命中 `/api/health`
@@ -34,8 +37,18 @@
 
 - [ ] 核对 Qdrant 集合名：`rag_text_768`、`rag_image_512`
 - [ ] 核对 Elasticsearch 索引：`cosmetics_docs`
-- [ ] 抽样检查文档元数据包含 `doc_id / role_mask / dept_mask / status`
+- [ ] 抽样检查文档元数据包含 `doc_id / role_mask / dept_mask / status / doc_version_epoch`
+- [ ] 准备生产 BGE 模型资产
+- [ ] 启用视觉检索时准备生产 CLIP 模型资产
+- [ ] 需要 OCR 时安装 PaddleOCR/PaddlePaddle 运行时
+- [ ] 运行完整快照构建（`full-rebuild`）并通过快照校验
+- [ ] 验证图像检索遵循 active epoch（legacy 点不泄漏到非 default epoch）
+- [ ] 验证不同角色的 RBAC 边界
+- [ ] 封存目标 epoch（`seal-epoch`）
+- [ ] 显式切换 `config.json` 的 `knowledge_version_epoch` 并重启在线服务
+- [ ] 保留上一 sealed epoch 以支持回滚
 - [ ] 抽样验证至少 10 个真实业务问题
+- [ ] 记录生产评测状态（真实模型 smoke / 质量评测是否为已验证结果）
 
 ## P2 运维准备
 
@@ -45,24 +58,15 @@
 - [ ] 准备 HTTPS 与反向代理配置
 - [ ] 组织管理员与运维演练
 
-## 当前可用的离线命令
+## 离线管线状态
 
-以下离线命令已通过 `offline/` 模块实现，可直接执行：
+`run_offline.py` 提供 `create-index`、`ingest`、`incremental-build`、`full-rebuild`、`seal-epoch`
+（以及向后兼容的 `ingest-text`）。管线覆盖 TXT/PDF/DOCX/XLSX/图片、扫描页 OCR 路由、BGE/CLIP
+adapter、Qdrant 文本/图像、Elasticsearch、增量 carry-forward、全量重建、快照校验与 epoch 封存，
+并在确定性测试中验证。
 
-```bash
-# 创建 Qdrant Collection 与 ES 索引
-python3 run_offline.py --mode create-index
-
-# 增量更新（基于文件指纹检测新增/修改文档）
-python3 run_offline.py --mode incremental
-
-# 全量重建
-python3 run_offline.py --mode full
-
-# 反馈闭环（参数优化）
-python3 run_offline.py --mode feedback
-python3 run_offline.py --mode rewrite-feedback
-
-# 生成 Mock 数据
-python3 -m data.mock_generator data/mock_data
-```
+真实 BGE/CLIP/PaddleOCR 需要外部模型/运行时资产，CI 不下载模型；真实模型 smoke 未执行时为
+`EXTERNAL_MODEL_ASSET_REQUIRED`。`seal-epoch` 默认先校验（Qdrant text/image + Elasticsearch）
+再封存；`--skip-validation` 仅为危险逃生口。封存后需手动切换 `knowledge_version_epoch` 才会
+对在线检索生效。调度抽象与 Airflow DAG 已实现，但默认 Compose 不运行 Airflow，也未做真实
+Airflow 执行验证。

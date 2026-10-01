@@ -165,9 +165,7 @@ async def status():
         "kv_pressure": kv_status["kv_pressure"],
         "active_requests": kv_status["active"],
         "kv_budget_gb": kv_status.get("kv_budget_gb", 0),
-        "endpoints_alive": llm_client.router.check_any_endpoint_alive()
-        if llm_client._router is not None
-        else False,
+        "endpoints_alive": llm_client.router.check_any_endpoint_alive() if llm_client._router is not None else False,
     }
 
 
@@ -198,7 +196,7 @@ async def generate(req: GenerateRequest, _auth: None = Depends(verify_service_to
     except Exception as e:
         metrics.increment("generation.errors")
         logger.error(f"Generation failed: {e}")
-        raise HTTPException(status_code=500, detail="生成失败，请稍后重试")
+        raise HTTPException(status_code=500, detail="生成失败，请稍后重试") from e
 
 
 @app.post("/api/continuation")
@@ -218,6 +216,7 @@ async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_se
         session_state = None
         if ctx.session_id:
             from core.pipeline_context import SessionState
+
             session_state = SessionState.get_or_create(ctx.session_id)
             # 恢复锁定的证据文档 ID
             if session_state.locked_doc_ids:
@@ -237,7 +236,7 @@ async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_se
     except Exception as e:
         metrics.increment("generation.continuation.errors")
         logger.error(f"Continuation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/admission-check", response_model=AdmissionCheckResponse)
@@ -293,4 +292,4 @@ if __name__ == "__main__":
     import uvicorn
 
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=8100)
+    uvicorn.run(app, host="0.0.0.0", port=8100)  # noqa: S104 -- container service intentionally binds all interfaces

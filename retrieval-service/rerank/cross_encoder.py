@@ -51,6 +51,7 @@ class CrossEncoderEnsemble:
     def ce_a(self):
         if self._ce_a is None:
             from sentence_transformers import CrossEncoder
+
             model_path = config["gpu1"]["models"]["cross_encoder_a"]["model_path"]
             self._ce_a = CrossEncoder(model_path)
             logger.info(f"CrossEncoder-A loaded: {model_path}")
@@ -60,6 +61,7 @@ class CrossEncoderEnsemble:
     def ce_b(self):
         if self._ce_b is None:
             from sentence_transformers import CrossEncoder
+
             model_path = config["gpu1"]["models"]["cross_encoder_b"]["model_path"]
             self._ce_b = CrossEncoder(model_path)
             logger.info(f"CrossEncoder-B loaded: {model_path}")
@@ -69,6 +71,7 @@ class CrossEncoderEnsemble:
     def batch_aggregator(self):
         if self._batch_aggregator is None:
             from retrieval_service.rerank.batch_aggregator import RerankBatchAggregator
+
             self._batch_aggregator = RerankBatchAggregator()
         return self._batch_aggregator
 

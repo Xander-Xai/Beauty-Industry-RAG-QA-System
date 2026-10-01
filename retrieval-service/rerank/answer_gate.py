@@ -23,6 +23,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from common.config import get_config_dict
+from common.models import AnswerGateResult
 
 config = get_config_dict()
 
@@ -71,6 +72,7 @@ class AnswerGate:
     @property
     def device(self):
         import torch
+
         return "cuda:1" if torch.cuda.is_available() else "cpu"
 
     def verify(
@@ -102,9 +104,7 @@ class AnswerGate:
             )
 
         # NLI inference
-        contradiction_score, entailment_score = self._nli_inference(
-            top_doc.content, answer
-        )
+        contradiction_score, entailment_score = self._nli_inference(top_doc.content, answer)
 
         # Decision logic
         warning = contradiction_score > 0.5
@@ -197,8 +197,11 @@ class AnswerGate:
         import torch
 
         inputs = self._nli_tokenizer(
-            premise, hypothesis,
-            return_tensors="pt", truncation=True, max_length=512,
+            premise,
+            hypothesis,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
@@ -221,8 +224,11 @@ class AnswerGate:
         hypotheses = [p[1] for p in pairs]
 
         inputs = self._nli_tokenizer(
-            premises, hypotheses,
-            return_tensors="pt", truncation=True, max_length=512,
+            premises,
+            hypotheses,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
             padding=True,
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}

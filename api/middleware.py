@@ -27,6 +27,7 @@ else:
     # H-10: 生产模式下 CORS_ORIGINS 必须显式设置
     try:
         from common.config import is_production_mode
+
         if is_production_mode():
             raise RuntimeError("生产模式下必须通过 CORS_ORIGINS 环境变量设置允许的来源（不可使用通配符 *）")
     except ImportError:
@@ -50,9 +51,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     - X-Request-ID（不存在时自动生成）
     """
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # 获取或生成 request-id
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:12]
 
@@ -96,4 +95,5 @@ def setup_middleware(app: FastAPI) -> None:
 
     # 审计日志（最内层，离 app 最近）
     from auth.audit_log import AuditLogMiddleware
+
     app.add_middleware(AuditLogMiddleware)

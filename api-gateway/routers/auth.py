@@ -1,4 +1,5 @@
 """Auth API routes for the API Gateway — login, refresh, metadata, user management."""
+
 import logging
 import os
 import sys
@@ -53,18 +54,18 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
-    @field_validator('username', 'password')
+    @field_validator("username", "password")
     @classmethod
     def validate_not_empty(cls, v):
         if not v or not v.strip():
-            raise ValueError('must not be empty')
+            raise ValueError("must not be empty")
         return v.strip()
 
 
 class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
-    token_type: str = "Bearer"
+    token_type: str = "Bearer"  # noqa: S105 -- protocol constant, not a credential
     expires_in: int
     user: dict
 
@@ -81,18 +82,18 @@ class CreateUserRequest(BaseModel):
     roles: list[str] = []
     departments: list[str] = []
 
-    @field_validator('password')
+    @field_validator("password")
     @classmethod
     def validate_password(cls, v):
         if len(v) < 8:
-            raise ValueError('password must be at least 8 characters')
+            raise ValueError("password must be at least 8 characters")
         return v
 
-    @field_validator('user_id', 'username')
+    @field_validator("user_id", "username")
     @classmethod
     def validate_not_empty(cls, v):
         if not v or not v.strip():
-            raise ValueError('must not be empty')
+            raise ValueError("must not be empty")
         return v.strip()
 
 
@@ -106,28 +107,28 @@ async def auth_metadata():
     """Public UI/auth metadata for the browser client."""
     cfg = get_config()
     jwt_config = get_jwt_config()
-    role_options = getattr(cfg.ui, 'role_options', None) or [
+    role_options = getattr(cfg.ui, "role_options", None) or [
         {
             "key": name,
             "label": name.replace("_", " ").title(),
             "role_mask": mask,
-            "dept_mask": getattr(cfg.rbac, 'public_mask', 0),
+            "dept_mask": getattr(cfg.rbac, "public_mask", 0),
         }
         for name, mask in cfg.rbac.roles.items()
     ]
     return {
         "app": {
-            "title": getattr(cfg.ui, 'app_title', None) or cfg.system.name,
-            "subtitle": getattr(cfg.ui, 'subtitle', ''),
+            "title": getattr(cfg.ui, "app_title", None) or cfg.system.name,
+            "subtitle": getattr(cfg.ui, "subtitle", ""),
             "version": cfg.system.version,
         },
         "auth": {
             "dev_mode": cfg.auth.dev_mode,
             "jwt_enabled": jwt_config.enabled,
-            "anonymous_user_id": getattr(cfg.ui, 'anonymous_user_id', 'web-user'),
+            "anonymous_user_id": getattr(cfg.ui, "anonymous_user_id", "web-user"),
         },
         "rbac": {
-            "default_role": getattr(cfg.ui, 'default_role', ''),
+            "default_role": getattr(cfg.ui, "default_role", ""),
             "roles": cfg.rbac.roles,
             "departments": cfg.rbac.departments,
             "role_options": role_options,
@@ -208,13 +209,17 @@ async def create_user(req: CreateUserRequest, authorization: str = Header(None))
     store = get_store()
     try:
         user = store.create_user(
-            req.user_id, req.username, req.password,
-            req.display_name, req.roles, req.departments,
+            req.user_id,
+            req.username,
+            req.password,
+            req.display_name,
+            req.roles,
+            req.departments,
         )
         return user.to_dict()
     except Exception as e:
         logger.error("Failed to create user: %s", e)
-        raise HTTPException(status_code=400, detail="Failed to create user")
+        raise HTTPException(status_code=400, detail="Failed to create user") from e
 
 
 @router.put("/api/auth/users/{user_id}/roles")

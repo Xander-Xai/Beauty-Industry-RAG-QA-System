@@ -4,6 +4,7 @@ AnswerGate contradiction detection, CrossEncoderEnsemble reranking, CLIP timeout
 
 侧重端到端流程与 mock 外部依赖（Qdrant/ES/Redis/CLIP）。
 """
+
 import os
 import sys
 import types
@@ -30,13 +31,16 @@ import numpy as np
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_recall_result(doc_id, content, score, source="dense_bge"):
     from core.pipeline_context import RecallResult
+
     return RecallResult(doc_id=doc_id, content=content, score=score, source=source)
 
 
 def _make_rerank_result(doc_id, content, source="dense_bge", ce_a=0.0, ce_b=0.0, ensemble=0.0):
     from core.pipeline_context import RerankResult
+
     r = RerankResult(doc_id=doc_id, content=content, source=source)
     r.ce_score_a = ce_a
     r.ce_score_b = ce_b
@@ -48,11 +52,13 @@ def _make_rerank_result(doc_id, content, source="dense_bge", ce_a=0.0, ce_b=0.0,
 # 1. ParallelRecallManager — execute() with mocked retrievers
 # ===========================================================================
 
+
 class TestParallelRecallExecute:
     """ParallelRecallManager.execute() 并行多路召回集成测试。"""
 
     def _make_manager(self):
         from retrieval.parallel_recall import ParallelRecallManager
+
         mgr = ParallelRecallManager.__new__(ParallelRecallManager)
         mgr._dense_retriever = MagicMock()
         mgr._bm25_retriever = MagicMock()
@@ -82,13 +88,13 @@ class TestParallelRecallExecute:
         mgr = self._make_manager()
         # mock dense retriever
         mgr._dense_retriever.search.return_value = [
-            {"doc_id": "d1", "content": "c1", "score": 0.9},
-            {"doc_id": "d2", "content": "c2", "score": 0.8},
+            {"doc_id": "d1", "content": "c1", "score": 0.9, "metadata": {"role_mask": 0, "dept_mask": 0}},
+            {"doc_id": "d2", "content": "c2", "score": 0.8, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
         # mock bm25 retriever
         mgr._bm25_retriever.search.return_value = [
-            {"doc_id": "d2", "content": "c2", "score": 0.85},
-            {"doc_id": "d3", "content": "c3", "score": 0.7},
+            {"doc_id": "d2", "content": "c2", "score": 0.85, "metadata": {"role_mask": 0, "dept_mask": 0}},
+            {"doc_id": "d3", "content": "c3", "score": 0.7, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
         # mock clip retriever (disable to simplify — use_clip=False)
 
@@ -123,7 +129,7 @@ class TestParallelRecallExecute:
         mgr = self._make_manager()
         mgr._dense_retriever.search.side_effect = ConnectionError("Qdrant 宕机")
         mgr._bm25_retriever.search.return_value = [
-            {"doc_id": "d1", "content": "c1", "score": 0.9},
+            {"doc_id": "d1", "content": "c1", "score": 0.9, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
 
         query_emb = np.random.rand(768).astype(np.float32)
@@ -153,7 +159,7 @@ class TestParallelRecallExecute:
 
         mgr = self._make_manager()
         mgr._dense_retriever.search.return_value = [
-            {"doc_id": "d1", "content": "c1", "score": 0.9},
+            {"doc_id": "d1", "content": "c1", "score": 0.9, "metadata": {"role_mask": 0, "dept_mask": 0}},
         ]
         # CLIP retriever 不可用
         mgr._clip_retriever.search.side_effect = Exception("GPU timeout")
@@ -176,11 +182,13 @@ class TestParallelRecallExecute:
 # 2. Agreement Score Computation
 # ===========================================================================
 
+
 class TestAgreementScore:
     """_compute_agreement_score() 一致性评分测试。"""
 
     def _make_manager(self):
         from retrieval.parallel_recall import ParallelRecallManager
+
         mgr = ParallelRecallManager.__new__(ParallelRecallManager)
         mgr._dense_retriever = MagicMock()
         mgr._bm25_retriever = MagicMock()
@@ -193,6 +201,7 @@ class TestAgreementScore:
         """相同结果的多路召回应有高一致性。"""
         mgr = self._make_manager()
         from core.pipeline_context import RecallResult
+
         shared = [
             RecallResult(doc_id="d1", content="c1", score=0.9, source="dense"),
             RecallResult(doc_id="d2", content="c2", score=0.8, source="dense"),
@@ -210,6 +219,7 @@ class TestAgreementScore:
         """完全不同的多路召回应有低一致性。"""
         mgr = self._make_manager()
         from core.pipeline_context import RecallResult
+
         path_results = {
             "dense_bge": [
                 RecallResult(doc_id="d1", content="c1", score=0.9, source="dense"),
@@ -228,6 +238,7 @@ class TestAgreementScore:
         """单路召回 Jaccard 为 0，但聚类可能给默认分。"""
         mgr = self._make_manager()
         from core.pipeline_context import RecallResult
+
         path_results = {
             "dense_bge": [
                 RecallResult(doc_id="d1", content="c1", score=0.9, source="dense"),
@@ -240,6 +251,7 @@ class TestAgreementScore:
         """部分重叠的召回应有中等一致性。"""
         mgr = self._make_manager()
         from core.pipeline_context import RecallResult
+
         path_results = {
             "dense_bge": [
                 RecallResult(doc_id="d1", content="c1", score=0.9, source="dense"),
@@ -261,11 +273,13 @@ class TestAgreementScore:
 # 3. AnswerGate Contradiction Detection
 # ===========================================================================
 
+
 class TestAnswerGate:
     """AnswerGate 矛盾检测测试。"""
 
     def _make_gate(self, nli_threshold=0.8):
         from retrieval.answer_gate import AnswerGate
+
         gate = AnswerGate.__new__(AnswerGate)
         gate.nli_threshold = nli_threshold
         gate._nli_model = None
@@ -284,6 +298,7 @@ class TestAnswerGate:
         """高 Jaccard 相似度应快速通过（跳过 NLI 模型）。"""
         gate = self._make_gate()
         from core.pipeline_context import RerankResult
+
         # 相同内容 → Jaccard 接近 1.0
         doc = RerankResult(doc_id="d1", content="烟酰胺浓度推荐2-5%")
         result = gate.verify(answer="烟酰胺浓度推荐2-5%", top_doc=doc)
@@ -294,6 +309,7 @@ class TestAnswerGate:
         """法规类低相似度应强制拒答。"""
         gate = self._make_gate()
         from core.pipeline_context import RerankResult
+
         doc = RerankResult(doc_id="d1", content="关于化妆品安全技术规范中铅限量标准")
         result = gate.verify(
             answer="完全不同的回答内容xyz",
@@ -308,6 +324,7 @@ class TestAnswerGate:
         """非法规类低相似度应标记 warning 但通过。"""
         gate = self._make_gate()
         from core.pipeline_context import RerankResult
+
         doc = RerankResult(doc_id="d1", content="关于化妆品安全技术规范中铅限量标准")
         result = gate.verify(
             answer="完全不同的回答内容xyz",
@@ -334,6 +351,7 @@ class TestAnswerGate:
         """batch_verify 应返回每个文档的矛盾/蕴含分数。"""
         gate = self._make_gate()
         from core.pipeline_context import RerankResult
+
         docs = [
             RerankResult(doc_id="d1", content="烟酰胺是一种维生素"),
             RerankResult(doc_id="d2", content="透明质酸保湿"),
@@ -355,16 +373,19 @@ class TestAnswerGate:
 # 4. CrossEncoderEnsemble Reranking
 # ===========================================================================
 
+
 class TestCrossEncoderEnsemble:
     """CrossEncoderEnsemble 重排测试。"""
 
     def _make_ensemble(self):
         from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
+
         ce = CrossEncoderEnsemble.__new__(CrossEncoderEnsemble)
         ce._ce_a = MagicMock()
         ce._ce_b = MagicMock()
         ce._batch_aggregator = MagicMock()
         from retrieval.cross_encoder_ensemble import PlattScaler
+
         ce._platt_scaler = PlattScaler.__new__(PlattScaler)
         ce._platt_scaler._calibrators = {
             "ce_a": {"a": -1.0, "b": 0.0},
@@ -414,11 +435,13 @@ class TestCrossEncoderEnsemble:
 # 5. PlattScaler
 # ===========================================================================
 
+
 class TestPlattScaler:
     """Platt Scaling 校准器测试。"""
 
     def _make_scaler(self):
         from retrieval.cross_encoder_ensemble import PlattScaler
+
         s = PlattScaler.__new__(PlattScaler)
         s._calibrators = {
             "ce_a": {"a": -1.0, "b": 0.0},

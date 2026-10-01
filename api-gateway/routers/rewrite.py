@@ -41,12 +41,14 @@ REWRITE_TIMEOUT_MS = int(os.environ.get("REWRITE_TIMEOUT_MS", "2000"))
 # ---------------------------------------------------------------------------
 class RewriteRequest(BaseModel):
     """查询改写请求体。"""
+
     query: str = Field(..., description="用户原始查询")
     recent_dialogs: list[str] = Field(default_factory=list, description="近期对话历史")
 
 
 class RewriteResponse(BaseModel):
     """查询改写响应体，透传下游 QueryRewriteResult。"""
+
     rewritten_query: str = ""
     business_type: str = "general"
     intent: str = ""

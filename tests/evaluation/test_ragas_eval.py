@@ -12,10 +12,10 @@ import pytest
 
 from tests.evaluation.ragas_eval import RAGASEvaluator, format_for_ragas, load_golden_set
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_entries() -> list[dict]:
@@ -37,9 +37,7 @@ def sample_entries() -> list[dict]:
 
 @pytest.fixture
 def jsonl_file(sample_entries: list[dict]) -> str:
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         for entry in sample_entries:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     yield f.name
@@ -48,12 +46,17 @@ def jsonl_file(sample_entries: list[dict]) -> str:
 
 @pytest.fixture
 def empty_jsonl_file() -> str:
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
         pass  # 空文件
     yield f.name
     os.unlink(f.name)
+
+
+@pytest.fixture
+def ragas_unavailable(monkeypatch):
+    """Make the optional RAGAS path deterministic even on full-dependency CI."""
+    monkeypatch.setitem(sys.modules, "ragas", None)
+    monkeypatch.setitem(sys.modules, "datasets", None)
 
 
 # ---------------------------------------------------------------------------
@@ -81,9 +84,7 @@ class TestLoadGoldenSet:
 
     def test_load_whitespace_only_entries(self) -> None:
         """纯空行文件应返回空列表。"""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
             f.write("   \n\n")
         try:
             dataset = load_golden_set(f.name)
@@ -146,7 +147,7 @@ class TestRAGASEvaluatorInit:
 
 
 class TestRAGASEvaluatorEvaluate:
-    def test_evaluate_returns_faithfulness_key(self, jsonl_file: str) -> None:
+    def test_evaluate_returns_faithfulness_key(self, jsonl_file: str, ragas_unavailable) -> None:
         """即使 RAGAS 未安装，evaluate() 也应返回包含 faithfulness 的字典。"""
         evaluator = RAGASEvaluator(jsonl_file)
         results = evaluator.evaluate()
@@ -154,7 +155,7 @@ class TestRAGASEvaluatorEvaluate:
         assert "faithfulness" in results
         assert results["faithfulness"] == 0.0
 
-    def test_evaluate_returns_warning_when_ragas_missing(self, jsonl_file: str) -> None:
+    def test_evaluate_returns_warning_when_ragas_missing(self, jsonl_file: str, ragas_unavailable) -> None:
         """RAGAS 未安装时 evaluate() 应包含 _warning 键。"""
         evaluator = RAGASEvaluator(jsonl_file)
         results = evaluator.evaluate()
@@ -173,7 +174,7 @@ class TestRAGASEvaluatorEvaluate:
         results = evaluator.evaluate(metrics=["nonexistent_metric"])
         assert results == {}
 
-    def test_evaluate_subset_of_metrics(self, jsonl_file: str) -> None:
+    def test_evaluate_subset_of_metrics(self, jsonl_file: str, ragas_unavailable) -> None:
         """传入有效指标子集应返回对应指标（RAGAS 未安装时返回 0.0）。"""
         evaluator = RAGASEvaluator(jsonl_file)
         results = evaluator.evaluate(metrics=["faithfulness", "answer_relevancy"])
@@ -192,7 +193,7 @@ class TestRAGASEvaluatorEvaluate:
 
 
 class TestRAGASEvaluatorCustomAnswerFn:
-    def test_evaluate_with_custom_answer_fn(self, jsonl_file: str) -> None:
+    def test_evaluate_with_custom_answer_fn(self, jsonl_file: str, ragas_unavailable) -> None:
         """evaluate_with_custom_answer_fn 应正常工作。"""
         evaluator = RAGASEvaluator(jsonl_file)
 
@@ -204,7 +205,7 @@ class TestRAGASEvaluatorCustomAnswerFn:
         assert "faithfulness" in results
         assert results["faithfulness"] == 0.0
 
-    def test_custom_answer_fn_dataset_property(self, jsonl_file: str) -> None:
+    def test_custom_answer_fn_dataset_property(self, jsonl_file: str, ragas_unavailable) -> None:
         """自定义回答函数后数据集属性应保持不变。"""
         evaluator = RAGASEvaluator(jsonl_file)
         original_question = evaluator.dataset[0]["question"]
@@ -214,7 +215,6 @@ class TestRAGASEvaluatorCustomAnswerFn:
 
         evaluator.evaluate_with_custom_answer_fn(answer_fn)
         assert evaluator.dataset[0]["question"] == original_question
-
 
     def test_evaluate_ragas_installed_path(self, jsonl_file: str, monkeypatch) -> None:
         """模拟 RAGAS 已安装时的 evaluate() 执行路径"""
@@ -226,12 +226,16 @@ class TestRAGASEvaluatorCustomAnswerFn:
         class MockMetric:
             pass
 
-        mock_ragas.evaluate = lambda dataset, metrics: type("Result", (), {
-            "faithfulness": 0.85,
-            "answer_relevancy": 0.92,
-            "context_precision": 0.78,
-            "context_recall": 0.88,
-        })()
+        mock_ragas.evaluate = lambda dataset, metrics: type(
+            "Result",
+            (),
+            {
+                "faithfulness": 0.85,
+                "answer_relevancy": 0.92,
+                "context_precision": 0.78,
+                "context_recall": 0.88,
+            },
+        )()
         sys.modules["ragas"] = mock_ragas
 
         # 创建 mock ragas.metrics 模块
@@ -253,6 +257,7 @@ class TestRAGASEvaluatorCustomAnswerFn:
 
         try:
             from tests.evaluation.ragas_eval import RAGASEvaluator
+
             evaluator = RAGASEvaluator(jsonl_file)
             results = evaluator.evaluate()
             # 由于 mock 的 ragas.evaluate 返回了固定值
@@ -263,9 +268,8 @@ class TestRAGASEvaluatorCustomAnswerFn:
                 if mod in sys.modules:
                     del sys.modules[mod]
 
-    def test_main_cli(self, jsonl_file: str, monkeypatch, capsys) -> None:
+    def test_main_cli(self, jsonl_file: str, monkeypatch, capsys, ragas_unavailable) -> None:
         """测试 CLI 入口 main() 函数"""
-        import argparse
         from unittest.mock import patch
 
         from tests.evaluation.ragas_eval import main
@@ -287,12 +291,16 @@ class TestRAGASEvaluatorCustomAnswerFn:
         class MockMetric:
             pass
 
-        mock_ragas.evaluate = lambda dataset, metrics: type("Result", (), {
-            "faithfulness": 0.90,
-            "answer_relevancy": 0.95,
-            "context_precision": 0.80,
-            "context_recall": 0.85,
-        })()
+        mock_ragas.evaluate = lambda dataset, metrics: type(
+            "Result",
+            (),
+            {
+                "faithfulness": 0.90,
+                "answer_relevancy": 0.95,
+                "context_precision": 0.80,
+                "context_recall": 0.85,
+            },
+        )()
         sys.modules["ragas"] = mock_ragas
 
         mock_metrics = types.ModuleType("ragas.metrics")
@@ -312,6 +320,7 @@ class TestRAGASEvaluatorCustomAnswerFn:
 
         try:
             from tests.evaluation.ragas_eval import RAGASEvaluator
+
             evaluator = RAGASEvaluator(jsonl_file)
 
             def answer_fn(question: str, contexts: list[str]) -> str:
@@ -330,6 +339,7 @@ class TestRAGASEvaluatorCustomAnswerFn:
 # Integration: Sample golden set
 # ---------------------------------------------------------------------------
 
+
 class TestSampleGoldenSet:
     def test_sample_golden_set_loads(self) -> None:
         """实际样例文件应能成功加载。"""
@@ -346,7 +356,7 @@ class TestSampleGoldenSet:
         for entry in dataset:
             assert required_keys.issubset(entry.keys()), f"条目缺少键: {entry.get('question', '?')}"
 
-    def test_sample_golden_set_evaluate(self) -> None:
+    def test_sample_golden_set_evaluate(self, ragas_unavailable) -> None:
         """使用样例数据集调用 evaluate() 不应崩溃。"""
         sample_path = Path(__file__).parent / "sample_golden_set.jsonl"
         evaluator = RAGASEvaluator(str(sample_path))

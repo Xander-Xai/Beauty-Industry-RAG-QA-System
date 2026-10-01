@@ -100,4 +100,4 @@ npm run dev
 
 - `POST /api/continuation` 当前仍是占位接口，页面没有把它作为真实续写能力暴露。
 - 如果系统没有可用知识库数据，问答接口仍可能返回低质量结果或空结果。
-- 离线导入管线已实现（`offline/` 包），可通过 `python3 run_offline.py --mode incremental` 导入文档数据。运行前需先下载 PaddleOCR、CLIP、BGE 等模型权重。
+- 知识库由管理员通过离线 ingestion 管线（`run_offline.py`）构建并发布；终端用户无需运行这些命令。如果系统当前没有可用的知识库快照，问答接口仍可能返回低质量或空结果。

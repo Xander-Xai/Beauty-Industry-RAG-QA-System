@@ -75,6 +75,7 @@ class OnlineRAGPipeline:
     def router(self):
         if self._router is None:
             from router.stateless_router import StatelessRouter
+
             self._router = StatelessRouter()
         return self._router
 
@@ -82,6 +83,7 @@ class OnlineRAGPipeline:
     def cache(self):
         if self._cache is None:
             from cache.redis_cache import RedisCache
+
             self._cache = RedisCache()
         return self._cache
 
@@ -89,6 +91,7 @@ class OnlineRAGPipeline:
     def admission(self):
         if self._admission is None:
             from admission.kv_admission import KVAdmissionControl
+
             self._admission = KVAdmissionControl()
         return self._admission
 
@@ -96,6 +99,7 @@ class OnlineRAGPipeline:
     def complexity_evaluator(self):
         if self._complexity_evaluator is None:
             from models.complexity_evaluator import ComplexityEvaluator
+
             self._complexity_evaluator = ComplexityEvaluator()
         return self._complexity_evaluator
 
@@ -103,6 +107,7 @@ class OnlineRAGPipeline:
     def query_rewriter(self):
         if self._query_rewriter is None:
             from rewrite.query_rewriter import QueryRewriter
+
             self._query_rewriter = QueryRewriter()
         return self._query_rewriter
 
@@ -110,6 +115,7 @@ class OnlineRAGPipeline:
     def embedding_service(self):
         if self._embedding_service is None:
             from models.embedding_service import EmbeddingService
+
             self._embedding_service = EmbeddingService()
         return self._embedding_service
 
@@ -117,6 +123,7 @@ class OnlineRAGPipeline:
     def parallel_recall(self):
         if self._parallel_recall is None:
             from retrieval.parallel_recall import ParallelRecallManager
+
             self._parallel_recall = ParallelRecallManager()
         return self._parallel_recall
 
@@ -124,6 +131,7 @@ class OnlineRAGPipeline:
     def bi_encoder(self):
         if self._bi_encoder is None:
             from retrieval.bi_encoder import BiEncoderReranker
+
             self._bi_encoder = BiEncoderReranker()
         return self._bi_encoder
 
@@ -131,6 +139,7 @@ class OnlineRAGPipeline:
     def cross_encoder_ensemble(self):
         if self._cross_encoder_ensemble is None:
             from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
+
             self._cross_encoder_ensemble = CrossEncoderEnsemble()
         return self._cross_encoder_ensemble
 
@@ -138,6 +147,7 @@ class OnlineRAGPipeline:
     def evidence_gate(self):
         if self._evidence_gate is None:
             from retrieval.evidence_gate import EvidenceEnsembleGate
+
             self._evidence_gate = EvidenceEnsembleGate()
         return self._evidence_gate
 
@@ -145,6 +155,7 @@ class OnlineRAGPipeline:
     def llm_client(self):
         if self._llm_client is None:
             from models.llm_client import LLMClient
+
             self._llm_client = LLMClient()
         return self._llm_client
 
@@ -152,6 +163,7 @@ class OnlineRAGPipeline:
     def answer_gate(self):
         if self._answer_gate is None:
             from retrieval.answer_gate import AnswerGate
+
             self._answer_gate = AnswerGate()
         return self._answer_gate
 
@@ -159,6 +171,7 @@ class OnlineRAGPipeline:
     def ab_platform(self):
         if self._ab_platform is None:
             from common.ab_testing import ABExperimentPlatform
+
             self._ab_platform = ABExperimentPlatform()
         return self._ab_platform
 
@@ -166,6 +179,7 @@ class OnlineRAGPipeline:
     def blip_service(self):
         if self._blip_service is None:
             from models.blip_service import BLIPInferenceService
+
             self._blip_service = BLIPInferenceService()
         return self._blip_service
 
@@ -174,6 +188,7 @@ class OnlineRAGPipeline:
         if self._otel_tracer is None:
             try:
                 from monitoring.otel_tracer import OpenTelemetryTracer
+
                 self._otel_tracer = OpenTelemetryTracer()
             except Exception:
                 self._otel_tracer = "unavailable"
@@ -183,6 +198,7 @@ class OnlineRAGPipeline:
     def blip_detector(self):
         if self._blip_detector is None:
             from models.blip_service import BLIPTargetDetector
+
             self._blip_detector = BLIPTargetDetector()
         return self._blip_detector
 
@@ -238,11 +254,7 @@ class OnlineRAGPipeline:
 
                 # ② 缓存查询（L1/L2）— PRD §10.6: requires_context=true 仅限原会话
                 # PRD §4.4: Rewrite 降级时禁用缓存
-                requires_ctx = (
-                    ctx.rewrite_result.requires_context
-                    if ctx.rewrite_result
-                    else False
-                )
+                requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False
                 cache_key = self._build_cache_key(ctx)
                 if requires_ctx:
                     # PRD §10.6: 上下文依赖型查询的缓存仅限同一 session 复用
@@ -273,7 +285,7 @@ class OnlineRAGPipeline:
                 # ③ Query Rewrite（路由增强器，失败降级不返回 503）
                 def _do_rewrite():
                     try:
-                        with (tracer.trace("rewrite") if tracer else contextlib.nullcontext()):
+                        with tracer.trace("rewrite") if tracer else contextlib.nullcontext():
                             return self.query_rewriter.rewrite(ctx.user_input, recent_dialogs=recent_dialogs)
                     except Exception as e:
                         logger.warning(f"Query Rewrite 失败，降级为规则兜底: {e}")
@@ -282,7 +294,7 @@ class OnlineRAGPipeline:
                 # ④ 复杂度评估（提前至 model routing 之前）
                 def _do_complexity():
                     try:
-                        with (tracer.trace("complexity_eval") if tracer else contextlib.nullcontext()):
+                        with tracer.trace("complexity_eval") if tracer else contextlib.nullcontext():
                             return self.complexity_evaluator.evaluate(ctx.user_input), None
                     except Exception as e:
                         logger.warning(f"复杂度评估失败，降级为简单模型: {e}")
@@ -305,17 +317,16 @@ class OnlineRAGPipeline:
                 business_type = ctx.rewrite_result.business_type
                 # 从 model_routing 确定端点名，再取对应模型的 max_output_tokens
                 from common.config import resolve_model_endpoint
+
                 target_tier = "complex" if is_complex else "simple"
                 target_endpoint = resolve_model_endpoint(target_tier)
                 # 在 gpu0/gpu1 配置中查找对应端点的 max_output_tokens
                 _max_tokens_cfg = (
-                    config.get("gpu0", {}).get("models", {}).get(target_endpoint, {})
-                    .get("max_output_tokens")
+                    config.get("gpu0", {}).get("models", {}).get(target_endpoint, {}).get("max_output_tokens")
                 )
                 if _max_tokens_cfg is None:
                     _max_tokens_cfg = (
-                        config.get("gpu1", {}).get("models", {}).get(target_endpoint, {})
-                        .get("max_output_tokens", {})
+                        config.get("gpu1", {}).get("models", {}).get(target_endpoint, {}).get("max_output_tokens", {})
                     )
                 ctx.max_output_tokens = _max_tokens_cfg.get(business_type, 512)
 
@@ -328,7 +339,7 @@ class OnlineRAGPipeline:
 
                 # ⑥ KV 准入控制（在 rewrite 之后以获取正确的 business_type 用于 P0/P1/P2 优先级）
                 t_admit = time.time()
-                with (tracer.trace("admission") if tracer else contextlib.nullcontext()):
+                with tracer.trace("admission") if tracer else contextlib.nullcontext():
                     admitted, admission_reason, admission_priority = self._check_admission(ctx)
                 ctx.record_timing("admission_check", (time.time() - t_admit) * 1000)
                 if not admitted:
@@ -337,7 +348,7 @@ class OnlineRAGPipeline:
 
                 # ⑦ 双 Embedding 路由 + CLIP 三档判别（PRD §4.5）
                 t_embedding = time.time()
-                with (tracer.trace("embedding_route") if tracer else contextlib.nullcontext()):
+                with tracer.trace("embedding_route") if tracer else contextlib.nullcontext():
                     query_embedding = self.embedding_service.encode_text(ctx.rewrite_result.rewritten_query)
                     clip_use, clip_top_k = self._should_use_clip_sync(ctx.rewrite_result)
                     ctx.clip_use = clip_use
@@ -347,13 +358,10 @@ class OnlineRAGPipeline:
                 # ⑧ 并行多路召回（PRD §7.1）
                 # PRD §4.3: 简单 query（60-70%）仅走 BGE+BM25 两路；复杂 query 走完整四路
                 t_recall = time.time()
-                with (tracer.trace("parallel_recall") if tracer else contextlib.nullcontext()):
+                with tracer.trace("parallel_recall") if tracer else contextlib.nullcontext():
                     recall_top_k = dict(config["retrieval"]["parallel_paths"])
                     if not is_complex:
-                        recall_top_k = {
-                            k: v for k, v in recall_top_k.items()
-                            if k in ("dense_bge", "bm25_es")
-                        }
+                        recall_top_k = {k: v for k, v in recall_top_k.items() if k in ("dense_bge", "bm25_es")}
                         logger.info("简单 query 路由: 仅 BGE+BM25 两路召回")
                     # PRD §4.4 保守执行：降级时 TopK 100→300
                     if is_fallback:
@@ -373,7 +381,7 @@ class OnlineRAGPipeline:
                 ctx.record_timing("parallel_recall", (time.time() - t_recall) * 1000)
 
                 # PRD §12: Track CLIP sync timeout
-                ctx.clip_sync_timeout = (clip_use and not any(r.source == "clip_visual" for r in ctx.recall_results))
+                ctx.clip_sync_timeout = clip_use and not any(r.source == "clip_visual" for r in ctx.recall_results)
 
                 # GAP-19: CLIP 异步补充召回（PRD §4.5）— 主链路返回后后台执行
                 # 结果存入 session.async_clip_results，供下一轮多轮对话预热复用
@@ -388,6 +396,8 @@ class OnlineRAGPipeline:
                             query=ctx.rewrite_result.rewritten_query,
                             qdrant_filter=clip_qdrant_filter,
                             session=session_state_for_clip,
+                            user_role_mask=ctx.user_role_mask,
+                            user_dept_mask=ctx.user_dept_mask,
                         )
                         # 不阻塞主流程：设置超时后放弃
                         try:
@@ -404,7 +414,7 @@ class OnlineRAGPipeline:
                 # ⑧-b BLIP 在线按需触发（PRD §6）
                 # 当 CLIP 召回返回图像结果且查询涉及视觉内容时，生成图像描述增强检索结果
                 t_blip = time.time()
-                with (tracer.trace("blip_inference") if tracer else contextlib.nullcontext()):
+                with tracer.trace("blip_inference") if tracer else contextlib.nullcontext():
                     try:
                         self._maybe_trigger_blip(ctx)
                     except Exception as e:
@@ -420,7 +430,7 @@ class OnlineRAGPipeline:
 
                 # ⑩ BiEncoder 宽保留（Top150）
                 t_bi = time.time()
-                with (tracer.trace("bi_encoder") if tracer else contextlib.nullcontext()):
+                with tracer.trace("bi_encoder") if tracer else contextlib.nullcontext():
                     ctx.rerank_results = self.bi_encoder.rerank(
                         query=ctx.rewrite_result.rewritten_query,
                         candidates=ctx.union_recall_set,
@@ -430,7 +440,7 @@ class OnlineRAGPipeline:
 
                 # ⑪ CrossEncoder Ensemble（GPU 批处理）
                 t_ce = time.time()
-                with (tracer.trace("cross_encoder_ensemble") if tracer else contextlib.nullcontext()):
+                with tracer.trace("cross_encoder_ensemble") if tracer else contextlib.nullcontext():
                     ctx.rerank_results = self.cross_encoder_ensemble.rerank(
                         query=ctx.rewrite_result.rewritten_query,
                         candidates=ctx.rerank_results,
@@ -440,13 +450,11 @@ class OnlineRAGPipeline:
 
                 # GAP-20: 将 CLIP 贡献度从 Rerank 结果传递到 ctx，供 MetricsCollector 采集
                 if ctx.rerank_results:
-                    ctx.clip_contribution_ratio = getattr(
-                        ctx.rerank_results[0], '_clip_contribution_ratio', 0.0
-                    )
+                    ctx.clip_contribution_ratio = getattr(ctx.rerank_results[0], "_clip_contribution_ratio", 0.0)
 
                 # ⑫ Evidence Ensemble Gate（投票机制，readme 7.4）
                 t_eg = time.time()
-                with (tracer.trace("evidence_gate") if tracer else contextlib.nullcontext()):
+                with tracer.trace("evidence_gate") if tracer else contextlib.nullcontext():
                     # 应用 A/B 实验覆盖（权重 / 阈值）
                     evidence_weights = ab_overrides.get("evidence_gate_weights")
                     evidence_thresholds = ab_overrides.get("evidence_gate_thresholds")
@@ -476,8 +484,8 @@ class OnlineRAGPipeline:
                             metric_name="latency_ms",
                             value=ctx.get_total_latency_ms(),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Could not record A/B experiment metrics: %s", exc)
 
                 # ⑬ 根据 Evidence Gate 决策分支
                 decision = ctx.evidence_result.decision
@@ -499,14 +507,12 @@ class OnlineRAGPipeline:
 
                 # ⑬ LLM 生成（含 KV 降级适配 + Prefix Caching 保护）
                 t_gen = time.time()
-                with (tracer.trace("generation") if tracer else contextlib.nullcontext()):
+                with tracer.trace("generation") if tracer else contextlib.nullcontext():
                     # PRD §9 Prefix Caching 保护: max_tokens 不变，由流式截断控制输出长度
                     effective_max_tokens = self.admission.get_effective_max_tokens(
                         ctx.max_output_tokens, admission_reason
                     )
-                    truncation_tokens = self.admission.get_truncation_tokens(
-                        ctx.max_output_tokens, admission_reason
-                    )
+                    truncation_tokens = self.admission.get_truncation_tokens(ctx.max_output_tokens, admission_reason)
                     force_downgrade = self.admission.should_force_downgrade(admission_reason)
                     effective_model = "simple" if force_downgrade else target_tier
 
@@ -533,7 +539,7 @@ class OnlineRAGPipeline:
 
                 # ⑮ Answer Gate（NLI 校验）
                 t_ag = time.time()
-                with (tracer.trace("answer_gate") if tracer else contextlib.nullcontext()):
+                with tracer.trace("answer_gate") if tracer else contextlib.nullcontext():
                     ctx.answer_gate_result = self.answer_gate.verify(
                         answer=ctx.generation_result.answer,
                         top_doc=ctx.rerank_results[0] if ctx.rerank_results else None,
@@ -614,6 +620,7 @@ class OnlineRAGPipeline:
         import hashlib as _hl
 
         from api.models import ChatResponse, QueryResponse
+
         rewrite_q = ctx.rewrite_result.rewritten_query if ctx.rewrite_result else ctx.user_input
 
         # PRD §10.2: schema fingerprint — 基于 response model 字段哈希
@@ -645,10 +652,11 @@ class OnlineRAGPipeline:
         return hashlib.sha256(json.dumps(scoped, sort_keys=True).encode()).hexdigest()
 
     def _build_clip_filter(self, ctx):
-        """构建 CLIP 异步召回的 Qdrant Filter"""
-        from auth.bitmask_rbac import build_qdrant_filter
+        """构建 CLIP 异步召回的 Qdrant Filter（与文本一致遵循 active epoch）"""
+        from auth.bitmask_rbac import build_qdrant_image_filter
+
         active_epoch = config.get("knowledge_version_epoch", "default")
-        return build_qdrant_filter(ctx.user_role_mask, ctx.user_dept_mask, active_epoch)
+        return build_qdrant_image_filter(ctx.user_role_mask, ctx.user_dept_mask, active_epoch)
 
     def _check_admission(self, ctx) -> tuple[bool, str, str]:
         """KV 准入控制检查 — 返回 (admitted, reason, priority)"""
@@ -665,6 +673,7 @@ class OnlineRAGPipeline:
         # PRD §9: P2 极端过载返回 503
         if reason in ("critical_p2_rejected",):
             from fastapi.responses import JSONResponse
+
             ctx.final_response = JSONResponse(
                 status_code=503,
                 content={
@@ -714,7 +723,9 @@ class OnlineRAGPipeline:
 
         # 从 config.json 读取领域关键词
         _domain_kw = config.get("domain_keywords", {})
-        regulation_keywords = _domain_kw.get("regulation", ["法规", "合规", "标准", "备案", "许可", "标准号", "GB", "禁用"])
+        regulation_keywords = _domain_kw.get(
+            "regulation", ["法规", "合规", "标准", "备案", "许可", "标准号", "GB", "禁用"]
+        )
         development_keywords = _domain_kw.get("development", ["配方", "研发", "工艺", "制备", "合成"])
         ingredient_keywords = _domain_kw.get("ingredient", ["成分", "INCI", "功效", "浓度", "含量", "添加量"])
 
@@ -725,6 +736,7 @@ class OnlineRAGPipeline:
         bert_score = 0.0
         try:
             from models.complexity_evaluator import ComplexityEvaluator
+
             # 创建独立的 BERT 评估器实例做意图分类
             evaluator = ComplexityEvaluator()
             is_complex = evaluator.evaluate(user_input)
@@ -737,8 +749,8 @@ class OnlineRAGPipeline:
                     business_type = "development"
                     intent = "formulation"
                 bert_score = 0.7
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("BERT rewrite fallback unavailable: %s", exc)
 
         # PRD §4.4: BERT 分类未命中时降级为关键词规则
         if bert_score == 0:
@@ -781,11 +793,27 @@ class OnlineRAGPipeline:
             score < 0.3 → (False, 0)  跳过
         """
         # 从 config.json 读取视觉关键词
-        visual_keywords = set(config.get("domain_keywords", {}).get("visual", [
-            "图片", "包装", "外观", "照片", "扫描", "标签",
-            "成分表", "配方", "图像", "图像识别", "OCR",
-            "说明书", "瓶身", "外盒",
-        ]))
+        visual_keywords = set(
+            config.get("domain_keywords", {}).get(
+                "visual",
+                [
+                    "图片",
+                    "包装",
+                    "外观",
+                    "照片",
+                    "扫描",
+                    "标签",
+                    "成分表",
+                    "配方",
+                    "图像",
+                    "图像识别",
+                    "OCR",
+                    "说明书",
+                    "瓶身",
+                    "外盒",
+                ],
+            )
+        )
         query_text = rewrite_result.rewritten_query if rewrite_result else ""
         keyword_hits = sum(1 for kw in visual_keywords if kw in query_text)
         keyword_score = min(keyword_hits * 0.3, 1.0)
@@ -801,9 +829,11 @@ class OnlineRAGPipeline:
             if image_centroid is not None:
                 query_emb = self.embedding_service.encode_text(query_text)
                 import numpy as np
-                centroid_score = float(np.dot(query_emb, image_centroid) / (
-                    np.linalg.norm(query_emb) * np.linalg.norm(image_centroid) + 1e-8
-                ))
+
+                centroid_score = float(
+                    np.dot(query_emb, image_centroid)
+                    / (np.linalg.norm(query_emb) * np.linalg.norm(image_centroid) + 1e-8)
+                )
                 centroid_score = max(centroid_score, 0.0)
         except Exception as e:
             logger.debug(f"图像质心相似度计算失败: {e}")
@@ -815,14 +845,15 @@ class OnlineRAGPipeline:
         )
 
         if score >= 0.6:
-            return True, 50   # 全量同步
+            return True, 50  # 全量同步
         elif score >= 0.3:
-            return True, 20   # 低成本同步
+            return True, 20  # 低成本同步
         else:
-            return False, 0   # 跳过
+            return False, 0  # 跳过
 
-    def _merge_and_dedup(self, recall_results: list, business_type: str = "general",
-                         is_visual_relevant: bool = False) -> list:
+    def _merge_and_dedup(
+        self, recall_results: list, business_type: str = "general", is_visual_relevant: bool = False
+    ) -> list:
         """
         Union 合并去冗 + 动态加权 RRF 融合（PRD §7.1 / §4.5 / §6）
 
@@ -866,10 +897,7 @@ class OnlineRAGPipeline:
                     seen_doc_ids[r.doc_id]["best_score"] = rrf_score
 
         # 按 RRF 分数降序排列
-        merged = [
-            v["result"]
-            for v in sorted(seen_doc_ids.values(), key=lambda x: x["best_score"], reverse=True)
-        ]
+        merged = [v["result"] for v in sorted(seen_doc_ids.values(), key=lambda x: x["best_score"], reverse=True)]
         return merged
 
     def _maybe_trigger_blip(self, ctx):
@@ -949,7 +977,7 @@ class OnlineRAGPipeline:
         2. 根据大纲定位已完成章节，模型仅补充剩余章节内容
         3. 通过 generate_continuation 填充
         """
-        from core.pipeline_context import GenerationResult
+        from core.pipeline_context import GenerationResult, SessionState
 
         try:
             session_state = SessionState.get_or_create(ctx.session_id or "default")
@@ -992,14 +1020,16 @@ class OnlineRAGPipeline:
         """
         try:
             messages = self._build_messages(ctx)
-            messages.append({
-                "role": "user",
-                "content": (
-                    "请根据已提供的证据，列出回答此问题的结构化大纲（JSON 格式）。\n"
-                    "格式: {\"outline\": [\"章节1\", \"章节2\", ...]}\n"
-                    "仅输出 JSON，不要输出其他内容。"
-                ),
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "请根据已提供的证据，列出回答此问题的结构化大纲（JSON 格式）。\n"
+                        '格式: {"outline": ["章节1", "章节2", ...]}\n'
+                        "仅输出 JSON，不要输出其他内容。"
+                    ),
+                }
+            )
 
             endpoint_key = self.llm_client._resolve_endpoint(target_model)
             answer = self.llm_client.router.route_chat(
@@ -1011,6 +1041,7 @@ class OnlineRAGPipeline:
 
             # 解析 JSON 大纲
             import re
+
             json_match = re.search(r'\{[^{}]*"outline"\s*:\s*\[([^\]]*)\][^{}]*\}', answer)
             if json_match:
                 items = re.findall(r'"([^"]+)"', json_match.group(1))
@@ -1027,11 +1058,7 @@ class OnlineRAGPipeline:
             if ctx.rewrite_result and ctx.rewrite_result.fallback:
                 return
             cache_key = self._build_cache_key(ctx)
-            requires_ctx = (
-                ctx.rewrite_result.requires_context
-                if ctx.rewrite_result
-                else False
-            )
+            requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False
             # PRD §10.6: 上下文依赖型查询的缓存仅限同一 session
             if requires_ctx:
                 cache_key = self._scope_cache_key_to_session(cache_key, ctx.session_id)

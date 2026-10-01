@@ -1,4 +1,5 @@
 """BM25 Retriever 测试 — 查询构建、权限过滤、版本过滤。"""
+
 import os
 import sys
 import types
@@ -25,6 +26,7 @@ class TestBM25QueryBuilding:
     def _make_retriever(self):
         """创建不连接 ES 的 BM25Retriever。"""
         from retrieval.bm25_retriever import BM25Retriever
+
         r = BM25Retriever.__new__(BM25Retriever)
         r._es_client = None
         r.enabled = True
@@ -59,20 +61,20 @@ class TestBM25QueryBuilding:
                     assert ".value &" in source
         assert script_found, "ES >= 8.0 应使用 painless 脚本过滤"
 
-    def test_old_es_uses_role_bucket(self):
-        """ES < 8.0 时，应使用 role_bucket terms 过滤。"""
+    def test_es_versions_use_bitmask_semantics(self):
+        """Bitmask authorization must not degrade to exact role_bucket matching."""
         r = self._make_retriever()
         r._es_version = (7, 10)
         query_body = r._build_es_query("配方", user_role_mask=2, user_dept_mask=0, top_k=15)
         filters = query_body["query"]["bool"]["filter"]
-        # 应包含 role_bucket 过滤
-        bucket_found = False
-        for f in filters:
-            should = f.get("bool", {}).get("should", [])
-            for s in should:
-                if s.get("term", {}).get("role_bucket") == 2:
-                    bucket_found = True
-        assert bucket_found, "ES < 8.0 应使用 role_bucket 过滤"
+        scripts = [
+            clause["script"]["script"]["source"]
+            for filter_clause in filters
+            for clause in filter_clause.get("bool", {}).get("should", [])
+            if "script" in clause
+        ]
+        assert any("role_mask" in source for source in scripts)
+        assert all("role_bucket" not in str(filter_clause) for filter_clause in filters)
 
     def test_super_admin_skips_role_filter(self):
         """超级管理员不应添加角色脚本过滤。"""
@@ -84,22 +86,20 @@ class TestBM25QueryBuilding:
             should = f.get("bool", {}).get("should", [])
             for s in should:
                 if "script" in s:
-                    assert False, "超级管理员不应有脚本过滤"
+                    raise AssertionError("超级管理员不应有脚本过滤")
 
     def test_version_epoch_filter(self):
         """应包含 knowledge_version_epoch 过滤。"""
         r = self._make_retriever()
         # patch config
         import retrieval.bm25_retriever as mod
+
         old_epoch = mod.config.get("knowledge_version_epoch")
         mod.config["knowledge_version_epoch"] = "20260603_00"
         try:
             query_body = r._build_es_query("测试", 0, 0, 10)
             filters = query_body["query"]["bool"]["filter"]
-            epoch_found = any(
-                f.get("term", {}).get("doc_version_epoch") == "20260603_00"
-                for f in filters
-            )
+            epoch_found = any(f.get("term", {}).get("doc_version_epoch") == "20260603_00" for f in filters)
             assert epoch_found, "应包含版本 epoch 过滤"
         finally:
             if old_epoch is not None:
@@ -111,11 +111,13 @@ class TestBM25QueryBuilding:
         r.enabled = False
         assert r.search("test", 0, 0) == []
 
-    def test_invalid_role_mask_clamped(self):
-        """无效 role_mask 应被修正为 0。"""
+    def test_invalid_role_mask_fails_closed(self):
+        """Invalid authorization masks must not be coerced into a broader query."""
         r = self._make_retriever()
-        query_body = r._build_es_query("test", user_role_mask=-1, user_dept_mask=0, top_k=10)
-        assert query_body["size"] == 10  # 不崩溃即通过
+        import pytest
+
+        with pytest.raises(ValueError):
+            r._build_es_query("test", user_role_mask=-1, user_dept_mask=0, top_k=10)
 
     def test_dept_mask_filter(self):
         """非零 dept_mask 应添加部门过滤。"""
@@ -127,6 +129,6 @@ class TestBM25QueryBuilding:
         for f in filters:
             should = f.get("bool", {}).get("should", [])
             for s in should:
-                if "script" in s and "4" in s["script"]["script"]["source"]:
+                if s.get("script", {}).get("script", {}).get("params", {}).get("user_dept_mask") == 4:
                     dept_found = True
         assert dept_found, "非零 dept_mask 应添加部门过滤"

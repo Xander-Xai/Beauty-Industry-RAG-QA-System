@@ -1,4 +1,5 @@
 """JWT Authentication module — RS256 signature with access/refresh tokens."""
+
 import logging
 import os
 import time
@@ -9,6 +10,7 @@ logger = logging.getLogger(__name__)
 # Try importing jwt, fall back gracefully
 try:
     import jwt
+
     HAS_JWT = True
 except ImportError:
     HAS_JWT = False
@@ -20,7 +22,7 @@ class TokenPair:
     access_token: str
     refresh_token: str
     expires_in: int
-    token_type: str = "Bearer"
+    token_type: str = "Bearer"  # noqa: S105 -- protocol constant, not a credential
 
 
 @dataclass
@@ -90,8 +92,7 @@ def generate_keypair(output_dir: str = "./keys"):
     return private_path, public_path
 
 
-def create_access_token(user_id: str, role_mask: int, dept_mask: int,
-                         extra_claims: dict = None) -> str:
+def create_access_token(user_id: str, role_mask: int, dept_mask: int, extra_claims: dict = None) -> str:
     """Create a short-lived access token."""
     if not HAS_JWT:
         raise RuntimeError("PyJWT not installed")
@@ -134,8 +135,7 @@ def create_refresh_token(user_id: str) -> str:
     return jwt.encode(payload, private_key, algorithm=config.algorithm)
 
 
-def create_token_pair(user_id: str, role_mask: int, dept_mask: int,
-                       extra_claims: dict = None) -> TokenPair:
+def create_token_pair(user_id: str, role_mask: int, dept_mask: int, extra_claims: dict = None) -> TokenPair:
     """Create both access and refresh tokens."""
     config = get_jwt_config()
     return TokenPair(
@@ -145,7 +145,7 @@ def create_token_pair(user_id: str, role_mask: int, dept_mask: int,
     )
 
 
-def verify_token(token: str, token_type: str = "access") -> dict | None:
+def verify_token(token: str, token_type: str = "access") -> dict | None:  # noqa: S107 -- protocol default, not a credential
     """Verify and decode a JWT token. Returns payload or None."""
     if not HAS_JWT:
         return None
