@@ -180,8 +180,9 @@ _RAGAS_ANCHOR_CN = r"(?:evaluator|评估器|依赖|凭据)"
 RAGAS_FAILURE_CONDITION_RE = re.compile(
     rf"(?:{_RAGAS_ANCHOR}|{_RAGAS_ANCHOR_CN})[^\n]{{0,24}}(?:{_RAGAS_AVAIL}|{_RAGAS_AVAIL_CN})|"
     rf"(?:{_RAGAS_AVAIL}|{_RAGAS_AVAIL_CN})[^\n]{{0,24}}(?:{_RAGAS_ANCHOR}|{_RAGAS_ANCHOR_CN})|"
-    rf"ragas[^\n]{{0,16}}(?:unavailable|not\s+installed|{_RAGAS_AVAIL_CN})|"
-    rf"(?:unavailable|not\s+installed|{_RAGAS_AVAIL_CN})[^\n]{{0,16}}ragas",
+    rf"ragas\s+(?:is\s+)?(?:unavailable|missing|not\s+installed)|"
+    rf"ragas\s*(?:{_RAGAS_AVAIL_CN})|"
+    rf"(?:unavailable|not\s+installed|{_RAGAS_AVAIL_CN})[^\n]{{0,8}}ragas",
     re.IGNORECASE,
 )
 
@@ -487,6 +488,17 @@ def check_docs_index(errors: list[str]) -> None:
             fail(errors, f"docs/README.md must index {token!r}")
 
 
+_RAGAS_CLAUSE_BOUNDARY_RE = re.compile(r"[；;。，,：:]")
+
+
+def _clause_start(line: str, index: int) -> int:
+    """Return the start of the clause containing ``index`` on ``line``."""
+    start = 0
+    for boundary in _RAGAS_CLAUSE_BOUNDARY_RE.finditer(line[:index]):
+        start = boundary.end()
+    return start
+
+
 def ragas_zero_fallback_claims(text: str) -> list[str]:
     """Return missing-RAGAS zero-score fallback claims presented as current.
 
@@ -508,7 +520,7 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
                 context = line[max(0, match.start() - 40) : match.end() + 40]
                 if not _RAGAS_ZERO_CONTEXT_RE.search(context):
                     continue
-                denial_window = line[max(0, match.start() - 24) : match.end()]
+                denial_window = line[_clause_start(line, match.start()) : match.end()]
                 if any(
                     re.search(denial, denial_window, flags=re.IGNORECASE)
                     for denial in RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS

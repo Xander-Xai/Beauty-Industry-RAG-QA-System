@@ -229,6 +229,13 @@ def test_zero_non_score_values_are_not_fallbacks():
     assert ragas_zero_fallback_claims("RAGAS returns zero exit status on success") == []
 
 
+def test_denial_in_previous_clause_does_not_hide_later_fallback():
+    """A denial in one clause must not suppress an affirmative in the next."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("RAGAS does not return zero, returns zero score when unavailable")
+
+
 def test_ragas_fallback_claim_fails_consistency_guard(tmp_path, monkeypatch):
     """A canonical doc with the retired fallback claim must fail the full guard."""
     import scripts.check_repo_consistency as guard
@@ -553,6 +560,23 @@ def test_conditional_ragas_clause_keeps_guarantees(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
     (tmp_path / "doc.md").write_text(
         "When RAGAS is unavailable, the CLI fails fast with a non-zero status and produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
+def test_missing_ragas_is_a_failure_condition(tmp_path, monkeypatch):
+    """Directly-bound `RAGAS is missing` counts as evaluator failure."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is missing, the CLI returns a non-zero status and produces no quality report.",
         encoding="utf-8",
     )
 
