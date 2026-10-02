@@ -215,6 +215,12 @@ _SECRET_KEY_MARKERS = (
     "accesskey",
     "privatekey",
 )
+# ``auth`` is too short to match as a substring: the provenance snapshot itself
+# contains ``auth_env_presence``, and a substring match would collapse that
+# mapping back to a constant boolean. Matching it as a suffix still redacts the
+# real credential keys (``auth``, ``remote_auth``, ``http_auth``) because they
+# end in it, while leaving ``auth_env_presence`` intact.
+_AUTH_SUFFIX = "auth"
 _KEY_SEPARATOR_RE = re.compile(r"[^a-z0-9]")
 
 
@@ -302,6 +308,8 @@ def _elastic_principal_fingerprint() -> str | None:
 
 def _is_secret_key(key: Any) -> bool:
     normalized = _normalized_key(key)
+    if normalized.endswith(_AUTH_SUFFIX):
+        return True
     return any(marker in normalized for marker in _SECRET_KEY_MARKERS)
 
 

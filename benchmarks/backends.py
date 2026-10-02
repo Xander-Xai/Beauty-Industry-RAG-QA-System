@@ -420,6 +420,17 @@ def probe_dense() -> BackendAvailability:
                 REASON_SERVICE_NO_DATA,
                 f"collection {collection} exists but holds 0 points over gRPC",
             )
+    elif grpc_port is not None:
+        # A gRPC port is configured but did not accept a connection. The online
+        # client is built with prefer_grpc=True, so retrieval would fail on its
+        # first call even if REST is healthy; REST evidence is not a substitute
+        # and must not report the configuration available.
+        return BackendAvailability(
+            "dense",
+            False,
+            REASON_SERVICE_UNREACHABLE,
+            f"configured gRPC port {grpc_port} is not reachable; production retrieval uses prefer_grpc=True",
+        )
     else:
         # gRPC is not available, so the REST listing is the only evidence there can be.
         if rest_reachable and ok == "http":

@@ -192,11 +192,13 @@ def test_qdrant_http_error_is_not_treated_as_available(monkeypatch):
     import urllib.error
 
     from benchmarks import backends
+    from common import config as common_config
 
     def _raise_401(request, timeout=None):
         raise urllib.error.HTTPError("http://x", 401, "Unauthorized", None, None)
 
-    # gRPC closed so the REST branch is the one under test.
+    # No gRPC port declared, so the REST branch is the one under test.
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"qdrant": {"host": "qdrant", "port": 6333}})
     monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port != 6334)
     monkeypatch.setattr(backends.urllib.request, "urlopen", _raise_401)
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
@@ -317,8 +319,10 @@ def test_effective_config_snapshot_has_no_secret_values(monkeypatch):
 
 def test_empty_qdrant_collection_is_rejected(monkeypatch):
     from benchmarks import backends
+    from common import config as common_config
 
-    # gRPC closed so the REST branch is the one under test.
+    # No gRPC port declared, so the REST branch is the one under test.
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"qdrant": {"host": "qdrant", "port": 6333}})
     monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port != 6334)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 0}}))
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
@@ -845,11 +849,12 @@ def test_dense_blocked_when_both_protocols_are_closed(monkeypatch, tmp_path):
 
 
 def test_rest_only_deployment_still_works(monkeypatch, tmp_path):
+    """A config that never declares a gRPC port may be served over REST alone."""
     from benchmarks import backends
     from common import config as common_config
 
     model = _write_complete_model(tmp_path / "model")
-    monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model))
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model, grpc_port=None))
     monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 5}}))
     assert backends.probe_dense().available is True
@@ -1364,9 +1369,32 @@ def test_grpc_failure_overrides_rest_success(monkeypatch):
     assert "grpc denied" in availability.detail
 
 
-def test_rest_only_path_still_works_when_grpc_closed(monkeypatch):
-    from benchmarks import backends
+def test_declared_grpc_closed_is_not_cleared_by_rest(monkeypatch):
+    """A config that declares gRPC is not a REST-only deployment.
 
+    `EmbeddingService` builds `QdrantClient(..., prefer_grpc=True)`, so a closed
+    gRPC port fails the first real retrieval even when REST is healthy. Reporting
+    `available` on REST evidence alone would promise a result the run cannot get.
+    """
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config, "get_config_dict", lambda: {"qdrant": {"host": "qdrant", "port": 6333, "grpc_port": 6334}}
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 9}}))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_SERVICE_UNREACHABLE
+
+
+def test_rest_only_path_still_works_when_grpc_undeclared(monkeypatch):
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"qdrant": {"host": "qdrant", "port": 6333}})
     monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 9}}))
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
@@ -2290,3 +2318,24 @@ def test_elastic_url_port_is_still_honoured(monkeypatch):
         lambda: {"elasticsearch": {"host": "http://localhost:19200"}},
     )
     assert _elastic_settings()[2] == 19200
+
+
+@pytest.mark.parametrize("key", ["auth", "remote_auth", "httpAuth", "remoteAuth"])
+def test_direct_auth_keys_are_redacted(key):
+    """A `Bearer ...` value stored under a direct auth key is credential material."""
+    from benchmarks.provenance import sanitize
+
+    assert sanitize({key: "Bearer abc123def456"})[key] is True
+
+
+def test_auth_env_presence_mapping_is_not_collapsed_by_the_auth_suffix(monkeypatch):
+    """`auth_env_presence` must survive; a bare substring match would flatten it."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    for name in provenance.CREDENTIAL_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+    presence = provenance.effective_retrieval_config()["auth_env_presence"]
+    assert isinstance(presence, dict) and presence
+    assert all(value is False for value in presence.values())
