@@ -474,3 +474,104 @@ def test_uniform_relevance_levels_are_unambiguous():
 
     assert detect_relevance_level([{"doc_id": "a", "contexts": []}]) == "level1_stable_id"
     assert detect_relevance_level([{"contexts": ["x"]}]) == "level2_normalized_exact_text"
+
+
+# ── Round 5: snapshot persistence, sample selection, real model assets ───────
+
+
+def test_effective_config_is_persisted_not_only_hashed(tmp_path, monkeypatch):
+    """The snapshot must travel with the hash so a run is reproducible."""
+    import benchmarks.retrieval_benchmark as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda root: ("sha", False))
+    exit_code = cli.main(
+        [
+            "--config",
+            "bm25",
+            "--limit",
+            "2",
+            "--dataset",
+            "tests/evaluation/golden_set.jsonl",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    assert exit_code == 0
+    run_dir = sorted(p for p in tmp_path.iterdir() if p.is_dir())[-1]
+    metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert "effective_config" in metadata
+    assert "elasticsearch" in metadata["effective_config"]
+    assert "qdrant" in metadata["effective_config"]
+
+
+def test_missing_requested_sample_id_is_rejected():
+    from benchmarks.dataset import DatasetError, load_queries
+
+    with pytest.raises(DatasetError, match="not present"):
+        load_queries("tests/evaluation/golden_set.jsonl", sample_ids=["0000", "9999"])
+
+
+def test_existing_sample_ids_still_work():
+    from benchmarks.dataset import load_queries
+
+    queries = load_queries("tests/evaluation/golden_set.jsonl", sample_ids=["0000", "0002"])
+    assert [q.sample_id for q in queries] == ["0000", "0002"]
+
+
+@pytest.mark.parametrize("limit", [0, -1, -10])
+def test_non_positive_limit_is_rejected(limit):
+    from benchmarks.dataset import DatasetError, load_queries
+
+    with pytest.raises(DatasetError, match="positive"):
+        load_queries("tests/evaluation/golden_set.jsonl", limit=limit)
+
+
+def test_empty_model_directory_is_not_available(tmp_path):
+    from benchmarks.backends import _looks_like_model_dir
+
+    empty = tmp_path / "model"
+    empty.mkdir()
+    ok, detail = _looks_like_model_dir(empty)
+    assert ok is False
+    assert "no transformer config" in detail
+
+
+def test_unrelated_file_is_not_a_model_dir(tmp_path):
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    (path / "README.txt").write_text("not a model", encoding="utf-8")
+    assert _looks_like_model_dir(path)[0] is False
+
+
+@pytest.mark.parametrize("artifact", ["config.json", "model.safetensors", "pytorch_model.bin"])
+def test_real_model_artifacts_are_accepted(tmp_path, artifact):
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    (path / artifact).write_text("x", encoding="utf-8")
+    assert _looks_like_model_dir(path)[0] is True
+
+
+def test_model_probe_rejects_empty_directory(tmp_path, monkeypatch):
+    """probe_dense must not report available for an empty model directory."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    empty = tmp_path / "model"
+    empty.mkdir()
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {
+            "qdrant": {"host": "qdrant", "port": 6333},
+            "embedding": {"text": {"collection": "rag_text_768", "model_path": str(empty)}},
+        },
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 10}}))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_MODEL_UNAVAILABLE

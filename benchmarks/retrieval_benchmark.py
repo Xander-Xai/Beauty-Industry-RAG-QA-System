@@ -167,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
         "sample_ids_hash": sample_ids_hash(queries),
         "config_name": configs[0] if len(configs) == 1 else "multi",
         "config_sha256": sha256_json(config_payload),
+        # The snapshot travels with the hash so a run can be reproduced
+        # without guessing which endpoint/collection/model was in effect.
+        "effective_config": effective_config,
         "requested_configs": configs,
         "top_k": args.top_k,
         "allow_dirty": bool(args.allow_dirty),

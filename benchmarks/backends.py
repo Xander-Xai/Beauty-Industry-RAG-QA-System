@@ -26,6 +26,7 @@ import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from benchmarks.models import BackendAvailability
@@ -124,6 +125,25 @@ def _qdrant_settings() -> tuple[str, int, str]:
     return host, port, text_collection
 
 
+# A local model directory is only usable when it actually holds transformers
+# weights. An empty directory, an unrelated file or an interrupted download must
+# not be reported as available.
+_MODEL_ARTIFACT_NAMES = ("config.json",)
+_MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".onnx")
+
+
+def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
+    if not path.is_dir():
+        return False, "path is not a directory"
+    for name in _MODEL_ARTIFACT_NAMES:
+        if (path / name).is_file():
+            return True, f"found {name}"
+    for pattern in _MODEL_WEIGHT_SUFFIXES:
+        if next(path.glob(f"*{pattern}"), None) is not None:
+            return True, f"found *{pattern}"
+    return False, "no transformer config or weight file found"
+
+
 def _model_weights_available() -> tuple[bool, str | None]:
     from common.config import get_config_dict
 
@@ -131,12 +151,11 @@ def _model_weights_available() -> tuple[bool, str | None]:
     model_path = (config.get("embedding", {}).get("text", {}) or {}).get("model_path")
     if not model_path:
         return False, None
-    from pathlib import Path
-
     resolved = Path(str(model_path))
-    if resolved.exists():
-        return True, str(model_path)
-    return False, str(model_path)
+    ok, detail = _looks_like_model_dir(resolved)
+    if not ok:
+        return False, f"{model_path} ({detail})"
+    return True, f"{model_path} ({detail})"
 
 
 # ── Probes ────────────────────────────────────────────────────────────────

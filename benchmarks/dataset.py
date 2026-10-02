@@ -99,13 +99,17 @@ def load_queries(
     ``sample_id`` is derived from the 1-based line number because the dataset has
     no identifier column. The same dataset therefore always yields the same ids.
     """
+    if limit is not None and limit <= 0:
+        raise DatasetError(f"limit must be a positive integer, got {limit}")
     rows = load_rows(path)
     wanted = set(sample_ids) if sample_ids else None
     queries: list[BenchmarkQuery] = []
+    seen_ids: set[str] = set()
     for index, row in enumerate(rows):
         sample_id = f"{index:04d}"
         if wanted is not None and sample_id not in wanted:
             continue
+        seen_ids.add(sample_id)
         question = str(row.get("question") or "").strip()
         if not question:
             raise DatasetError(f"{path}: sample {sample_id} has no question")
@@ -129,6 +133,12 @@ def load_queries(
         )
         if limit is not None and len(queries) >= limit:
             break
+    if wanted is not None:
+        # A requested id that does not exist is a user error, not a smaller
+        # experiment; silently dropping it would misreport the run's scope.
+        missing = sorted(wanted - seen_ids)
+        if missing:
+            raise DatasetError(f"{path}: requested sample id(s) not present: {', '.join(missing)}")
     if not queries:
         raise DatasetError(f"{path}: no samples selected")
     return queries
