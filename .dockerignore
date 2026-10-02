@@ -60,6 +60,8 @@ __pycache__
 # Generated and benchmark evidence: not shipped inside the image
 artifacts/benchmarks/*
 !artifacts/benchmarks/README.md
+artifacts/performance/*
+!artifacts/performance/README.md
 reports
 
 # Virtual environments

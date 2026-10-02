@@ -92,3 +92,5 @@ AUDIT_REPORT.md
 __pycache__/
 artifacts/benchmarks/*
 !artifacts/benchmarks/README.md
+artifacts/performance/*
+!artifacts/performance/README.md
