@@ -548,7 +548,7 @@ def test_unrelated_file_is_not_a_model_dir(tmp_path):
 def _complete_model_dir(path):
     """A minimal but *complete* transformers snapshot."""
     path.mkdir(parents=True, exist_ok=True)
-    for name in ("config.json", "tokenizer_config.json", "model.safetensors"):
+    for name in ("config.json", "tokenizer.json", "model.safetensors"):
         (path / name).write_text("x", encoding="utf-8")
     return path
 
@@ -669,3 +669,165 @@ def test_valid_configs_list_is_accepted():
 
     args = argparse.Namespace(config=None, configs="bm25, dense")
     assert cli._resolve_configs(args) == ["bm25", "dense"]
+
+
+# ── Round 7: loadable artifacts, gRPC probe, non-object rows, reranker hash ──
+
+
+def test_tokenizer_config_alone_is_not_a_vocabulary(tmp_path):
+    """`tokenizer_config.json` carries no tokens; from_pretrained would fail."""
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer_config.json", "model.safetensors"):
+        (path / name).write_text("x", encoding="utf-8")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "tokenizer vocabulary" in detail
+
+
+@pytest.mark.parametrize("weight", ["model.pt", "model.onnx"])
+def test_arbitrary_weight_extensions_are_rejected(tmp_path, weight):
+    """AutoModel.from_pretrained cannot load a bare .pt/.onnx checkpoint."""
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", weight):
+        (path / name).write_text("x", encoding="utf-8")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "model weights" in detail
+
+
+def test_vocab_txt_vocabulary_is_accepted(tmp_path):
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "vocab.txt", "pytorch_model.bin"):
+        (path / name).write_text("x", encoding="utf-8")
+    assert _looks_like_model_dir(path)[0] is True
+
+
+def _qdrant_config(model_path, **qdrant_overrides):
+    """Config mirroring production: REST port + gRPC port + an embedding model."""
+    qdrant = {"host": "qdrant", "port": 6333, "grpc_port": 6334}
+    qdrant.update(qdrant_overrides)
+    return {
+        "qdrant": qdrant,
+        "embedding": {"text": {"collection": "rag_text_768", "model_path": str(model_path)}},
+    }
+
+
+def _write_complete_model(path):
+    path.mkdir(parents=True, exist_ok=True)
+    for name in ("config.json", "tokenizer.json", "model.safetensors"):
+        (path / name).write_text("x", encoding="utf-8")
+    return path
+
+
+def test_dense_available_via_grpc_when_rest_is_closed(monkeypatch, tmp_path):
+    """EmbeddingService prefers gRPC, so REST-only reachability is not enough."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    model = _write_complete_model(tmp_path / "model")
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model))
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6334)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (False, None))
+    availability = backends.probe_dense()
+    assert availability.available is True, availability.detail
+    assert "6334" in availability.detail or "grpc" in availability.detail.lower()
+
+
+def test_dense_blocked_when_both_protocols_are_closed(monkeypatch, tmp_path):
+    from benchmarks import backends
+    from common import config as common_config
+
+    model = _write_complete_model(tmp_path / "model")
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model))
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: False)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (False, None))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_SERVICE_UNREACHABLE
+    assert "grpc" in availability.detail
+
+
+def test_rest_only_deployment_still_works(monkeypatch, tmp_path):
+    from benchmarks import backends
+    from common import config as common_config
+
+    model = _write_complete_model(tmp_path / "model")
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model))
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 5}}))
+    assert backends.probe_dense().available is True
+
+
+@pytest.mark.parametrize("payload", ["[]", '"text"', "42", "null"])
+def test_non_object_rows_are_dataset_errors(tmp_path, payload):
+    from benchmarks.dataset import DatasetError, load_rows
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(payload + "\n", encoding="utf-8")
+    with pytest.raises(DatasetError, match="must be a JSON object"):
+        load_rows(bad)
+
+
+def test_non_object_row_reports_line_number(tmp_path):
+    from benchmarks.dataset import DatasetError, load_rows
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"question":"q","contexts":["c"]}\n"oops"\n', encoding="utf-8")
+    with pytest.raises(DatasetError, match=r":2:"):
+        load_rows(bad)
+
+
+def test_non_object_row_surfaces_through_cli(tmp_path):
+    """The CLI catches DatasetError, so malformed rows must not raise AttributeError."""
+    import benchmarks.retrieval_benchmark as cli
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('"just a string"\n', encoding="utf-8")
+    exit_code = cli.main(
+        ["--config", "bm25", "--dataset", str(bad), "--output-dir", str(tmp_path / "out"), "--allow-dirty"]
+    )
+    assert exit_code == 2
+    assert not list((tmp_path / "out").glob("*/metadata.json")) if (tmp_path / "out").exists() else True
+
+
+def test_cross_encoder_models_change_the_config_hash(monkeypatch):
+    """Changing a reranker path must change config_sha256."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    base = {
+        "elasticsearch": {"host": "http://es", "index": "i"},
+        "gpu1": {
+            "models": {"cross_encoder_a": {"model_path": "/models/a"}, "cross_encoder_b": {"model_path": "/models/b"}}
+        },
+    }
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: base)
+    first = provenance.sha256_json(provenance.effective_retrieval_config())
+
+    changed = json.loads(json.dumps(base))
+    changed["gpu1"]["models"]["cross_encoder_a"]["model_path"] = "/models/changed"
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: changed)
+    second = provenance.sha256_json(provenance.effective_retrieval_config())
+    assert first != second
+
+
+def test_cross_encoder_snapshot_exposes_model_paths(monkeypatch):
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"gpu1": {"models": {"cross_encoder_a": {"model_path": "/models/a"}}}},
+    )
+    snapshot = provenance.effective_retrieval_config()
+    assert snapshot["cross_encoder"]["cross_encoder_a"]["model_path"] == "/models/a"

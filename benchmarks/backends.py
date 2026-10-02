@@ -126,14 +126,36 @@ def _qdrant_settings() -> tuple[str, int, str]:
     return host, port, text_collection
 
 
+def _qdrant_grpc_port() -> int | None:
+    """gRPC port used by the production ``EmbeddingService`` client.
+
+    ``EmbeddingService`` builds ``QdrantClient(..., grpc_port=...,
+    prefer_grpc=True)``, so gRPC is a first-class production protocol here and a
+    REST-only reachability check would misreport dense retrieval as unavailable.
+    """
+    from common.config import get_config_dict
+
+    grpc_port = (get_config_dict().get("qdrant", {}) or {}).get("grpc_port")
+    if grpc_port in (None, ""):
+        return None
+    try:
+        return int(grpc_port)
+    except (TypeError, ValueError):
+        return None
+
+
 # A local model directory is only usable when it actually holds transformers
 # weights. An empty directory, an unrelated file or an interrupted download must
 # not be reported as available. `AutoModel.from_pretrained` needs config *and*
 # weights, and `AutoTokenizer.from_pretrained` needs tokenizer assets, so all three
 # groups must be present for a partial or interrupted cache to stay unavailable.
 _MODEL_CONFIG_NAMES = ("config.json",)
-_MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".onnx")
-_TOKENIZER_ASSET_NAMES = ("tokenizer.json", "tokenizer_config.json", "vocab.txt")
+# `AutoModel.from_pretrained` only consumes safetensors or a torch pickle; a bare
+# `.pt`/`.onnx` file is not a loadable checkpoint for it.
+_MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin")
+# `AutoTokenizer.from_pretrained` needs an actual vocabulary. `tokenizer_config.json`
+# alone carries no tokens and would still fail to load.
+_TOKENIZER_VOCAB_NAMES = ("tokenizer.json", "vocab.txt")
 
 
 def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
@@ -143,12 +165,12 @@ def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
     if not any((path / name).is_file() for name in _MODEL_CONFIG_NAMES):
         missing.append("config.json")
     if not any(next(path.glob(f"*{suffix}"), None) is not None for suffix in _MODEL_WEIGHT_SUFFIXES):
-        missing.append("model weights (*.safetensors/*.bin/*.pt/*.onnx)")
-    if not any((path / name).is_file() for name in _TOKENIZER_ASSET_NAMES):
-        missing.append("tokenizer assets (tokenizer.json/tokenizer_config.json/vocab.txt)")
+        missing.append("model weights (*.safetensors/*.bin)")
+    if not any((path / name).is_file() for name in _TOKENIZER_VOCAB_NAMES):
+        missing.append("tokenizer vocabulary (tokenizer.json/vocab.txt)")
     if missing:
         return False, "incomplete model directory, missing: " + ", ".join(missing)
-    return True, "found model config, weights and tokenizer assets"
+    return True, "found model config, weights and tokenizer vocabulary"
 
 
 def _model_weights_available() -> tuple[bool, str | None]:
@@ -209,10 +231,19 @@ def probe_bm25() -> BackendAvailability:
 def probe_dense() -> BackendAvailability:
     """Dense/BGE needs Qdrant text collection *and* real embedding weights."""
     host, port, collection = _qdrant_settings()
-    if not _tcp_reachable(host, port):
-        return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"{host}:{port}")
-    ok, payload = _http_get(f"http://{host}:{port}/collections/{collection}")
-    if ok == "http":
+    grpc_port = _qdrant_grpc_port()
+    rest_reachable = _tcp_reachable(host, port)
+    grpc_reachable = grpc_port is not None and _tcp_reachable(host, grpc_port)
+    if not rest_reachable and not grpc_reachable:
+        probed = f"{host}:{port}"
+        if grpc_port is not None:
+            probed += f" (rest) / {host}:{grpc_port} (grpc)"
+        return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, probed)
+    # The production client prefers gRPC, so a reachable gRPC endpoint is enough
+    # to attempt retrieval; the HTTP collection listing stays as the cheap probe
+    # when REST is the only thing answering.
+    ok, payload = _http_get(f"http://{host}:{port}/collections/{collection}") if rest_reachable else (False, None)
+    if rest_reachable and ok == "http":
         # HTTP-level answer proves reachability; the blocker is the collection.
         return BackendAvailability(
             "dense",
@@ -220,13 +251,16 @@ def probe_dense() -> BackendAvailability:
             REASON_SERVICE_NO_DATA,
             f"collection {collection} answered HTTP {payload} (absent or inaccessible)",
         )
-    if not ok:
-        return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
     points = None
     if isinstance(payload, dict):
         result = payload.get("result")
         if isinstance(result, dict):
             points = result.get("points_count")
+    # Without a collection listing, the collection's existence and point count
+    # cannot be confirmed over REST, so gRPC reachability is the only usable
+    # production transport and its absence is a real blocker.
+    if points is None and not grpc_reachable:
+        return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
     if points is not None and int(points) == 0:
         # An existing but empty collection cannot answer any retrieval query.
         return BackendAvailability(

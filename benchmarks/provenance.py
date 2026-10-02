@@ -185,6 +185,25 @@ def render_environment(environment: dict[str, Any]) -> dict[str, Any]:
     return rendered
 
 
+_SECRET_KEY_MARKERS = ("password", "secret", "token", "api_key", "credential")
+
+
+def _sanitize_models(models: Any) -> dict[str, Any]:
+    """Model settings with any credential-ish value reduced to a presence flag."""
+    if not isinstance(models, dict):
+        return {}
+    sanitized: dict[str, Any] = {}
+    for name, settings in models.items():
+        if not isinstance(settings, dict):
+            sanitized[name] = settings
+            continue
+        sanitized[name] = {
+            key: (bool(value) if any(marker in str(key).lower() for marker in _SECRET_KEY_MARKERS) else value)
+            for key, value in settings.items()
+        }
+    return sanitized
+
+
 def effective_retrieval_config() -> dict[str, Any]:
     """A sanitized snapshot of the retrieval settings that actually apply.
 
@@ -210,6 +229,10 @@ def effective_retrieval_config() -> dict[str, Any]:
         "parallel_paths": retrieval.get("parallel_paths"),
         "rerank": retrieval.get("rerank"),
         "bi_encoder": retrieval.get("bi_encoder"),
+        # The cross-encoder ensemble reads gpu1.models.cross_encoder_{a,b}; without
+        # these a change of reranker path/revision would leave config_sha256
+        # identical for hybrid_rrf_biencoder_crossencoder.
+        "cross_encoder": _sanitize_models((config.get("gpu1", {}) or {}).get("models", {})),
         "elasticsearch": {
             "host": elastic.get("host"),
             "index": elastic.get("index"),

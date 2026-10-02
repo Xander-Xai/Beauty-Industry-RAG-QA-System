@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -46,9 +46,16 @@ def load_rows(path: str | Path) -> list[dict[str, Any]]:
             if not line.strip():
                 continue
             try:
-                rows.append(json.loads(line))
+                decoded = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise DatasetError(f"{path}:{line_number}: invalid JSON ({exc})") from exc
+            # A bare list or string decodes fine but has no fields; rejecting it
+            # here keeps the failure a DatasetError instead of a later AttributeError.
+            if not isinstance(decoded, Mapping):
+                raise DatasetError(
+                    f"{path}:{line_number}: each line must be a JSON object, got {type(decoded).__name__}"
+                )
+            rows.append(decoded)
     if not rows:
         raise DatasetError(f"{path}: dataset is empty")
     return rows
