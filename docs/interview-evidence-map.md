@@ -79,6 +79,9 @@ model weights or dashboards behind them. They are `HISTORICAL_PRODUCTION`, not
 | Internal users | 200+ | `HISTORICAL_PRODUCTION` | company production context; proprietary corpus/logs/models are not included in the public repository |
 | Short-burst QPS | 10–15 | `HISTORICAL_PRODUCTION` | production observation, not a repository benchmark |
 | Daily requests | 1500+ | `HISTORICAL_PRODUCTION` | production observation, not a repository benchmark |
+| Production serving hardware | RTX A5000 ×2 | `HISTORICAL_PRODUCTION` | the serving host is not part of this repository; no comparable GPU topology has been executed here |
+| Later-stage model migration | Qwen2.5 → Qwen3-14B / Qwen3-4B gray-migration validation | `HISTORICAL_PRODUCTION` | proprietary production models, weights, traffic-split configuration and logs are not in this repository; the migration is **not** reproducible here |
+| Company recognition | Annual technical innovation award | `HISTORICAL_PRODUCTION` | company recognition of prior work; **not** runtime technical validation of this codebase, and not evidence about this repository |
 
 Interview framing:
 
@@ -87,6 +90,23 @@ Interview framing:
 > 10–15 QPS. That is company production context; the public repository contains
 > a small sanitized subset and no production logs, so those numbers are not a
 > reproducible benchmark from this repo."
+
+> "Production model serving ran on RTX A5000 ×2, and in a later stage I validated
+> a Qwen2.5 to Qwen3-14B / Qwen3-4B gray migration. Those weights, logs and
+> traffic-split configuration were proprietary and are not in this repository, so
+> the repository does not reproduce that migration."
+
+Boundary rules for the three rows above the volume metrics:
+
+1. **Do not classify any of this as `REPO_VERIFIED`.** There is no code, config,
+   test or artifact in this repository that evidences the serving hardware, the
+   gray migration, or the award.
+2. **Do not substitute historical production experience for repository
+   validation.** The single shared 4B / 14B vLLM GPU topology in `config.json` has
+   never been executed in this repository: the weights are absent and `vllm` is
+   not installed. That item stays `PENDING`.
+3. **An award is not a runtime validation.** It is recognition of company work and
+   carries no evidence about this codebase's latency, throughput or correctness.
 
 Do not present these as repository results. Do not invent a benchmark to match
 them.
@@ -125,7 +145,13 @@ a repository benchmark.
 - Describing `LOCAL_REAL_VALIDATION` as production cluster / HA / SLO.
 - Describing deterministic fake models as real BGE/CLIP/OCR validation.
 - Presenting `HISTORICAL_PRODUCTION` scale as `REPO_VERIFIED`.
+- Using historical production model-serving experience (RTX A5000 ×2, the
+  Qwen2.5 → Qwen3 gray migration) as evidence that this repository's 4B/14B vLLM
+  topology was validated. It was not; that remains `PENDING`.
+- Treating a company award as runtime technical validation of this codebase.
 - Claiming OpenTelemetry/Jaeger export is closed-loop when the default is the
   OTel SDK provider with no exporter configured (spans neither exported nor
   retained).
 - Presenting default-zero monitoring gauges without hooks as live metrics.
+- Quoting any retrieval metric. The framework is `REPO_VERIFIED`; the result is
+  `PENDING` and no artifact exists.

@@ -15,8 +15,15 @@
 
 - [RAGAS evaluation guide](ragas-evaluation-guide.md): offline quality-evaluation harness,
   golden set, reporter and CI boundary.
+- [Retrieval benchmark artifact contract](../artifacts/benchmarks/README.md): the six-file
+  run contract, what `BLOCKED` means, and why a real run still cannot produce a metric.
 - [Benchmark data quality](benchmark-data-quality.md): measured golden-set field coverage and the
   buckets the retrieval benchmark deliberately does not produce.
+
+Retrieval benchmark framework: `REPO_VERIFIED` (deterministic metrics, provenance,
+artifact contract, covered by tests).
+Retrieval benchmark result: `PENDING` — no reproducible artifact exists, so no
+retrieval metric is claimed anywhere in the repository.
 
 ## Validation
 
