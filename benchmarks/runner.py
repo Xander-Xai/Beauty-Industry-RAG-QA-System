@@ -26,6 +26,10 @@ from benchmarks import backends
 from benchmarks.latency import new_latency_record, record_stage, stage_availability, summarize_latency, timed_stage
 from benchmarks.metrics import aggregate_results, score_ranking
 from benchmarks.models import (
+    HIT_KS,
+    MRR_K,
+    NDCG_K,
+    RECALL_KS,
     STATUS_BLOCKED,
     STATUS_EXECUTED,
     STATUS_SKIPPED,
@@ -38,6 +42,10 @@ from benchmarks.models import (
 from benchmarks.relevance import RelevanceStrategy, dedupe_preserving_rank
 
 DEFAULT_TOP_K = 10
+# Every reported cutoff must be observable. A retrieval depth below this value
+# would silently understate Recall@10 / MRR@10 / NDCG@10 because results at
+# ranks 6..10 could never be seen.
+MIN_TOP_K = max(max(RECALL_KS), max(HIT_KS), MRR_K, NDCG_K)
 
 
 class Retriever(Protocol):
@@ -81,6 +89,11 @@ def run_configuration(
     force_block_reason: str | None = None,
 ) -> ConfigRun:
     """Execute or block one configuration, returning its outcome and metrics."""
+    if top_k < MIN_TOP_K:
+        raise ValueError(
+            f"top_k={top_k} is below the largest reported cutoff ({MIN_TOP_K}); "
+            "retrieval depth must cover every metric cutoff so Recall@K/MRR/NDCG are not understated"
+        )
     if config_name not in backends.CONFIG_DESCRIPTIONS:
         outcome = ConfigOutcome(config_name, STATUS_SKIPPED, f"unknown configuration: {config_name}")
         return ConfigRun(outcome)

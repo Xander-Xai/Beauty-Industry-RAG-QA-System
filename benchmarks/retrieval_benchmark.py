@@ -41,7 +41,7 @@ from benchmarks.provenance import (
     sha256_json,
     write_gitignore_entry,
 )
-from benchmarks.runner import DEFAULT_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
+from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
 
 DEFAULT_OUTPUT_DIR = "artifacts/benchmarks"
 
@@ -116,6 +116,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_configs:
         return _print_configs(len(rows))
 
+    if args.top_k < MIN_TOP_K:
+        print(
+            f"--top-k must be >= {MIN_TOP_K} so every reported metric cutoff (Recall@10, MRR@10, "
+            f"NDCG@10) is observable; got {args.top_k}. Lowering it would silently understate them.",
+            file=sys.stderr,
+        )
+        return 2
+
     configs = _resolve_configs(args)
     unknown = [name for name in configs if name not in backends.CONFIG_DESCRIPTIONS]
     if unknown:
@@ -154,13 +162,16 @@ def main(argv: list[str] | None = None) -> int:
         "top_k": args.top_k,
         "allow_dirty": bool(args.allow_dirty),
         "synthetic_retriever": False,
-        "results_are_benchmark": True,
     }
     environment = render_environment(collect_environment())
-    coverage = bucket_coverage(rows)
+    # Coverage describes the samples this run actually used, not the whole file.
+    coverage = bucket_coverage([query.raw for query in queries])
 
     runs = [run_configuration(name, queries, top_k=args.top_k) for name in configs]
     summary = summarize_run(runs)
+    # A blocked run contains no retrieval-quality result, so the artifact must
+    # not advertise itself as benchmark evidence.
+    metadata["results_are_benchmark"] = bool(summary.get("any_results"))
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id

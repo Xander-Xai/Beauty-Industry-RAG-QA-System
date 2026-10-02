@@ -19,7 +19,9 @@ shortcut and reports the corpus requirement explicitly instead.
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import socket
 import urllib.error
 import urllib.request
@@ -42,11 +44,27 @@ class BenchmarkUnavailable(RuntimeError):
     """Raised when a backend is asked to retrieve without being available."""
 
 
-def _http_get(url: str) -> tuple[bool, Any]:
-    """Return ``(ok, payload)`` for a short-timeout GET."""
+def _http_get(url: str, auth: tuple[str, str] | None = None) -> tuple[bool, Any]:
+    """Return ``(ok, payload)`` for a short-timeout GET.
+
+    Compose enables ``xpack.security.enabled``, so the probe must authenticate
+    exactly like the production retriever; otherwise a healthy secured
+    Elasticsearch answers 401 and would be misreported as unreachable.
+    """
+    if not url.lower().startswith(("http://", "https://")):
+        # Only operator-configured http(s) endpoints are probed; never file:// or
+        # a custom scheme, so this can never read a local path.
+        return False, None
+    request = urllib.request.Request(url)  # noqa: S310 - scheme validated above
+    if auth and auth[0]:
+        token = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode("ascii")
+        request.add_header("Authorization", f"Basic {token}")
     try:
-        with urllib.request.urlopen(url, timeout=PROBE_TIMEOUT_SECONDS) as response:  # noqa: S310 - operator-configured http(s) endpoint
+        with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT_SECONDS) as response:  # noqa: S310
             body = response.read()
+    except urllib.error.HTTPError as exc:
+        # An HTTP-level answer (401/403/404) proves the service is reachable.
+        return "http", exc.code
     except (urllib.error.URLError, OSError, ValueError):
         return False, None
     try:
@@ -63,26 +81,43 @@ def _tcp_reachable(host: str, port: int) -> bool:
         return False
 
 
-def _elastic_settings() -> tuple[str, str, int]:
+def _elastic_settings() -> tuple[str, str, int, tuple[str, str] | None]:
+    """Return ``(url, index, port, auth)`` derived from the live configuration.
+
+    The port comes from the URL when it embeds one, unless the configuration
+    overrides it, so ``http://localhost:19200`` is probed on 19200 rather than on
+    the 9200 default.
+    """
+    from urllib.parse import urlparse
+
     from common.config import get_config_dict
 
     config = get_config_dict()
     elastic = config.get("elasticsearch", {}) or {}
     url = str(elastic.get("host") or "http://elasticsearch:9200")
     index = str(elastic.get("index") or "cosmetics_docs")
-    port = int(elastic.get("port") or 9200)
-    return url, index, port
+    parsed = urlparse(url if "//" in url else f"//{url}")
+    port = int(elastic.get("port") or parsed.port or (443 if parsed.scheme == "https" else 9200))
+    auth: tuple[str, str] | None = None
+    username = elastic.get("username") or os.environ.get("ELASTICSEARCH_USERNAME") or ""
+    password = elastic.get("password") or os.environ.get("ELASTICSEARCH_PASSWORD") or ""
+    if username:
+        auth = (str(username), str(password))
+    return url, index, port, auth
 
 
 def _qdrant_settings() -> tuple[str, int, str]:
+    """Return ``(host, port, text_collection)`` using the configured collection."""
     from common.config import get_config_dict
 
     config = get_config_dict()
     qdrant = config.get("qdrant", {}) or {}
     host = str(qdrant.get("host") or "qdrant")
     port = int(qdrant.get("port") or 6333)
-    collections = qdrant.get("collections", {}) or {}
-    text_collection = str((collections.get("rag_text_768", {}) or {}).get("name") or "rag_text_768")
+    configured = (config.get("embedding", {}).get("text", {}) or {}).get("collection")
+    text_collection = str(
+        configured or (qdrant.get("collections", {}) or {}).get("rag_text_768", {}).get("name") or "rag_text_768"
+    )
     return host, port, text_collection
 
 
@@ -105,11 +140,19 @@ def _model_weights_available() -> tuple[bool, str | None]:
 
 
 def probe_bm25() -> BackendAvailability:
-    """BM25 needs a reachable Elasticsearch holding the benchmark corpus."""
-    url, index, port = _elastic_settings()
+    """BM25 needs a reachable, authenticated Elasticsearch holding the corpus."""
+    url, index, port, auth = _elastic_settings()
     if not _tcp_reachable(url.split("//")[-1].split(":")[0], port):
         return BackendAvailability("bm25", False, REASON_SERVICE_UNREACHABLE, f"{url}:{port}")
-    ok, payload = _http_get(f"{url.rstrip('/')}/{index}/_count")
+    ok, payload = _http_get(f"{url.rstrip('/')}/{index}/_count", auth=auth)
+    if ok == "http":
+        # The service answered; a non-200 status is auth/index, not unreachability.
+        return BackendAvailability(
+            "bm25",
+            False,
+            REASON_SERVICE_NO_DATA,
+            f"index {index} answered HTTP {payload} (auth or index problem, service reachable)",
+        )
     if not ok:
         return BackendAvailability("bm25", False, REASON_SERVICE_UNREACHABLE, f"{url.rstrip('/')}/{index}")
     count = None

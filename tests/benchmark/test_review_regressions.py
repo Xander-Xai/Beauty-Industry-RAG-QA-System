@@ -1,0 +1,184 @@
+"""Regression tests for issues raised in the first automated review of PR #17.
+
+Each test fails against the implementation that was reviewed and passes after the
+corresponding fix.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from benchmarks.dataset import detect_relevance_level
+from benchmarks.runner import MIN_TOP_K, run_configuration
+
+# ── P1: retrieval depth must cover every reported cutoff ────────────────────
+
+
+def test_top_k_below_largest_cutoff_is_rejected(make_query):
+    queries = [make_query("0000", ["alpha passage"])]
+    with pytest.raises(ValueError, match="largest reported cutoff"):
+        run_configuration("bm25", queries, top_k=MIN_TOP_K - 1)
+
+
+def test_min_top_k_covers_the_largest_cutoff():
+    from benchmarks.models import HIT_KS, MRR_K, NDCG_K, RECALL_KS
+
+    assert MIN_TOP_K == max(max(RECALL_KS), max(HIT_KS), MRR_K, NDCG_K)
+    assert MIN_TOP_K == 10
+
+
+def test_cli_rejects_shallow_top_k():
+    from benchmarks.retrieval_benchmark import main
+
+    exit_code = main(["--config", "bm25", "--top-k", "3", "--allow-dirty", "--output-dir", "/tmp/bench-shallow"])
+    assert exit_code == 2
+
+
+# ── P2: stable-id detection must check each field ───────────────────────────
+
+
+@pytest.mark.parametrize("field", ["doc_id", "chunk_id", "source_id"])
+def test_detect_relevance_level_sees_each_stable_id(field):
+    assert detect_relevance_level([{field: "x", "contexts": ["a"]}]) == "level1_stable_id"
+
+
+def test_detect_relevance_level_stays_level2_without_ids():
+    assert detect_relevance_level([{"contexts": ["a"]}]) == "level2_normalized_exact_text"
+
+
+def test_stable_id_dataset_loads_level1_items(tmp_path):
+    from benchmarks.dataset import load_queries
+
+    path = tmp_path / "ids.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "question": "q",
+                "contexts": ["alpha"],
+                "doc_id": "doc-1",
+                "business_type": "regulation",
+                "difficulty": "easy",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    queries = load_queries(path)
+    assert [item.key for item in queries[0].relevant_items] == ["doc-1"]
+
+
+# ── P2: coverage must describe the executed subset ──────────────────────────
+
+
+def test_coverage_reflects_selected_subset(mini_dataset):
+    from benchmarks.dataset import bucket_coverage, load_queries
+
+    queries = load_queries(mini_dataset, limit=1)
+    coverage = bucket_coverage([query.raw for query in queries])
+    assert coverage["sample_count"] == 1
+    assert coverage["field_coverage"]["business_type"] == 1
+    assert coverage["field_coverage"]["contexts"] == 1
+
+
+def test_coverage_unavailable_buckets_still_reported(mini_dataset):
+    from benchmarks.dataset import bucket_coverage, load_queries
+
+    coverage = bucket_coverage([q.raw for q in load_queries(mini_dataset, limit=1)])
+    assert coverage["unavailable_buckets"] == ["visual_required", "complexity"]
+
+
+# ── P2: blocked artifacts must not claim to be benchmark results ─────────────
+
+
+def test_blocked_run_metadata_is_not_a_benchmark(tmp_path, monkeypatch):
+    """A run where nothing executed must not set results_are_benchmark."""
+    from benchmarks import retrieval_benchmark as cli
+
+    monkeypatch.setattr(cli, "git_provenance", lambda root: ("abc123", False))
+    exit_code = cli.main(
+        [
+            "--config",
+            "bm25",
+            "--limit",
+            "2",
+            "--dataset",
+            "tests/evaluation/golden_set.jsonl",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    assert exit_code == 0
+    runs = sorted(p for p in tmp_path.iterdir() if p.is_dir())
+    assert runs
+    metadata = json.loads((runs[-1] / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["results_are_benchmark"] is False
+    assert metadata["sample_count"] == 2
+
+
+# ── P2: Elasticsearch probe settings must follow configuration ───────────────
+
+
+def test_elastic_port_is_parsed_from_url(monkeypatch):
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "http://localhost:19200", "index": "idx"}},
+    )
+    url, index, port, auth = backends._elastic_settings()
+    assert url == "http://localhost:19200"
+    assert port == 19200
+    assert index == "idx"
+
+
+def test_elastic_probe_uses_configured_credentials(monkeypatch):
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {
+            "elasticsearch": {"host": "http://localhost:9200", "index": "idx", "username": "elastic", "password": "pw"}
+        },
+    )
+    _, _, _, auth = backends._elastic_settings()
+    assert auth == ("elastic", "pw")
+
+
+def test_http_status_is_reachable_not_unreachable(monkeypatch):
+    """An HTTP 401 proves the service is reachable; it is an auth/index problem."""
+    import urllib.error
+
+    from benchmarks import backends
+
+    def _raise_401(request, timeout=None):
+        raise urllib.error.HTTPError("http://x", 401, "Unauthorized", None, None)
+
+    monkeypatch.setattr(backends.urllib.request, "urlopen", _raise_401)
+    ok, code = backends._http_get("http://localhost:9200/idx/_count")
+    assert ok == "http"
+    assert code == 401
+
+
+# ── P2: dense probe must use the configured collection ───────────────────────
+
+
+def test_qdrant_probe_uses_configured_text_collection(monkeypatch):
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {
+            "qdrant": {"host": "qdrant", "port": 6333},
+            "embedding": {"text": {"collection": "rag_text_custom"}},
+        },
+    )
+    _, _, collection = backends._qdrant_settings()
+    assert collection == "rag_text_custom"

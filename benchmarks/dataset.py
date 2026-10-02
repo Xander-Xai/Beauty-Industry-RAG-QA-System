@@ -58,8 +58,10 @@ def detect_relevance_level(rows: Sequence[dict[str, Any]]) -> str:
     """Whether ground truth can be matched by stable id (``level1``) or only by text."""
     if not rows:
         return "level2_normalized_exact_text"
-    if any(row.get(_STABLE_ID_KEYS) for row in rows):
-        return "level1_stable_id"
+    for row in rows:
+        for field in _STABLE_ID_KEYS:
+            if row.get(field) not in (None, ""):
+                return "level1_stable_id"
     return "level2_normalized_exact_text"
 
 
