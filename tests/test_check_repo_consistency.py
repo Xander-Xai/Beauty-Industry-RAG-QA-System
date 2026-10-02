@@ -214,6 +214,13 @@ def test_no_longer_zero_fallback_is_not_historically_exempt():
     assert ragas_zero_fallback_claims("Historical note: RAGAS previously returned zero scores.") == []
 
 
+def test_historical_exemption_is_clause_scoped():
+    """A historical clause must not exempt a neighboring current-state clause."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("Historical behavior failed fast; currently RAGAS missing returns zero scores")
+
+
 def test_later_affirmative_fallback_is_not_hidden_by_earlier_denial():
     """An earlier truthful denial must not mask a later affirmative fallback."""
     from scripts.check_repo_consistency import ragas_zero_fallback_claims
@@ -602,6 +609,24 @@ def test_coordinated_ragas_clauses_keep_leading_condition(tmp_path, monkeypatch)
     assert errors == []
 
 
+def test_contrast_clause_does_not_inherit_leading_condition(tmp_path, monkeypatch):
+    """A contrast conjunction must not inherit the leading condition."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, the CLI returns a non-zero status,"
+        " but a successful RAGAS dry-run produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+
 def test_bare_non_zero_is_not_a_failure_status(tmp_path, monkeypatch):
     """`non-zero scores` is not a non-zero exit/status guarantee."""
     import scripts.check_repo_consistency as guard
@@ -676,6 +701,22 @@ def test_local_validation_marker_must_be_affirmative(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "ROOT", tmp_path)
     (tmp_path / "doc.md").write_text(
         "LOCAL_REAL_VALIDATION is an evidence category.\n",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_local_runtime_validation_contract(errors)
+    assert any("affirmatively" in error for error in errors)
+
+
+def test_local_validation_marker_requires_non_negated_assertion(tmp_path, monkeypatch):
+    """A negated `not yet validated` dependency must not satisfy the marker."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "LOCAL_VALIDATION_DOCS", ["doc.md"])
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "doc.md").write_text(
+        "LOCAL_REAL_VALIDATION is an evidence category.\nProduction Redis is not yet validated.\n",
         encoding="utf-8",
     )
 

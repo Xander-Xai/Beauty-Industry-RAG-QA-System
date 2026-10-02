@@ -213,9 +213,24 @@ _LOCAL_VALIDATION_DEPENDENCY_RE = re.compile(
     re.IGNORECASE,
 )
 _LOCAL_VALIDATION_AFFIRMATIVE_RE = re.compile(
-    r"validated|verified|real|true|完成|已验证|验证|执行|已",
+    r"validated|verified|完成|已验证|验证|执行|已",
     re.IGNORECASE,
 )
+_VALIDATION_AFFIRMATIVE_NEGATION_BEFORE_RE = re.compile(
+    r"not\s+(?:yet\s+)?\s*$|never\s*$|尚未\s*$|未能\s*$|还未\s*$|未\s*$|无法\s*$|不能\s*$",
+    re.IGNORECASE,
+)
+
+
+def _affirmative_validation_in(window: str) -> bool:
+    """True when ``window`` contains a non-negated completed-validation phrase."""
+    for match in _LOCAL_VALIDATION_AFFIRMATIVE_RE.finditer(window):
+        prefix = window[max(0, match.start() - 24) : match.start()]
+        if _VALIDATION_AFFIRMATIVE_NEGATION_BEFORE_RE.search(prefix):
+            continue
+        return True
+    return False
+
 
 STALE_LOCAL_VALIDATION_CLAIM_PATTERNS = [
     r"(?:Redis|反向代理|代理|Elasticsearch|Prometheus|(?<![A-Za-z])ES(?![A-Za-z]))[^\n]{0,24}"
@@ -513,6 +528,12 @@ def _clause_start(line: str, index: int) -> int:
     return start
 
 
+def _clause_end(line: str, index: int) -> int:
+    """Return the end of the clause containing ``index`` on ``line``."""
+    boundary = _RAGAS_CLAUSE_BOUNDARY_RE.search(line, index)
+    return boundary.start() if boundary else len(line)
+
+
 def ragas_zero_fallback_claims(text: str) -> list[str]:
     """Return missing-RAGAS zero-score fallback claims presented as current.
 
@@ -526,11 +547,12 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
     for line in text.splitlines():
         if "ragas" not in line.lower():
             continue
-        if RAGAS_HISTORICAL_MARKERS.search(line):
-            continue
         for pattern in RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS:
             found = False
             for match in re.finditer(pattern, line, flags=re.IGNORECASE):
+                clause = line[_clause_start(line, match.start()) : _clause_end(line, match.end())]
+                if RAGAS_HISTORICAL_MARKERS.search(clause):
+                    continue
                 context = line[max(0, match.start() - 40) : match.end() + 40]
                 if not _RAGAS_ZERO_CONTEXT_RE.search(context):
                     continue
@@ -551,6 +573,9 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
 _SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?\n]+")
 _RAGAS_COMMA_SPLIT_RE = re.compile(r"[，,]+")
 _LOCAL_VALIDATION_COMMA_SPLIT_RE = re.compile(r"[，,：:]+")
+# Contrast conjunctions change scope, so a leading condition must not propagate
+# through them.
+_CONTRAST_SPLIT_RE = re.compile(r"\bbut\b|\bwhereas\b|\bhowever\b|然而|不过|但是|但", re.IGNORECASE)
 
 # A leading qualifier (subordinate condition or scope phrase) governs the whole
 # sentence that follows it, so it must not be split away from its guarantees or
@@ -572,16 +597,17 @@ def _split_clauses(line: str, comma_split_re: re.Pattern[str]) -> list[str]:
     """
     segments: list[str] = []
     for sentence in _SENTENCE_SPLIT_RE.split(line):
-        if not sentence.strip():
-            continue
-        pieces = [piece for piece in comma_split_re.split(sentence) if piece.strip()]
-        if not pieces:
-            continue
-        first = pieces[0]
-        if _LEADING_QUALIFIER_RE.match(first) or first.rstrip().endswith(("时", "的话")):
-            segments.append("，".join(pieces))
-        else:
-            segments.extend(pieces)
+        for sub_sentence in _CONTRAST_SPLIT_RE.split(sentence):
+            if not sub_sentence.strip():
+                continue
+            pieces = [piece for piece in comma_split_re.split(sub_sentence) if piece.strip()]
+            if not pieces:
+                continue
+            first = pieces[0]
+            if _LEADING_QUALIFIER_RE.match(first) or first.rstrip().endswith(("时", "的话")):
+                segments.append("，".join(pieces))
+            else:
+                segments.extend(pieces)
     return segments
 
 
@@ -710,6 +736,16 @@ def stale_local_validation_claims(text: str) -> list[str]:
     return claims
 
 
+def _local_validation_affirmative_scope(text: str) -> bool:
+    """True when a LOCAL_REAL_VALIDATION mention is near an affirmative dependency claim."""
+    marker = "LOCAL_REAL_VALIDATION"
+    for match in re.finditer(marker, text):
+        window = text[max(0, match.start() - 400) : match.end() + 400]
+        if _LOCAL_VALIDATION_DEPENDENCY_RE.search(window) and _affirmative_validation_in(window):
+            return True
+    return False
+
+
 def check_local_runtime_validation_contract(errors: list[str]) -> None:
     """Canonical docs must affirm the completed local real-dependency validation."""
     for name in LOCAL_VALIDATION_DOCS:
@@ -723,11 +759,7 @@ def check_local_runtime_validation_contract(errors: list[str]) -> None:
                 errors,
                 f"{name}: must classify the completed Redis/nginx/ES/Prometheus validation as LOCAL_REAL_VALIDATION",
             )
-        elif not any(
-            _LOCAL_VALIDATION_DEPENDENCY_RE.search(text[max(0, match.start() - 400) : match.end() + 400])
-            and _LOCAL_VALIDATION_AFFIRMATIVE_RE.search(text[max(0, match.start() - 400) : match.end() + 400])
-            for match in re.finditer(marker, text)
-        ):
+        elif not _local_validation_affirmative_scope(text):
             fail(
                 errors,
                 f"{name}: must affirmatively state that Redis/nginx/Elasticsearch/Prometheus were validated locally",
