@@ -28,6 +28,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from benchmarks.models import BackendAvailability
 
@@ -205,8 +206,17 @@ def _non_empty(path: Path) -> bool:
         return False
 
 
-def _declared_shards(path: Path) -> list[str] | None:
-    """Shard filenames declared by a transformers weight index, if one exists."""
+INVALID_WEIGHT_INDEX = "invalid"
+
+
+def _declared_shards(path: Path) -> list[str] | None | str:
+    """Shard filenames declared by a transformers weight index.
+
+    Returns ``None`` when no index exists, :data:`INVALID_WEIGHT_INDEX` when one
+    exists but cannot be parsed into a ``weight_map`` (which from_pretrained would
+    still fail on), and the shard list otherwise. An unreadable index must not be
+    conflated with an absent one, or a partial download looks complete.
+    """
     for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
         index_file = path / index_name
         if not _non_empty(index_file):
@@ -214,10 +224,11 @@ def _declared_shards(path: Path) -> list[str] | None:
         try:
             index = json.loads(index_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return None
+            return INVALID_WEIGHT_INDEX
         weight_map = index.get("weight_map") if isinstance(index, dict) else None
-        if isinstance(weight_map, dict):
+        if isinstance(weight_map, dict) and weight_map:
             return sorted({str(name) for name in weight_map.values()})
+        return INVALID_WEIGHT_INDEX
     return None
 
 
@@ -237,7 +248,9 @@ def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
         # A single shard can be present while the rest of the download is missing,
         # which from_pretrained still rejects; follow the index when there is one.
         declared = _declared_shards(path)
-        if declared is not None:
+        if declared == INVALID_WEIGHT_INDEX:
+            missing.append("a readable transformers weight index")
+        elif declared is not None:
             present = {candidate.name for candidate in weight_files}
             absent = [shard for shard in declared if shard not in present]
             if absent:
@@ -279,7 +292,9 @@ def probe_bm25() -> BackendAvailability:
             REASON_SERVICE_DISABLED,
             "elasticsearch.enabled is false; BM25Retriever returns no results",
         )
-    if not _tcp_reachable(url.split("//")[-1].split(":")[0], port):
+    # urlparse().hostname handles IPv6 literals ("[::1]") and strips userinfo,
+    # both of which a naive string split mangles.
+    if not _tcp_reachable(urlparse(url).hostname or "localhost", port):
         return BackendAvailability("bm25", False, REASON_SERVICE_UNREACHABLE, f"{url}:{port}")
     ok, payload = _http_get(f"{url.rstrip('/')}/{index}/_count", auth=auth)
     if ok == "http":
@@ -348,6 +363,20 @@ def probe_dense() -> BackendAvailability:
             REASON_SERVICE_NO_DATA,
             f"collection {collection} exists but holds 0 points",
         )
+    # Production constructs QdrantClient(..., prefer_grpc=True), so a working REST
+    # port does not prove the transport retrieval actually uses. When gRPC is
+    # reachable it must verify the collection too.
+    if grpc_reachable and grpc_port is not None:
+        grpc_points, grpc_note = _grpc_collection_points(host, grpc_port, collection)
+        if grpc_points is None:
+            return BackendAvailability("dense", False, REASON_SERVICE_NO_DATA, grpc_note)
+        if int(grpc_points) == 0:
+            return BackendAvailability(
+                "dense",
+                False,
+                REASON_SERVICE_NO_DATA,
+                f"collection {collection} exists but holds 0 points over gRPC",
+            )
     weights_ok, model_path = _model_weights_available()
     if not weights_ok:
         return BackendAvailability(

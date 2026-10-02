@@ -185,23 +185,35 @@ def render_environment(environment: dict[str, Any]) -> dict[str, Any]:
     return rendered
 
 
-_SECRET_KEY_MARKERS = ("password", "secret", "token", "api_key", "credential")
+_SECRET_KEY_MARKERS = ("password", "secret", "token", "api_key", "credential", "access_key", "private_key")
+
+
+def _is_secret_key(key: Any) -> bool:
+    lowered = str(key).lower()
+    return any(marker in lowered for marker in _SECRET_KEY_MARKERS)
+
+
+def sanitize(value: Any) -> Any:
+    """Recursively replace credential-ish values with presence flags.
+
+    Applied to everything persisted from the live configuration: artifacts get
+    shared and promoted, so a secret nested anywhere in the config tree must not
+    be written verbatim.
+    """
+    if isinstance(value, dict):
+        return {key: (bool(item) if _is_secret_key(key) else sanitize(item)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize(item) for item in value]
+    return value
 
 
 def _sanitize_models(models: Any) -> dict[str, Any]:
     """Model settings with any credential-ish value reduced to a presence flag."""
     if not isinstance(models, dict):
         return {}
-    sanitized: dict[str, Any] = {}
-    for name, settings in models.items():
-        if not isinstance(settings, dict):
-            sanitized[name] = settings
-            continue
-        sanitized[name] = {
-            key: (bool(value) if any(marker in str(key).lower() for marker in _SECRET_KEY_MARKERS) else value)
-            for key, value in settings.items()
-        }
-    return sanitized
+    return {name: sanitize(settings) for name, settings in models.items()}
 
 
 def effective_retrieval_config() -> dict[str, Any]:
@@ -221,7 +233,7 @@ def effective_retrieval_config() -> dict[str, Any]:
     elastic = config.get("elasticsearch", {}) or {}
     qdrant = config.get("qdrant", {}) or {}
     embedding = config.get("embedding", {}) or {}
-    return {
+    snapshot = {
         "config_path": os.environ.get("CONFIG_PATH") or "config.json",
         "knowledge_version_epoch": config.get("knowledge_version_epoch"),
         "retrieval": retrieval,
@@ -260,6 +272,9 @@ def effective_retrieval_config() -> dict[str, Any]:
         },
         "secret_env_presence": credential_env_state(),
     }
+    # Applied once at the boundary so a credential nested anywhere in the
+    # configuration tree is reduced to a presence flag before it is persisted.
+    return sanitize(snapshot)
 
 
 def write_gitignore_entry(repo_root: Path, entry: str) -> bool:

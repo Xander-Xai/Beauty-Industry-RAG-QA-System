@@ -331,6 +331,7 @@ def test_non_empty_qdrant_collection_with_weights_is_available(monkeypatch):
 
     monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 42}}))
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (42, "ok"))
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
     assert backends.probe_dense().available is True
 
@@ -1148,3 +1149,146 @@ def test_sample_ids_without_limit_select_all():
 
     queries = load_queries("tests/evaluation/golden_set.jsonl", sample_ids=["0001", "0003", "0005"])
     assert [q.sample_id for q in queries] == ["0001", "0003", "0005"]
+
+
+# ── Round 10: full snapshot sanitization, gRPC-always, invalid index, IPv6 ───
+
+
+def test_nested_credentials_are_reduced_to_presence_flags():
+    from benchmarks.provenance import sanitize
+
+    sanitized = sanitize(
+        {
+            "embedding": {
+                "text": {"model_path": "/models/bge", "api_key": "sk-secret"},
+                "nested": {"password": "hunter2", "token": "abc"},
+                "list": [{"secret": "s"}],
+            },
+            "index": "rag",
+        }
+    )
+    assert sanitized["embedding"]["text"]["api_key"] is True
+    assert sanitized["embedding"]["nested"]["password"] is True
+    assert sanitized["embedding"]["nested"]["token"] is True
+    assert sanitized["embedding"]["list"][0]["secret"] is True
+    assert sanitized["embedding"]["text"]["model_path"] == "/models/bge"
+    assert sanitized["index"] == "rag"
+
+
+def test_effective_config_snapshot_has_no_nested_secret(monkeypatch):
+    """The persisted snapshot must not leak a credential nested under embedding."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {
+            "embedding": {"text": {"model_path": "/m", "api_key": "sk-live-123"}},
+            "retrieval": {"rerank": {"token": "tok-xyz"}},
+        },
+    )
+    import json as _json
+
+    rendered = _json.dumps(provenance.effective_retrieval_config())
+    assert "sk-live-123" not in rendered
+    assert "tok-xyz" not in rendered
+
+
+def test_snapshot_still_records_embedding_settings(monkeypatch):
+    """Sanitizing must not drop the settings needed to reproduce a run."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"embedding": {"text": {"model_path": "/models/bge", "collection": "rag_text_768", "api_key": "s"}}},
+    )
+    snapshot = provenance.effective_retrieval_config()
+    assert snapshot["embedding"]["text"]["model_path"] == "/models/bge"
+    assert snapshot["embedding"]["text"]["collection"] == "rag_text_768"
+
+
+def test_grpc_failure_blocks_even_when_rest_works(monkeypatch):
+    """Production prefers gRPC, so a broken gRPC must not read as available."""
+    from benchmarks import backends
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 42}}))
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (None, "grpc boom"))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_SERVICE_NO_DATA
+    assert "grpc boom" in availability.detail
+
+
+def test_grpc_empty_over_rest_populated_blocks(monkeypatch):
+    from benchmarks import backends
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 42}}))
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (0, "ok"))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert "0 points over gRPC" in availability.detail
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"not_weight_map": []}', "[]", "{}", '{"weight_map": []}', "not json at all"],
+)
+def test_malformed_weight_index_is_rejected(tmp_path, content):
+    """An unreadable index is not the same as no index."""
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", "model-00001-of-00002.safetensors"):
+        (path / name).write_text("x" * 10, encoding="utf-8")
+    (path / "model.safetensors.index.json").write_text(content, encoding="utf-8")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "weight index" in detail
+
+
+def test_valid_index_with_complete_shards_still_passes(tmp_path):
+    """Rejecting malformed indexes must not reject good ones."""
+    import json as _json
+
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", "model.safetensors"):
+        (path / name).write_text("x" * 10, encoding="utf-8")
+    (path / "model.safetensors.index.json").write_text(
+        _json.dumps({"weight_map": {"layer.0": "model.safetensors"}}), encoding="utf-8"
+    )
+    assert _looks_like_model_dir(path)[0] is True
+
+
+@pytest.mark.parametrize("url", ["http://[::1]:9200", "http://user:pass@es:9200", "https://es.internal:9243"])
+def test_es_host_is_parsed_as_a_hostname(monkeypatch, url):
+    """IPv6 literals and userinfo must not be passed to the TCP pre-check."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    seen = {}
+
+    def fake_tcp(host, port):
+        seen["host"] = host
+        seen["port"] = port
+        return True
+
+    monkeypatch.setattr(backends, "_elastic_settings", lambda: (url, "idx", 9200, None))
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"enabled": True}})
+    monkeypatch.setattr(backends, "_tcp_reachable", fake_tcp)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"count": 3}))
+    availability = backends.probe_bm25()
+    assert seen["host"] in {"::1", "es", "es.internal"}
+    assert "[" not in (seen["host"] or "")
+    assert "user" not in (seen["host"] or "")
+    assert availability.available is True
