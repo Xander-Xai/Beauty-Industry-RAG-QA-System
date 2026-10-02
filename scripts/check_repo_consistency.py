@@ -159,10 +159,11 @@ RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
 )
 
 # Only lines that describe an unavailable/failed evaluator count as the failure
-# clause. Both guarantees must appear on such lines, so an unrelated RAGAS line
-# (for example a benchmark report mention) cannot satisfy either half.
+# clause. This deliberately excludes the guarantee wording itself (`fail fast`,
+# `非零`, exit codes) so a successful-run statement cannot bootstrap its own
+# failure scope. Both guarantees must appear on such a clause.
 RAGAS_FAILURE_CONDITION_RE = re.compile(
-    r"unavailable|missing|not\s+installed|缺少|缺失|不可用|未安装|fail[- ]?fast|非零|退出码\s*[2-5]",
+    r"unavailable|missing|not\s+installed|缺少|缺失|不可用|未安装",
     re.IGNORECASE,
 )
 

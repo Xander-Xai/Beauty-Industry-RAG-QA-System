@@ -437,6 +437,28 @@ def test_negated_no_report_assertion_is_rejected(tmp_path, monkeypatch):
     assert any("does not produce a quality report" in error for error in errors)
 
 
+def test_successful_run_does_not_bootstrap_failure_scope(tmp_path, monkeypatch):
+    """Guarantee wording alone must not classify a segment as evaluator failure."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    doc = tmp_path / "doc.md"
+
+    doc.write_text("A successful RAGAS run will fail fast and produce no quality report.", encoding="utf-8")
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+    doc.write_text("RAGAS 正常可用时返回非零状态且不生成质量报告。", encoding="utf-8")
+    errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+
 def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)
