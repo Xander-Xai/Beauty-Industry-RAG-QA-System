@@ -172,7 +172,7 @@ LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE = re.compile(
 )
 
 STALE_LOCAL_VALIDATION_CLAIM_PATTERNS = [
-    r"(?:Redis|反向代理|代理|Elasticsearch|ES|Prometheus)[^\n]{0,24}"
+    r"(?:Redis|反向代理|代理|Elasticsearch|Prometheus|(?<![A-Za-z])ES(?![A-Za-z]))[^\n]{0,24}"
     r"(?:尚待|仍待|仍需|尚未|还未|未[^\n]{0,6}(?:验证|验收))",
     r"(?:尚待|仍待|仍需|尚未|还未)[^\n]{0,16}"
     r"(?:Redis|反向代理|Elasticsearch|Prometheus)[^\n]{0,16}(?:验收|验证)",
@@ -461,10 +461,14 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
 
     Line-scoped and negation-aware: a denial such as "never emit a zero-score
     report" is not a claim, and lines with an explicit historical marker are
-    exempt. Deterministic: no PR number, GitHub API, git history or wall clock.
+    exempt. Only RAGAS lines are considered, so unrelated zero wording (for
+    example a cache hit-rate sentence) is not misread as this fallback.
+    Deterministic: no PR number, GitHub API, git history or wall clock.
     """
     claims: list[str] = []
     for line in text.splitlines():
+        if "ragas" not in line.lower():
+            continue
         if HISTORICAL_MARKERS.search(line):
             continue
         for pattern in RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS:

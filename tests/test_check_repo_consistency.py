@@ -198,6 +198,13 @@ def test_ragas_zero_fallback_claim_is_rejected():
     assert ragas_zero_fallback_claims(english)
 
 
+def test_unrelated_zero_wording_is_not_a_ragas_fallback():
+    """Generic zero wording without a RAGAS reference is not this claim."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("The cache hit rate returns zero when no requests exist.") == []
+
+
 def test_ragas_fallback_claim_fails_consistency_guard(tmp_path, monkeypatch):
     """A canonical doc with the retired fallback claim must fail the full guard."""
     import scripts.check_repo_consistency as guard
@@ -342,9 +349,17 @@ def test_completed_local_redis_validation_cannot_regress():
     from scripts.check_repo_consistency import stale_local_validation_claims
 
     assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证。")
-    assert stale_local_validation_claims("真实 nginx TRUSTED_PROXIES 尚未验证。")
+    assert stale_local_validation_claims("真实反向代理 nginx 客户端 IP 尚未验证。")
     assert stale_local_validation_claims("认证 Elasticsearch 本地集成尚未验证。")
     assert stale_local_validation_claims("真实 Prometheus authenticated scrape 尚未验证。")
+
+
+def test_es_substring_is_not_matched_as_elasticsearch():
+    """The ES abbreviation must be a standalone token, not a word suffix."""
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("RAGAS scores 尚未验证") == []
+    assert stale_local_validation_claims("认证 ES 本地集成尚未验证。")
 
 
 def test_redis_cluster_boundary_is_allowed():
