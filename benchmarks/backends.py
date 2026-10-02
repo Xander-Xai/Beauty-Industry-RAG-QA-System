@@ -391,65 +391,41 @@ def probe_dense() -> BackendAvailability:
     """Dense/BGE needs Qdrant text collection *and* real embedding weights."""
     host, port, collection = _qdrant_settings()
     grpc_port = _qdrant_grpc_port()
-    rest_reachable = _tcp_reachable(host, port)
-    grpc_reachable = grpc_port is not None and _tcp_reachable(host, grpc_port)
-    if not rest_reachable and not grpc_reachable:
-        probed = f"{host}:{port}"
-        if grpc_port is not None:
-            probed += f" (rest) / {host}:{grpc_port} (grpc)"
-        return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, probed)
-    ok, payload = _http_get(f"http://{host}:{port}/collections/{collection}") if rest_reachable else (False, None)
-    # The production client prefers gRPC (QdrantClient(..., prefer_grpc=True)), so
-    # gRPC is the decisive transport whenever it is reachable: a working REST port
-    # — or a REST 401/403/404 from an unauthenticated proxy — does not prove that
-    # real retrieval would succeed.
-    rest_points = None
-    if isinstance(payload, dict):
-        result = payload.get("result")
-        if isinstance(result, dict):
-            rest_points = result.get("points_count")
-
-    if grpc_reachable and grpc_port is not None:
-        grpc_points, grpc_note = _grpc_collection_points(host, grpc_port, collection)
-        if grpc_points is None:
-            return BackendAvailability("dense", False, REASON_SERVICE_NO_DATA, grpc_note)
-        if int(grpc_points) == 0:
-            return BackendAvailability(
-                "dense",
-                False,
-                REASON_SERVICE_NO_DATA,
-                f"collection {collection} exists but holds 0 points over gRPC",
-            )
-    elif grpc_port is not None:
-        # A gRPC port is configured but did not accept a connection. The online
-        # client is built with prefer_grpc=True, so retrieval would fail on its
-        # first call even if REST is healthy; REST evidence is not a substitute
-        # and must not report the configuration available.
+    # `EmbeddingService.qdrant_client` subscribes config["qdrant"]["grpc_port"]
+    # unconditionally and builds the client with prefer_grpc=True, so a config
+    # that omits the key cannot run production retrieval at all (KeyError), and a
+    # config that declares an unreachable one fails on its first query. There is
+    # no REST-only production path to accept, so REST evidence is used solely to
+    # explain a block and never to clear one.
+    if grpc_port is None:
         return BackendAvailability(
             "dense",
             False,
             REASON_SERVICE_UNREACHABLE,
-            f"configured gRPC port {grpc_port} is not reachable; production retrieval uses prefer_grpc=True",
+            "config omits qdrant.grpc_port, which production reads unconditionally; "
+            "there is no REST-only dense retrieval path in this repository",
         )
-    else:
-        # gRPC is not available, so the REST listing is the only evidence there can be.
-        if rest_reachable and ok == "http":
-            # HTTP-level answer proves reachability; the blocker is the collection.
-            return BackendAvailability(
-                "dense",
-                False,
-                REASON_SERVICE_NO_DATA,
-                f"collection {collection} answered HTTP {payload} (absent or inaccessible)",
-            )
-        if rest_points is None:
-            return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
-        if int(rest_points) == 0:
-            return BackendAvailability(
-                "dense",
-                False,
-                REASON_SERVICE_NO_DATA,
-                f"collection {collection} exists but holds 0 points",
-            )
+    grpc_reachable = _tcp_reachable(host, grpc_port)
+    if not grpc_reachable:
+        rest_note = ""
+        if _tcp_reachable(host, port):
+            rest_note = f"; REST {host}:{port} answered but production uses prefer_grpc=True"
+        return BackendAvailability(
+            "dense",
+            False,
+            REASON_SERVICE_UNREACHABLE,
+            f"configured gRPC port {grpc_port} is not reachable; production retrieval uses prefer_grpc=True{rest_note}",
+        )
+    grpc_points, grpc_note = _grpc_collection_points(host, grpc_port, collection)
+    if grpc_points is None:
+        return BackendAvailability("dense", False, REASON_SERVICE_NO_DATA, grpc_note)
+    if int(grpc_points) == 0:
+        return BackendAvailability(
+            "dense",
+            False,
+            REASON_SERVICE_NO_DATA,
+            f"collection {collection} exists but holds 0 points over gRPC",
+        )
     weights_ok, model_path = _model_weights_available()
     if not weights_ok:
         return BackendAvailability(

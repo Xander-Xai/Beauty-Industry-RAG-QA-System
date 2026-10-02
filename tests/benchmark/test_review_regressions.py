@@ -188,7 +188,11 @@ def test_qdrant_probe_uses_configured_text_collection(monkeypatch):
 
 
 def test_qdrant_http_error_is_not_treated_as_available(monkeypatch):
-    """An HTTP 401/404 for the collection is a reachable service, not a usable one."""
+    """A REST 401 cannot clear a closed gRPC port.
+
+    Production builds the client with prefer_grpc=True, so a REST-level answer
+    from an unauthenticated proxy is not evidence that retrieval would work.
+    """
     import urllib.error
 
     from benchmarks import backends
@@ -197,15 +201,17 @@ def test_qdrant_http_error_is_not_treated_as_available(monkeypatch):
     def _raise_401(request, timeout=None):
         raise urllib.error.HTTPError("http://x", 401, "Unauthorized", None, None)
 
-    # No gRPC port declared, so the REST branch is the one under test.
-    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"qdrant": {"host": "qdrant", "port": 6333}})
-    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port != 6334)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"qdrant": {"host": "qdrant", "port": 6333, "grpc_port": 6334}},
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
     monkeypatch.setattr(backends.urllib.request, "urlopen", _raise_401)
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
     availability = backends.probe_dense()
     assert availability.available is False
-    assert availability.reason == backends.REASON_SERVICE_NO_DATA
-    assert "401" in (availability.detail or "")
+    assert availability.reason == backends.REASON_SERVICE_UNREACHABLE
 
 
 def test_per_stage_latency_is_not_fabricated(make_query):
@@ -321,10 +327,13 @@ def test_empty_qdrant_collection_is_rejected(monkeypatch):
     from benchmarks import backends
     from common import config as common_config
 
-    # No gRPC port declared, so the REST branch is the one under test.
-    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"qdrant": {"host": "qdrant", "port": 6333}})
-    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port != 6334)
-    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 0}}))
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"qdrant": {"host": "qdrant", "port": 6333, "grpc_port": 6334}},
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (0, "empty"))
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
     availability = backends.probe_dense()
     assert availability.available is False
@@ -601,12 +610,12 @@ def test_model_probe_rejects_empty_directory(tmp_path, monkeypatch):
         common_config,
         "get_config_dict",
         lambda: {
-            "qdrant": {"host": "qdrant", "port": 6333},
+            "qdrant": {"host": "qdrant", "port": 6333, "grpc_port": 6334},
             "embedding": {"text": {"collection": "rag_text_768", "model_path": str(empty)}},
         },
     )
     monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
-    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 10}}))
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (10, "ok"))
     availability = backends.probe_dense()
     assert availability.available is False
     assert availability.reason == backends.REASON_MODEL_UNAVAILABLE
@@ -848,16 +857,22 @@ def test_dense_blocked_when_both_protocols_are_closed(monkeypatch, tmp_path):
     assert "grpc" in availability.detail
 
 
-def test_rest_only_deployment_still_works(monkeypatch, tmp_path):
-    """A config that never declares a gRPC port may be served over REST alone."""
+def test_rest_only_deployment_is_rejected(monkeypatch, tmp_path):
+    """A config that omits `qdrant.grpc_port` cannot run production retrieval.
+
+    `EmbeddingService.qdrant_client` subscribes that key unconditionally, so a
+    REST-only config raises KeyError on the client and never reaches a search.
+    """
     from benchmarks import backends
     from common import config as common_config
 
     model = _write_complete_model(tmp_path / "model")
     monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model, grpc_port=None))
-    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 5}}))
-    assert backends.probe_dense().available is True
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert "grpc_port" in (availability.detail or "")
 
 
 @pytest.mark.parametrize("payload", ["[]", '"text"', "42", "null"])
@@ -1390,15 +1405,15 @@ def test_declared_grpc_closed_is_not_cleared_by_rest(monkeypatch):
     assert availability.reason == backends.REASON_SERVICE_UNREACHABLE
 
 
-def test_rest_only_path_still_works_when_grpc_undeclared(monkeypatch):
+def test_rest_health_cannot_rescue_an_undeclared_grpc_port(monkeypatch):
     from benchmarks import backends
     from common import config as common_config
 
     monkeypatch.setattr(common_config, "get_config_dict", lambda: {"qdrant": {"host": "qdrant", "port": 6333}})
-    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 9}}))
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
-    assert backends.probe_dense().available is True
+    assert backends.probe_dense().available is False
 
 
 def test_zero_byte_weight_index_is_rejected(tmp_path):
