@@ -145,6 +145,16 @@ RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS = [
     r"no\s+longer\s+(?:returns?|emits?|produces?|writes?)\b[^\n]{0,24}zero",
 ]
 
+# A zero match only counts as the retired score fallback when the surrounding
+# window refers to a score/result/report/fallback or to an unavailable
+# evaluator. This keeps truthful statements such as "returns zero failed
+# samples" or "returns zero exit status" out of the guard.
+_RAGAS_ZERO_CONTEXT_RE = re.compile(
+    r"score|scores|result|results|report|reports|fallback|零分|_warning|warning|"
+    r"unavailable|missing|not\s+installed|缺少|缺失|不可用|未安装",
+    re.IGNORECASE,
+)
+
 # Two independent RAGAS failure contracts. They must each be documented, and a
 # bare "UNAVAILABLE" must not satisfy the non-zero/failure-status half.
 RAGAS_FAILURE_STATUS_REQUIRED_RE = re.compile(
@@ -495,9 +505,13 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
         for pattern in RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS:
             found = False
             for match in re.finditer(pattern, line, flags=re.IGNORECASE):
-                window = line[max(0, match.start() - 24) : match.end() + 24]
+                context = line[max(0, match.start() - 40) : match.end() + 40]
+                if not _RAGAS_ZERO_CONTEXT_RE.search(context):
+                    continue
+                denial_window = line[max(0, match.start() - 24) : match.end()]
                 if any(
-                    re.search(denial, window, flags=re.IGNORECASE) for denial in RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS
+                    re.search(denial, denial_window, flags=re.IGNORECASE)
+                    for denial in RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS
                 ):
                     continue
                 claims.append(match.group(0))
@@ -516,6 +530,8 @@ _RAGAS_SEGMENT_SPLIT_RE = re.compile(r"[；;。！!？?，,\n]+")
 # "不返回非零状态". A bare "not installed" earlier in the segment does not count.
 _STATUS_NEGATION_BEFORE_RE = re.compile(
     r"(?:does|do|will|would|should|could|can|is|are|was|were)\s+not\s+(?:\w+\s+){0,3}$|"
+    r"(?:can't|won't|isn't|aren't|wasn't|weren't|couldn't|shouldn't|wouldn't|doesn't|don't|didn't)\s+"
+    r"(?:\w+\s+){0,3}$|"
     r"(?:never|not)\s+(?:\w+\s+){0,3}$|"
     r"(?:fails?|failed)\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:is|are|was|were)?\s*unable\s+to\s+(?:\w+\s+){0,3}$|"
@@ -557,8 +573,8 @@ def _ragas_status_affirmative(segment: str) -> bool:
 # ("does not produce a report", "不生成报告") include the negation in the match
 # itself, so only a meta-negation before the phrase counts.
 _REPORT_NEGATION_BEFORE_RE = re.compile(
-    r"(?:does|do|did)\s+not\s+mean\s+(?:\w+\s+){0,2}$|"
-    r"(?:doesn't|don't|didn't)\s+mean\s+(?:\w+\s+){0,2}$|"
+    r"(?:does|do|did)\s+not\s+(?:guarantee|assert|imply|ensure|mean)\s+(?:\w+\s+){0,2}$|"
+    r"(?:doesn't|don't|didn't)\s+(?:guarantee|assert|imply|ensure|mean)\s+(?:\w+\s+){0,2}$|"
     r"not\s+that\s+(?:\w+\s+){0,2}$|"
     r"(?:并非|不代表|不等于|并不意味着|不能说明)[^\n]{0,6}$",
     re.IGNORECASE,
@@ -621,7 +637,7 @@ def stale_local_validation_claims(text: str) -> list[str]:
     """
     claims: list[str] = []
     for line in text.splitlines():
-        for clause in re.split(r"[；;。，,]+", line):
+        for clause in re.split(r"[；;。，,：:]+", line):
             if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(clause):
                 continue
             for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:

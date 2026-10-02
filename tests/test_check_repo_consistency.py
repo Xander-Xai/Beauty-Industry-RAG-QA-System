@@ -221,6 +221,14 @@ def test_later_affirmative_fallback_is_not_hidden_by_earlier_denial():
     assert ragas_zero_fallback_claims("RAGAS does not return zero on success, but returns zero when unavailable")
 
 
+def test_zero_non_score_values_are_not_fallbacks():
+    """Zero counts/statuses are not the retired score fallback."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("RAGAS returns zero failed samples when every sample succeeds") == []
+    assert ragas_zero_fallback_claims("RAGAS returns zero exit status on success") == []
+
+
 def test_ragas_fallback_claim_fails_consistency_guard(tmp_path, monkeypatch):
     """A canonical doc with the retired fallback claim must fail the full guard."""
     import scripts.check_repo_consistency as guard
@@ -410,6 +418,32 @@ def test_failure_to_return_is_status_negation(tmp_path, monkeypatch):
     assert any("unsuccessful/non-zero" in error for error in errors)
 
 
+def test_contracted_status_negation_is_rejected(tmp_path, monkeypatch):
+    """Contracted auxiliaries (`can't`, `won't`) negate the status guarantee."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    doc = tmp_path / "doc.md"
+
+    doc.write_text(
+        "RAGAS unavailable can't return a non-zero status and produces no quality report.",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+
+    doc.write_text(
+        "RAGAS unavailable won't return a non-zero status and produces no quality report.",
+        encoding="utf-8",
+    )
+    errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+
+
 def test_ragas_report_guarantee_must_share_failure_clause_with_comma(tmp_path, monkeypatch):
     """A comma-joined non-failure RAGAS clause must not satisfy the no-report half."""
     import scripts.check_repo_consistency as guard
@@ -440,6 +474,32 @@ def test_negated_no_report_assertion_is_rejected(tmp_path, monkeypatch):
     )
 
     errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+
+def test_non_guarantee_of_report_suppression_is_rejected(tmp_path, monkeypatch):
+    """`does not guarantee/assert/imply` negates the no-report guarantee."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    doc = tmp_path / "doc.md"
+
+    doc.write_text(
+        "RAGAS unavailable returns a non-zero status but does not guarantee no quality report.",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+    doc.write_text(
+        "RAGAS unavailable returns a non-zero status but does not imply no quality report.",
+        encoding="utf-8",
+    )
+    errors = []
     guard.check_ragas_failure_contract(errors)
     assert any("does not produce a quality report" in error for error in errors)
 
@@ -555,6 +615,14 @@ def test_production_boundary_exemption_splits_commas():
 
     assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证，production cluster 也未验证")
     assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证, production cluster 也未验证")
+
+
+def test_production_boundary_exemption_splits_colons():
+    """Colon-delimited clauses are split before applying the boundary exemption."""
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证：production cluster 也未验证")
+    assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证: production cluster 也未验证")
 
 
 def test_tracing_default_is_not_misdescribed_as_local_memory_spans():
