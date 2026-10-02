@@ -21,7 +21,8 @@
 | Structured audit trail | Implemented in code | `common/audit.py` emits business-action events (`auth.login.*`, `admin.user.create`, `admin.role.update`, `media.access.denied`, `knowledge.epoch.seal`) with a stable schema, forced redaction and request-id correlation; persisted to Redis Stream + daily JSONL. No SIEM forwarding, and no `knowledge.epoch.activate` event because no activate endpoint exists |
 | Alerting | Implemented as configuration | `monitoring/prometheus/alerts.yml` defines 6 alerts over metrics the canonical collector actually emits; every threshold is a `DESIGN_TARGET`. No production Prometheus evaluates them and no alert has fired in production |
 | SLO / runbook | Documented; objectives are targets | `docs/slo-runbook.md` defines 5 objectives and 8 incident procedures against degradation paths that exist in code. No objective has been met or measured |
-| OpenTelemetry export | Exporter implemented; runtime closed loop pending | `monitoring/otel_exporter.py` adds an opt-in OTLP path with non-fatal failure semantics and a span-attribute allow-list; default remains no exporter. Application -> exporter -> collector -> backend -> queried span is `PENDING` |
+| OpenTelemetry export | Exporter implemented and test-covered; disabled by default; runtime closed loop pending | `monitoring/otel_exporter.py` adds an opt-in OTLP path with non-fatal failure semantics and a span-attribute allow-list; with `OTEL_EXPORT_ENABLED=false` no span processor is attached, and the exporter package is an optional dependency in `requirements-otel.txt`. Application -> exporter -> collector -> backend -> queried span is `PENDING` |
+| In-process alert engine | Legacy; not wired into the canonical request path | `monitoring/otel_tracer.py` contains an older in-process `AlertingManager` that no module under `app.py`, `api/` or `core/` constructs. It is not the Prometheus rule set and must not be described as the alert contract; the unconsumed `config.json` -> `alerting.rules` block that fed it was removed |
 
 All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Historical implementation plans under `docs/superpowers/` are not current implementation evidence.
 
@@ -464,7 +465,8 @@ L2 Private Cache	query_hash + version + role_mask + dept_mask	存储特定权限
 ● 审计日志记录 user_role_mask、过滤表达式、拦截原因。
 ● 明文保护：user_query 强制 SHA256 哈希，研发配方类查询日志脱敏为 [REDACTED]。
 12. 可观测性与数据闭环
-● 全链路追踪（OpenTelemetry + Jaeger）。
+● 【当前实现】全链路追踪钩子接入在线主链路，走 OpenTelemetry SDK TracerProvider；span 导出为可选 OTLP 路径（`monitoring/otel_exporter.py`），默认关闭。
+● 【历史/目标设计】原「OpenTelemetry + Jaeger」表述对应 Jaeger thrift agent 路径（`config.json` → `monitoring.jaeger.*`）。OTel SDK 已不再附带 Jaeger exporter，当前实现走 OTLP；collector/后端/可查询 span 的闭环仍为 `PENDING`，本仓库没有任何 span 被后端查询到。
 ● 关键监控指标：
   ○ L1/L2 命中率（按权限分区统计）
   ○ Rewrite 延迟/成功率

@@ -10,6 +10,14 @@
 - Deterministic retrieval benchmark framework merged via PR #17 (squash `8446d19`). Its final tree is
   byte-identical to `main`'s, so the merged source branch `feat/reproducible-rag-benchmark` was verified
   as fully contained in `main` and deleted.
+- Enterprise-readiness scope was tracked in [#20](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/20)
+  (completed) and delivered by PR #21 (merged): performance artifact contract, structured
+  enterprise audit, SLO/runbook, Prometheus alert rules, Grafana dashboard, optional OTLP
+  exporter.
+- [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) is the post-merge
+  truth reconciliation for those capabilities. It corrects documentation, one internal metric
+  naming defect and one unconsumed config block; it introduces no new capability and produces
+  no new external validation evidence.
 - Runtime validation: see [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
@@ -67,7 +75,8 @@ large-corpus throughput has been established.
 | RRF | Weighted reciprocal rank fusion implemented in retrieval | `retrieval/parallel_recall.py`, `retrieval-service/rerank/rrf_fusion.py` | `tests/test_rrf_fusion.py`, `tests/test_parallel_recall.py` | Fusion weights in `config.json` | CI unit coverage; no relevance benchmark | VERIFIED | Claim implementation only |
 | BiEncoder | BiEncoder reranking implemented in the online pipeline | `retrieval/bi_encoder.py`, `core/pipeline.py` | `tests/test_bi_encoder_rerank.py` | BGE model paths in `config.json`; weights external | CI uses mocks; no production model run | PARTIAL | Model assets and evaluation are separate |
 | RAGAS | Harness/reporter/validator and a 300+ entry golden set exist; single-evaluation flow, real pipeline answer/contexts, failure accounting and report provenance implemented; library `evaluate()` keeps a non-quality unavailable fallback, while `--require-ragas` fails fast with a non-zero exit and no quality report; no real quality score produced | `tests/evaluation/ragas_eval.py`, `ragas_report.py`, `validate_golden_set.py` | `tests/evaluation/test_ragas_eval.py`, `test_ragas_report.py` | Optional package omitted from default requirements; isolated `requirements-ragas.txt` (pinned, carries recorded advisories); `config.json` → `ragas` | CI deterministic evaluation guard passes without real RAGAS; real evaluator smoke and pipeline evaluation are BLOCKED (no `OPENAI_API_KEY`; latest `ragas` import-broken, importable `ragas 0.2.15` has advisories) | PARTIAL | `--require-ragas` missing dependency/credential must fail fast (exit 2/3) with no report; real eval pending an approved provider |
-| OpenTelemetry tracing | Tracing hook is on the online pipeline path; default install routes through the OTel SDK provider with no exporter configured (spans neither exported nor retained), falling back to an in-memory span buffer only when the OTel SDK is absent or initialization fails | `core/pipeline.py`, `monitoring/otel_tracer.py` | `tests/test_monitoring_otel.py` | `config.json` → `monitoring.jaeger.enabled=false`; `opentelemetry-api`/`-sdk` installed, no exporter package | CI exercises the tracer without an exporter; no Jaeger/OTLP backend verified | PARTIAL | Say "tracing hook wired, no exporter configured", not "OTel/Jaeger export closed loop" |
+| OpenTelemetry tracing | Tracing hook is on the online pipeline path and runs through the OTel SDK `TracerProvider`. Span attributes are reduced to an allow-list before touching the SDK. Falls back to an in-memory span buffer only when the OTel SDK is absent or provider initialization fails | `core/pipeline.py`, `monitoring/otel_tracer.py` | `tests/test_monitoring_otel.py`, `tests/monitoring/test_observability.py` | `config.json` → `monitoring.jaeger.enabled=false` (legacy thrift-agent path, not read by the tracer); `opentelemetry-api`/`-sdk` in `requirements.txt` | CI exercises the tracer with export disabled; no backend was ever queried | PARTIAL | Say "tracing hook wired through the OTel SDK, export off by default". This row is about the **hook**; the exporter and its default-off state are the `OTLP export` row below |
+| OTLP export | Three separate states, never merged: the exporter is **implemented**; it is **disabled by default** (`OTEL_EXPORT_ENABLED=false`, exporter package isolated in `requirements-otel.txt`, state exposed as `rag_otel_exporter_enabled`); the collector/backend closed loop is **PENDING**. Span attributes are allow-listed and every export failure is non-fatal | `monitoring/otel_exporter.py`, `monitoring/otel_tracer.py` | `tests/monitoring/test_observability.py`, `tests/test_monitoring_otel.py` | `OTEL_EXPORT_ENABLED=false` by default; `requirements-otel.txt`; `.env.example` documents the switch | Implementation is REPO_VERIFIED and test-covered. The application -> exporter -> collector -> backend -> queried-span loop is PENDING; no evidence is recorded under `monitoring/evidence/`, so no Jaeger/OTLP backend has ever been queried | PARTIAL | Say "exporter implemented and test-covered, disabled by default, closed loop pending" — never "OTLP tracing validated", "Jaeger operational" or "production tracing complete" |
 | RBAC | Auth and bitmask authorization code exists under a uint32 mask contract; missing/malformed metadata fails closed, and text/image retrieval plus `/api/media/{doc_id}` are epoch/RBAC aware | `auth/`, `common/auth.py`, `retrieval/parallel_recall.py`, `api/routes.py` | `tests/test_bitmask_rbac.py`, `tests/test_retrieval_authorization_contract.py`, `tests/test_media_route.py`, `tests/offline/test_image_processing.py` | `config.json` RBAC section and environment settings | CI unit/API tests; no production policy audit | PARTIAL | Describe implemented paths without deployment claims |
 | Cache | Cache implementations and metrics exist; full invalidation model not certified | `cache/`, cache service, metrics code | `tests/test_cache.py`, `tests/test_metrics_endpoint.py` | Cache settings in `config.json` | CI unit tests; no workload benchmark | PARTIAL | Keep full design behavior unverified |
 | Frontend contract | React client reads auth/RBAC metadata and routes single-query, chat, session and stats panels to the monolith API | `frontend/src/App.jsx`, `api/routes_auth.py` metadata endpoint | `tests/test_auth_metadata.py`; frontend build is separate | `config.json` UI metadata | CI does not build the frontend here | PARTIAL | Frontend integration remains build/validation-scoped |
@@ -77,8 +86,8 @@ large-corpus throughput has been established.
 | Structured audit trail | Business-action events with a stable 9-field schema; redaction enforced on every emit; request-id correlation via contextvar; Redis Stream + daily JSONL persistence; no activate event because no activate endpoint exists | `common/audit.py`, `api/routes_auth.py`, `api/routes.py`, `run_offline.py` | `tests/test_audit_log.py` (schema, three outcomes, key/value redaction, correlation, real login path) | `logs/audit/<date>.jsonl`; Redis Stream `audit:events` capped at 10000 | Implementation is REPO_VERIFIED. No SIEM forwarding and no production audit review; that is a deployment concern, not a repository claim | PARTIAL | Keep audit stdout structured for external forwarding |
 | SLO + incident runbook | Five objectives and eight incident procedures written against the degradation paths that exist in code | `docs/slo-runbook.md` | Docs-consistency guards assert the objectives stay `DESIGN_TARGET` | Alert names map 1:1 to `monitoring/prometheus/alerts.yml` | Document is REPO_VERIFIED. Every objective is a `DESIGN_TARGET`; no SLO has been met and none has been measured | PARTIAL | Do not restate a target as an achievement |
 | Prometheus alerting | Six rules over metrics the canonical collector actually emits; malformed summary exposition fixed; two guards against traffic-less firing | `monitoring/prometheus/alerts.yml`, `monitoring/otel_tracer.py`, `api/middleware.py`, `core/pipeline_context.py` | `tests/monitoring/` asserts every referenced metric is emitted, exposition is well-formed, and no placeholder gauge backs an alert | `deploy/prometheus.yml` scrapes the monolith with `bearer_token_file` | Configuration is REPO_VERIFIED. No production Prometheus evaluates these rules, and no alert has fired in production | PARTIAL | Qdrant/Elasticsearch outages are deliberately unalerted; the metric is missing and that gap is documented |
+| In-process AlertingManager | A second, older threshold engine exists in `monitoring/otel_tracer.py` but is **not wired into the canonical request path** | `monitoring/otel_tracer.py` (`AlertingManager`); referenced by no module under `app.py`, `api/`, `core/pipeline.py` or `core/pipeline_context.py` | `tests/test_monitoring_subsystem.py` exercises it directly; `tests/monitoring/test_alerting_reachability.py` asserts it stays unwired | The `config.json` → `alerting.rules` block that fed it was removed — it had no canonical consumer and read as a second production alert contract | Never runs in the deployed application, so there is no runtime evidence of any kind, not even local | STALE | Deprecated/legacy. Never describe these rules as "the Prometheus rules"; the canonical contract is `monitoring/prometheus/alerts.yml`. Two of its default rules (`kv_utilization`, `rerank_batch_queue_delay_p99`) have no canonical producer, so they could not fire regardless |
 | Grafana dashboard | Ten panels over emitted metrics only | `monitoring/grafana/dashboards/rag-overview.json` | `tests/monitoring/` asserts panel metrics exist and no hallucination/RAGAS/GPU panel exists | Provisioned via `monitoring/grafana/provisioning/` | JSON is REPO_VERIFIED. Never imported into a running Grafana, so panel population is PENDING | PARTIAL | Optional overlay only; the canonical deployment does not start Grafana |
-| OTLP export | Opt-in exporter path with non-fatal failure semantics and a span-attribute allow-list | `monitoring/otel_exporter.py`, `monitoring/otel_tracer.py` | `tests/monitoring/test_observability.py`, `tests/test_monitoring_otel.py` | `OTEL_EXPORT_ENABLED=false` by default; exporter package isolated in `requirements-otel.txt`; state exposed as `rag_otel_exporter_enabled` | Implementation is REPO_VERIFIED. The application -> exporter -> collector -> backend -> queried-span loop is PENDING; no evidence is recorded under `monitoring/evidence/` | PARTIAL | Say "exporter implemented, closed loop pending", never "tracing validated" |
 | Runtime version | Runtime version agrees with newest dated changelog release | `common/config.py` reads `config.json` | Consistency script checks the invariant | `config.json` `system.version` = `2.3.0` | `scripts/check_repo_consistency.py` runs in CI | VERIFIED | Keep the check enabled; Unreleased does not bump version |
 | CI | Python checks include tests, compile, collection and repository consistency | `.github/workflows/ci.yml` | Workflow runs pytest and collection checks | Workflow configuration | Verify the current `HEAD` GitHub Actions run for CI | VERIFIED | Require green checks on the reconciliation PR |
 | Ruff | Lint and formatting are configured as CI checks | `.github/workflows/lint.yml` | Ruff check and format check | Workflow configuration | Verify the current `HEAD` GitHub Actions run for Ruff | VERIFIED | Require green checks on the reconciliation PR |
@@ -99,10 +108,18 @@ recorded in [Audit lineage](#audit-lineage).
   implementation scope: closed (`completed`), delivered by PR #17.
 - [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval
   benchmark execution: open.
+- [#20](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/20) — enterprise-readiness
+  evidence loop: completed, delivered by PR #21.
+- [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) — post-merge truth
+  reconciliation: the current one.
 - [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) — umbrella external
   validation (real BGE / CLIP / PaddleOCR / Airflow / benchmark artifact): open.
 - [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) — runtime / security
   external validation (real RAGAS, 4B/14B vLLM GPU topology): open.
+
+Issue #20 being completed records that the *implementation scope* shipped. It does **not**
+record that any of its results were observed: no performance artifact, no production alert
+firing, no traced span. Those stay `PENDING` and keep #8, #12 and #18 open.
 
 Closing #16 records that the framework scope is delivered. It does **not** record a benchmark result:
 no artifact exists, so `benchmark result` stays `PENDING` and both execution blockers (no real
@@ -174,6 +191,37 @@ Concrete non-equivalences, each enforced by a guard:
 - A performance artifact framework existing does not mean QPS or P95 were measured.
 - An SLO being defined does not mean the SLO was met.
 - Audit events being emitted does not mean they were reviewed or forwarded to a SIEM.
+- `monitoring/prometheus/alerts.yml` existing does not mean the in-process
+  `AlertingManager` is part of it. That class is legacy and unwired; it is a
+  *second* mechanism, not a second half of the canonical one.
+
+## Two alerting mechanisms, and which one is canonical
+
+The repository contains two threshold engines. They must never be described
+interchangeably.
+
+| Mechanism | What evaluates it | Canonical? |
+|---|---|---|
+| `monitoring/prometheus/alerts.yml` | An external Prometheus server loading the file via `deploy/prometheus.yml` | **Yes.** This is the alert contract. Its 6 rules only reference `/api/metrics` series the collector really emits, and `tests/monitoring/test_prometheus_alerts.py` enforces that correspondence. |
+| `monitoring/otel_tracer.py::AlertingManager` | Nothing. It is an in-process engine and no canonical module constructs it | No. Legacy / not wired. |
+
+Reachability evidence for the second row: `app.py`, `api/*`, `core/pipeline.py` and
+`core/pipeline_context.py` contain no reference to `AlertingManager` or
+`check_alerts()`. `tests/monitoring/test_alerting_reachability.py` asserts this, so
+wiring it up later fails loudly instead of silently creating a second contract.
+
+Consequences recorded honestly:
+
+- The `config.json` → `alerting.rules` block that used to feed it was removed. It had
+  no canonical consumer and its presence in `config.json` read like a second
+  production alert contract. JSON cannot carry a comment, so the honest options were
+  "delete it" or "keep a misleading second contract"; it was deleted.
+- Two of its default rules depend on `kv_utilization` and
+  `rerank_batch_queue_delay_p99`, neither of which has a producer on the canonical
+  path. They could never fire even if the class were wired.
+- Its metric names are internal dotted collector names (`cache.total`,
+  `prefix_cache.hit`), not `rag_*` Prometheus series. Do not translate between them
+  by eye.
 
 `scripts/check_repo_consistency.py` derives each result's presence from the
 working tree (`artifacts/performance/*/metadata.json`,

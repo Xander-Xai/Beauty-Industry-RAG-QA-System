@@ -82,7 +82,7 @@
 
 仍需外部产物才算完成（`PENDING`）：
 
-- [ ] 启用 OTLP 导出并在后端实际查询到本服务产生的 span。当前默认无 exporter，**exporter 已实现不代表闭环已验证**
+- [ ] 启用 OTLP 导出并在后端实际查询到本服务产生的 span。默认 `OTEL_EXPORT_ENABLED=false`，exporter 包是可选依赖；**exporter 已实现且有测试覆盖，不代表闭环已验证**
 - [ ] 在运行中的 Prometheus 里导入并评估 `monitoring/prometheus/alerts.yml`，确认规则能被加载且指标可抓取（需先生成 scrape bearer token 文件）
 - [ ] 导入 Grafana 仪表盘，确认面板能被真实数据填充
 - [ ] 产出 retrieval benchmark artifact（`artifacts/benchmarks/<run-id>/`），并核对 `docs/repository-truth-audit.md` 中的 artifact 验收字段。**当前没有 artifact，benchmark 框架 = `REPO_VERIFIED`，benchmark 结果 = `PENDING`**
