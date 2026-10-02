@@ -1,0 +1,22 @@
+# Optional OpenTelemetry OTLP exporter.
+#
+# NOT in requirements.txt on purpose:
+#   * OTLP span export is opt-in (OTEL_EXPORT_ENABLED=false by default), so the
+#     canonical deployment does not need this package.
+#   * The default dependency set is a pip-audit --strict merge gate; keeping the
+#     exporter isolated means a new advisory in the tracing stack cannot break an
+#     unrelated change, and any advisory here is reviewed explicitly.
+#
+# This mirrors the existing isolation pattern used for requirements-ragas.txt.
+#
+# Install to enable export:
+#     pip install -r requirements-otel.txt
+#
+# Without it the application still starts, still serves, and still traces
+# locally; it logs "OTLP span export requested but unavailable" and reports
+# otel.exporter_enabled 0. Export never blocks a request.
+#
+# Verify advisories before enabling, the same review required for
+# requirements-ragas.txt:
+#     pip install -r requirements-otel.txt && pip check && pip-audit -r requirements-otel.txt
+opentelemetry-exporter-otlp>=1.25.0

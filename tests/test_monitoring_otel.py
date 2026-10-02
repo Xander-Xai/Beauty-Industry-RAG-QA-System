@@ -181,7 +181,12 @@ class TestOpenTelemetryTracerSpans:
 
         fake = FakeOtel()
         tracer._otel_tracer = fake
-        with tracer.trace("otel.span", {"a": "b"}):
+        # Attributes are reduced to an allow-list before reaching the SDK, so a
+        # caller cannot push arbitrary payload (query text, a token, a document
+        # excerpt) into a trace backend. `request_id` is allow-listed; the
+        # free-form keys below are not, and must be dropped.
+        with tracer.trace("otel.span", {"request_id": "r1", "a": "b", "user_query": "secret"}):
             pass
-        assert fake.span.attributes == {"a": "b"}
+        assert fake.span.attributes == {"request_id": "r1"}
+        assert "user_query" not in fake.span.attributes
         assert tracer.get_trace_summary() == []

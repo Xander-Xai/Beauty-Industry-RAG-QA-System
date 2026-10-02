@@ -13,12 +13,21 @@ OpenTelemetry 全链路追踪（readme 12 节）
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections import defaultdict
 from contextlib import contextmanager
 
 from common.config import get_config_dict
+from monitoring.otel_exporter import (
+    EXPORTER_ENABLED_METRIC,
+    ExporterState,
+    build_resource,
+    build_span_processor,
+    load_config,
+    sanitize_attributes,
+)
 
 config = get_config_dict()
 
@@ -53,37 +62,47 @@ class OpenTelemetryTracer:
         logger.info(f"OpenTelemetryTracer 初始化完成 ({'OTel' if self._use_otel else '本地模式'})")
 
     def _try_init_otel(self):
-        """尝试初始化 OpenTelemetry + Jaeger 导出器（PRD §12）"""
+        """Initialize the OTel SDK tracer provider, with optional span export.
+
+        Export is opt-in via ``OTEL_EXPORT_ENABLED`` and is handled by
+        :mod:`monitoring.otel_exporter`. Every failure there is non-fatal: the
+        provider still works, spans simply stay local, and the outcome is
+        reported through ``otel_exporter_state`` plus a warning log. An
+        unreachable collector must never fail a query.
+        """
+        self.exporter_state = ExporterState.DISABLED
+        self.exporter_detail = ""
         try:
             from opentelemetry import trace
             from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-            provider = TracerProvider()
+            exporter_config = load_config()
+            resource = build_resource(exporter_config)
+            provider = TracerProvider(resource=resource) if resource is not None else TracerProvider()
 
-            # Jaeger 导出器（PRD §12: 全链路追踪 OpenTelemetry + Jaeger）
-            jaeger_config = config.get("monitoring", {}).get("jaeger", {})
-            if jaeger_config.get("enabled", False):
-                try:
-                    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
-
-                    jaeger_exporter = JaegerExporter(
-                        agent_host_name=jaeger_config.get("agent_host", "localhost"),
-                        agent_port=jaeger_config.get("agent_port", 6831),
-                    )
-                    provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
-                    logger.info("Jaeger 导出器已启用")
-                except ImportError:
-                    logger.warning("opentelemetry-exporter-jaeger 未安装，跳过 Jaeger 导出")
-                except Exception as e:
-                    logger.warning(f"Jaeger 导出器初始化失败: {e}")
+            processor, state, detail = build_span_processor(exporter_config)
+            self.exporter_state = state
+            self.exporter_detail = detail
+            if processor is not None:
+                provider.add_span_processor(processor)
+                logger.info(
+                    "OTLP span export enabled: %s",
+                    json.dumps(exporter_config.describe(), ensure_ascii=False),
+                )
+            elif state != ExporterState.DISABLED:
+                # Export was requested but is not available. This is a warning,
+                # not an error: the business path must keep working.
+                logger.warning("OTLP span export requested but unavailable: %s", detail)
 
             trace.set_tracer_provider(provider)
             self._otel_tracer = trace.get_tracer("rag-system")
             self._use_otel = True
         except ImportError:
-            pass
+            self._use_otel = False
         except Exception as e:
+            self._use_otel = False
+            self.exporter_state = ExporterState.FAILED
+            self.exporter_detail = f"{type(e).__name__}: {e}"
             logger.debug(f"OTel 初始化失败，使用本地模式: {e}")
 
     @contextmanager
@@ -124,6 +143,10 @@ class OpenTelemetryTracer:
 
     def _trace_with_otel(self, span_name: str, attributes: dict):
         """OpenTelemetry 追踪（防御性实现）"""
+        # Attributes are reduced to an allow-list before touching the SDK, so a
+        # raw query or token cannot reach a trace backend even when the caller
+        # passes one.
+        attributes = sanitize_attributes(attributes)
         span = {
             "name": span_name,
             "start_time": time.time(),
@@ -217,6 +240,16 @@ class MetricsCollector:
     def set_active_requests(self, count: int) -> None:
         """当前在途请求数（用于饱和度观测）。"""
         self._gauges["http.active_requests"] = float(count)
+
+    def set_exporter_state(self, state: str) -> None:
+        """OTLP 导出器状态（1=已启用，0=未启用）。
+
+        Exposed as a metric so an operator can confirm whether spans are leaving
+        the process without reading logs. It is 0 both when export is off and when
+        export was requested but is unavailable; the log line distinguishes them.
+        """
+        self._gauges[EXPORTER_ENABLED_METRIC] = 1.0 if state == "enabled" else 0.0
+        self._gauges["otel.exporter_active"] = 1.0 if state == "enabled" else 0.0
 
     def set_redis_degraded(self, degraded: bool) -> None:
         """Redis 降级状态。

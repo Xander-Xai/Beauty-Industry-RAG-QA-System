@@ -1,0 +1,12 @@
+# 仪表盘自动加载：只加载 dashboards/ 下的真实 JSON，
+# 不包含任何 GPU 利用率、幻觉率或实时 RAGAS 分数面板——那些指标不存在。
+apiVersion: 1
+providers:
+  - name: rag
+    orgId: 1
+    folder: RAG
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
