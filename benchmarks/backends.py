@@ -197,16 +197,51 @@ _MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin")
 _TOKENIZER_VOCAB_NAMES = ("tokenizer.json", "vocab.txt")
 
 
+def _non_empty(path: Path) -> bool:
+    """A zero-byte placeholder from an interrupted download is not an artifact."""
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _declared_shards(path: Path) -> list[str] | None:
+    """Shard filenames declared by a transformers weight index, if one exists."""
+    for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        index_file = path / index_name
+        if not _non_empty(index_file):
+            continue
+        try:
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if isinstance(weight_map, dict):
+            return sorted({str(name) for name in weight_map.values()})
+    return None
+
+
 def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
     if not path.is_dir():
         return False, "path is not a directory"
     missing: list[str] = []
-    if not any((path / name).is_file() for name in _MODEL_CONFIG_NAMES):
+    if not any(_non_empty(path / name) for name in _MODEL_CONFIG_NAMES):
         missing.append("config.json")
-    if not any(next(path.glob(f"*{suffix}"), None) is not None for suffix in _MODEL_WEIGHT_SUFFIXES):
-        missing.append("model weights (*.safetensors/*.bin)")
-    if not any((path / name).is_file() for name in _TOKENIZER_VOCAB_NAMES):
+    if not any(_non_empty(path / name) for name in _TOKENIZER_VOCAB_NAMES):
         missing.append("tokenizer vocabulary (tokenizer.json/vocab.txt)")
+    weight_files = [candidate for suffix in _MODEL_WEIGHT_SUFFIXES for candidate in sorted(path.glob(f"*{suffix}"))]
+    weight_files = [candidate for candidate in weight_files if _non_empty(candidate)]
+    if not weight_files:
+        missing.append("model weights (*.safetensors/*.bin)")
+    else:
+        # A single shard can be present while the rest of the download is missing,
+        # which from_pretrained still rejects; follow the index when there is one.
+        declared = _declared_shards(path)
+        if declared is not None:
+            present = {candidate.name for candidate in weight_files}
+            absent = [shard for shard in declared if shard not in present]
+            if absent:
+                missing.append(f"{len(absent)} of {len(declared)} weight shard(s), e.g. {absent[0]}")
     if missing:
         return False, "incomplete model directory, missing: " + ", ".join(missing)
     return True, "found model config, weights and tokenizer vocabulary"

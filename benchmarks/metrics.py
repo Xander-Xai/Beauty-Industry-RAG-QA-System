@@ -144,15 +144,21 @@ def _group(results: Sequence[QueryBenchmarkResult], attribute: str) -> dict[str,
     return {name: _metric_block(bucket) for name, bucket in sorted(buckets.items())}
 
 
-def aggregate_results(results: Sequence[QueryBenchmarkResult]) -> dict[str, Any]:
+def aggregate_results(
+    results: Sequence[QueryBenchmarkResult],
+    available_buckets: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Aggregate per-query results into overall and per-bucket blocks.
 
-    Only the buckets the dataset actually supports are produced: ``overall``,
-    ``business_type`` and ``difficulty``. Buckets are never invented, and small
-    buckets keep their real ``sample_count`` instead of being hidden.
+    ``available_buckets`` comes from the dataset's measured field coverage. A
+    breakdown whose source field is absent is omitted entirely rather than built
+    from the loader's ``"unknown"`` placeholder, which would present an invented
+    all-unknown table as a real result. Small buckets keep their real
+    ``sample_count`` instead of being hidden.
     """
-    return {
-        "overall": _metric_block(results),
-        "by_business_type": _group(results, "business_type"),
-        "by_difficulty": _group(results, "difficulty"),
-    }
+    supported = set(available_buckets) if available_buckets is not None else {"overall", "business_type", "difficulty"}
+    aggregate: dict[str, Any] = {"overall": _metric_block(results)}
+    for attribute in ("business_type", "difficulty"):
+        if attribute in supported:
+            aggregate[f"by_{attribute}"] = _group(results, attribute)
+    return aggregate

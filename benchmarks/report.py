@@ -144,16 +144,17 @@ def build_report(
         lines += [f"## Overall Metrics — `{name}`", ""]
         lines += _metric_table(metrics.get("overall", {}))
         lines.append("")
-        lines += [f"## Metrics by Business Type — `{name}`", ""]
-        for bucket, block in (metrics.get("by_business_type") or {}).items():
-            lines += [f"### {bucket}", ""]
-            lines += _metric_table(block)
-            lines.append("")
-        lines += [f"## Metrics by Difficulty — `{name}`", ""]
-        for bucket, block in (metrics.get("by_difficulty") or {}).items():
-            lines += [f"### {bucket}", ""]
-            lines += _metric_table(block)
-            lines.append("")
+        for attribute, label in (("business_type", "Business Type"), ("difficulty", "Difficulty")):
+            blocks = metrics.get(f"by_{attribute}")
+            if not blocks:
+                # The dataset does not carry this field; printing an empty or
+                # all-unknown table would overstate what the run measured.
+                continue
+            lines += [f"## Metrics by {label} — `{name}`", ""]
+            for bucket, block in blocks.items():
+                lines += [f"### {bucket}", ""]
+                lines += _metric_table(block)
+                lines.append("")
         lines += [f"## Latency — `{name}`", ""]
         lines += _latency_table(entry.get("latency", {}))
         lines.append("")

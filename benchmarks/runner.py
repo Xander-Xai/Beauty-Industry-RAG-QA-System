@@ -184,8 +184,15 @@ def run_configuration(
     return ConfigRun(outcome, results, failures)
 
 
-def summarize_run(runs: Sequence[ConfigRun]) -> dict[str, Any]:
-    """Aggregate every executed configuration, keeping blocked ones visible."""
+def summarize_run(
+    runs: Sequence[ConfigRun],
+    available_buckets: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Aggregate every executed configuration, keeping blocked ones visible.
+
+    ``available_buckets`` is the dataset's measured field coverage; breakdowns
+    outside it are omitted instead of being built from ``"unknown"`` values.
+    """
     per_config: dict[str, Any] = {}
     latency: dict[str, Any] = {}
     for run in runs:
@@ -194,7 +201,7 @@ def summarize_run(runs: Sequence[ConfigRun]) -> dict[str, Any]:
             entry["failures"] = run.failures
             entry["failure_count"] = len(run.failures)
         if run.executed:
-            entry["metrics"] = aggregate_results(run.results)
+            entry["metrics"] = aggregate_results(run.results, available_buckets=available_buckets)
             entry["latency"] = summarize_latency([result.latency_ms for result in run.results])
             entry["stage_availability"] = stage_availability([r.latency_ms for r in run.results])
             latency[run.outcome.config_name] = entry["latency"]

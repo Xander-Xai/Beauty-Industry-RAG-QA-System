@@ -185,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     coverage = bucket_coverage([query.raw for query in queries])
 
     runs = [run_configuration(name, queries, top_k=args.top_k) for name in configs]
-    summary = summarize_run(runs)
+    summary = summarize_run(runs, available_buckets=coverage.get("available_buckets"))
     # A blocked run contains no retrieval-quality result, so the artifact must
     # not advertise itself as benchmark evidence.
     metadata["results_are_benchmark"] = bool(summary.get("any_results"))

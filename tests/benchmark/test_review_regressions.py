@@ -993,3 +993,158 @@ def test_partial_field_coverage_lists_only_supported_breakdowns():
     )
     assert "business_type" in coverage["available_buckets"]
     assert "difficulty" not in coverage["available_buckets"]
+
+
+# ── Round 9: unsupported breakdowns, weight shards, sample-id + limit ─────────
+
+
+def test_absent_bucket_fields_are_omitted_from_metrics():
+    """No business_type in the data must mean no by_business_type block."""
+    from benchmarks.metrics import aggregate_results
+    from tests.benchmark.test_aggregation import _result, _to_query_result
+
+    results = [_to_query_result(_result("0000", "unknown", "unknown", ["a"], ["a"]))]
+    aggregate = aggregate_results(results, available_buckets=["overall"])
+    assert "by_business_type" not in aggregate
+    assert "by_difficulty" not in aggregate
+    assert aggregate["overall"]["sample_count"] == 1
+
+
+def test_supported_bucket_fields_are_kept():
+    from benchmarks.metrics import aggregate_results
+    from tests.benchmark.test_aggregation import _result, _to_query_result
+
+    results = [_to_query_result(_result("0000", "ingredient", "easy", ["a"], ["a"]))]
+    aggregate = aggregate_results(results, available_buckets=["overall", "business_type", "difficulty"])
+    assert "ingredient" in aggregate["by_business_type"]
+    assert "easy" in aggregate["by_difficulty"]
+
+
+def test_unknown_placeholder_rows_are_not_reported_as_a_breakdown():
+    """The loader substitutes 'unknown'; an all-unknown table must not surface."""
+    from benchmarks.metrics import aggregate_results
+    from tests.benchmark.test_aggregation import _result, _to_query_result
+
+    results = [_to_query_result(_result("0000", "unknown", "unknown", ["a"], ["a"]))]
+    aggregate = aggregate_results(results, available_buckets=["overall"])
+    assert "by_business_type" not in aggregate
+    assert "by_difficulty" not in aggregate
+
+
+def test_report_omits_missing_breakdown_sections():
+    from benchmarks.report import build_report
+
+    summary = {
+        "configs": {
+            "bm25": {
+                "status": "EXECUTED",
+                "reason": "ran",
+                "metrics": {"overall": {"sample_count": 3}},
+                "latency": {},
+            }
+        },
+        "executed_configs": ["bm25"],
+        "blocked_configs": [],
+        "latency": {},
+        "any_results": True,
+    }
+    coverage = {"sample_count": 3, "available_buckets": ["overall"], "unavailable_buckets": [], "field_coverage": {}}
+    text = build_report(
+        {"run_id": "r", "requested_configs": ["bm25"]},
+        {},
+        summary,
+        coverage,
+        per_query_rows=3,
+        synthetic_retriever=True,
+    )
+    assert "Metrics by Business Type" not in text
+    assert "Metrics by Difficulty" not in text
+
+
+def test_incomplete_shard_set_is_rejected(tmp_path):
+    """An index declaring 2 shards with only 1 present must not look loadable."""
+    import json as _json
+
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", "model-00001-of-00002.safetensors"):
+        (path / name).write_text("x" * 10, encoding="utf-8")
+    (path / "model.safetensors.index.json").write_text(
+        _json.dumps(
+            {
+                "weight_map": {
+                    "layer.0": "model-00001-of-00002.safetensors",
+                    "layer.1": "model-00002-of-00002.safetensors",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "1 of 2 weight shard" in detail
+
+
+def test_complete_shard_set_is_accepted(tmp_path):
+    import json as _json
+
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in (
+        "config.json",
+        "tokenizer.json",
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+    ):
+        (path / name).write_text("x" * 10, encoding="utf-8")
+    (path / "model.safetensors.index.json").write_text(
+        _json.dumps(
+            {
+                "weight_map": {
+                    "layer.0": "model-00001-of-00002.safetensors",
+                    "layer.1": "model-00002-of-00002.safetensors",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _looks_like_model_dir(path)[0] is True
+
+
+def test_zero_byte_weight_file_is_rejected(tmp_path):
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json"):
+        (path / name).write_text("x", encoding="utf-8")
+    (path / "model.safetensors").write_bytes(b"")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "model weights" in detail
+
+
+def test_sample_ids_with_smaller_limit_are_not_reported_absent():
+    """Regression: the limit must not hide a later requested id from validation."""
+    from benchmarks.dataset import load_queries
+
+    queries = load_queries("tests/evaluation/golden_set.jsonl", sample_ids=["0000", "0002"], limit=1)
+    assert [q.sample_id for q in queries] == ["0000"]
+
+
+def test_missing_sample_id_still_rejected_with_limit():
+    from benchmarks.dataset import DatasetError, load_queries
+
+    with pytest.raises(DatasetError, match="not present"):
+        load_queries("tests/evaluation/golden_set.jsonl", sample_ids=["0000", "9999"], limit=1)
+
+
+def test_sample_ids_without_limit_select_all():
+    from benchmarks.dataset import load_queries
+
+    queries = load_queries("tests/evaluation/golden_set.jsonl", sample_ids=["0001", "0003", "0005"])
+    assert [q.sample_id for q in queries] == ["0001", "0003", "0005"]
