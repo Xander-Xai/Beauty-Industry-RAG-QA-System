@@ -585,6 +585,23 @@ def test_missing_ragas_is_a_failure_condition(tmp_path, monkeypatch):
     assert errors == []
 
 
+def test_coordinated_ragas_clauses_keep_leading_condition(tmp_path, monkeypatch):
+    """A leading condition governs every coordinated clause in the sentence."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, the CLI returns a non-zero status, and it produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
 def test_bare_non_zero_is_not_a_failure_status(tmp_path, monkeypatch):
     """`non-zero scores` is not a non-zero exit/status guarantee."""
     import scripts.check_repo_consistency as guard
@@ -649,6 +666,22 @@ def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)
     assert errors == []
+
+
+def test_local_validation_marker_must_be_affirmative(tmp_path, monkeypatch):
+    """A bare marker with no validated-dependency statement must be rejected."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "LOCAL_VALIDATION_DOCS", ["doc.md"])
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "doc.md").write_text(
+        "LOCAL_REAL_VALIDATION is an evidence category.\n",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_local_runtime_validation_contract(errors)
+    assert any("affirmatively" in error for error in errors)
 
 
 def test_stale_local_validation_claim_is_rejected(tmp_path, monkeypatch):

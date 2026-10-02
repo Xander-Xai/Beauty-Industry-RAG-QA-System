@@ -205,6 +205,18 @@ LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The LOCAL_REAL_VALIDATION marker must be attached to the actual completed
+# dependencies and an affirmative validation statement, so silently deleting the
+# evidence claim (leaving only a glossary mention) is detected.
+_LOCAL_VALIDATION_DEPENDENCY_RE = re.compile(
+    r"Redis|nginx|反向代理|Elasticsearch|Prometheus|(?<![A-Za-z])ES(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_LOCAL_VALIDATION_AFFIRMATIVE_RE = re.compile(
+    r"validated|verified|real|true|完成|已验证|验证|执行|已",
+    re.IGNORECASE,
+)
+
 STALE_LOCAL_VALIDATION_CLAIM_PATTERNS = [
     r"(?:Redis|反向代理|代理|Elasticsearch|Prometheus|(?<![A-Za-z])ES(?![A-Za-z]))[^\n]{0,24}"
     r"(?:尚待|仍待|仍需|尚未|还未|未[^\n]{0,6}(?:验证|验收))",
@@ -536,11 +548,13 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
     return claims
 
 
-_RAGAS_SEGMENT_SPLIT_RE = re.compile(r"[；;。！!？?，,\n]+")
-_LOCAL_VALIDATION_SPLIT_RE = re.compile(r"[；;。，,：:\n]+")
+_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?\n]+")
+_RAGAS_COMMA_SPLIT_RE = re.compile(r"[，,]+")
+_LOCAL_VALIDATION_COMMA_SPLIT_RE = re.compile(r"[，,：:]+")
 
-# A leading qualifier (subordinate condition or scope phrase) governs the clause
-# that follows it, so it must not be split away from its guarantee/boundary.
+# A leading qualifier (subordinate condition or scope phrase) governs the whole
+# sentence that follows it, so it must not be split away from its guarantees or
+# boundary. Sentences that do not start with a qualifier are split normally.
 _LEADING_QUALIFIER_RE = re.compile(
     r"^\s*(?:when|if|while|unless|because|since|given|for|in\s+case|provided|"
     r"in\s+production|in\s+prod|对于|关于|针对|在|当|若|如果|假如|一旦|鉴于)",
@@ -548,25 +562,27 @@ _LEADING_QUALIFIER_RE = re.compile(
 )
 
 
-def _split_clauses(line: str, split_re: re.Pattern[str]) -> list[str]:
+def _split_clauses(line: str, comma_split_re: re.Pattern[str]) -> list[str]:
     """Split a line into clauses, keeping leading qualifiers attached.
 
-    A clause that starts with a subordinate condition (or ends with ``时`` /
-    ``的话``) is merged with the next clause so the qualifier governs it.
+    Sentences are split on terminal punctuation first. Within a sentence, if the
+    leading clause is a subordinate condition (or ends with ``时`` / ``的话``),
+    the whole sentence is kept together so the qualifier governs every
+    coordinated clause.
     """
-    pieces = [piece for piece in split_re.split(line) if piece.strip()]
-    merged: list[str] = []
-    index = 0
-    while index < len(pieces):
-        piece = pieces[index]
-        has_qualifier = _LEADING_QUALIFIER_RE.match(piece) or piece.rstrip().endswith(("时", "的话"))
-        if has_qualifier and index + 1 < len(pieces):
-            merged.append(f"{piece}，{pieces[index + 1]}")
-            index += 2
+    segments: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(line):
+        if not sentence.strip():
+            continue
+        pieces = [piece for piece in comma_split_re.split(sentence) if piece.strip()]
+        if not pieces:
+            continue
+        first = pieces[0]
+        if _LEADING_QUALIFIER_RE.match(first) or first.rstrip().endswith(("时", "的话")):
+            segments.append("，".join(pieces))
         else:
-            merged.append(piece)
-            index += 1
-    return merged
+            segments.extend(pieces)
+    return segments
 
 
 # A status guarantee is negated when an auxiliary/negation directly governs it,
@@ -594,7 +610,7 @@ def _ragas_failure_segments(text: str) -> list[str]:
     """
     segments: list[str] = []
     for line in text.splitlines():
-        for segment in _split_clauses(line, _RAGAS_SEGMENT_SPLIT_RE):
+        for segment in _split_clauses(line, _RAGAS_COMMA_SPLIT_RE):
             if not segment.strip():
                 continue
             if "ragas" not in segment.lower() and "evaluator" not in segment.lower():
@@ -683,7 +699,7 @@ def stale_local_validation_claims(text: str) -> list[str]:
     """
     claims: list[str] = []
     for line in text.splitlines():
-        for clause in _split_clauses(line, _LOCAL_VALIDATION_SPLIT_RE):
+        for clause in _split_clauses(line, _LOCAL_VALIDATION_COMMA_SPLIT_RE):
             if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(clause):
                 continue
             for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:
@@ -695,16 +711,26 @@ def stale_local_validation_claims(text: str) -> list[str]:
 
 
 def check_local_runtime_validation_contract(errors: list[str]) -> None:
-    """Canonical docs must not deny the completed local real-dependency validation."""
+    """Canonical docs must affirm the completed local real-dependency validation."""
     for name in LOCAL_VALIDATION_DOCS:
         path = ROOT / name
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
-        if "LOCAL_REAL_VALIDATION" not in text:
+        marker = "LOCAL_REAL_VALIDATION"
+        if marker not in text:
             fail(
                 errors,
                 f"{name}: must classify the completed Redis/nginx/ES/Prometheus validation as LOCAL_REAL_VALIDATION",
+            )
+        elif not any(
+            _LOCAL_VALIDATION_DEPENDENCY_RE.search(text[max(0, match.start() - 400) : match.end() + 400])
+            and _LOCAL_VALIDATION_AFFIRMATIVE_RE.search(text[max(0, match.start() - 400) : match.end() + 400])
+            for match in re.finditer(marker, text)
+        ):
+            fail(
+                errors,
+                f"{name}: must affirmatively state that Redis/nginx/Elasticsearch/Prometheus were validated locally",
             )
         claims = sorted(set(stale_local_validation_claims(text)))
         if claims:
