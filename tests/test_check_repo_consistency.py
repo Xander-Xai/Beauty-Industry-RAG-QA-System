@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from scripts.check_repo_consistency import (
     REQUIRED_AUDIT_AREAS,
+    benchmark_artifact_exists,
+    benchmark_classification_errors,
     check_docs_index,
     check_documented_offline_commands,
     check_forbidden_current_claims,
     check_local_runtime_validation_contract,
     check_metrics_auth_contract,
     check_metrics_route_contract,
+    check_prd_design_targets,
     check_ragas_failure_contract,
     check_rbac_mask_contract,
     check_stale_offline_claims,
     check_truth_audit,
+    check_version_label_semantics,
+    forbidden_evidence_claims,
     post_merge_phase_drift_claims,
     retired_topology_claims,
     run_offline_subcommands,
+    v25_release_claims,
 )
 
 
@@ -999,3 +1007,172 @@ def test_uvicorn_proxy_headers_disabled_guard(tmp_path, monkeypatch):
     ok: list[str] = []
     guard.check_uvicorn_proxy_headers_disabled(ok)
     assert ok == []
+
+
+def test_canonical_docs_include_validation_and_benchmark_contract():
+    """Evidence-heavy docs must be held to the same guard as the guides."""
+    from pathlib import Path
+
+    from scripts.check_repo_consistency import CANONICAL_DOCS
+
+    relative = {str(path.relative_to(Path.cwd())) for path in CANONICAL_DOCS}
+    assert "docs/validation/real-ragas-evaluation.md" in relative
+    assert "docs/validation/v2.5-runtime-security-validation.md" in relative
+    assert "artifacts/benchmarks/README.md" in relative
+
+
+def test_forbidden_evidence_claims_flag_unevidenced_results():
+    assert forbidden_evidence_claims("The retrieval benchmark reports Recall@10 = 0.87.")
+    assert forbidden_evidence_claims("HitRate@5: 0.61 is the measured result.")
+    assert forbidden_evidence_claims("RAGAS faithfulness score 0.82 was produced.")
+    assert forbidden_evidence_claims("真实 BGE 模型已完成验证，可直接用于生产。")
+    assert forbidden_evidence_claims("Real configured CLIP has been validated.")
+    assert forbidden_evidence_claims("PaddleOCR 已运行通过全流程验证。")
+    assert forbidden_evidence_claims("OpenTelemetry/Jaeger 导出闭环已完成。")
+    assert forbidden_evidence_claims("OTel export closed-loop verified with a live collector.")
+    assert forbidden_evidence_claims("压测 P95 吞吐已达标，满足 QPS 要求。")
+
+
+def test_forbidden_evidence_claims_allow_required_denials():
+    """The docs are required to write the denial, so denials must not trip the guard."""
+    assert forbidden_evidence_claims("Retrieval benchmark result: PENDING — no artifact exists.") == []
+    assert (
+        forbidden_evidence_claims(
+            "- Claiming OpenTelemetry/Jaeger export is closed-loop when the default is the\n"
+            "  OTel SDK provider with no exporter configured."
+        )
+        == []
+    )
+    assert (
+        forbidden_evidence_claims(
+            'Say "tracing hook wired, no exporter configured", not "OTel/Jaeger export closed loop".'
+        )
+        == []
+    )
+    assert forbidden_evidence_claims("真实 BGE smoke 未执行时为 EXTERNAL_MODEL_ASSET_REQUIRED。") == []
+    assert forbidden_evidence_claims("PRD P95/P99/QPS values are design targets.") == []
+    # Metric *names* are legitimate; only an attached value is a claim.
+    assert (
+        forbidden_evidence_claims("The harness computes Recall@1/3/5/10, HitRate@1/3/5/10, MRR@10 and NDCG@10.") == []
+    )
+
+
+def test_current_docs_have_no_unevidenced_evidence_claims():
+    from scripts.check_repo_consistency import CANONICAL_DOCS
+
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        claims = forbidden_evidence_claims(path.read_text(encoding="utf-8"))
+        assert not claims, f"{path} claims unevidenced evidence: {claims}"
+
+
+def test_benchmark_framework_result_split_is_documented():
+    from pathlib import Path
+
+    from scripts.check_repo_consistency import BENCHMARK_CLASSIFICATION_DOCS
+
+    for name in BENCHMARK_CLASSIFICATION_DOCS:
+        path = Path(name)
+        assert path.exists(), name
+        text = path.read_text(encoding="utf-8")
+        assert "REPO_VERIFIED" in text, f"{name} must classify the benchmark framework"
+        assert "PENDING" in text, f"{name} must classify the benchmark result"
+
+
+def test_no_committed_benchmark_artifact_means_result_stays_pending():
+    """No artifact on disk => the result must not be stated as available."""
+    from scripts.check_repo_consistency import BENCHMARK_CLASSIFICATION_DOCS
+
+    if benchmark_artifact_exists():
+        return  # an artifact exists; the docs would then be updated instead
+    for name in BENCHMARK_CLASSIFICATION_DOCS:
+        text = Path(name).read_text(encoding="utf-8")
+        assert "PENDING" in text, f"{name} must keep the result PENDING without an artifact"
+
+
+def test_benchmark_artifact_presence_is_derived_from_disk(monkeypatch, tmp_path):
+    """Artifact presence must come from the working tree, never the GitHub API."""
+    import scripts.check_repo_consistency as guard
+
+    source = Path(guard.__file__).read_text(encoding="utf-8")
+    # No network client, no wall clock: the guard must be offline-deterministic.
+    for forbidden in ("import requests", "import urllib.request", "import httpx", "date.today", "datetime.now"):
+        assert forbidden not in source, f"guard must not use {forbidden}"
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    assert guard.benchmark_artifact_exists() is False
+
+    run_dir = tmp_path / "artifacts/benchmarks/run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text("{}", encoding="utf-8")
+    assert guard.benchmark_artifact_exists() is True
+
+
+def test_benchmark_classification_requires_a_split_when_state_is_discussed():
+    silent = "# Benchmark\n\nThe retrieval benchmark result is excellent.\n"
+    assert benchmark_classification_errors("x.md", silent)
+
+    classified = "# Benchmark\n\nRetrieval benchmark framework: REPO_VERIFIED. Result: PENDING.\n"
+    assert benchmark_classification_errors("x.md", classified) == []
+
+    # A doc that never discusses the benchmark is out of scope for this guard.
+    assert benchmark_classification_errors("x.md", "# Deployment\n\nRun docker compose up.\n") == []
+
+
+def test_v25_release_claims_are_flagged_but_working_milestone_wording_passes():
+    assert v25_release_claims("The repository was released as v2.5 on 2026-06-06.")
+    assert v25_release_claims("正式发布版本：v2.5")
+    assert v25_release_claims("v2.5 is the current runtime version.")
+
+    assert v25_release_claims("v2.5 is a historical working milestone label, not a release.") == []
+    assert v25_release_claims("config.json system.version stays 2.3.0") == []
+    assert v25_release_claims("`v2.5` 是历史 working milestone 标签，**不是**正式发布版本") == []
+
+
+def test_canonical_docs_keep_v25_as_working_milestone():
+    errors: list[str] = []
+    check_version_label_semantics(errors)
+    assert errors == []
+
+
+def test_version_label_guard_catches_injected_release_claim(tmp_path, monkeypatch):
+    import scripts.check_repo_consistency as guard
+
+    (tmp_path / "README.md").write_text("Released as v2.5 last quarter.\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    errors: list[str] = []
+    guard.check_version_label_semantics(errors)
+    assert errors
+
+
+def test_prd_design_targets_guard_passes_for_current_prd():
+    errors: list[str] = []
+    check_prd_design_targets(errors)
+    assert errors == []
+
+
+def test_runtime_version_matches_latest_dated_release():
+    """config.json system.version must equal the newest dated CHANGELOG heading."""
+    import json
+    import re
+    from pathlib import Path
+
+    config = json.loads(Path("config.json").read_text(encoding="utf-8"))
+    changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+    releases = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.MULTILINE)
+    assert releases
+    assert config["system"]["version"] == releases[0]
+    # Unreleased is present and does not assign a version.
+    assert "## [Unreleased]" in changelog
+
+
+def test_no_v25_version_heading_was_invented():
+    """A fabricated 2.5.0 release entry would contradict the runtime version."""
+    import re
+    from pathlib import Path
+
+    changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+    assert not re.search(r"^## \[2\.5\.0\]", changelog, re.MULTILINE)
+    assert "## [2.3.0]" in changelog
