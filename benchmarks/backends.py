@@ -106,16 +106,23 @@ def _elastic_settings() -> tuple[str, str, int, tuple[str, str] | None]:
     # Mirror the production BM25Retriever precedence exactly: environment first,
     # config.json only as a fallback, otherwise a rotated credential makes real
     # retrieval succeed while the probe reports a 401.
-    username = os.environ.get("ELASTICSEARCH_USERNAME") or elastic.get("username") or ""
-    password = os.environ.get("ELASTICSEARCH_PASSWORD") or elastic.get("password") or ""
-    if not username or not password:
-        # Credentials may instead be embedded in the host URL userinfo
-        # ("https://user:password@host:9200"), which is a supported form.
-        userinfo_username, userinfo_password = elastic_url_userinfo(str(elastic.get("host") or ""))
-        username = username or userinfo_username
-        password = password or userinfo_password
-    if username and password:
-        auth = (str(username), str(password))
+    # Each credential source is used atomically: a half from one source must never
+    # be paired with a half from another, because that would fabricate a principal
+    # (for example env username + URL password) that exists in neither place.
+    env_user = os.environ.get("ELASTICSEARCH_USERNAME")
+    env_pass = os.environ.get("ELASTICSEARCH_PASSWORD")
+    config_user = elastic.get("username")
+    config_pass = elastic.get("password")
+    url_user, url_pass = elastic_url_userinfo(str(elastic.get("host") or ""))
+    auth = None
+    for candidate_user, candidate_pass in (
+        (env_user, env_pass),
+        (config_user, config_pass),
+        (url_user, url_pass),
+    ):
+        if candidate_user and candidate_pass:
+            auth = (str(candidate_user), str(candidate_pass))
+            break
     # The credentials travel in the Authorization header, so the userinfo must be
     # removed from the URL: urllib keeps it as part of the connection host, which
     # breaks DNS/connection setup even though the header is correct.
@@ -245,7 +252,7 @@ _MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin")
 _RECOGNIZED_WEIGHT_FILENAMES = frozenset({"model.safetensors", "pytorch_model.bin"})
 # `AutoTokenizer.from_pretrained` needs an actual vocabulary. `tokenizer_config.json`
 # alone carries no tokens and would still fail to load.
-_TOKENIZER_VOCAB_NAMES = ("tokenizer.json", "vocab.txt")
+_TOKENIZER_VOCAB_NAMES = ("tokenizer.json", "vocab.txt", "spiece.model", "sentencepiece.bpe.model")
 
 
 def _non_empty(path: Path) -> bool:
@@ -293,7 +300,7 @@ def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
     if not any(_non_empty(path / name) for name in _MODEL_CONFIG_NAMES):
         missing.append("config.json")
     if not any(_non_empty(path / name) for name in _TOKENIZER_VOCAB_NAMES):
-        missing.append("tokenizer vocabulary (tokenizer.json/vocab.txt)")
+        missing.append("tokenizer vocabulary (tokenizer.json/vocab.txt/spiece.model)")
     weight_files = [candidate for suffix in _MODEL_WEIGHT_SUFFIXES for candidate in sorted(path.glob(f"*{suffix}"))]
     weight_files = [candidate for candidate in weight_files if _non_empty(candidate)]
     if not weight_files:

@@ -2088,3 +2088,128 @@ def test_duplicate_rejected_before_any_artifact_is_written(tmp_path):
             ]
         )
     assert not list(tmp_path.glob("*/metadata.json"))
+
+
+# ── Round 17: atomic credential sources, SentencePiece, ML lib versions ──────
+
+
+def test_env_username_is_not_paired_with_url_password(monkeypatch):
+    """Half-credentials from different sources must never be combined."""
+    from benchmarks.backends import _elastic_settings
+    from common import config as common_config
+
+    monkeypatch.setenv("ELASTICSEARCH_USERNAME", "alice")
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://bob:urlpass@es:9200"}},
+    )
+    _, _, _, auth = _elastic_settings()
+    # Neither the fabricated alice:urlpass nor the incomplete env half is used;
+    # the URL pair is the first complete source.
+    assert auth == ("bob", "urlpass")
+
+
+def test_env_pair_takes_precedence_as_a_whole(monkeypatch):
+    from benchmarks.backends import _elastic_settings
+    from common import config as common_config
+
+    monkeypatch.setenv("ELASTICSEARCH_USERNAME", "alice")
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "envpass")
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {
+            "elasticsearch": {
+                "host": "https://bob:urlpass@es:9200",
+                "username": "cfguser",
+                "password": "cfgpass",
+            }
+        },
+    )
+    assert _elastic_settings()[3] == ("alice", "envpass")
+
+
+def test_config_pair_used_when_env_is_incomplete(monkeypatch):
+    from benchmarks.backends import _elastic_settings
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "orphaned-env-password")
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"username": "cfguser", "password": "cfgpass"}},
+    )
+    assert _elastic_settings()[3] == ("cfguser", "cfgpass")
+
+
+def test_no_credential_when_no_complete_pair(monkeypatch):
+    from benchmarks.backends import _elastic_settings
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+    assert _elastic_settings()[3] is None
+
+
+def test_provenance_uses_the_same_atomic_source(monkeypatch):
+    """The fingerprint must describe the principal the probe would authenticate as."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setenv("ELASTICSEARCH_USERNAME", "alice")
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://bob:urlpass@es:9200"}},
+    )
+    fingerprint = provenance.effective_retrieval_config()["elasticsearch"]["principal_fingerprint"]
+    import hashlib
+
+    assert fingerprint == "sha256:" + hashlib.sha256(b"bob").hexdigest()[:16]
+
+
+@pytest.mark.parametrize("vocab", ["spiece.model", "sentencepiece.bpe.model"])
+def test_sentencepiece_vocabulary_is_accepted(tmp_path, vocab):
+    """A valid SentencePiece model has no tokenizer.json or vocab.txt."""
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "model.safetensors", vocab):
+        (path / name).write_text("weights", encoding="utf-8")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is True, detail
+
+
+def test_still_requires_a_vocabulary_of_some_kind(tmp_path):
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "model.safetensors", "README.md"):
+        (path / name).write_text("x", encoding="utf-8")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "tokenizer vocabulary" in detail
+
+
+def test_environment_records_model_runtime_libraries():
+    """transformers/sentence-transformers generate the embeddings being scored."""
+    from benchmarks.provenance import collect_environment
+
+    environment = collect_environment()
+    for key in ("transformers_version", "sentence_transformers_version", "torch_version"):
+        assert key in environment
+
+
+def test_environment_versions_are_in_the_rendered_artifact():
+    from benchmarks.provenance import collect_environment, render_environment
+
+    rendered = render_environment(collect_environment())
+    assert "transformers_version" in rendered
+    assert "sentence_transformers_version" in rendered

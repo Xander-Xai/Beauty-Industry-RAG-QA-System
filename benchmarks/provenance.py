@@ -161,6 +161,12 @@ def collect_environment() -> dict[str, Any]:
         "ram_bytes": _ram_bytes(),
         "qdrant_version": _module_version("qdrant_client"),
         "elasticsearch_version": _module_version("elasticsearch"),
+        # These libraries generate the embeddings and the BiEncoder rankings that the
+        # metrics are computed over, and requirements.txt pins only lower bounds, so
+        # two installations of the same commit can resolve different model runtimes.
+        "transformers_version": _module_version("transformers"),
+        "sentence_transformers_version": _module_version("sentence_transformers"),
+        "torch_version": _module_version("torch"),
         "embedding_model": None,
         "embedding_model_revision": None,
         "biencoder_model": None,
@@ -212,31 +218,34 @@ def redact_url_userinfo(value: Any) -> Any:
     return redacted if "//" in value else redacted.removeprefix("//")
 
 
-def _elastic_username() -> str | None:
-    return os.environ.get("ELASTICSEARCH_USERNAME") or _config_elastic_field("username") or _elastic_url_username()
+def _elastic_credentials() -> tuple[str | None, str | None]:
+    """The Elasticsearch credential pair in effect, taken from a single source.
 
-
-def _elastic_url_username() -> str | None:
-    """Username embedded in ``elasticsearch.host`` userinfo, if any.
-
-    The host is redacted before persistence, so without this the principal would
-    be invisible and two different URL-authenticated principals would share a
-    ``config_sha256``.
+    Sources are used atomically — environment, then config file, then host-URL
+    userinfo — and each must supply both halves. Mixing halves across sources would
+    describe a principal that exists in neither place.
     """
     from benchmarks.backends import elastic_url_userinfo
 
-    username, _ = elastic_url_userinfo(_config_elastic_field("host") or "")
-    return username
+    env_user = os.environ.get("ELASTICSEARCH_USERNAME")
+    env_pass = os.environ.get("ELASTICSEARCH_PASSWORD")
+    config_user = _config_elastic_field("username")
+    config_pass = _config_elastic_field("password")
+    url_user, url_pass = elastic_url_userinfo(_config_elastic_field("host") or "")
+    for username, password in ((env_user, env_pass), (config_user, config_pass), (url_user, url_pass)):
+        if username and password:
+            return username, password
+    # No complete pair: report whichever single half is present so its presence is
+    # still visible, without inventing a partner.
+    return env_user or config_user or url_user, env_pass or config_pass or url_pass
+
+
+def _elastic_username() -> str | None:
+    return _elastic_credentials()[0]
 
 
 def _elastic_password() -> str | None:
-    password = os.environ.get("ELASTICSEARCH_PASSWORD") or _config_elastic_field("password")
-    if password:
-        return password
-    from benchmarks.backends import elastic_url_userinfo
-
-    _, embedded = elastic_url_userinfo(_config_elastic_field("host") or "")
-    return embedded
+    return _elastic_credentials()[1]
 
 
 def _config_elastic_field(field: str) -> str | None:
