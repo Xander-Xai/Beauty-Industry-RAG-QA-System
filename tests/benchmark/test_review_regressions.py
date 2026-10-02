@@ -737,9 +737,94 @@ def test_dense_available_via_grpc_when_rest_is_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model))
     monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6334)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (False, None))
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (5, "ok"))
     availability = backends.probe_dense()
     assert availability.available is True, availability.detail
-    assert "6334" in availability.detail or "grpc" in availability.detail.lower()
+
+
+def test_grpc_tcp_only_is_not_enough_when_collection_absent(monkeypatch, tmp_path):
+    """A reachable gRPC port must not imply the configured collection exists."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    model = _write_complete_model(tmp_path / "model")
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model))
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6334)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (False, None))
+    monkeypatch.setattr(
+        backends,
+        "_grpc_collection_points",
+        lambda host, port, coll: (None, f"collection {coll} is absent or inaccessible over gRPC"),
+    )
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_SERVICE_NO_DATA
+    assert "absent or inaccessible" in availability.detail
+
+
+def test_grpc_verified_empty_collection_is_blocked(monkeypatch, tmp_path):
+    """A gRPC-verified but empty collection cannot answer any query."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    model = _write_complete_model(tmp_path / "model")
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: _qdrant_config(model))
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6334)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (False, None))
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (0, "ok"))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert "0 points" in availability.detail
+
+
+def test_grpc_verification_is_attempted_with_prefer_grpc(monkeypatch):
+    """The verification client must use gRPC, matching EmbeddingService."""
+    from benchmarks import backends
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def get_collection(self, name):
+            class Info:
+                points_count = 3
+
+            return Info()
+
+        def close(self):
+            captured["closed"] = True
+
+    import qdrant_client
+
+    monkeypatch.setattr(qdrant_client, "QdrantClient", FakeClient, raising=False)
+    points, note = backends._grpc_collection_points("qdrant", 6334, "rag_text_768")
+    assert points == 3
+    assert captured["prefer_grpc"] is True
+    assert captured["grpc_port"] == 6334
+    assert captured["closed"] is True
+
+
+def test_grpc_verification_failure_is_not_available(monkeypatch):
+    from benchmarks import backends
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def get_collection(self, name):
+            raise RuntimeError("NotFound: collection does not exist")
+
+        def close(self):
+            pass
+
+    import qdrant_client
+
+    monkeypatch.setattr(qdrant_client, "QdrantClient", FakeClient, raising=False)
+    points, note = backends._grpc_collection_points("qdrant", 6334, "rag_text_768")
+    assert points is None
+    assert "absent or inaccessible" in note
 
 
 def test_dense_blocked_when_both_protocols_are_closed(monkeypatch, tmp_path):
@@ -831,3 +916,80 @@ def test_cross_encoder_snapshot_exposes_model_paths(monkeypatch):
     )
     snapshot = provenance.effective_retrieval_config()
     assert snapshot["cross_encoder"]["cross_encoder_a"]["model_path"] == "/models/a"
+
+
+# ── Round 8: unusable contexts and coverage-derived breakdowns ──────────────
+
+
+@pytest.mark.parametrize("contexts", [[""], ["   "], [None], [123], ["ok", ""], ["ok", None]])
+def test_unusable_context_entries_are_dataset_errors(tmp_path, contexts):
+    """Blank/non-string ground truth must not become 'None' or a ValueError."""
+    import json
+
+    from benchmarks.dataset import DatasetError, load_queries
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(json.dumps({"question": "q", "contexts": contexts}) + "\n", encoding="utf-8")
+    with pytest.raises(DatasetError, match="non-empty string"):
+        load_queries(bad)
+
+
+def test_unusable_context_names_the_sample(tmp_path):
+    import json
+
+    from benchmarks.dataset import DatasetError, load_queries
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(
+        json.dumps({"question": "q0", "contexts": ["fine"]})
+        + "\n"
+        + json.dumps({"question": "q1", "contexts": ["fine", None]})
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(DatasetError, match=r"sample 0001 context 1"):
+        load_queries(bad)
+
+
+def test_unusable_context_exits_cleanly_through_cli(tmp_path):
+    import json
+
+    import benchmarks.retrieval_benchmark as cli
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(json.dumps({"question": "q", "contexts": [""]}) + "\n", encoding="utf-8")
+    exit_code = cli.main(
+        ["--config", "bm25", "--dataset", str(bad), "--output-dir", str(tmp_path / "out"), "--allow-dirty"]
+    )
+    assert exit_code == 2
+
+
+def test_breakdowns_require_actual_field_coverage():
+    """A dataset without business_type/difficulty must not advertise them."""
+    from benchmarks.dataset import bucket_coverage
+
+    coverage = bucket_coverage([{"question": "q", "contexts": ["c"]}])
+    assert coverage["available_buckets"] == ["overall"]
+
+
+def test_breakdowns_included_when_fields_present():
+    from benchmarks.dataset import bucket_coverage
+
+    coverage = bucket_coverage(
+        [{"question": "q", "contexts": ["c"], "business_type": "ingredient", "difficulty": "easy"}]
+    )
+    assert "business_type" in coverage["available_buckets"]
+    assert "difficulty" in coverage["available_buckets"]
+
+
+def test_partial_field_coverage_lists_only_supported_breakdowns():
+    from benchmarks.dataset import bucket_coverage
+
+    coverage = bucket_coverage(
+        [
+            {"question": "q1", "contexts": ["c"], "business_type": "ingredient"},
+            {"question": "q2", "contexts": ["c"]},
+        ]
+    )
+    assert "business_type" in coverage["available_buckets"]
+    assert "difficulty" not in coverage["available_buckets"]

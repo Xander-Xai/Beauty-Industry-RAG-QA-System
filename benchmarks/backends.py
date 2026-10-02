@@ -126,6 +126,45 @@ def _qdrant_settings() -> tuple[str, int, str]:
     return host, port, text_collection
 
 
+def _grpc_collection_points(host: str, grpc_port: int, collection: str) -> tuple[int | None, str]:
+    """Query a collection over gRPC, the transport production retrieval prefers.
+
+    Returns ``(points_count, note)``. ``points_count`` is ``None`` when the
+    collection's existence or size could not be established, which must never be
+    read as "available".
+    """
+    try:
+        from qdrant_client import QdrantClient
+    except ImportError:
+        return None, "qdrant_client is not installed, cannot verify the collection over gRPC"
+    try:
+        client = QdrantClient(
+            host=host, port=DEFAULT_QDRANT_REST_PORT, grpc_port=grpc_port, prefer_grpc=True, timeout=10
+        )
+    except Exception as exc:  # noqa: BLE001 - client construction raises backend-specific errors
+        return None, f"gRPC client could not be created ({type(exc).__name__})"
+    try:
+        info = client.get_collection(collection)
+    except Exception as exc:  # noqa: BLE001 - missing/inaccessible collections raise client errors
+        return None, f"collection {collection} is absent or inaccessible over gRPC ({type(exc).__name__})"
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+    points = getattr(info, "points_count", None)
+    if points is None and isinstance(info, dict):
+        points = info.get("points_count")
+    if points is None:
+        return None, f"collection {collection} returned no points_count over gRPC"
+    try:
+        return int(points), f"collection {collection} verified over gRPC"
+    except (TypeError, ValueError):
+        return None, f"collection {collection} returned a non-numeric points_count"
+
+
+DEFAULT_QDRANT_REST_PORT = 6333
+
+
 def _qdrant_grpc_port() -> int | None:
     """gRPC port used by the production ``EmbeddingService`` client.
 
@@ -257,11 +296,16 @@ def probe_dense() -> BackendAvailability:
         if isinstance(result, dict):
             points = result.get("points_count")
     # Without a collection listing, the collection's existence and point count
-    # cannot be confirmed over REST, so gRPC reachability is the only usable
-    # production transport and its absence is a real blocker.
-    if points is None and not grpc_reachable:
-        return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
-    if points is not None and int(points) == 0:
+    # cannot be confirmed over REST, so verify it over gRPC — the transport
+    # production retrieval actually uses — before declaring availability.
+    if points is None:
+        if not grpc_reachable or grpc_port is None:
+            return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
+        grpc_points, grpc_note = _grpc_collection_points(host, grpc_port, collection)
+        if grpc_points is None:
+            return BackendAvailability("dense", False, REASON_SERVICE_NO_DATA, grpc_note)
+        points = grpc_points
+    if int(points) == 0:
         # An existing but empty collection cannot answer any retrieval query.
         return BackendAvailability(
             "dense",

@@ -123,6 +123,14 @@ def load_queries(
         contexts = row.get("contexts")
         if not isinstance(contexts, list) or not contexts:
             raise DatasetError(f"{path}: sample {sample_id} has no contexts (ground truth)")
+        # A non-string or blank entry would either become the bogus ground truth
+        # "None" or raise an uncaught ValueError deep inside normalization.
+        for position, item in enumerate(contexts):
+            if not isinstance(item, str) or not item.strip():
+                raise DatasetError(
+                    f"{path}: sample {sample_id} context {position} must be a non-empty string, "
+                    f"got {type(item).__name__}"
+                )
         stable = stable_id_from(row)
         if stable:
             relevant: list[RelevantItem] = [RelevantItem(key=stable, text=str(contexts[0]))]
@@ -163,10 +171,15 @@ def bucket_coverage(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Field coverage used to state which breakdowns are supported."""
     keys = ("question", "answer", "ground_truth", "contexts", "business_type", "difficulty") + KNOWN_UNAVAILABLE_BUCKETS
     counts = coverage(rows, keys)
+    # Only advertise a breakdown the selected rows can actually support; load_queries
+    # substitutes "unknown", so listing a zero-coverage field would present an
+    # invented all-unknown table as supported metadata.
+    available = ["overall"]
+    available += [name for name in ("business_type", "difficulty") if counts.get(name, 0) > 0]
     return {
         "sample_count": len(rows),
         "field_coverage": counts,
-        "available_buckets": ["overall", "business_type", "difficulty"],
+        "available_buckets": available,
         "unavailable_buckets": [key for key in KNOWN_UNAVAILABLE_BUCKETS if counts.get(key, 0) == 0],
         "relevance_level": detect_relevance_level(rows),
         "relevance_strategy_counts": relevance_strategies(rows),
