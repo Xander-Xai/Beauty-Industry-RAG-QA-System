@@ -358,6 +358,15 @@ def test_production_boundary_exemption_is_clause_scoped():
     assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证；production cluster 也未验证")
 
 
+def test_tracing_default_is_not_misdescribed_as_local_memory_spans():
+    """The default install uses the OTel SDK provider with no exporter."""
+    from pathlib import Path
+
+    text = Path("docs/interview-architecture-baseline.md").read_text(encoding="utf-8")
+    assert "没有配置任何 exporter" in text
+    assert "只有 OTel SDK 未安装时" in text
+
+
 def test_metrics_auth_contract():
     errors: list[str] = []
     check_metrics_auth_contract(errors)
