@@ -438,7 +438,12 @@ def forbidden_evidence_claims(text: str) -> list[str]:
     for line in text.splitlines():
         for pattern in (result_number, ragas_score, external_validated, tracing_closed_loop, load_verified):
             for match in pattern.finditer(line):
-                window = line[max(0, match.start() - 50) : match.end() + 50]
+                # Leading context is capped at 50 characters so a denial earlier in
+                # the same sentence does not retroactively excuse a later claim.
+                # The window then runs to the end of the line, because a markdown
+                # table row puts its classification after the claim and the row is
+                # often longer than 50 characters.
+                window = line[max(0, match.start() - 50) :]
                 prefix = line[max(0, match.start() - 60) : match.start()]
                 # A "do not claim this" frame in the same bullet is the opposite of
                 # an overclaim: these documents are required to state the denial.
@@ -1085,6 +1090,294 @@ def check_metrics_auth_contract(errors: list[str]) -> None:
             fail(errors, f"{name}: must document that /api/metrics requires authentication")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Enterprise-readiness evidence guards
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Each capability below has a *framework* state and a *result* state that must
+# never be collapsed into one another. "Alert rules exist" is not "alerts fired";
+# "an exporter is implemented" is not "tracing is closed-loop"; "a performance
+# artifact harness exists" is not "QPS is verified". The presence of each result
+# artifact is derived from the working tree, so the required wording follows the
+# repository's real state rather than a hardcoded expectation.
+
+PERFORMANCE_ARTIFACT_GLOB = "artifacts/performance/*/metadata.json"
+
+
+def performance_artifact_exists() -> bool:
+    """True when a performance run artifact is committed to the working tree."""
+    return any(ROOT.glob(PERFORMANCE_ARTIFACT_GLOB))
+
+
+def otel_runtime_evidence_exists() -> bool:
+    """True when an OTLP closed-loop run has been recorded.
+
+    A closed-loop claim requires a recorded trace artifact. This repository keeps
+    such evidence under ``monitoring/evidence/`` when a local run has actually
+    happened; the directory does not exist today, which is why the runtime
+    closed loop is PENDING rather than verified.
+    """
+    evidence = ROOT / "monitoring" / "evidence"
+    if not evidence.is_dir():
+        return False
+    return any(evidence.glob("*.json"))
+
+
+def audit_action_events_exist() -> bool:
+    """True when structured business-action audit events are implemented."""
+    module = ROOT / "common/audit.py"
+    if not module.exists():
+        return False
+    text = module.read_text(encoding="utf-8")
+    return "def audit_event(" in text and "KNOWN_ACTIONS" in text
+
+
+def prometheus_alert_rules_exist() -> bool:
+    """True when alert rules are configured in the repository."""
+    return (ROOT / "monitoring/prometheus/alerts.yml").is_file()
+
+
+def grafana_dashboard_exists() -> bool:
+    """True when a dashboard JSON is committed."""
+    return (ROOT / "monitoring/grafana/dashboards").is_dir() and any(
+        (ROOT / "monitoring/grafana/dashboards").glob("*.json")
+    )
+
+
+def slo_runbook_exists() -> bool:
+    return (ROOT / "docs/slo-runbook.md").is_file()
+
+
+def otlp_exporter_implemented() -> bool:
+    """True when an opt-in OTLP exporter path is implemented."""
+    module = ROOT / "monitoring/otel_exporter.py"
+    return module.is_file() and "def build_span_processor(" in module.read_text(encoding="utf-8")
+
+
+def enterprise_claim_errors(name: str, text: str) -> list[str]:
+    """Return claims that outrun the evidence that exists for them."""
+    errors: list[str] = []
+    line_claims: list[str] = []
+
+    def scan(patterns: list[str], evidence_present: bool, subject: str) -> None:
+        """Flag matches unless the evidence they depend on is present.
+
+        ``evidence_present=True`` means the claim is allowed, so the scan is
+        skipped. An unconditional claim is checked by passing ``False`` with no
+        artifact behind it — which is exactly the case for "an alert fired in
+        production" and "an SLO was met": no repository artifact could ever
+        justify either.
+        """
+        if evidence_present:
+            return
+        for pattern in patterns:
+            for line in text.splitlines():
+                match = re.search(pattern, line, flags=re.IGNORECASE)
+                if not match:
+                    continue
+                if _NO_EVIDENCE_NEGATION_RE.search(line):
+                    continue
+                if _PROHIBITION_FRAME_RE.search(line):
+                    continue
+                if _PENDING_BOUNDARY_RE.search(line):
+                    continue
+                line_claims.append(f"{subject}: {match.group(0)!r}")
+
+    # 1. Performance result claims with no committed artifact.
+    scan(
+        [
+            r"(?:throughput|QPS)[^\n]{0,20}(?:verified|validated|measured|achieved|达标)",
+            r"(?:P95|P99|p95|p99)[^\n]{0,16}(?:verified|validated|实测|达标|已达成)",
+            r"load\s+test[^\n]{0,24}(?:result|proves|demonstrates)",
+        ],
+        performance_artifact_exists(),
+        "performance result",
+    )
+
+    # 2. Tracing closed-loop claims with no recorded runtime evidence.
+    scan(
+        [
+            r"(?:OTLP|OpenTelemetry|Jaeger)[^\n]{0,40}(?:closed[- ]?loop|闭环(?:验证|完成)?)(?:[^\n]{0,10}(?:validated|verified|完成))?",
+            r"(?:span|trace)[^\n]{0,24}(?:exported|export)[^\n]{0,16}(?:verified|confirmed|已查询到)",
+        ],
+        otel_runtime_evidence_exists(),
+        "OTLP closed loop",
+    )
+
+    # 3. Alerts claimed as configured when no rule file exists.
+    scan(
+        [
+            r"(?:Prometheus|monitoring)[^\n]{0,30}alert(?:ing|s)?[^\n]{0,16}(?:configured|configured|in place|已配置|已启用)"
+        ],
+        prometheus_alert_rules_exist(),
+        "alert rules",
+    )
+
+    # 4. Alerts claimed as having fired in production.
+    scan(
+        [
+            r"(?:alerts?|\w*Alert\w*|Rag[A-Z]\w*)[^\n]{0,24}(?:fired|triggered)[^\n]{0,24}(?:production|线上|生产)",
+            r"(?:production|线上|生产)[^\n]{0,24}(?:alerts?|\w*Alert\w*|Rag[A-Z]\w*)[^\n]{0,16}(?:fired|triggered)",
+        ],
+        # Unconditional: no committed artifact could justify this claim.
+        False,
+        "alerts fired",
+    )
+
+    # 5. Dashboard claimed as available with no dashboard committed.
+    scan(
+        [r"Grafana[^\n]{0,24}dashboard[^\n]{0,16}(?:available|provided|imported|已导入|可用)"],
+        grafana_dashboard_exists(),
+        "Grafana dashboard",
+    )
+
+    # 6. Enterprise audit claimed as implemented with no action events.
+    scan(
+        [r"(?:structured|企业级)[^\n]{0,16}audit[^\n]{0,24}(?:implemented|已实现|in place)"],
+        audit_action_events_exist(),
+        "enterprise audit",
+    )
+
+    # 7. SLO claimed as met rather than targeted.
+    scan(
+        [
+            r"(?:availability|可用性)[^\n]{0,24}(?:currently|已)?(?:achieves|meets|达到|reached)[^\n]{0,12}99",
+            r"(?:achieves|meets|reached|达到)[^\n]{0,12}99(?:\.\d+)?\s*%?[^\n]{0,16}(?:availability|可用性)",
+            r"SLO[^\n]{0,16}(?:is|was)\s+met",
+            r"(?:latency|延迟)[^\n]{0,16}(?:is|was)\s+met",
+        ],
+        # Unconditional: an achieved SLO needs production history, which this
+        # repository does not and must not invent.
+        False,
+        "SLO achieved",
+    )
+
+    if line_claims:
+        errors.append(f"{name}: claims outrun the available evidence: {line_claims}")
+    return errors
+
+
+# Explicit "this is a target, not a result" wording that exempts a line from the
+# guards above. Broader than _NO_EVIDENCE_NEGATION_RE because it also accepts the
+# target/design vocabulary these documents legitimately use.
+_PENDING_BOUNDARY_RE = re.compile(
+    r"DESIGN_TARGET|design\s+target|目标(?:值)?|PENDING|not\s+measured|未(?:测量|验证)|"
+    r"still\s+pending|尚未|no\s+artifact|没有.{0,8}artifact|framework\s*=|"
+    r"HISTORICAL_PRODUCTION|REPO_VERIFIED|LOCAL_REAL_VALIDATION|"
+    # An explicit denial of the claim itself: "no alert has fired in production",
+    # "no SLO has been met". These documents are required to write the denial,
+    # so it must not be read as the claim.
+    r"\bno\s+[A-Za-z][\w\s]{0,30}(?:fired|triggered|achieved|been\s+met|has\s+been\s+met)\b|"
+    r"\bnot\s+[A-Za-z][\w\s]{0,30}(?:fired|triggered|been\s+met)\b",
+    re.IGNORECASE,
+)
+
+
+def check_enterprise_readiness_contracts(errors: list[str]) -> None:
+    """Keep every enterprise-readiness claim tied to the evidence that exists."""
+    for name in (
+        "README.md",
+        "PRD.md",
+        "docs/README.md",
+        "docs/operations-guide.md",
+        "docs/pre-launch-checklist.md",
+        "docs/slo-runbook.md",
+        "docs/repository-truth-audit.md",
+        "docs/interview-evidence-map.md",
+        "docs/interview-architecture-baseline.md",
+        "docs/deployment-guide.md",
+    ):
+        path = ROOT / name
+        if not path.exists():
+            continue
+        errors.extend(enterprise_claim_errors(name, path.read_text(encoding="utf-8")))
+
+
+def check_enterprise_readiness_coverage(errors: list[str]) -> None:
+    """The implemented capabilities must be discoverable from the docs index."""
+    index = ROOT / "docs/README.md"
+    if index.exists():
+        text = index.read_text(encoding="utf-8")
+        if "slo-runbook.md" not in text:
+            fail(errors, "docs/README.md must index the SLO/runbook document")
+
+    runbook = ROOT / "docs/slo-runbook.md"
+    if runbook.exists():
+        text = runbook.read_text(encoding="utf-8")
+        if "DESIGN_TARGET" not in text:
+            fail(errors, "docs/slo-runbook.md must classify its objectives as DESIGN_TARGET")
+        # A runbook that claims to be a contract must also refuse to claim it was met.
+        if not _SLO_TARGET_BOUNDARY_RE.search(text):
+            fail(
+                errors,
+                "docs/slo-runbook.md must state that no SLO has been met (no achieved-SLO claim)",
+            )
+
+    alerts = ROOT / "monitoring/prometheus/alerts.yml"
+    if alerts.exists():
+        text = alerts.read_text(encoding="utf-8")
+        if "DESIGN_TARGET" not in text:
+            fail(errors, "monitoring/prometheus/alerts.yml must label its thresholds DESIGN_TARGET")
+        if "NOT VALIDATED IN PRODUCTION" not in text.upper():
+            fail(
+                errors,
+                "monitoring/prometheus/alerts.yml must state that alerting is not validated in production",
+            )
+
+    performance_readme = ROOT / "artifacts/performance/README.md"
+    if performance_readme.exists():
+        text = performance_readme.read_text(encoding="utf-8")
+        if "Not executed is not zero" not in text:
+            fail(errors, "artifacts/performance/README.md must state the null-not-zero rule")
+        for status in ("EXECUTED", "PARTIAL", "BLOCKED"):
+            if status not in text:
+                fail(errors, f"artifacts/performance/README.md must document the {status} status")
+
+
+_SLO_TARGET_BOUNDARY_RE = re.compile(
+    r"no\s+SLO\s+has\s+been\s+met|not\s+a\s+report|is\s+a\s+\*\*contract\*\*",
+    re.IGNORECASE,
+)
+
+
+def check_observability_is_optional(errors: list[str]) -> None:
+    """The canonical deployment must not require the observability stack."""
+    base = ROOT / "docker-compose.yml"
+    overlay = ROOT / "docker-compose.observability.yml"
+    if not base.exists() or not overlay.exists():
+        return
+    import yaml
+
+    try:
+        base_services = set(yaml.safe_load(base.read_text(encoding="utf-8")).get("services", {}))
+        overlay_services = set(yaml.safe_load(overlay.read_text(encoding="utf-8")).get("services", {}))
+    except Exception as exc:  # pragma: no cover - malformed compose is CI's other job
+        fail(errors, f"cannot parse compose files for the optionality check: {exc}")
+        return
+
+    if base_services & overlay_services:
+        fail(
+            errors,
+            "docker-compose.observability.yml must not redefine canonical services: "
+            f"{sorted(base_services & overlay_services)}",
+        )
+    for required in ("prometheus", "jaeger", "grafana"):
+        if required not in overlay_services:
+            fail(errors, f"docker-compose.observability.yml must provide {required} behind the overlay")
+
+
+def check_canonical_runtime_is_not_observability_gated(errors: list[str]) -> None:
+    """No forbidden platform may be required by the canonical deployment."""
+    for name in ("docker-compose.yml", "Dockerfile"):
+        path = ROOT / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8").lower()
+        for forbidden in ("kubernetes", "helm", "kafka", "langgraph"):
+            if forbidden in text:
+                fail(errors, f"{name} must not introduce {forbidden} into the canonical deployment")
+
+
 def check_uvicorn_proxy_headers_disabled(errors: list[str]) -> None:
     """app.py must disable uvicorn's own X-Forwarded-For handling.
 
@@ -1254,6 +1547,10 @@ def main() -> int:
     check_evidence_classification_guards(errors)
     check_version_label_semantics(errors)
     check_prd_design_targets(errors)
+    check_enterprise_readiness_contracts(errors)
+    check_enterprise_readiness_coverage(errors)
+    check_observability_is_optional(errors)
+    check_canonical_runtime_is_not_observability_gated(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):

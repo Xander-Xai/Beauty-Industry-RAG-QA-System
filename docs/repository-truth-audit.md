@@ -73,6 +73,12 @@ large-corpus throughput has been established.
 | Frontend contract | React client reads auth/RBAC metadata and routes single-query, chat, session and stats panels to the monolith API | `frontend/src/App.jsx`, `api/routes_auth.py` metadata endpoint | `tests/test_auth_metadata.py`; frontend build is separate | `config.json` UI metadata | CI does not build the frontend here | PARTIAL | Frontend integration remains build/validation-scoped |
 | Performance | PRD P95/P99/QPS values are design targets | Benchmark utilities exist under `tests/load/`; no reproducible artifact checked in | Load-test code is not a benchmark result | Target values in `config.json` / PRD | CI does not establish production latency/throughput/accuracy | PARTIAL | Label numbers as design targets |
 | Retrieval benchmark | Deterministic retrieval-quality harness exists (Recall@1/3/5/10, HitRate@1/3/5/10, MRR@10, binary NDCG@10) with provenance and artifact contract | `benchmarks/`, `artifacts/benchmarks/` | `tests/benchmark/` (deterministic tests, fixture retriever only) | Bucket support: overall / business_type / difficulty; `visual_required` and complexity labels absent (see `docs/benchmark-data-quality.md`) | Framework = REPO_VERIFIED; no real benchmark artifact exists, so the result is PENDING. Configurations currently report BLOCKED (no live Elasticsearch/Qdrant, no BGE weights, no corpus containing the ground truth) | PARTIAL | Never publish numbers from a blocked or fixture-retriever run |
+| Performance evidence | Deterministic seven-file artifact contract under `artifacts/performance/`; status `EXECUTED`/`PARTIAL`/`BLOCKED` derived from observation; unmeasured values are `null`, never `0`; unrun work is blocked with a reason | `benchmarks/performance.py`, `benchmarks/performance_cli.py`, `tests/load/locustfile.py` | `tests/performance/` (null-vs-zero, status derivation, provenance, redaction) | `artifacts/performance/README.md` documents the contract; generated runs are git/docker-ignored | Framework = REPO_VERIFIED. No artifact is committed, so no QPS/P95/P99 is measured: result = PENDING. A run against an unreachable target was executed and correctly recorded BLOCKED | PARTIAL | Never publish a number from a run that did not execute |
+| Structured audit trail | Business-action events with a stable 9-field schema; redaction enforced on every emit; request-id correlation via contextvar; Redis Stream + daily JSONL persistence; no activate event because no activate endpoint exists | `common/audit.py`, `api/routes_auth.py`, `api/routes.py`, `run_offline.py` | `tests/test_audit_log.py` (schema, three outcomes, key/value redaction, correlation, real login path) | `logs/audit/<date>.jsonl`; Redis Stream `audit:events` capped at 10000 | Implementation is REPO_VERIFIED. No SIEM forwarding and no production audit review; that is a deployment concern, not a repository claim | PARTIAL | Keep audit stdout structured for external forwarding |
+| SLO + incident runbook | Five objectives and eight incident procedures written against the degradation paths that exist in code | `docs/slo-runbook.md` | Docs-consistency guards assert the objectives stay `DESIGN_TARGET` | Alert names map 1:1 to `monitoring/prometheus/alerts.yml` | Document is REPO_VERIFIED. Every objective is a `DESIGN_TARGET`; no SLO has been met and none has been measured | PARTIAL | Do not restate a target as an achievement |
+| Prometheus alerting | Six rules over metrics the canonical collector actually emits; malformed summary exposition fixed; two guards against traffic-less firing | `monitoring/prometheus/alerts.yml`, `monitoring/otel_tracer.py`, `api/middleware.py`, `core/pipeline_context.py` | `tests/monitoring/` asserts every referenced metric is emitted, exposition is well-formed, and no placeholder gauge backs an alert | `deploy/prometheus.yml` scrapes the monolith with `bearer_token_file` | Configuration is REPO_VERIFIED. No production Prometheus evaluates these rules, and no alert has fired in production | PARTIAL | Qdrant/Elasticsearch outages are deliberately unalerted; the metric is missing and that gap is documented |
+| Grafana dashboard | Ten panels over emitted metrics only | `monitoring/grafana/dashboards/rag-overview.json` | `tests/monitoring/` asserts panel metrics exist and no hallucination/RAGAS/GPU panel exists | Provisioned via `monitoring/grafana/provisioning/` | JSON is REPO_VERIFIED. Never imported into a running Grafana, so panel population is PENDING | PARTIAL | Optional overlay only; the canonical deployment does not start Grafana |
+| OTLP export | Opt-in exporter path with non-fatal failure semantics and a span-attribute allow-list | `monitoring/otel_exporter.py`, `monitoring/otel_tracer.py` | `tests/monitoring/test_observability.py`, `tests/test_monitoring_otel.py` | `OTEL_EXPORT_ENABLED=false` by default; exporter package isolated in `requirements-otel.txt`; state exposed as `rag_otel_exporter_enabled` | Implementation is REPO_VERIFIED. The application -> exporter -> collector -> backend -> queried-span loop is PENDING; no evidence is recorded under `monitoring/evidence/` | PARTIAL | Say "exporter implemented, closed loop pending", never "tracing validated" |
 | Runtime version | Runtime version agrees with newest dated changelog release | `common/config.py` reads `config.json` | Consistency script checks the invariant | `config.json` `system.version` = `2.3.0` | `scripts/check_repo_consistency.py` runs in CI | VERIFIED | Keep the check enabled; Unreleased does not bump version |
 | CI | Python checks include tests, compile, collection and repository consistency | `.github/workflows/ci.yml` | Workflow runs pytest and collection checks | Workflow configuration | Verify the current `HEAD` GitHub Actions run for CI | VERIFIED | Require green checks on the reconciliation PR |
 | Ruff | Lint and formatting are configured as CI checks | `.github/workflows/lint.yml` | Ruff check and format check | Workflow configuration | Verify the current `HEAD` GitHub Actions run for Ruff | VERIFIED | Require green checks on the reconciliation PR |
@@ -150,6 +156,30 @@ and currently returns HTTP 400, so gating on it would produce a flaky red build
 rather than a real signal. CI reports the advisories as a non-blocking step so
 they stay visible. Remediation (a lockfile refresh plus a verified frontend
 build) is open work, not something this reconciliation silently performed.
+
+## Enterprise readiness: four layers kept separate
+
+Each capability above has four independent states. Collapsing any two of them is
+the drift this audit exists to prevent.
+
+- **Implemented** — code/config exists in this repository.
+- **Tested** — covered by collected deterministic tests.
+- **Runtime validated** — exercised here against a real dependency on a single host.
+- **Pending external** — needs an asset, credential or environment this repository lacks.
+
+Concrete non-equivalences, each enforced by a guard:
+
+- Alert rules existing does not mean any alert has fired in production.
+- An OTLP exporter existing does not mean a tracing closed loop was verified.
+- A performance artifact framework existing does not mean QPS or P95 were measured.
+- An SLO being defined does not mean the SLO was met.
+- Audit events being emitted does not mean they were reviewed or forwarded to a SIEM.
+
+`scripts/check_repo_consistency.py` derives each result's presence from the
+working tree (`artifacts/performance/*/metadata.json`,
+`monitoring/evidence/*.json`, the alert file, the dashboard directory), so the
+required wording follows the repository's real state instead of a hardcoded
+expectation.
 
 ## Architecture debt — free-text semantic governance
 

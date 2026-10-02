@@ -36,6 +36,22 @@ artifact contract, covered by tests).
 Retrieval benchmark result: `PENDING` — no reproducible artifact exists, so no
 retrieval metric is claimed anywhere in the repository.
 
+## Operations / Observability
+
+- [SLO and incident runbook](slo-runbook.md): five objectives (all `DESIGN_TARGET`) plus
+  alert → diagnosis → mitigation → rollback procedures for Redis, Elasticsearch, Qdrant,
+  model endpoints, latency, error rate and knowledge-epoch release.
+- [Prometheus alert rules](../monitoring/prometheus/alerts.yml): six alerts over metrics this
+  application actually emits. Every threshold is a `DESIGN_TARGET`.
+- [OTLP exporter](../monitoring/otel_exporter.py) and the
+  [optional observability overlay](../docker-compose.observability.yml): opt-in span export plus a
+  Prometheus/Jaeger/Grafana stack. The canonical deployment does not start any of it.
+- [Performance evidence artifact contract](../artifacts/performance/README.md): seven-file run
+  contract where *not executed* is never recorded as zero.
+
+Performance artifact framework: `REPO_VERIFIED`.
+Performance result, alerting validated in production, and OTLP runtime closed loop: `PENDING`.
+
 ## Validation
 
 - [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md):

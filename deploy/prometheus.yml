@@ -5,7 +5,38 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Alert rules for the canonical monolith. Load them with:
+#     rule_files:
+#       - /etc/prometheus/monitoring/prometheus/alerts.yml
+# Every threshold in that file is a DESIGN_TARGET.
+rule_files:
+  - /etc/prometheus/monitoring/prometheus/alerts.yml
+
 scrape_configs:
+  # Canonical monolith (app.py). This is the job the alerts in
+  # monitoring/prometheus/alerts.yml are written against: rag_http_* and
+  # rag_redis_degraded_mode are emitted by /api/metrics on this path.
+  #
+  # /api/metrics requires authentication, so the token must be provided as a
+  # file rather than inline. Prometheus does NOT expand environment variables in
+  # its config, so a token cannot be injected without writing it to disk:
+  #
+  #   1. mint a short-lived token:  see docs/slo-runbook.md#auditlookup
+  #   2. printf '%s' "$TOKEN" > deploy/prometheus-token && chmod 600 ...
+  #   3. keep deploy/prometheus-token OUT of version control
+  #
+  # Without the token file this job returns 401 and `up` is 0, which is
+  # indistinguishable from the API being down — RagAppDown's description says so.
+  - job_name: 'rag-api'
+    scheme: http
+    metrics_path: '/api/metrics'
+    bearer_token_file: '/etc/prometheus/rag_metrics_token'
+    static_configs:
+      - targets: ['app:8000']
+        labels:
+          service: 'rag-api'
+    scrape_interval: 15s
+
   # PRD §12: 监控微服务指标
   - job_name: 'rag-monitoring-service'
     static_configs:

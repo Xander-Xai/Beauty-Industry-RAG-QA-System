@@ -17,6 +17,11 @@
 | Cache | Partial | Cache implementations and metrics exist; the complete PRD invalidation design is not certified |
 | KV admission | Partial | Admission control code exists; capacity behavior requires workload-specific measurement |
 | Performance metrics | Design targets | Numerical latency/QPS claims below have no benchmark artifact and are not verified production results |
+| Performance evidence artifact | Implemented in code; no run yet | `benchmarks/performance.py` implements a seven-file contract where an unexecuted run records `null` rather than `0` and carries a `blocked_reason`; `artifacts/performance/` contains only its README, so no QPS/P95/P99 has been measured |
+| Structured audit trail | Implemented in code | `common/audit.py` emits business-action events (`auth.login.*`, `admin.user.create`, `admin.role.update`, `media.access.denied`, `knowledge.epoch.seal`) with a stable schema, forced redaction and request-id correlation; persisted to Redis Stream + daily JSONL. No SIEM forwarding, and no `knowledge.epoch.activate` event because no activate endpoint exists |
+| Alerting | Implemented as configuration | `monitoring/prometheus/alerts.yml` defines 6 alerts over metrics the canonical collector actually emits; every threshold is a `DESIGN_TARGET`. No production Prometheus evaluates them and no alert has fired in production |
+| SLO / runbook | Documented; objectives are targets | `docs/slo-runbook.md` defines 5 objectives and 8 incident procedures against degradation paths that exist in code. No objective has been met or measured |
+| OpenTelemetry export | Exporter implemented; runtime closed loop pending | `monitoring/otel_exporter.py` adds an opt-in OTLP path with non-fatal failure semantics and a span-attribute allow-list; default remains no exporter. Application -> exporter -> collector -> backend -> queried span is `PENDING` |
 
 All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Historical implementation plans under `docs/superpowers/` are not current implementation evidence.
 

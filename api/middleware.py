@@ -10,15 +10,47 @@ from __future__ import annotations
 import logging
 import os
 import time
-import uuid
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from common.audit import reset_request_id, sanitize_request_id, set_request_id
 from common.config import get_config, is_production_mode
 
 logger = logging.getLogger(__name__)
+
+#: In-flight request count, published so `rag_http_active_requests` reflects real
+#: saturation rather than a default zero.
+_active_requests = 0
+
+
+def _record_http_metrics(status_code: int, elapsed_ms: float) -> None:
+    """Publish the HTTP observation on the canonical metrics collector.
+
+    Imported lazily and defensively: metrics must never be the reason a request
+    fails, so any problem here is swallowed after being logged at debug level.
+    """
+    global _active_requests
+    try:
+        from api.routes import get_metrics
+
+        metrics = get_metrics()
+        metrics.record_http_request(status_code, elapsed_ms)
+        metrics.set_active_requests(_active_requests)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("HTTP metric recording failed: %s", exc)
+
+
+def note_request_started() -> None:
+    global _active_requests
+    _active_requests += 1
+
+
+def note_request_finished() -> None:
+    global _active_requests
+    _active_requests = max(0, _active_requests - 1)
+
 
 # CORS 来源白名单：通过环境变量配置，多个来源用逗号分隔
 # 生产环境应设置为具体前端域名，如 "https://internal.example.com"
@@ -50,26 +82,50 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # 获取或生成 request-id
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:12]
+        # 获取或生成 request-id。Incoming header wins so a gateway-supplied id
+        # survives end to end, but only when it is short and free of control
+        # characters: this value is logged, persisted into every audit event
+        # (Redis Stream + JSONL) and echoed in the response header, so an
+        # unbounded or hostile inbound value would otherwise be amplified into
+        # all three.
+        request_id = sanitize_request_id(request.headers.get("X-Request-ID"))
 
+        # Publish the id for the duration of the request so audit events, the
+        # access log line and any trace span all reference the same value
+        # without it being threaded through every call site.
+        token = set_request_id(request_id)
+        note_request_started()
         t_start = time.perf_counter()
-        response = await call_next(request)
-        elapsed_ms = (time.perf_counter() - t_start) * 1000
+        try:
+            response = await call_next(request)
+        except Exception:
+            # An unhandled exception becomes a 5xx. Record it here, because the
+            # route never returned and this middleware is the only place that
+            # still sees the failure.
+            note_request_finished()
+            _record_http_metrics(500, (time.perf_counter() - t_start) * 1000)
+            raise
+        try:
+            elapsed_ms = (time.perf_counter() - t_start) * 1000
 
-        # 将 request-id 注入响应头
-        response.headers["X-Request-ID"] = request_id
+            # 将 request-id 注入响应头
+            response.headers["X-Request-ID"] = request_id
 
-        logger.info(
-            "%s %s -> %d (%.1fms) [req=%s]",
-            request.method,
-            request.url.path,
-            response.status_code,
-            elapsed_ms,
-            request_id,
-        )
+            _record_http_metrics(response.status_code, elapsed_ms)
 
-        return response
+            logger.info(
+                "%s %s -> %d (%.1fms) [req=%s]",
+                request.method,
+                request.url.path,
+                response.status_code,
+                elapsed_ms,
+                request_id,
+            )
+
+            return response
+        finally:
+            note_request_finished()
+            reset_request_id(token)
 
 
 def setup_middleware(app: FastAPI) -> None:

@@ -17,6 +17,17 @@ from auth.jwt_auth import (
     verify_token,
 )
 from auth.user_store import UserStore
+from common.audit import (
+    ACTION_LOGIN_FAILURE,
+    ACTION_LOGIN_RATE_LIMITED,
+    ACTION_LOGIN_SUCCESS,
+    ACTION_ROLE_UPDATE,
+    ACTION_USER_CREATE,
+    OUTCOME_DENIED,
+    OUTCOME_FAILED,
+    OUTCOME_SUCCESS,
+    audit_event,
+)
 from common.auth import is_admin_role_mask
 from common.config import get_config
 
@@ -159,6 +170,11 @@ def get_store() -> UserStore:
     return _store
 
 
+#: Describes the admin action currently being authorized, so an authorization
+#: denial can name the action it refused instead of emitting a generic event.
+_ADMIN_ACTION_CONTEXT: dict[str, str] = {}
+
+
 def _require_admin_payload(authorization: str | None) -> dict:
     """Validate the bearer token and enforce configured admin access."""
     config = get_jwt_config()
@@ -174,6 +190,17 @@ def _require_admin_payload(authorization: str | None) -> dict:
         raise HTTPException(status_code=401, detail="Token 无效或已过期")
 
     if not is_admin_role_mask(payload.get("role_mask", 0)):
+        # A privileged action refused on authorization grounds is exactly the
+        # event an auditor looks for, so it is recorded rather than only
+        # returned as a 403.
+        audit_event(
+            action=_ADMIN_ACTION_CONTEXT.get("action", ACTION_USER_CREATE),
+            outcome=OUTCOME_DENIED,
+            actor_id=str(payload.get("sub") or "unknown"),
+            resource_type=_ADMIN_ACTION_CONTEXT.get("resource_type", "user"),
+            resource_id=_ADMIN_ACTION_CONTEXT.get("resource_id") or "",
+            reason="admin role required",
+        )
         raise HTTPException(status_code=403, detail="需要管理员权限")
 
     return payload
@@ -274,11 +301,32 @@ async def login(req: LoginRequest, request: Request):
     """用户登录，返回 JWT token pair。"""
     # H-4: 登录速率限制（支持反向代理 X-Forwarded-For）
     client_ip = _get_client_ip(request)
-    _check_login_rate_limit(client_ip)
+    try:
+        _check_login_rate_limit(client_ip)
+    except HTTPException:
+        audit_event(
+            action=ACTION_LOGIN_RATE_LIMITED,
+            outcome=OUTCOME_DENIED,
+            resource_type="session",
+            resource_id=client_ip,
+            reason="login rate limit exceeded",
+            metadata={"username": req.username},
+        )
+        raise
 
     store = get_store()
     user = store.authenticate(req.username, req.password)
     if user is None:
+        # Recorded without the submitted password, and without the token pair
+        # that a success would return.
+        audit_event(
+            action=ACTION_LOGIN_FAILURE,
+            outcome=OUTCOME_DENIED,
+            resource_type="session",
+            resource_id=req.username,
+            reason="invalid credentials",
+            metadata={"client_ip": client_ip},
+        )
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     config = get_jwt_config()
@@ -286,6 +334,15 @@ async def login(req: LoginRequest, request: Request):
         raise HTTPException(status_code=503, detail="JWT 认证未配置")
 
     pair = create_token_pair(user.user_id, user.role_mask, user.dept_mask)
+    # Only the resulting identity is recorded; the token pair itself never is.
+    audit_event(
+        action=ACTION_LOGIN_SUCCESS,
+        outcome=OUTCOME_SUCCESS,
+        actor_id=user.user_id,
+        resource_type="session",
+        resource_id=user.user_id,
+        metadata={"role_mask": user.role_mask, "dept_mask": user.dept_mask, "client_ip": client_ip},
+    )
     return LoginResponse(
         access_token=pair.access_token,
         refresh_token=pair.refresh_token,
@@ -322,7 +379,11 @@ async def list_users(authorization: str = Header(None)):
 @router.post("/users")
 async def create_user(req: CreateUserRequest, authorization: str = Header(None)):
     """创建新用户。"""
-    _require_admin_payload(authorization)
+    _ADMIN_ACTION_CONTEXT.update({"action": ACTION_USER_CREATE, "resource_type": "user", "resource_id": req.user_id})
+    try:
+        payload = _require_admin_payload(authorization)
+    finally:
+        _ADMIN_ACTION_CONTEXT.clear()
 
     store = get_store()
     try:
@@ -334,19 +395,59 @@ async def create_user(req: CreateUserRequest, authorization: str = Header(None))
             req.roles,
             req.departments,
         )
-        return user.to_dict()
     except Exception as e:
         logger.error("创建用户失败: %s", e)
+        audit_event(
+            action=ACTION_USER_CREATE,
+            outcome=OUTCOME_FAILED,
+            actor_id=str(payload.get("sub") or "unknown"),
+            resource_type="user",
+            resource_id=req.user_id,
+            reason="create_user raised",
+            metadata={"error_type": type(e).__name__},
+        )
         raise HTTPException(status_code=400, detail="创建用户失败，请检查参数后重试") from e
+
+    # Roles/departments only; the submitted password is never passed to audit.
+    audit_event(
+        action=ACTION_USER_CREATE,
+        outcome=OUTCOME_SUCCESS,
+        actor_id=str(payload.get("sub") or "unknown"),
+        resource_type="user",
+        resource_id=req.user_id,
+        metadata={"roles": list(req.roles or []), "departments": list(req.departments or [])},
+    )
+    return user.to_dict()
 
 
 @router.put("/users/{user_id}/roles")
 async def update_user_roles(user_id: str, req: UpdateRolesRequest, authorization: str = Header(None)):
     """更新用户角色。"""
-    _require_admin_payload(authorization)
+    _ADMIN_ACTION_CONTEXT.update({"action": ACTION_ROLE_UPDATE, "resource_type": "user", "resource_id": user_id})
+    try:
+        payload = _require_admin_payload(authorization)
+    finally:
+        _ADMIN_ACTION_CONTEXT.clear()
 
     store = get_store()
     user = store.update_user_roles(user_id, req.roles, req.departments)
     if user is None:
+        audit_event(
+            action=ACTION_ROLE_UPDATE,
+            outcome=OUTCOME_FAILED,
+            actor_id=str(payload.get("sub") or "unknown"),
+            resource_type="user",
+            resource_id=user_id,
+            reason="user not found",
+        )
         raise HTTPException(status_code=404, detail="用户不存在")
+
+    audit_event(
+        action=ACTION_ROLE_UPDATE,
+        outcome=OUTCOME_SUCCESS,
+        actor_id=str(payload.get("sub") or "unknown"),
+        resource_type="user",
+        resource_id=user_id,
+        metadata={"roles": list(req.roles or []), "departments": list(req.departments or [])},
+    )
     return user.to_dict()

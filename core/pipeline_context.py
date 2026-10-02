@@ -305,16 +305,33 @@ class SessionState:
         ]
         return session
 
+    @staticmethod
+    def _publish_redis_degraded(degraded: bool) -> None:
+        """把真实的 Redis 降级状态发布到指标系统。
+
+        告警规则读的就是这个值，因此它必须由真实降级路径设置。如果只在采集器里
+        预置成 0，`RagRedisDegraded` 永远不可能触发，也就无法区分「Redis 正常」
+        与「Redis 正常但这个 hook 从未接上」。
+        """
+        try:
+            from api.routes import get_metrics
+
+            get_metrics().set_redis_degraded(degraded)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("could not publish redis degradation state: %s", exc)
+
     def _persist_to_redis(self):
         """将当前会话状态写入 Redis（异步静默失败）。"""
         try:
             client = _get_redis_client()
             if client is None:
+                self._publish_redis_degraded(True)
                 return
             key = f"session:{self.session_id}"
             client.setex(key, self._SESSION_REDIS_TTL, json.dumps(self._to_dict()))
         except Exception as exc:
             logger.debug("会话 Redis 持久化失败（降级内存）: %s", exc)
+            self._publish_redis_degraded(True)
 
     @classmethod
     def get_or_create(cls, session_id: str) -> SessionState:
@@ -339,10 +356,13 @@ class SessionState:
         try:
             client = _get_redis_client()
             if client is None:
+                cls._publish_redis_degraded(True)
                 return None
             key = f"session:{session_id}"
             raw = client.get(key)
             if raw is None:
+                # A cache miss is not a degradation: Redis answered.
+                cls._publish_redis_degraded(False)
                 return None
             data = json.loads(raw)
             if data.get("schema_version") != cls._SESSION_SCHEMA_VERSION:
@@ -351,9 +371,11 @@ class SessionState:
             session = cls._from_dict(data)
             # 刷新 TTL
             client.expire(key, cls._SESSION_REDIS_TTL)
+            cls._publish_redis_degraded(False)
             return session
         except Exception as exc:
             logger.debug("Redis 会话读取失败，降级内存: %s", exc)
+            cls._publish_redis_degraded(True)
             return None
 
     @classmethod

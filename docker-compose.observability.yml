@@ -1,0 +1,74 @@
+# 可选可观测性栈（OPTIONAL observability stack）
+#
+# 用法:
+#     docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+#
+# 这是一个**可选 overlay**。默认部署 `docker compose up -d` 不会启动这里的任何
+# 服务，canonical 部署仍然是 FastAPI 单体 + Docker Compose。
+#
+# 组件:
+#   prometheus  抓取 canonical 单体的 /api/metrics，并加载 alert 规则
+#   jaeger      OTLP 接收后端（Jaeger 原生接收 OTLP，无需额外 collector）
+#   grafana     可选的最小仪表盘（仅展示真实存在的指标）
+#
+# 重要边界:
+#   * 这里的服务被拉起 **不等于** tracing 闭环已验证。应用侧还需要设置
+#     OTEL_EXPORT_ENABLED=true 与 OTEL_EXPORTER_OTLP_ENDPOINT。
+#   * 本仓库没有提交任何运行期证据，因此 tracing 闭环仍是 PENDING。
+#     见 docs/slo-runbook.md#tracelookup。
+#   * 没有引入 Kubernetes、Kafka、Agent、MCP 或任何常驻控制面。
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: rag-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Alert 规则以只读方式挂载；这是 alerts.yml 第一次进入容器。
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/monitoring/prometheus/alerts.yml:ro
+      # /api/metrics 需要认证。运维需自行生成该文件（见 deploy/prometheus.yml 注释）；
+      # 缺失时该 job 返回 401，RagAppDown 会触发，其 description 已说明这一歧义。
+      - ./deploy/prometheus-token:/etc/prometheus/rag_metrics_token:ro
+    networks:
+      - rag-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: rag-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP HTTP  ← 应用导出到这里
+      - "4317:4317"     # OTLP gRPC
+    networks:
+      - rag-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: rag-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?Grafana admin password must be set}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_observability_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
+
+volumes:
+  grafana_observability_data:

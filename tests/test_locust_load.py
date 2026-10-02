@@ -48,12 +48,26 @@ class TestLocustScriptStructure:
         assert len(ALL_QUERIES) == (len(QUERIES_REGULATION) + len(QUERIES_INGREDIENT) + len(QUERIES_GENERAL))
 
     def test_latency_stats(self):
-        """LatencyStats 数据结构正确。"""
-        from tests.load.locustfile import LatencyStats
+        """LatencyStats 数据结构正确。
+
+        LatencyStats 已移入 `benchmarks.performance`，与 performance artifact 共用
+        同一实现，避免「未测量」语义在两处漂移。
+
+        行为变更：空样本集的统计量返回 ``None`` 而非 ``0.0``。旧断言
+        (``p50 == 0.0``) 把「没有测量」写成了「0 毫秒」，会让一次根本没跑起来
+        的压测看起来又快又健康 —— 这正是 performance artifact 契约要禁止的。
+        """
+        from benchmarks.performance import LatencyStats
 
         stats = LatencyStats()
-        assert stats.p50 == 0.0
-        assert stats.p95 == 0.0
+        assert stats.count == 0
+        assert stats.p50 is None
+        assert stats.p95 is None
+        assert stats.p99 is None
+        assert stats.avg is None
+        assert stats.min is None
+        assert stats.max is None
+        assert stats.to_dict() == {"count": 0}
 
         stats.add(100)
         stats.add(200)
