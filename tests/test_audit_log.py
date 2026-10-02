@@ -414,3 +414,65 @@ def test_seal_epoch_audit_records_skip_validation_distinction():
 
 def test_audit_event_dataclass_field_order_is_stable():
     assert tuple(AuditEvent.__dataclass_fields__)[: len(CORE_FIELDS)] == CORE_FIELDS
+
+
+# ── inbound correlation id hygiene ──────────────────────────────────────────
+
+
+def test_valid_request_id_passes_through():
+    from common.audit import sanitize_request_id
+
+    assert sanitize_request_id("trace-1") == "trace-1"
+    assert sanitize_request_id("req.id:1-2_3") == "req.id:1-2_3"
+
+
+def test_request_id_at_the_length_limit_is_accepted():
+    from common.audit import MAX_REQUEST_ID_LENGTH, sanitize_request_id
+
+    candidate = "A" * MAX_REQUEST_ID_LENGTH
+    assert sanitize_request_id(candidate) == candidate
+    assert sanitize_request_id("A" * (MAX_REQUEST_ID_LENGTH + 1)) != "A" * (MAX_REQUEST_ID_LENGTH + 1)
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "A" * 20000,
+        "abc\r\nFAKE LOG LINE",
+        "a\tb",
+        "a b",
+        "req$id",
+        "",
+        None,
+    ],
+)
+def test_hostile_request_id_is_replaced_not_propagated(hostile):
+    """An inbound id reaches the log, every audit event and a response header.
+
+    An unbounded or control-character-bearing value would let one request flood
+    the access log, the Redis Stream and the daily JSONL file, or forge a log
+    line. It must be discarded in favour of a generated id.
+    """
+    from common.audit import MAX_REQUEST_ID_LENGTH, sanitize_request_id
+
+    result = sanitize_request_id(hostile)
+    assert result != hostile
+    assert len(result) <= 36  # a generated uuid4
+    assert len(result) <= MAX_REQUEST_ID_LENGTH
+    for control in ("\r", "\n", "\t"):
+        assert control not in result
+
+
+def test_hostile_request_id_never_reaches_an_audit_event():
+    from common.audit import sanitize_request_id
+
+    hostile = "A" * 20000
+    safe = sanitize_request_id(hostile)
+    event = audit_event(
+        action=ACTION_LOGIN_SUCCESS,
+        outcome=OUTCOME_SUCCESS,
+        actor_id="u1",
+        request_id=safe,
+    )
+    assert event.request_id == safe
+    assert len(event.to_json()) < 500

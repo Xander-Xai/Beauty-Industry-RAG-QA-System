@@ -338,6 +338,31 @@ def log_audit_event(
 _current_request_id: ContextVar[str] = ContextVar("rag_request_id", default="")
 
 
+#: Longest accepted inbound correlation id. An inbound X-Request-ID is
+#: attacker-controlled and this value reaches the access log, every audit event,
+#: the Redis Stream, the daily JSONL file and the response header, so an
+#: unbounded string would let a client flood all of them with one request.
+MAX_REQUEST_ID_LENGTH = 64
+
+#: Only these characters are accepted. Everything else (CR, LF, TAB, NUL,
+#: other control characters, spaces) is rejected so an id cannot forge a log line
+#: or split a response header.
+_REQUEST_ID_ALLOWED_RE = re.compile(rf"\A[A-Za-z0-9_.:-]{{1,{MAX_REQUEST_ID_LENGTH}}}\Z")
+
+
+def sanitize_request_id(candidate: str | None) -> str:
+    """Return a safe correlation id, generating one when the input is unusable.
+
+    An inbound id is only honoured when it is short and made solely of
+    characters that cannot affect a log line or a header. Anything else is
+    discarded in favour of a freshly generated id, so a malformed or hostile
+    value can never be propagated into an audit record.
+    """
+    if candidate and _REQUEST_ID_ALLOWED_RE.match(candidate):
+        return candidate
+    return new_request_id()
+
+
 def new_request_id() -> str:
     return str(uuid.uuid4())
 

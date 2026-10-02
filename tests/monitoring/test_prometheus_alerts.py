@@ -224,6 +224,71 @@ def test_redis_alert_is_driven_by_the_real_fallback_path(all_rules):
     assert "rag_redis_degraded_mode 0.0" in collector.to_prometheus_text()
 
 
+def test_redis_client_absent_actually_flips_the_metric(monkeypatch):
+    """Drive the real fallback path, not just the setter.
+
+    `_publish_redis_degraded` swallows its own exceptions so a metrics problem
+    can never break session handling. That is correct, but it also means a
+    broken publish would go unnoticed: `hasattr` would still pass and the gauge
+    would silently stay at its pre-initialised 0. This test therefore triggers
+    the genuine code path with Redis unavailable and asserts the exported value.
+    """
+    import core.pipeline_context as pipeline_context
+    from api.routes import get_metrics
+
+    monkeypatch.setattr(pipeline_context, "_get_redis_client", lambda: None)
+    collector = get_metrics()
+    collector.set_redis_degraded(False)
+
+    # Redis unavailable: no client, so the session must fall back to memory...
+    assert pipeline_context.SessionState._try_get_redis("degraded-probe") is None
+    # ...and the gauge must actually have moved, without raising AttributeError.
+    assert "rag_redis_degraded_mode 1.0" in collector.to_prometheus_text()
+
+
+def test_redis_read_failure_actually_flips_the_metric(monkeypatch):
+    """A read that raises is the second degradation branch."""
+    import core.pipeline_context as pipeline_context
+    from api.routes import get_metrics
+
+    class BrokenRedis:
+        def get(self, key):
+            raise ConnectionError("redis is down")
+
+    monkeypatch.setattr(pipeline_context, "_get_redis_client", lambda: BrokenRedis())
+    collector = get_metrics()
+    collector.set_redis_degraded(False)
+
+    assert pipeline_context.SessionState._try_get_redis("degraded-probe-2") is None
+    assert "rag_redis_degraded_mode 1.0" in collector.to_prometheus_text()
+
+
+def test_successful_redis_read_clears_the_metric(monkeypatch):
+    """A healthy read must clear the gauge, so the alert can recover."""
+    import json
+
+    import core.pipeline_context as pipeline_context
+    from api.routes import get_metrics
+
+    class HealthyRedis:
+        def get(self, key):
+            return json.dumps(pipeline_context.SessionState("probe-session")._to_dict())
+
+        def expire(self, key, ttl):
+            return True
+
+        def setex(self, key, ttl, value):
+            return True
+
+    monkeypatch.setattr(pipeline_context, "_get_redis_client", lambda: HealthyRedis())
+    collector = get_metrics()
+    collector.set_redis_degraded(True)
+
+    session = pipeline_context.SessionState._try_get_redis("healthy-probe")
+    assert session is not None
+    assert "rag_redis_degraded_mode 0.0" in collector.to_prometheus_text()
+
+
 # ── documentation boundary ──────────────────────────────────────────────────
 
 
