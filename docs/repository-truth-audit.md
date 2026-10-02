@@ -6,6 +6,10 @@
 - Historical merged PRs: #3, #4, #5, #6, #7.
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
 - v2.5 runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
+- Interview truth and validation-evidence reconciliation merged via PR #15 (squash `aa189d9`).
+- Deterministic retrieval benchmark framework merged via PR #17 (squash `8446d19`). Its final tree is
+  byte-identical to `main`'s, so the merged source branch `feat/reproducible-rag-benchmark` was verified
+  as fully contained in `main` and deleted.
 - Runtime validation: see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
@@ -70,6 +74,28 @@ large-corpus throughput has been established.
 | Runtime artifacts | Tracked PID/stopped markers were tool state, not product files | Exact markers removed | Consistency check rejects tracked PID/state markers | `.gitignore` excludes local state paths | Verify using `git ls-files` and CI invariant | VERIFIED | Keep runtime state untracked |
 | Documentation governance | Current guides and historical plans have separate roles | `docs/README.md`, current guides and `docs/superpowers/` | Consistency checks link/path and stale-claim invariants | No runtime config claim | CI validates stable docs invariants | VERIFIED | Keep plans/specs out of current implementation evidence |
 
+## External validation tracker map
+
+Repository-side GitHub state is governance audit, not an offline consistency invariant, so it is
+recorded here for human readers and is deliberately **not** enforced by `scripts/check_repo_consistency.py`.
+Re-query GitHub before relying on any row; the states below are a snapshot at the verification date
+recorded in [Audit lineage](#audit-lineage).
+
+- PR #15 — interview truth and validation-evidence reconciliation: merged.
+- PR #17 — deterministic retrieval benchmark **framework**: merged.
+- [#16](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/16) — benchmark framework
+  implementation scope: closed (`completed`), delivered by PR #17.
+- [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval
+  benchmark execution: open.
+- [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) — umbrella external
+  validation (real BGE / CLIP / PaddleOCR / Airflow / benchmark artifact): open.
+- [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) — runtime / security
+  external validation (real RAGAS, 4B/14B vLLM GPU topology): open.
+
+Closing #16 records that the framework scope is delivered. It does **not** record a benchmark result:
+no artifact exists, so `benchmark result` stays `PENDING` and both execution blockers (no real
+retrieval executor, no independent corpus) stay open in #18.
+
 ## External validation pending
 
 These are implemented in code but not validated against real external assets/runtimes here:
@@ -78,7 +104,12 @@ These are implemented in code but not validated against real external assets/run
 - Real configured CLIP model smoke — `EXTERNAL_MODEL_ASSET_REQUIRED`.
 - Real PaddleOCR smoke — external runtime not installed.
 - Real Airflow DAG execution — Airflow not installed.
-- Production evaluation / benchmark — no reproducible artifact checked in.
+- Production evaluation / benchmark — no reproducible artifact checked in. The benchmark framework
+  exists and is `REPO_VERIFIED`; two structural blockers keep execution open: **no real retrieval
+  executor is wired for CLI runs**, and **no independent corpus** covers the golden-set relevance
+  truth (building one from `golden_set.contexts` would be label leakage). See
+  [benchmark data quality](benchmark-data-quality.md) and
+  [artifacts/benchmarks/README.md](../artifacts/benchmarks/README.md).
 - Real RAGAS evaluation with a permitted dependency and evaluator API key — not run: no
   `OPENAI_API_KEY`, `ragas 0.4.x` is import-broken, and the importable `ragas 0.2.15` pulls
   `langchain 0.3.x` with advisories (see [real RAGAS validation](validation/real-ragas-evaluation.md)).
