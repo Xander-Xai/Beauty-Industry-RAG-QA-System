@@ -39,6 +39,7 @@ REASON_SERVICE_NO_DATA = "service_reachable_but_empty"
 REASON_MODEL_UNAVAILABLE = "model_assets_unavailable"
 REASON_CORPUS_UNRESOLVED = "corpus_does_not_contain_ground_truth"
 REASON_NOT_CONFIGURED = "not_configured"
+REASON_SERVICE_DISABLED = "service_disabled_by_config"
 
 
 class BenchmarkUnavailable(RuntimeError):
@@ -127,21 +128,27 @@ def _qdrant_settings() -> tuple[str, int, str]:
 
 # A local model directory is only usable when it actually holds transformers
 # weights. An empty directory, an unrelated file or an interrupted download must
-# not be reported as available.
-_MODEL_ARTIFACT_NAMES = ("config.json",)
+# not be reported as available. `AutoModel.from_pretrained` needs config *and*
+# weights, and `AutoTokenizer.from_pretrained` needs tokenizer assets, so all three
+# groups must be present for a partial or interrupted cache to stay unavailable.
+_MODEL_CONFIG_NAMES = ("config.json",)
 _MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".onnx")
+_TOKENIZER_ASSET_NAMES = ("tokenizer.json", "tokenizer_config.json", "vocab.txt")
 
 
 def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
     if not path.is_dir():
         return False, "path is not a directory"
-    for name in _MODEL_ARTIFACT_NAMES:
-        if (path / name).is_file():
-            return True, f"found {name}"
-    for pattern in _MODEL_WEIGHT_SUFFIXES:
-        if next(path.glob(f"*{pattern}"), None) is not None:
-            return True, f"found *{pattern}"
-    return False, "no transformer config or weight file found"
+    missing: list[str] = []
+    if not any((path / name).is_file() for name in _MODEL_CONFIG_NAMES):
+        missing.append("config.json")
+    if not any(next(path.glob(f"*{suffix}"), None) is not None for suffix in _MODEL_WEIGHT_SUFFIXES):
+        missing.append("model weights (*.safetensors/*.bin/*.pt/*.onnx)")
+    if not any((path / name).is_file() for name in _TOKENIZER_ASSET_NAMES):
+        missing.append("tokenizer assets (tokenizer.json/tokenizer_config.json/vocab.txt)")
+    if missing:
+        return False, "incomplete model directory, missing: " + ", ".join(missing)
+    return True, "found model config, weights and tokenizer assets"
 
 
 def _model_weights_available() -> tuple[bool, str | None]:
@@ -164,6 +171,18 @@ def _model_weights_available() -> tuple[bool, str | None]:
 def probe_bm25() -> BackendAvailability:
     """BM25 needs a reachable, authenticated Elasticsearch holding the corpus."""
     url, index, port, auth = _elastic_settings()
+    from common.config import get_config_dict
+
+    es_config = get_config_dict().get("elasticsearch", {}) or {}
+    # The production BM25Retriever returns no results while this flag is false,
+    # so an unreachable-index probe would disagree with the real executor.
+    if not es_config.get("enabled", True):
+        return BackendAvailability(
+            "bm25",
+            False,
+            REASON_SERVICE_DISABLED,
+            "elasticsearch.enabled is false; BM25Retriever returns no results",
+        )
     if not _tcp_reachable(url.split("//")[-1].split(":")[0], port):
         return BackendAvailability("bm25", False, REASON_SERVICE_UNREACHABLE, f"{url}:{port}")
     ok, payload = _http_get(f"{url.rstrip('/')}/{index}/_count", auth=auth)

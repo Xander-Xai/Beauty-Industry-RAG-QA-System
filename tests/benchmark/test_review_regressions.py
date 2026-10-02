@@ -533,7 +533,7 @@ def test_empty_model_directory_is_not_available(tmp_path):
     empty.mkdir()
     ok, detail = _looks_like_model_dir(empty)
     assert ok is False
-    assert "no transformer config" in detail
+    assert "incomplete model directory" in detail
 
 
 def test_unrelated_file_is_not_a_model_dir(tmp_path):
@@ -545,14 +545,42 @@ def test_unrelated_file_is_not_a_model_dir(tmp_path):
     assert _looks_like_model_dir(path)[0] is False
 
 
-@pytest.mark.parametrize("artifact", ["config.json", "model.safetensors", "pytorch_model.bin"])
-def test_real_model_artifacts_are_accepted(tmp_path, artifact):
+def _complete_model_dir(path):
+    """A minimal but *complete* transformers snapshot."""
+    path.mkdir(parents=True, exist_ok=True)
+    for name in ("config.json", "tokenizer_config.json", "model.safetensors"):
+        (path / name).write_text("x", encoding="utf-8")
+    return path
+
+
+def test_complete_model_dir_is_accepted(tmp_path):
+    from benchmarks.backends import _looks_like_model_dir
+
+    ok, detail = _looks_like_model_dir(_complete_model_dir(tmp_path / "model"))
+    assert ok is True
+    assert "found model config" in detail
+
+
+@pytest.mark.parametrize(
+    ("files", "missing_fragment"),
+    [
+        (("config.json", "tokenizer_config.json"), "weights"),
+        (("config.json", "model.safetensors"), "tokenizer"),
+        (("model.safetensors", "tokenizer.json"), "config.json"),
+        (("config.json",), "weights"),
+    ],
+)
+def test_partial_model_cache_is_rejected(tmp_path, files, missing_fragment):
+    """A lone config or lone weight file must not look loadable."""
     from benchmarks.backends import _looks_like_model_dir
 
     path = tmp_path / "model"
     path.mkdir()
-    (path / artifact).write_text("x", encoding="utf-8")
-    assert _looks_like_model_dir(path)[0] is True
+    for name in files:
+        (path / name).write_text("x", encoding="utf-8")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert missing_fragment in detail
 
 
 def test_model_probe_rejects_empty_directory(tmp_path, monkeypatch):
@@ -575,3 +603,69 @@ def test_model_probe_rejects_empty_directory(tmp_path, monkeypatch):
     availability = backends.probe_dense()
     assert availability.available is False
     assert availability.reason == backends.REASON_MODEL_UNAVAILABLE
+
+
+# ── Round 6: complete model set, elasticsearch.enabled, empty --configs ──────
+
+
+def test_disabled_elasticsearch_is_blocked_even_when_reachable(monkeypatch):
+    """BM25Retriever returns nothing while disabled, so the probe must agree."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        backends,
+        "_elastic_settings",
+        lambda: ("http://es", "cosmetics_docs", 9200, None),
+    )
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"enabled": False}},
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"count": 42}))
+    availability = backends.probe_bm25()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_SERVICE_DISABLED
+    assert "enabled is false" in availability.detail
+
+
+def test_enabled_elasticsearch_still_probes(monkeypatch):
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        backends,
+        "_elastic_settings",
+        lambda: ("http://es", "cosmetics_docs", 9200, None),
+    )
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"enabled": True}},
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"count": 42}))
+    assert backends.probe_bm25().available is True
+
+
+@pytest.mark.parametrize("value", [",", " , ", ",,", " , , "])
+def test_empty_configs_list_is_rejected(value, tmp_path):
+    """`,`-only input must not produce a successful 'multi' artifact."""
+    import argparse
+
+    import benchmarks.retrieval_benchmark as cli
+
+    args = argparse.Namespace(config=None, configs=value)
+    with pytest.raises(SystemExit, match="contained no configuration names"):
+        cli._resolve_configs(args)
+
+
+def test_valid_configs_list_is_accepted():
+    import argparse
+
+    import benchmarks.retrieval_benchmark as cli
+
+    args = argparse.Namespace(config=None, configs="bm25, dense")
+    assert cli._resolve_configs(args) == ["bm25", "dense"]

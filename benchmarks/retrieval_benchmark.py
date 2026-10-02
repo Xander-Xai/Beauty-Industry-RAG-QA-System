@@ -79,7 +79,12 @@ def _resolve_configs(args: argparse.Namespace) -> list[str]:
     if args.config:
         return [args.config]
     if args.configs:
-        return [item.strip() for item in args.configs.split(",") if item.strip()]
+        requested = [item.strip() for item in args.configs.split(",") if item.strip()]
+        if not requested:
+            # `--configs ,,` must not become an empty experiment that still
+            # writes a "multi" artifact and exits successfully.
+            raise SystemExit("--configs was provided but contained no configuration names")
+        return requested
     return ["bm25", "dense", "hybrid_rrf"]
 
 
