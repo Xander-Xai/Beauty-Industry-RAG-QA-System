@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from benchmarks import backends
-from benchmarks.latency import new_latency_record, record_stage, stage_availability, summarize_latency, timed_stage
+from benchmarks.latency import new_latency_record, stage_availability, summarize_latency, timed_stage
 from benchmarks.metrics import aggregate_results, score_ranking
 from benchmarks.models import (
     HIT_KS,
@@ -126,7 +126,6 @@ def run_configuration(
 
     retriever = retriever_factory(config_name)
     results: list[QueryBenchmarkResult] = []
-    stages = backends.STAGE_BY_CONFIG[config_name]
     for query in queries:
         latency = new_latency_record()
         with timed_stage(latency, "total_retrieval_ms"):
@@ -136,12 +135,9 @@ def run_configuration(
             [item.key for item in query.relevant_items],
             [item.key for item in deduped],
         )
-        # Only the stages this configuration declares as active are recorded;
-        # every other stage stays None so it cannot look measured.
-        for stage in stages:
-            if stage == "total_retrieval_ms":
-                continue
-            record_stage(latency, stage, latency["total_retrieval_ms"])
+        # Only end-to-end retrieval is timed. Per-stage values stay None unless a
+        # real executor supplies them; copying the total into every stage would
+        # fabricate per-stage timings that were never measured.
         results.append(
             QueryBenchmarkResult(
                 sample_id=query.sample_id,

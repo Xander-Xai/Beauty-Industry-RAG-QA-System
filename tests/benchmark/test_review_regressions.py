@@ -182,3 +182,91 @@ def test_qdrant_probe_uses_configured_text_collection(monkeypatch):
     )
     _, _, collection = backends._qdrant_settings()
     assert collection == "rag_text_custom"
+
+
+# ── Round 2: HTTP sentinel, fabricated stage latency, credential precedence ──
+
+
+def test_qdrant_http_error_is_not_treated_as_available(monkeypatch):
+    """An HTTP 401/404 for the collection is a reachable service, not a usable one."""
+    import urllib.error
+
+    from benchmarks import backends
+
+    def _raise_401(request, timeout=None):
+        raise urllib.error.HTTPError("http://x", 401, "Unauthorized", None, None)
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends.urllib.request, "urlopen", _raise_401)
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_SERVICE_NO_DATA
+    assert "401" in (availability.detail or "")
+
+
+def test_per_stage_latency_is_not_fabricated(make_query):
+    """Untimed stages must stay None instead of mirroring the end-to-end time."""
+    from benchmarks.latency import stage_availability
+    from benchmarks.models import LATENCY_STAGES
+    from benchmarks.runner import run_configuration
+
+    queries = [make_query("0000", ["alpha passage"])]
+    from tests.benchmark.conftest import FixtureRetriever
+
+    retriever = FixtureRetriever({"0000": ["alpha passage"]})
+    run = run_configuration("hybrid_rrf", queries, retriever_factory=lambda name: retriever)
+    assert run.executed
+    latency = run.results[0].latency_ms
+    assert latency["total_retrieval_ms"] is not None
+    for stage in LATENCY_STAGES:
+        if stage != "total_retrieval_ms":
+            assert latency[stage] is None, stage
+    availability = stage_availability([r.latency_ms for r in run.results])
+    assert availability["bm25_ms"] == 0
+    assert availability["total_retrieval_ms"] == 1
+
+
+def test_environment_credentials_take_precedence_over_config(monkeypatch):
+    """The probe must mirror BM25Retriever: env first, config.json as fallback."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {
+            "elasticsearch": {
+                "host": "http://localhost:9200",
+                "index": "idx",
+                "username": "from-config",
+                "password": "cfg-pass",
+            }
+        },
+    )
+    monkeypatch.setenv("ELASTICSEARCH_USERNAME", "from-env")
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "env-pass")
+    _, _, _, auth = backends._elastic_settings()
+    assert auth == ("from-env", "env-pass")
+
+
+def test_config_credentials_used_when_env_absent(monkeypatch):
+    from benchmarks import backends
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {
+            "elasticsearch": {
+                "host": "http://localhost:9200",
+                "index": "idx",
+                "username": "from-config",
+                "password": "cfg-pass",
+            }
+        },
+    )
+    _, _, _, auth = backends._elastic_settings()
+    assert auth == ("from-config", "cfg-pass")

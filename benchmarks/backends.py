@@ -99,9 +99,12 @@ def _elastic_settings() -> tuple[str, str, int, tuple[str, str] | None]:
     parsed = urlparse(url if "//" in url else f"//{url}")
     port = int(elastic.get("port") or parsed.port or (443 if parsed.scheme == "https" else 9200))
     auth: tuple[str, str] | None = None
-    username = elastic.get("username") or os.environ.get("ELASTICSEARCH_USERNAME") or ""
-    password = elastic.get("password") or os.environ.get("ELASTICSEARCH_PASSWORD") or ""
-    if username:
+    # Mirror the production BM25Retriever precedence exactly: environment first,
+    # config.json only as a fallback, otherwise a rotated credential makes real
+    # retrieval succeed while the probe reports a 401.
+    username = os.environ.get("ELASTICSEARCH_USERNAME") or elastic.get("username") or ""
+    password = os.environ.get("ELASTICSEARCH_PASSWORD") or elastic.get("password") or ""
+    if username and password:
         auth = (str(username), str(password))
     return url, index, port, auth
 
@@ -171,6 +174,14 @@ def probe_dense() -> BackendAvailability:
     if not _tcp_reachable(host, port):
         return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"{host}:{port}")
     ok, payload = _http_get(f"http://{host}:{port}/collections/{collection}")
+    if ok == "http":
+        # HTTP-level answer proves reachability; the blocker is the collection.
+        return BackendAvailability(
+            "dense",
+            False,
+            REASON_SERVICE_NO_DATA,
+            f"collection {collection} answered HTTP {payload} (absent or inaccessible)",
+        )
     if not ok:
         return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
     weights_ok, model_path = _model_weights_available()
