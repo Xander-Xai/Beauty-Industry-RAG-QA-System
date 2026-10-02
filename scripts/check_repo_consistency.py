@@ -146,6 +146,14 @@ RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Only lines that describe an unavailable/failed evaluator count as the failure
+# clause. Both guarantees must appear on such lines, so an unrelated RAGAS line
+# (for example a benchmark report mention) cannot satisfy either half.
+RAGAS_FAILURE_CONDITION_RE = re.compile(
+    r"unavailable|missing|not\s+installed|缺少|缺失|不可用|未安装|fail[- ]?fast|非零|退出码\s*[2-5]",
+    re.IGNORECASE,
+)
+
 # The v2.5 runtime/security work completed local validation against real Redis,
 # real nginx, authenticated Elasticsearch and authenticated Prometheus. Canonical
 # docs must classify that as LOCAL_REAL_VALIDATION and must not regress to
@@ -471,14 +479,13 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
     return claims
 
 
-def _ragas_scoped_text(text: str) -> str:
-    """Return only lines that actually mention RAGAS.
+def _ragas_failure_scoped_lines(text: str) -> list[str]:
+    """Return RAGAS lines that describe an unavailable/failed evaluator.
 
-    Keeps the failure contracts tied to the RAGAS statement instead of letting
-    unrelated wording (for example a Docker Compose ``fail-fast`` sentence)
-    satisfy them.
+    Both failure guarantees must be tied to such a line, so unrelated RAGAS
+    wording (for example a benchmark report mention) cannot satisfy them.
     """
-    return "\n".join(line for line in text.splitlines() if "ragas" in line.lower())
+    return [line for line in text.splitlines() if "ragas" in line.lower() and RAGAS_FAILURE_CONDITION_RE.search(line)]
 
 
 def check_ragas_failure_contract(errors: list[str]) -> None:
@@ -488,7 +495,7 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
     current behavior. The core RAGAS docs must independently document that an
     unavailable/failed evaluator is unsuccessful (fail fast / non-zero), and
     that it does not produce a quality report. Both assertions are scoped to
-    RAGAS-related lines so unrelated text cannot satisfy them.
+    RAGAS lines that actually describe evaluator failure.
     """
     for path in CANONICAL_DOCS:
         if not path.exists():
@@ -503,13 +510,13 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
         path = ROOT / name
         if not path.exists():
             continue
-        scoped = _ragas_scoped_text(path.read_text(encoding="utf-8"))
-        if not RAGAS_FAILURE_STATUS_REQUIRED_RE.search(scoped):
+        scoped_lines = _ragas_failure_scoped_lines(path.read_text(encoding="utf-8"))
+        if not any(RAGAS_FAILURE_STATUS_REQUIRED_RE.search(line) for line in scoped_lines):
             fail(
                 errors,
                 f"{name}: must document unavailable/failure as unsuccessful/non-zero",
             )
-        if not RAGAS_NO_REPORT_REQUIRED_RE.search(scoped):
+        if not any(RAGAS_NO_REPORT_REQUIRED_RE.search(line) for line in scoped_lines):
             fail(
                 errors,
                 f"{name}: must document that unavailable/failure does not produce a quality report",
@@ -527,7 +534,7 @@ def stale_local_validation_claims(text: str) -> list[str]:
     """
     claims: list[str] = []
     for line in text.splitlines():
-        for clause in re.split(r"[；;。]+", line):
+        for clause in re.split(r"[；;。，,]+", line):
             if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(clause):
                 continue
             for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:

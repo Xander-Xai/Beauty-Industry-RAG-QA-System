@@ -301,6 +301,23 @@ def test_ragas_contracts_are_scoped_to_ragas_clause(tmp_path, monkeypatch):
     assert errors == []
 
 
+def test_ragas_guarantees_must_be_tied_to_failure_clause(tmp_path, monkeypatch):
+    """An unrelated RAGAS line must not satisfy the no-report guarantee."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "RAGAS unavailable returns a non-zero status.\nThere is no quality report from last month RAGAS benchmark.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+
 def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)
@@ -356,6 +373,14 @@ def test_production_boundary_exemption_is_clause_scoped():
     from scripts.check_repo_consistency import stale_local_validation_claims
 
     assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证；production cluster 也未验证")
+
+
+def test_production_boundary_exemption_splits_commas():
+    """Comma-delimited clauses are split before applying the boundary exemption."""
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证，production cluster 也未验证")
+    assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证, production cluster 也未验证")
 
 
 def test_tracing_default_is_not_misdescribed_as_local_memory_spans():

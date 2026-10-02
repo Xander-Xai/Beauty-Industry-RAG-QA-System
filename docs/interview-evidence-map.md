@@ -40,7 +40,7 @@ Rules:
 | BGE text embedding | `PENDING` (adapter contract `REPO_VERIFIED`) | Adapter + pooling contract in `offline/embeddings.py`; deterministic tests only | Real configured BGE smoke on real weights |
 | CLIP image embedding | `PENDING` (adapter contract `REPO_VERIFIED`) | `offline/embeddings.py`; deterministic embedder tests | Real configured CLIP smoke on real weights |
 | OCR (PaddleOCR) | `PENDING` | `offline/image_processor.py` provider interface; deterministic provider tests | Real PaddleOCR runtime smoke |
-| Qdrant text/image | `REPO_VERIFIED` | `offline/text_ingestion.py`, `offline/qdrant_writer.py`; in-memory + real Qdrant integration tests | Production cluster topology is deployment-specific |
+| Qdrant text/image | `REPO_VERIFIED` | `offline/text_ingestion.py`, `offline/qdrant_writer.py`; in-memory `QdrantClient` integration tests only (no real Qdrant service runtime test) | Real Qdrant service validation |
 | Elasticsearch (writer + BM25) | `REPO_VERIFIED` | `offline/elasticsearch_writer.py`, `retrieval/bm25_retriever.py`; fake + real ES integration tests | Multi-node/TLS topology is deployment-specific |
 | Elasticsearch security | `LOCAL_REAL_VALIDATION` | `tests/integration/test_es_auth_runtime.py`; local authenticated ES 8.11 (unauth/wrong creds 401) | Multi-node ES/TLS + production credentials |
 | RBAC (uint32 bitmask) | `REPO_VERIFIED` | `common/auth.py`, `retrieval/parallel_recall.py`, `api/routes.py`; `tests/test_bitmask_rbac.py`, `tests/test_retrieval_authorization_contract.py` | Production policy audit is deployment-specific |
@@ -59,7 +59,7 @@ Rules:
 | Performance benchmark | `PENDING` | Load-test utilities under `tests/load/`; no checked-in artifact | A reproducible benchmark artifact (see criteria below) |
 | QLoRA fine-tuning | `PENDING` | `offline/finetune_qlora.py`; utility + mocked tests only | Reproducible training run + adapter artifact |
 | Airflow scheduling | `PENDING` | `dags/knowledge_base_dags.py`; DAG registration tests only | Real Airflow DAG execution |
-| OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py`; default is the OTel SDK provider with no exporter configured (in-memory fallback only when the SDK is absent) | Real OTLP/Jaeger backend export |
+| OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py` covers `MetricsCollector` and the `OpenTelemetryTracer` local/OTel span paths; default is the OTel SDK provider with no exporter configured (in-memory fallback only when the SDK is absent) | Real OTLP/Jaeger backend export |
 | Jaeger exporter | `PENDING` | `docker-compose.microservices.yml` service; `config.json` `monitoring.jaeger.enabled=false`; exporter package not in default requirements | Enable exporter + verify spans in Jaeger |
 
 ## Business scale — historical production context
