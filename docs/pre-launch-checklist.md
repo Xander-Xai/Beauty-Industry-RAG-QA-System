@@ -69,14 +69,28 @@
 
 ## P2 可观测性与证据产物
 
-本仓库的确定性测试证明的是实现契约，不是生产运行证据。以下每一项都需要一份可复现的外部产物才算完成：
+本仓库的确定性测试证明的是实现契约，不是生产运行证据。下面把「已实现」与「已验证」分开列出：前者由本仓库代码与测试覆盖，后者需要一份可复现的外部产物。**不要因为前者完成就勾选后者。**
 
-- [ ] 验证 OpenTelemetry exporter 与后端：启用 exporter（或 OTLP collector）后，在后端实际查询到本服务产生的 span。当前默认无 exporter，追踪钩子不等于导出闭环
-- [ ] 验证 Grafana 仪表盘与告警规则基于真实指标触发，而非默认 0 值
+已实现（`REPO_VERIFIED`，本仓库代码 + 确定性测试）：
+
+- [x] performance artifact 契约（七文件、`EXECUTED`/`PARTIAL`/`BLOCKED`、未测量即 `null`）
+- [x] 结构化企业动作审计（统一 schema、强制脱敏、request_id 关联、Redis Stream + JSONL 持久化）
+- [x] SLO 与故障 Runbook（5 个目标 + 8 个处置流程；目标为 `DESIGN_TARGET`）
+- [x] Prometheus 告警规则（6 条，全部基于真实 emit 的指标；阈值为 `DESIGN_TARGET`）
+- [x] Grafana 最小仪表盘（10 个面板，仅真实指标）
+- [x] OTLP exporter 实现（默认关闭、失败不影响业务、span 属性白名单）
+
+仍需外部产物才算完成（`PENDING`）：
+
+- [ ] 启用 OTLP 导出并在后端实际查询到本服务产生的 span。当前默认无 exporter，**exporter 已实现不代表闭环已验证**
+- [ ] 在运行中的 Prometheus 里导入并评估 `monitoring/prometheus/alerts.yml`，确认规则能被加载且指标可抓取（需先生成 scrape bearer token 文件）
+- [ ] 导入 Grafana 仪表盘，确认面板能被真实数据填充
 - [ ] 产出 retrieval benchmark artifact（`artifacts/benchmarks/<run-id>/`），并核对 `docs/repository-truth-audit.md` 中的 artifact 验收字段。**当前没有 artifact，benchmark 框架 = `REPO_VERIFIED`，benchmark 结果 = `PENDING`**
 - [ ] 产出负载/性能 artifact（吞吐、P95/P99、并发），或明确记录 PRD 中的延迟/QPS 数字仍为设计目标
 - [ ] 记录真实 RAGAS evaluator 运行结果，或明确记录其依赖/凭据仍阻塞
 - [ ] 完成真实 4B/14B vLLM GPU 拓扑验证（需要模型权重与 GPU）。**历史生产推理经验不构成该仓库的验证证据**
+
+未覆盖的依赖故障场景（诚实缺口，非遗漏）：Qdrant 与 Elasticsearch 故障没有告警规则，因为本仓库未为它们输出任何 Prometheus 指标；目前靠 `GET /api/health` 巡检与 Runbook 流程覆盖。补齐它需要新增真实指标埋点，不应靠写一条指向不存在指标的规则来假装覆盖。
 
 ## 外部模型验证状态（尚未完成）
 

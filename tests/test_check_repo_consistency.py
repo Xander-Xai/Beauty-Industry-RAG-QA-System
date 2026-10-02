@@ -1176,3 +1176,176 @@ def test_no_v25_version_heading_was_invented():
     changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
     assert not re.search(r"^## \[2\.5\.0\]", changelog, re.MULTILINE)
     assert "## [2.3.0]" in changelog
+
+
+# ── enterprise readiness evidence guards ────────────────────────────────────
+
+
+def test_enterprise_claims_pass_for_current_docs():
+    from scripts.check_repo_consistency import check_enterprise_readiness_contracts
+
+    errors: list[str] = []
+    check_enterprise_readiness_contracts(errors)
+    assert errors == []
+
+
+def test_enterprise_readiness_coverage_passes():
+    from scripts.check_repo_consistency import check_enterprise_readiness_coverage
+
+    errors: list[str] = []
+    check_enterprise_readiness_coverage(errors)
+    assert errors == []
+
+
+def test_performance_result_claim_is_flagged_without_an_artifact():
+    from scripts.check_repo_consistency import enterprise_claim_errors
+
+    overclaim = "Throughput was validated at 12 QPS on the production configuration.\n"
+    assert enterprise_claim_errors("x.md", overclaim)
+
+
+def test_performance_design_target_wording_is_allowed():
+    from scripts.check_repo_consistency import enterprise_claim_errors
+
+    honest = "Throughput target is a DESIGN_TARGET; no performance artifact is committed.\n"
+    assert enterprise_claim_errors("x.md", honest) == []
+
+
+def test_otel_closed_loop_claim_is_flagged_without_runtime_evidence():
+    from scripts.check_repo_consistency import enterprise_claim_errors
+
+    overclaim = "The OTLP closed loop was validated against a live collector.\n"
+    assert enterprise_claim_errors("x.md", overclaim)
+
+
+def test_otel_implementation_only_wording_is_allowed():
+    from scripts.check_repo_consistency import enterprise_claim_errors
+
+    honest = (
+        "The exporter is implemented; the runtime closed loop is PENDING because no "
+        "local application to collector to backend run is recorded.\n"
+    )
+    assert enterprise_claim_errors("x.md", honest) == []
+
+
+def test_production_fired_alert_claim_is_flagged():
+    from scripts.check_repo_consistency import enterprise_claim_errors
+
+    overclaim = "RagHighErrorRate fired in production last quarter.\n"
+    assert enterprise_claim_errors("x.md", overclaim)
+
+
+def test_slo_achieved_claim_is_flagged():
+    from scripts.check_repo_consistency import enterprise_claim_errors
+
+    overclaim = "The service currently achieves 99.9% availability.\n"
+    assert enterprise_claim_errors("x.md", overclaim)
+
+
+def test_audit_implemented_claim_is_flagged_when_events_are_absent(monkeypatch, tmp_path):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/x.md").write_text(
+        "Structured enterprise audit is implemented for all admin actions.\n", encoding="utf-8"
+    )
+    errors = guard.enterprise_claim_errors("x.md", (tmp_path / "docs/x.md").read_text(encoding="utf-8"))
+    assert errors
+
+
+def test_dashboard_claim_is_flagged_when_no_dashboard_exists(monkeypatch, tmp_path):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    text = "The Grafana dashboard is available for the on-call rotation.\n"
+    assert guard.enterprise_claim_errors("x.md", text)
+
+
+def test_artifact_presence_is_derived_from_disk(monkeypatch, tmp_path):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    assert guard.performance_artifact_exists() is False
+    run = tmp_path / "artifacts/performance/run-1"
+    run.mkdir(parents=True)
+    (run / "metadata.json").write_text("{}", encoding="utf-8")
+    assert guard.performance_artifact_exists() is True
+
+    assert guard.otel_runtime_evidence_exists() is False
+    evidence = tmp_path / "monitoring/evidence"
+    evidence.mkdir(parents=True)
+    (evidence / "span.json").write_text("{}", encoding="utf-8")
+    assert guard.otel_runtime_evidence_exists() is True
+
+
+def test_enterprise_capability_probes_reflect_the_repository():
+    from scripts.check_repo_consistency import (
+        audit_action_events_exist,
+        grafana_dashboard_exists,
+        otlp_exporter_implemented,
+        prometheus_alert_rules_exist,
+        slo_runbook_exists,
+    )
+
+    assert audit_action_events_exist()
+    assert prometheus_alert_rules_exist()
+    assert grafana_dashboard_exists()
+    assert slo_runbook_exists()
+    assert otlp_exporter_implemented()
+
+
+def test_observability_stack_is_optional():
+    from scripts.check_repo_consistency import check_observability_is_optional
+
+    errors: list[str] = []
+    check_observability_is_optional(errors)
+    assert errors == []
+
+
+def test_optional_observability_stack_is_not_part_of_canonical_deployment():
+    from pathlib import Path
+
+    import yaml
+
+    base = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    overlay = yaml.safe_load(Path("docker-compose.observability.yml").read_text(encoding="utf-8"))
+    assert not set(base.get("services", {})) & set(overlay.get("services", {}))
+
+
+def test_canonical_deployment_has_no_forbidden_platform():
+    from scripts.check_repo_consistency import check_canonical_runtime_is_not_observability_gated
+
+    errors: list[str] = []
+    check_canonical_runtime_is_not_observability_gated(errors)
+    assert errors == []
+
+
+def test_guards_are_offline_and_deterministic():
+    """No network, no wall clock, no hardcoded test counts or PR numbers."""
+    from pathlib import Path
+
+    import scripts.check_repo_consistency as guard
+
+    source = Path(guard.__file__).read_text(encoding="utf-8")
+    for forbidden in (
+        "import requests",
+        "import urllib.request",
+        "import httpx",
+        "date.today",
+        "datetime.now",
+        "time.time()",
+    ):
+        assert forbidden not in source, f"consistency guard must not use {forbidden}"
+
+
+def test_explicit_denial_of_a_claim_is_not_flagged():
+    """These documents are required to write the denial; it must not be misread."""
+    from scripts.check_repo_consistency import enterprise_claim_errors
+
+    for denial in (
+        "No alert has fired in production.",
+        "no SLO has been met.",
+        "The service has not been validated in production.",
+    ):
+        assert enterprise_claim_errors("x.md", denial + "\n") == [], denial

@@ -116,6 +116,27 @@ python -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 
 当前状态：benchmark 框架为 `REPO_VERIFIED`；**retrieval benchmark 结果为 `PENDING`**，仓库内没有可复现的真实 benchmark artifact。缺少真实依赖时，配置会以 `BLOCKED` 与原因记录，**不会**产出数字。数据质量缺口见 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 说明见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
 
+## Enterprise operations / observability
+
+除检索与生成质量外，本仓库补齐了运维证据闭环：性能证据产物契约、结构化审计、SLO 与故障 Runbook、Prometheus 告警规则、可选 OTLP 导出链路。实现与证据状态严格分层：
+
+| 能力 | 状态 |
+|---|---|
+| performance artifact 框架（七文件契约、`BLOCKED`/`PARTIAL`/`EXECUTED`、未测量即 `null`） | `REPO_VERIFIED` |
+| 结构化企业动作审计（统一 schema、强制脱敏、request_id 关联、Redis Stream + JSONL 持久化） | `REPO_VERIFIED` |
+| SLO 与故障 Runbook（5 个目标 + 8 个故障处置流程） | `REPO_VERIFIED`（目标为 `DESIGN_TARGET`） |
+| Prometheus 告警规则（6 条，全部基于真实 emit 的指标） | `REPO_VERIFIED` |
+| Grafana 最小仪表盘（10 个面板，仅真实指标） | `REPO_VERIFIED` |
+| OTLP exporter 实现（默认关闭、失败不影响业务、span 属性白名单） | `REPO_VERIFIED` |
+| 真实性能产物 | `PENDING`（无 artifact） |
+| 告警在生产触发 | `PENDING` |
+| OTLP 运行时闭环（应用 → exporter → collector → 后端 → 查到 span） | `PENDING` |
+| SLO 达成 | `PENDING`（全部为 `DESIGN_TARGET`） |
+
+生产级依赖降级路径（Redis→进程内会话、ES→空结果走 dense、Qdrant→BM25-only、rewrite→简单档位）是代码中真实存在的实现，Runbook 按这些真实降级模式编写。
+
+详见 [docs/slo-runbook.md](docs/slo-runbook.md)、[docs/interview-evidence-map.md](docs/interview-evidence-map.md) 与 [docs/repository-truth-audit.md](docs/repository-truth-audit.md)。
+
 ## Historical production context
 
 作者此前公司生产环境的业务规模与流量背景（3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户、高峰短时 10–15 QPS、日均 1500+ 请求；RTX A5000 ×2 生产推理环境，后续阶段完成 Qwen2.5 → Qwen3-14B / Qwen3-4B 灰度迁移验证）记录在 [docs/interview-evidence-map.md](docs/interview-evidence-map.md)，分类为 `HISTORICAL_PRODUCTION`。公开仓库不包含对应的专有语料、生产日志、模型权重或监控数据，因此这些**不是** `REPO_VERIFIED`，也不可由本仓库复现。

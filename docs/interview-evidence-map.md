@@ -57,6 +57,15 @@ Rules:
 | 14B routing | `REPO_VERIFIED` (routing contract) | `router/stateless_router.py`, `config.json` `gpu0.models.gen_14b`; contract tests | Real vLLM 14B GPU deployment |
 | RAGAS evaluation | `PENDING` (harness `REPO_VERIFIED`) | `tests/evaluation/ragas_eval.py`; deterministic guard; library `evaluate()` keeps a non-quality unavailable fallback, while `--require-ragas` fails fast with no report | Approved evaluator provider + API key + real run |
 | Performance benchmark | `PENDING` | Load-test utilities under `tests/load/`; no checked-in artifact | A reproducible benchmark artifact (see criteria below) |
+| Performance artifact contract | `REPO_VERIFIED` (framework) / `PENDING` (result) | `benchmarks/performance.py`, `artifacts/performance/`; seven-file contract with `EXECUTED`/`PARTIAL`/`BLOCKED` derived from what happened; unmeasured values are `null`, never `0`; `tests/performance/` | A real run against a live API, LLM and retrieval stack |
+| Performance real run | `PENDING` | No artifact is committed. `tests/load/locustfile.py` blocks on an unreachable API or a missing bearer token and records `blocked_reason` | Execute the declared workload and commit one artifact |
+| Structured enterprise audit | `REPO_VERIFIED` (implementation) | `common/audit.py`; stable 9-field schema, forced redaction, request-id correlation; `auth.login.*`, `admin.user.create`, `admin.role.update`, `media.access.denied`, `knowledge.epoch.seal`; Redis Stream + daily JSONL sinks; `tests/test_audit_log.py` | Forward the audit stream to a SIEM (out of scope here) |
+| SLO + incident runbook | `REPO_VERIFIED` (document) / `DESIGN_TARGET` (objectives) | `docs/slo-runbook.md`; 5 objectives, 8 incident procedures written against the degradation paths that exist in code | Meet an objective in a real environment |
+| Prometheus alert rules | `REPO_VERIFIED` (configuration) / `PENDING` (fired in production) | `monitoring/prometheus/alerts.yml`; 6 alerts over metrics verified as emitted; thresholds are `DESIGN_TARGET` | A production Prometheus instance evaluating these rules |
+| Grafana dashboard | `REPO_VERIFIED` (JSON) / `PENDING` (validated against a live stack) | `monitoring/grafana/dashboards/rag-overview.json`; 10 panels, only metrics this application emits; no hallucination-rate, live-RAGAS or GPU panel | Import it into a running Grafana and confirm the panels populate |
+| OTLP exporter | `REPO_VERIFIED` (implementation) | `monitoring/otel_exporter.py`; opt-in via `OTEL_EXPORT_ENABLED`, non-fatal on failure, span-attribute allow-list; `requirements-otel.txt`; `tests/monitoring/test_observability.py` | Install the exporter package and enable it |
+| OTLP backend closed loop | `PENDING` | No recorded evidence under `monitoring/evidence/`. Export state is observable as `rag_otel_exporter_enabled` | Application -> exporter -> collector -> backend -> a span actually queried |
+| Prometheus metrics endpoint | `REPO_VERIFIED` | `monitoring/otel_tracer.py` serves `/api/metrics`; `rag_http_*`, `rag_redis_degraded_mode`, `rag_otel_exporter_enabled`; `tests/monitoring/` asserts every alert metric exists | A scrape job in a running Prometheus |
 | QLoRA fine-tuning | `PENDING` | `offline/finetune_qlora.py`; utility + mocked tests only | Reproducible training run + adapter artifact |
 | Airflow scheduling | `PENDING` | `dags/knowledge_base_dags.py`; DAG registration tests only | Real Airflow DAG execution |
 | OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py` covers `MetricsCollector` and the `OpenTelemetryTracer` local/OTel span paths; default is the OTel SDK provider with no exporter configured (in-memory fallback when the SDK is absent or init fails) | Real OTLP/Jaeger backend export |
@@ -155,3 +164,10 @@ a repository benchmark.
 - Presenting default-zero monitoring gauges without hooks as live metrics.
 - Quoting any retrieval metric. The framework is `REPO_VERIFIED`; the result is
   `PENDING` and no artifact exists.
+- Saying "performance is verified" as one phrase. The artifact *framework* is
+  `REPO_VERIFIED`; no performance *result* exists.
+- Saying "alerting is in place" as if alerts had fired. The rules exist as
+  configuration; no production Prometheus evaluates them.
+- Saying "tracing is closed-loop". The exporter is implemented; no
+  application -> collector -> backend -> queried-span run is recorded.
+- Saying "the SLO is 99.5%". Every objective is a `DESIGN_TARGET`.

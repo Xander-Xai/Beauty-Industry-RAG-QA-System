@@ -64,6 +64,63 @@ Changes present on `main` after the 2.3.0 release entry:
   currently reports `BLOCKED` (no live Elasticsearch/Qdrant, no BGE weights, and no corpus
   containing the golden-set passages). Benchmark framework = `REPO_VERIFIED`, benchmark
   result = `PENDING`.
+- Performance evidence artifact contract under `artifacts/performance/<run-id>/`
+  (`metadata.json`, `environment.json`, `workload.json`, `latency_metrics.json`,
+  `throughput_metrics.json`, `errors.json`, `report.md`):
+  - `EXECUTED` / `PARTIAL` / `BLOCKED` status **derived** from what happened rather than
+    chosen by the caller; `blocked_reason` wins outright and zero requests is `BLOCKED`.
+  - Not executed is recorded as `null` and the latency block is reduced to `{"count": 0}`,
+    so an unrun workload can never read as a fast, healthy one.
+  - Git provenance (`git_sha`, `git_dirty`), runtime version, host, workload declaration,
+    limitations and a machine-readable digest.
+  - Load-harness preflight blocks on an unreachable API, a non-200 `/api/health` or a
+    missing bearer token, because every `/api/*` endpoint except health requires auth and a
+    tokenless run would otherwise measure a stream of 401s.
+  - **No performance number is claimed.** No artifact is committed, so measured
+    QPS/P95/P99 remains `PENDING` and PRD figures remain `DESIGN_TARGET`.
+- Structured enterprise audit events (`common/audit.py`) for login success/failure/rate-limit,
+  user and role administration, protected-media denial and epoch seal:
+  - Stable schema (timestamp, request_id, actor_id, action, resource_type, resource_id,
+    outcome, reason, metadata) with extra context confined to `metadata`.
+  - Redaction enforced on every emit, covering key spelling variants, nested
+    dict/list/tuple structures, and credential-shaped *values*; `auth` is matched as a
+    suffix so a presence mapping is not collapsed.
+  - request-id correlation via a contextvar shared with the access log and trace spans.
+  - Reuses the existing Redis Stream + daily JSONL audit sinks.
+  - No `knowledge.epoch.activate` event: this repository has no activate endpoint.
+- Real HTTP and Redis-degradation metrics on the canonical `/api/metrics` path:
+  `rag_http_requests`, `rag_http_responses_2xx/4xx/5xx`, `rag_http_rate_limited`,
+  `rag_http_active_requests`, `rag_http_request_duration_seconds`, and
+  `rag_redis_degraded_mode` driven by the actual fallback path. Previously the endpoint
+  emitted only `rag_uptime_seconds` until a complete RAG query succeeded, so dependency
+  failures produced no metrics at all.
+- Prometheus alert rules (`monitoring/prometheus/alerts.yml`): `RagAppDown`,
+  `RagHighErrorRate`, `RagHighLatencyP95`, `RagRedisDegraded`,
+  `RagHighLoginRateLimit`, `RagRequestSaturation`. Every threshold is a `DESIGN_TARGET`.
+  Qdrant and Elasticsearch outages are deliberately not alerted because no metric is
+  emitted for them; that gap is documented rather than papered over.
+- Optional OTLP span export (`monitoring/otel_exporter.py`): off by default, non-fatal on
+  any failure, span attributes reduced to an allow-list, exporter package isolated in
+  `requirements-otel.txt`. Observable as `rag_otel_exporter_enabled`.
+- `docs/slo-runbook.md`: 5 objectives (all `DESIGN_TARGET`) and 8 incident procedures.
+- Optional `docker-compose.observability.yml` (Prometheus + Jaeger + Grafana), verified to
+  be purely additive; the canonical deployment still starts none of it.
+- Minimal Grafana dashboard over emitted metrics only — no hallucination-rate, live-RAGAS
+  or GPU-utilization panel, since those metrics do not exist.
+
+### Fixed
+
+- `monitoring-service/metrics_collector.py` emitted every latency quantile as
+  `rag_{quantile="0.5"}`: the metric name was computed and then never used. That is not
+  valid Prometheus exposition format, so those quantiles were silently unscrapeable and any
+  latency alert would have had no data behind it.
+- `deploy/prometheus.yml` scraped only `monitoring-service:8400`, which emits none of the
+  `rag_http_*` metrics the alerts target. Added a `rag-api` job for the monolith, with the
+  scrape token supplied via `bearer_token_file`.
+- `common/audit.py` legacy `log_audit_event` now inherits the request id from context and
+  redacts its `extra` payload, so both audit streams share one redaction rule.
+- `tests/test_locust_load.py` asserted `LatencyStats.p50 == 0.0` for an empty sample set,
+  encoding a fabricated zero as the contract. Now asserted as `None`.
 
 ### Changed
 

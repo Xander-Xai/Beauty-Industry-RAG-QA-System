@@ -99,6 +99,82 @@ jobs:
         continue-on-error: true
         run: npm audit || true
 
+  enterprise-readiness:
+    name: 企业就绪配置校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Deterministic configuration checks for the enterprise-readiness artifacts:
+    # alert rules, the OTLP exporter contract, the performance artifact contract
+    # and the optional observability overlay. No real backend, no real collector,
+    # no real model and no real RAGAS here — those stay optional and manual.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout pyyaml
+
+      - name: Alert rules reference only emitted metrics
+        run: python -m pytest tests/monitoring/ -q
+
+      - name: Performance artifact contract
+        run: python -m pytest tests/performance/ tests/test_audit_log.py -q
+
+      - name: Validate the optional observability overlay is additive
+        env:
+          REDIS_PASSWORD: ci-only-not-a-secret
+          ELASTICSEARCH_PASSWORD: ci-only-not-a-secret
+          MINIO_ACCESS_KEY: ci-only
+          MINIO_SECRET_KEY: ci-only-not-a-secret
+          SERVICE_AUTH_TOKEN: ci-only-not-a-secret
+          GF_SECURITY_ADMIN_PASSWORD: ci-only-not-a-secret
+        run: |
+          set -euo pipefail
+          # The overlay must be purely additive: plain `docker compose up` may not
+          # start Prometheus, Jaeger or Grafana, and layering it on must not remove
+          # or redefine a canonical service.
+          base=$(mktemp); layered=$(mktemp)
+          docker compose -f docker-compose.yml config --services | sort > "$base"
+          docker compose -f docker-compose.yml -f docker-compose.observability.yml \
+            config --services | sort > "$layered"
+
+          added=$(comm -13 "$base" "$layered" | tr '\n' ' ')
+          removed=$(comm -23 "$base" "$layered" | tr -d '\n')
+          echo "added: $added"
+          echo "removed: '${removed:-none}'"
+          test -z "$removed" || {
+            echo "::error::the overlay removes canonical services: $removed"; exit 1; }
+          for svc in prometheus jaeger grafana; do
+            echo "$added" | grep -q "$svc" || {
+              echo "::error::$svc missing from the observability overlay"; exit 1; }
+          done
+
+      - name: Documented alert inventory matches the rule file
+        run: |
+          set -euo pipefail
+          python - <<'PYCODE'
+          import re
+          import sys
+          from pathlib import Path
+
+          alerts = Path("monitoring/prometheus/alerts.yml").read_text(encoding="utf-8")
+          runbook = Path("docs/slo-runbook.md").read_text(encoding="utf-8")
+          names = set(re.findall(r"^\s*- alert:\s*(\w+)", alerts, re.MULTILINE))
+          missing = sorted(n for n in names if n not in runbook)
+          if missing:
+              print(f"::error::alerts missing from the runbook: {missing}")
+              sys.exit(1)
+          print(f"{len(names)} alerts, all covered by the runbook")
+          PYCODE
+
   test:
     name: 测试套件
     runs-on: ubuntu-latest

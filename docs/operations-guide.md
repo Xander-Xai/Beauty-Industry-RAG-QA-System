@@ -17,6 +17,30 @@
 
 会话状态与登录限流在配置 Redis 时跨 worker 共享；Redis 不可用时降级为进程内内存（此时多 worker 不共享，属于可接受的降级而非故障）。
 
+## 1.1 告警 → 诊断 → 处置
+
+完整流程（8 个故障场景，每项含 Alert / 用户影响 / 诊断 / 立即处置 / 降级模式 / 回滚 / 需采集证据 / 恢复验证）见 [SLO 与故障 Runbook](slo-runbook.md)。本节只给出入口对照，避免值班同学在两处文档间反复跳转。
+
+| 告警 | 第一动作 | Runbook 章节 |
+|---|---|---|
+| `RagAppDown` | 先确认 scrape token 是否有效：`curl -i http://localhost:8000/api/metrics \| head -1`。401 说明是 token 问题，不是服务挂了 | [HighErrorRate](slo-runbook.md#higherrorrate) |
+| `RagHighErrorRate` | 看 `rag_http_responses_5xx` 占比与 `GET /api/health` 三个依赖位，定位到具体依赖 | [HighErrorRate](slo-runbook.md#higherrorrate) |
+| `RagHighLatencyP95` | 先看 `rag_cache_hit_rate`（Redis 故障会同时打掉缓存），再看 `rag_kv_pressure` | [HighLatency](slo-runbook.md#highlatency) |
+| `RagRedisDegraded` | 会话已降级到进程内、限流已退化为单进程计数。确认 Redis 存活即可，不要重启业务进程 | [RedisUnavailable](slo-runbook.md#redisunavailable) |
+| `RagHighLoginRateLimit` | 多数是撞库或客户端重试风暴；若 Redis 同时不可用，限流在多 worker 下会被削弱 | [RedisUnavailable](slo-runbook.md#redisunavailable) |
+| `RagRequestSaturation` | 在途请求偏高，优先降并发而不是加超时 | [HighLatency](slo-runbook.md#highlatency) |
+
+Qdrant 与 Elasticsearch 故障**没有**告警规则：`/api/health` 以 JSON 返回依赖状态，而本仓库没有为它们输出任何 Prometheus 指标。这两个场景靠 `GET /api/health` 巡检 + Runbook 处置流程覆盖，不靠告警。
+
+所有告警阈值均为 `DESIGN_TARGET`，不是生产历史调优结果；本仓库没有任何告警在生产触发过的证据。
+
+## 1.2 审计与追踪查询
+
+- 审计事件查询：`tail -n 200 logs/audit/$(date +%F).jsonl`
+- 按 request_id 串联网关日志、访问日志与审计：`grep "$REQUEST_ID" logs/*.log logs/audit/*.jsonl`
+- 追踪状态确认：默认**没有配置 exporter**，后端查不到 span；启用方式见 [slo-runbook.md#tracelookup](slo-runbook.md#tracelookup)
+- 导出是否生效：`rag_otel_exporter_enabled`（0=未启用或不可用，1=已启用）
+
 ## 2. 当前值得盯的指标
 
 ### 应用可用性
