@@ -92,6 +92,19 @@ authenticated Elasticsearch online + offline paths, and an authenticated Prometh
 `LOCAL_REAL_VALIDATION` is not a production benchmark, does not imply production HA/SLO, and must not be
 rewritten as "never validated".
 
+## Architecture debt — free-text semantic governance
+
+The drift guards in `scripts/check_repo_consistency.py` enforce repository-truth
+invariants by parsing natural-language documentation with scoped regexes. This
+works today, but free-text semantic matching has an unbounded edge space: every
+new phrasing requires another pattern, which is ongoing maintenance cost rather
+than a one-time fix.
+
+Future improvement (deliberately out of scope for this reconciliation):
+replace the free-text semantic regex governance with structured repository
+facts / a machine-readable truth schema, and validate documents against that
+schema instead of against prose.
+
 ## Offline history check
 
 Before the Phase 1 text-ingestion slice, `offline/` contained only the QLoRA files. Phase 1 added
