@@ -1385,3 +1385,128 @@ def test_zero_byte_weight_index_is_rejected(tmp_path):
     ok, detail = _looks_like_model_dir(path)
     assert ok is False
     assert "weight index" in detail
+
+
+# ── Round 12: question type, recognized weight names, principal fingerprint ──
+
+
+@pytest.mark.parametrize("question", [["a"], {"a": 1}, 42, True, ""])
+def test_non_string_questions_are_dataset_errors(tmp_path, question):
+    """A list/object/number question must not be coerced into a query."""
+    import json as _json
+
+    from benchmarks.dataset import DatasetError, load_queries
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(_json.dumps({"question": question, "contexts": ["c"]}) + "\n", encoding="utf-8")
+    with pytest.raises(DatasetError, match="question must be a non-empty string"):
+        load_queries(bad)
+
+
+def test_non_string_question_is_not_coerced(tmp_path):
+    import json as _json
+
+    from benchmarks.dataset import DatasetError, load_queries
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(_json.dumps({"question": ["a"], "contexts": ["c"]}) + "\n", encoding="utf-8")
+    with pytest.raises(DatasetError) as excinfo:
+        load_queries(bad)
+    assert "list" in str(excinfo.value)
+    assert "['a']" not in str(excinfo.value)
+
+
+def test_non_string_question_exits_cleanly_through_cli(tmp_path):
+    import json as _json
+
+    import benchmarks.retrieval_benchmark as cli
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(_json.dumps({"question": 42, "contexts": ["c"]}) + "\n", encoding="utf-8")
+    exit_code = cli.main(
+        ["--config", "bm25", "--dataset", str(bad), "--output-dir", str(tmp_path / "out"), "--allow-dirty"]
+    )
+    assert exit_code == 2
+
+
+def test_valid_string_question_still_works():
+    from benchmarks.dataset import load_queries
+
+    queries = load_queries("tests/evaluation/golden_set.jsonl", limit=1)
+    assert isinstance(queries[0].question, str)
+    assert queries[0].question
+
+
+@pytest.mark.parametrize("weight", ["training_args.bin", "optimizer.pt", "tf_model.h5"])
+def test_unrecognized_weight_names_are_rejected(tmp_path, weight):
+    """from_pretrained does not treat these as a checkpoint."""
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", weight):
+        (path / name).write_text("weights", encoding="utf-8")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "model weights" in detail
+
+
+@pytest.mark.parametrize("weight", ["model.safetensors", "pytorch_model.bin"])
+def test_recognized_weight_names_are_accepted(tmp_path, weight):
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", weight):
+        (path / name).write_text("weights", encoding="utf-8")
+    assert _looks_like_model_dir(path)[0] is True
+
+
+def test_index_declared_shards_are_still_accepted(tmp_path):
+    """A shard set named by the index remains valid without recognized names."""
+    import json as _json
+
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", "part-a.bin"):
+        (path / name).write_text("weights", encoding="utf-8")
+    (path / "model.safetensors.index.json").write_text(
+        _json.dumps({"weight_map": {"layer.0": "part-a.bin"}}), encoding="utf-8"
+    )
+    assert _looks_like_model_dir(path)[0] is True
+
+
+def test_principal_fingerprint_differs_per_credential(monkeypatch):
+    """Two ES principals must not collapse to the same snapshot/hash."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    def config_for(username, password):
+        return {"elasticsearch": {"host": "http://es:9200", "username": username, "password": password}}
+
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: config_for("alice", "pw-a"))
+    first = provenance.effective_retrieval_config()
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: config_for("bob", "pw-b"))
+    second = provenance.effective_retrieval_config()
+    assert first["elasticsearch"]["principal_fingerprint"] != second["elasticsearch"]["principal_fingerprint"]
+    assert provenance.sha256_json(first) != provenance.sha256_json(second)
+
+
+def test_principal_fingerprint_is_not_reversible(monkeypatch):
+    import json as _json
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "http://es:9200", "username": "alice", "password": "super-secret"}},
+    )
+    snapshot = provenance.effective_retrieval_config()
+    rendered = _json.dumps(snapshot)
+    assert "super-secret" not in rendered
+    assert "alice" not in rendered
+    assert snapshot["elasticsearch"]["principal_fingerprint"].startswith("sha256:")

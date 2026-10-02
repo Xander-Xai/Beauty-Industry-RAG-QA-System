@@ -193,6 +193,7 @@ _MODEL_CONFIG_NAMES = ("config.json",)
 # `AutoModel.from_pretrained` only consumes safetensors or a torch pickle; a bare
 # `.pt`/`.onnx` file is not a loadable checkpoint for it.
 _MODEL_WEIGHT_SUFFIXES = (".safetensors", ".bin")
+_RECOGNIZED_WEIGHT_FILENAMES = frozenset({"model.safetensors", "pytorch_model.bin"})
 # `AutoTokenizer.from_pretrained` needs an actual vocabulary. `tokenizer_config.json`
 # alone carries no tokens and would still fail to load.
 _TOKENIZER_VOCAB_NAMES = ("tokenizer.json", "vocab.txt")
@@ -251,6 +252,9 @@ def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
     else:
         # A single shard can be present while the rest of the download is missing,
         # which from_pretrained still rejects; follow the index when there is one.
+        # A *.bin wildcard also matches training_args.bin and similar, which
+        # from_pretrained does not treat as weights; only the recognized
+        # checkpoint names are accepted when no index declares the shards.
         declared = _declared_shards(path)
         if declared == INVALID_WEIGHT_INDEX:
             missing.append("a readable transformers weight index")
@@ -259,6 +263,10 @@ def _looks_like_model_dir(path: Path) -> tuple[bool, str]:
             absent = [shard for shard in declared if shard not in present]
             if absent:
                 missing.append(f"{len(absent)} of {len(declared)} weight shard(s), e.g. {absent[0]}")
+        else:
+            recognized = [candidate for candidate in weight_files if candidate.name in _RECOGNIZED_WEIGHT_FILENAMES]
+            if not recognized:
+                missing.append("model weights (" + "/".join(sorted(_RECOGNIZED_WEIGHT_FILENAMES)) + ")")
     if missing:
         return False, "incomplete model directory, missing: " + ", ".join(missing)
     return True, "found model config, weights and tokenizer vocabulary"

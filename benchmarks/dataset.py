@@ -123,9 +123,14 @@ def load_queries(
         sample_id = f"{index:04d}"
         if wanted is not None and sample_id not in wanted:
             continue
-        question = str(row.get("question") or "").strip()
-        if not question:
-            raise DatasetError(f"{path}: sample {sample_id} has no question")
+        raw_question = row.get("question")
+        # A list/object/number would otherwise be coerced and sent to the
+        # retriever as its Python repr, scoring a malformed query as if valid.
+        if not isinstance(raw_question, str) or not raw_question.strip():
+            raise DatasetError(
+                f"{path}: sample {sample_id} question must be a non-empty string, got {type(raw_question).__name__}"
+            )
+        question = raw_question.strip()
         contexts = row.get("contexts")
         if not isinstance(contexts, list) or not contexts:
             raise DatasetError(f"{path}: sample {sample_id} has no contexts (ground truth)")

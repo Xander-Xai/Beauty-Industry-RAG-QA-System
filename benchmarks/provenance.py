@@ -209,6 +209,31 @@ def redact_url_userinfo(value: Any) -> Any:
     return redacted
 
 
+def _elastic_username() -> str | None:
+    return os.environ.get("ELASTICSEARCH_USERNAME") or _config_elastic_field("username")
+
+
+def _elastic_password() -> str | None:
+    return os.environ.get("ELASTICSEARCH_PASSWORD") or _config_elastic_field("password")
+
+
+def _config_elastic_field(field: str) -> str | None:
+    from common.config import get_config_dict
+
+    value = (get_config_dict().get("elasticsearch", {}) or {}).get(field)
+    return str(value) if value else None
+
+
+def _elastic_principal_fingerprint() -> str | None:
+    """Non-reversible identifier for the Elasticsearch credential in effect."""
+    username = _elastic_username()
+    password = _elastic_password()
+    if not username and not password:
+        return None
+    digest = hashlib.sha256(f"{username or ''}:{password or ''}".encode()).hexdigest()
+    return f"sha256:{digest[:16]}"
+
+
 def _is_secret_key(key: Any) -> bool:
     lowered = str(key).lower()
     return any(marker in lowered for marker in _SECRET_KEY_MARKERS)
@@ -270,8 +295,14 @@ def effective_retrieval_config() -> dict[str, Any]:
             "host": elastic.get("host"),
             "index": elastic.get("index"),
             "enabled": elastic.get("enabled"),
-            "username_set": bool(os.environ.get("ELASTICSEARCH_USERNAME") or elastic.get("username")),
-            "password_set": bool(os.environ.get("ELASTICSEARCH_PASSWORD") or elastic.get("password")),
+            # Presence flags alone collapse every principal into the same
+            # snapshot, so two credentials that see different corpora (for example
+            # under document-level security) would produce an identical
+            # config_sha256. A salted fingerprint identifies the principal without
+            # being reversible back to the credential.
+            "username_set": bool(_elastic_username()),
+            "password_set": bool(_elastic_password()),
+            "principal_fingerprint": _elastic_principal_fingerprint(),
         },
         "qdrant": {
             "host": qdrant.get("host"),
