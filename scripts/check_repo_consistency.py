@@ -483,13 +483,45 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
     return claims
 
 
-def _ragas_failure_scoped_lines(text: str) -> list[str]:
-    """Return RAGAS lines that describe an unavailable/failed evaluator.
+_RAGAS_SEGMENT_SPLIT_RE = re.compile(r"[；;。！!？?\n]+")
 
-    Both failure guarantees must be tied to such a line, so unrelated RAGAS
-    wording (for example a benchmark report mention) cannot satisfy them.
+# A status guarantee is negated when an auxiliary/negation directly governs it,
+# e.g. "does not fail fast", "will not return a non-zero status", "不会 fail fast",
+# "不返回非零状态". A bare "not installed" earlier in the segment does not count.
+_STATUS_NEGATION_BEFORE_RE = re.compile(
+    r"(?:does|do|will|would|should|could|can|is|are|was|were)\s+not\s+(?:\w+\s+){0,3}$|"
+    r"(?:never|not)\s+(?:\w+\s+){0,3}$|"
+    r"(?:不|未|无法|不能|不会|未能)[^\n]{0,4}$",
+    re.IGNORECASE,
+)
+
+
+def _ragas_failure_segments(text: str) -> list[str]:
+    """Return sentence/clause segments that describe an unavailable/failed evaluator.
+
+    Segments are split on sentence/clause punctuation (not commas), so a
+    guarantee must live in the same clause as the evaluator-failure condition.
     """
-    return [line for line in text.splitlines() if "ragas" in line.lower() and RAGAS_FAILURE_CONDITION_RE.search(line)]
+    segments: list[str] = []
+    for line in text.splitlines():
+        for segment in _RAGAS_SEGMENT_SPLIT_RE.split(line):
+            if not segment.strip():
+                continue
+            if "ragas" not in segment.lower() and "evaluator" not in segment.lower():
+                continue
+            if RAGAS_FAILURE_CONDITION_RE.search(segment):
+                segments.append(segment)
+    return segments
+
+
+def _ragas_status_affirmative(segment: str) -> bool:
+    """True when the segment asserts the non-zero/fail-fast status affirmatively."""
+    for match in RAGAS_FAILURE_STATUS_REQUIRED_RE.finditer(segment):
+        prefix = segment[max(0, match.start() - 24) : match.start()]
+        if _STATUS_NEGATION_BEFORE_RE.search(prefix):
+            continue
+        return True
+    return False
 
 
 def check_ragas_failure_contract(errors: list[str]) -> None:
@@ -499,7 +531,7 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
     current behavior. The core RAGAS docs must independently document that an
     unavailable/failed evaluator is unsuccessful (fail fast / non-zero), and
     that it does not produce a quality report. Both assertions are scoped to
-    RAGAS lines that actually describe evaluator failure.
+    evaluator-failure clauses and the status half must not be negated.
     """
     for path in CANONICAL_DOCS:
         if not path.exists():
@@ -514,13 +546,13 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
         path = ROOT / name
         if not path.exists():
             continue
-        scoped_lines = _ragas_failure_scoped_lines(path.read_text(encoding="utf-8"))
-        if not any(RAGAS_FAILURE_STATUS_REQUIRED_RE.search(line) for line in scoped_lines):
+        segments = _ragas_failure_segments(path.read_text(encoding="utf-8"))
+        if not any(_ragas_status_affirmative(segment) for segment in segments):
             fail(
                 errors,
                 f"{name}: must document unavailable/failure as unsuccessful/non-zero",
             )
-        if not any(RAGAS_NO_REPORT_REQUIRED_RE.search(line) for line in scoped_lines):
+        if not any(RAGAS_NO_REPORT_REQUIRED_RE.search(segment) for segment in segments):
             fail(
                 errors,
                 f"{name}: must document that unavailable/failure does not produce a quality report",
