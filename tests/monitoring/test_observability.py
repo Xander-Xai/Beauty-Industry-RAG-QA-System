@@ -128,15 +128,43 @@ def test_builder_returns_a_string_reason_on_success():
     assert isinstance(reason, str)
 
 
-def test_unreachable_endpoint_still_initialises(monkeypatch):
-    """A collector that is not listening must not stop export from being wired.
+def test_unreachable_endpoint_does_not_raise():
+    """An unreachable collector must not escape as an exception.
 
-    BatchSpanProcessor connects lazily, so this succeeds; the point is that no
-    exception escapes and the application keeps working.
+    The outcome depends on whether the optional exporter package is installed, and
+    this repository deliberately does not put it in requirements.txt, so CI and a
+    developer machine legitimately differ. Both outcomes are correct; what must
+    hold is that no exception escapes and the state is a documented one:
+
+    * package installed -> ENABLED, because BatchSpanProcessor connects lazily
+    * package absent -> UNAVAILABLE, and the application still serves
     """
-    processor, state, _ = build_span_processor(OtelExporterConfig(enabled=True, endpoint="http://127.0.0.1:1"))
-    assert processor is not None
-    assert state == ExporterState.ENABLED
+    processor, state, reason = build_span_processor(OtelExporterConfig(enabled=True, endpoint="http://127.0.0.1:1"))
+    assert state in {ExporterState.ENABLED, ExporterState.UNAVAILABLE}
+    assert isinstance(reason, str) and reason
+    if state == ExporterState.ENABLED:
+        assert processor is not None
+    else:
+        assert processor is None
+        assert "not installed" in reason
+
+
+def test_missing_exporter_package_is_reported_not_fatal(monkeypatch):
+    """Simulate the optional exporter package being absent."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name.startswith("opentelemetry.exporter.otlp"):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    processor, state, reason = build_span_processor(OtelExporterConfig(enabled=True, endpoint="http://collector:4318"))
+    assert processor is None
+    assert state == ExporterState.UNAVAILABLE
+    assert "not installed" in reason
 
 
 def test_tracer_init_is_non_fatal_with_broken_export_env(monkeypatch):
