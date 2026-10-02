@@ -158,13 +158,15 @@ _RAGAS_ZERO_CONTEXT_RE = re.compile(
 # Two independent RAGAS failure contracts. They must each be documented, and a
 # bare "UNAVAILABLE" must not satisfy the non-zero/failure-status half.
 RAGAS_FAILURE_STATUS_REQUIRED_RE = re.compile(
-    r"fail[- ]?fast|非\s*0\s*退出|非零退出|非零状态|non-?zero(?:\s+(?:status|exit))?|退出码\s*[2-5]",
+    r"fail(?:s|ed)?[- ]?fast|非\s*0\s*退出|非零退出|非零状态|"
+    r"non-?zero\s+(?:status|exit(?:\s+code)?|code)|退出码\s*[2-5]",
     re.IGNORECASE,
 )
 RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
     r"不生成[^\n]{0,16}(?:质量)?(?:报告|report)|不写[^\n]{0,8}(?:报告|report)|"
     r"no\s+quality\s+report|never\s+(?:write|emit|produce)[^\n]{0,20}report|"
-    r"does\s+not\s+produce[^\n]{0,24}report",
+    r"does\s+not\s+produce[^\n]{0,24}report|must\s+not\s+produce[^\n]{0,24}report|"
+    r"without\s+producing[^\n]{0,24}report",
     re.IGNORECASE,
 )
 

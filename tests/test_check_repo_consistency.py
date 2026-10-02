@@ -585,6 +585,66 @@ def test_missing_ragas_is_a_failure_condition(tmp_path, monkeypatch):
     assert errors == []
 
 
+def test_bare_non_zero_is_not_a_failure_status(tmp_path, monkeypatch):
+    """`non-zero scores` is not a non-zero exit/status guarantee."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, it produces non-zero scores and no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+
+
+def test_inflected_fail_fast_is_accepted(tmp_path, monkeypatch):
+    """`fails fast` is an ordinary affirmative form of the status guarantee."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, the evaluator fails fast and produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
+def test_common_report_suppression_forms_are_accepted(tmp_path, monkeypatch):
+    """`must not produce` / `without producing` are affirmative suppression forms."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    doc = tmp_path / "doc.md"
+
+    doc.write_text(
+        "When RAGAS is unavailable, the evaluator fails fast and must not produce a quality report.",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+    doc.write_text(
+        "When RAGAS is unavailable, the evaluator fails fast without producing a quality report.",
+        encoding="utf-8",
+    )
+    errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
 def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)
