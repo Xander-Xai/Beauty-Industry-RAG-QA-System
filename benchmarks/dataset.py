@@ -54,15 +54,35 @@ def load_rows(path: str | Path) -> list[dict[str, Any]]:
     return rows
 
 
+def relevance_strategies(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """Count rows by the relevance strategy each row will actually use.
+
+    A dataset where only some rows carry a stable id is genuinely mixed, and
+    ``load_queries`` falls back to normalized-text keys for the rows without one.
+    Reporting a single strategy would overstate how much ground truth is matched
+    by identifier.
+    """
+    with_id = 0
+    without_id = 0
+    for row in rows:
+        has_id = any(row.get(field) not in (None, "") for field in _STABLE_ID_KEYS)
+        if has_id:
+            with_id += 1
+        else:
+            without_id += 1
+    return {"level1_stable_id": with_id, "level2_normalized_exact_text": without_id}
+
+
 def detect_relevance_level(rows: Sequence[dict[str, Any]]) -> str:
-    """Whether ground truth can be matched by stable id (``level1``) or only by text."""
+    """Overall relevance strategy, naming mixed datasets explicitly."""
     if not rows:
         return "level2_normalized_exact_text"
-    for row in rows:
-        for field in _STABLE_ID_KEYS:
-            if row.get(field) not in (None, ""):
-                return "level1_stable_id"
-    return "level2_normalized_exact_text"
+    counts = relevance_strategies(rows)
+    if counts["level1_stable_id"] == 0:
+        return "level2_normalized_exact_text"
+    if counts["level2_normalized_exact_text"] == 0:
+        return "level1_stable_id"
+    return "mixed(level1_stable_id+level2_normalized_exact_text)"
 
 
 def coverage(rows: Sequence[dict[str, Any]], keys: Sequence[str]) -> dict[str, int]:
@@ -132,4 +152,5 @@ def bucket_coverage(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "available_buckets": ["overall", "business_type", "difficulty"],
         "unavailable_buckets": [key for key in KNOWN_UNAVAILABLE_BUCKETS if counts.get(key, 0) == 0],
         "relevance_level": detect_relevance_level(rows),
+        "relevance_strategy_counts": relevance_strategies(rows),
     }

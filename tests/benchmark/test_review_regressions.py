@@ -379,3 +379,98 @@ def test_all_failed_queries_block_the_configuration(make_query):
     assert run.results == []
     assert run.failures
     assert "failed during retrieval" in run.outcome.reason
+
+
+# ── Round 4: clean git status, partial failures in report, mixed relevance ───
+
+
+def test_clean_git_status_is_false_not_null(tmp_path):
+    """A clean tree must attest git_dirty=false, not null."""
+    import subprocess as sp
+
+    from benchmarks.provenance import git_provenance
+
+    sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    sp.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
+        cwd=tmp_path,
+        check=True,
+    )
+    sha, dirty = git_provenance(tmp_path)
+    assert sha is not None
+    assert dirty is False
+
+
+def test_dirty_tree_is_true(tmp_path):
+    import subprocess as sp
+
+    from benchmarks.provenance import git_provenance
+
+    sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    sp.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "untracked.txt").write_text("x", encoding="utf-8")
+    _, dirty = git_provenance(tmp_path)
+    assert dirty is True
+
+
+def test_partial_failures_appear_in_report():
+    """Executed-with-failures must disclose the reduced sample in report.md."""
+    from benchmarks.report import build_report
+
+    summary = {
+        "configs": {
+            "bm25": {
+                "status": "EXECUTED",
+                "reason": "ran",
+                "failure_count": 2,
+                "metrics": {"overall": {"sample_count": 8}, "by_business_type": {}, "by_difficulty": {}},
+                "latency": {},
+            }
+        },
+        "executed_configs": ["bm25"],
+        "blocked_configs": [],
+        "latency": {},
+        "any_results": True,
+    }
+    coverage = {
+        "sample_count": 10,
+        "relevance_level": "level2",
+        "available_buckets": [],
+        "unavailable_buckets": [],
+        "field_coverage": {},
+    }
+    text = build_report(
+        {"run_id": "r", "requested_configs": ["bm25"]},
+        {},
+        summary,
+        coverage,
+        per_query_rows=8,
+        synthetic_retriever=True,
+    )
+    assert "2 sample(s) failed during retrieval" in text
+    assert "fewer samples than requested" in text
+
+
+def test_mixed_relevance_strategy_is_reported():
+    from benchmarks.dataset import bucket_coverage, detect_relevance_level
+
+    rows = [
+        {"doc_id": "d1", "contexts": ["a"]},
+        {"contexts": ["b"]},
+    ]
+    level = detect_relevance_level(rows)
+    assert level.startswith("mixed")
+    counts = bucket_coverage(rows)["relevance_strategy_counts"]
+    assert counts["level1_stable_id"] == 1
+    assert counts["level2_normalized_exact_text"] == 1
+
+
+def test_uniform_relevance_levels_are_unambiguous():
+    from benchmarks.dataset import detect_relevance_level
+
+    assert detect_relevance_level([{"doc_id": "a", "contexts": []}]) == "level1_stable_id"
+    assert detect_relevance_level([{"contexts": ["x"]}]) == "level2_normalized_exact_text"

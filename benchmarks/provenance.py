@@ -54,17 +54,23 @@ def _git(args: list[str], cwd: str | Path) -> str | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    output = completed.stdout.strip()
-    return output or None
+    # Empty stdout is a meaningful result (for example a clean
+    # `git status --porcelain`), so it must not collapse into None.
+    return completed.stdout.strip()
 
 
 def git_provenance(cwd: str | Path = ".") -> tuple[str | None, bool | None]:
-    """Return ``(git_sha, git_dirty)``; ``None`` when git cannot answer."""
+    """Return ``(git_sha, git_dirty)``.
+
+    ``git_dirty`` is ``None`` only when git could not answer at all; a clean tree
+    is ``False``, which is what makes a clean artifact attest to the repository
+    state.
+    """
     sha = _git(["rev-parse", "HEAD"], cwd)
     if sha is None:
         return None, None
     status = _git(["status", "--porcelain"], cwd)
-    dirty = bool(status) if status is not None else None
+    dirty = None if status is None else bool(status)
     return sha, dirty
 
 

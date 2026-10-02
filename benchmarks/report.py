@@ -159,13 +159,27 @@ def build_report(
         lines.append("")
 
     lines += ["## Failed / Skipped Queries", ""]
+    partial_failures: list[str] = []
+    for name, entry in (summary.get("configs") or {}).items():
+        failed_samples = entry.get("failure_count") or 0
+        if entry.get("status") == STATUS_EXECUTED and failed_samples:
+            # Metrics were produced from a reduced sample; that must be visible
+            # next to the numbers.
+            partial_failures.append(f"`{name}`: {failed_samples} sample(s) failed during retrieval")
     if per_query_rows == 0:
         lines.append("- none: no configuration produced per-query results in this run")
     else:
         lines.append(f"- per-query result rows written: {per_query_rows}")
+    lines += [f"- {item}" for item in partial_failures]
     for name, entry in (summary.get("configs") or {}).items():
         if entry.get("status") != STATUS_EXECUTED:
             lines.append(f"- `{name}`: {entry.get('status')} — {entry.get('reason')}")
+    if partial_failures:
+        lines.append("")
+        lines.append(
+            "> The metrics above were computed from fewer samples than requested; "
+            "the failed sample ids are listed in `retrieval_metrics.json`."
+        )
     lines.append("")
 
     lines += ["## Environment", ""]
