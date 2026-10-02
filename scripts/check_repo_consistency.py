@@ -158,12 +158,20 @@ RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Only lines that describe an unavailable/failed evaluator count as the failure
-# clause. This deliberately excludes the guarantee wording itself (`fail fast`,
-# `非零`, exit codes) so a successful-run statement cannot bootstrap its own
-# failure scope. Both guarantees must appear on such a clause.
+# Only clauses that describe an unavailable/failed *evaluator* count as the
+# failure clause. Availability wording must bind to the evaluator, dependency or
+# credentials (not unrelated data), and the guarantee wording itself (`fail fast`,
+# `非零`, exit codes) is excluded so a successful-run statement cannot bootstrap
+# its own failure scope.
+_RAGAS_AVAIL = r"(?:unavailable|missing|not\s+installed)"
+_RAGAS_AVAIL_CN = r"(?:缺少|缺失|不可用|未安装)"
+_RAGAS_ANCHOR = r"(?:evaluator|dependenc(?:y|ies)|credential(?:s)?|api\s+key)"
+_RAGAS_ANCHOR_CN = r"(?:evaluator|评估器|依赖|凭据)"
 RAGAS_FAILURE_CONDITION_RE = re.compile(
-    r"unavailable|missing|not\s+installed|缺少|缺失|不可用|未安装",
+    rf"(?:{_RAGAS_ANCHOR}|{_RAGAS_ANCHOR_CN})[^\n]{{0,24}}(?:{_RAGAS_AVAIL}|{_RAGAS_AVAIL_CN})|"
+    rf"(?:{_RAGAS_AVAIL}|{_RAGAS_AVAIL_CN})[^\n]{{0,24}}(?:{_RAGAS_ANCHOR}|{_RAGAS_ANCHOR_CN})|"
+    rf"ragas[^\n]{{0,16}}(?:unavailable|not\s+installed|{_RAGAS_AVAIL_CN})|"
+    rf"(?:unavailable|not\s+installed|{_RAGAS_AVAIL_CN})[^\n]{{0,16}}ragas",
     re.IGNORECASE,
 )
 
@@ -485,14 +493,18 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
         if RAGAS_HISTORICAL_MARKERS.search(line):
             continue
         for pattern in RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS:
-            match = re.search(pattern, line, flags=re.IGNORECASE)
-            if not match:
-                continue
-            window = line[max(0, match.start() - 24) : match.end() + 24]
-            if any(re.search(denial, window, flags=re.IGNORECASE) for denial in RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS):
-                continue
-            claims.append(match.group(0))
-            break
+            found = False
+            for match in re.finditer(pattern, line, flags=re.IGNORECASE):
+                window = line[max(0, match.start() - 24) : match.end() + 24]
+                if any(
+                    re.search(denial, window, flags=re.IGNORECASE) for denial in RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS
+                ):
+                    continue
+                claims.append(match.group(0))
+                found = True
+                break
+            if found:
+                break
     return claims
 
 

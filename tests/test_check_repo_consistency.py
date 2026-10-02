@@ -214,6 +214,13 @@ def test_no_longer_zero_fallback_is_not_historically_exempt():
     assert ragas_zero_fallback_claims("Historical note: RAGAS previously returned zero scores.") == []
 
 
+def test_later_affirmative_fallback_is_not_hidden_by_earlier_denial():
+    """An earlier truthful denial must not mask a later affirmative fallback."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("RAGAS does not return zero on success, but returns zero when unavailable")
+
+
 def test_ragas_fallback_claim_fails_consistency_guard(tmp_path, monkeypatch):
     """A canonical doc with the retired fallback claim must fail the full guard."""
     import scripts.check_repo_consistency as guard
@@ -454,6 +461,24 @@ def test_successful_run_does_not_bootstrap_failure_scope(tmp_path, monkeypatch):
 
     doc.write_text("RAGAS 正常可用时返回非零状态且不生成质量报告。", encoding="utf-8")
     errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+
+def test_unrelated_missing_data_does_not_bootstrap_failure_scope(tmp_path, monkeypatch):
+    """Availability wording must bind to the evaluator, not unrelated data."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "A successful RAGAS run with missing optional metadata returns a non-zero status and no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
     guard.check_ragas_failure_contract(errors)
     assert any("unsuccessful/non-zero" in error for error in errors)
     assert any("does not produce a quality report" in error for error in errors)
