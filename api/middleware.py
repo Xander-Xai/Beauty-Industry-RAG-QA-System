@@ -10,12 +10,12 @@ from __future__ import annotations
 import logging
 import os
 import time
-import uuid
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from common.audit import new_request_id, reset_request_id, set_request_id
 from common.config import get_config, is_production_mode
 
 logger = logging.getLogger(__name__)
@@ -50,26 +50,34 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # 获取或生成 request-id
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:12]
+        # 获取或生成 request-id。Incoming header wins so a gateway-supplied id
+        # survives end to end.
+        request_id = request.headers.get("X-Request-ID") or new_request_id()
 
-        t_start = time.perf_counter()
-        response = await call_next(request)
-        elapsed_ms = (time.perf_counter() - t_start) * 1000
+        # Publish the id for the duration of the request so audit events, the
+        # access log line and any trace span all reference the same value
+        # without it being threaded through every call site.
+        token = set_request_id(request_id)
+        try:
+            t_start = time.perf_counter()
+            response = await call_next(request)
+            elapsed_ms = (time.perf_counter() - t_start) * 1000
 
-        # 将 request-id 注入响应头
-        response.headers["X-Request-ID"] = request_id
+            # 将 request-id 注入响应头
+            response.headers["X-Request-ID"] = request_id
 
-        logger.info(
-            "%s %s -> %d (%.1fms) [req=%s]",
-            request.method,
-            request.url.path,
-            response.status_code,
-            elapsed_ms,
-            request_id,
-        )
+            logger.info(
+                "%s %s -> %d (%.1fms) [req=%s]",
+                request.method,
+                request.url.path,
+                response.status_code,
+                elapsed_ms,
+                request_id,
+            )
 
-        return response
+            return response
+        finally:
+            reset_request_id(token)
 
 
 def setup_middleware(app: FastAPI) -> None:

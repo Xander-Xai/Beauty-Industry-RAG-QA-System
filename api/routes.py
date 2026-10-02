@@ -32,6 +32,7 @@ from api.models import (
     QueryResponse,
     StatsResponse,
 )
+from common.audit import audit_media_denied
 from common.auth import is_document_authorized, require_identity, validate_doc_id
 from common.config import get_config_dict
 from common.models import UserIdentity
@@ -452,6 +453,14 @@ def media_handler(
         identity.user_role_mask,
         identity.user_dept_mask,
     ):
+        # A refused read of protected media is a security-relevant event, not
+        # merely a 4xx: it is the signal for investigating a probe or a
+        # mis-scoped role.
+        audit_media_denied(
+            identity.user_id,
+            doc_id,
+            reason="role/dept mask mismatch or missing document metadata",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

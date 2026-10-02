@@ -3,14 +3,35 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
+import os
 import sys
+
+from common.audit import (
+    ACTION_EPOCH_SEAL,
+    OUTCOME_FAILED,
+    OUTCOME_SUCCESS,
+    audit_event,
+)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+#: Epoch sealing is an operator CLI action, not an authenticated API call. The
+#: actor is recorded as a CLI principal; the OS user is kept in metadata so the
+#: record is still attributable on a shared host.
+CLI_ACTOR_ID = "cli_operator"
+
+
+def _operator_name() -> str:
+    try:
+        return getpass.getuser()
+    except Exception:
+        return os.environ.get("USER") or "unknown"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -130,6 +151,12 @@ def _handle_full_rebuild(args) -> int:
 
 
 def _handle_seal_epoch(args) -> int:
+    """Seal a knowledge epoch, auditing both the outcome and how it was sealed.
+
+    Sealing is a release action: after it the epoch is immutable, and activation
+    is a separate manual step. A seal performed with ``--skip-validation`` is
+    recorded distinctly because it bypasses the snapshot check.
+    """
     from offline.snapshot_builder import configured_snapshot_builder
 
     builder = configured_snapshot_builder()
@@ -140,12 +167,46 @@ def _handle_seal_epoch(args) -> int:
             "Prefer the normal validate-then-seal path.",
             args.epoch,
         )
+        audit_event(
+            action=ACTION_EPOCH_SEAL,
+            outcome=OUTCOME_SUCCESS,
+            actor_id=CLI_ACTOR_ID,
+            resource_type="knowledge_epoch",
+            resource_id=args.epoch,
+            metadata={"skip_validation": True, "validated": False, "operator": _operator_name()},
+        )
         return 0
-    builder.seal_epoch(args.epoch, validate=True)
+    try:
+        builder.seal_epoch(args.epoch, validate=True)
+    except Exception as exc:
+        # Validation failure must never be a silent non-event: it is the signal
+        # that the previous sealed epoch stays active.
+        audit_event(
+            action=ACTION_EPOCH_SEAL,
+            outcome=OUTCOME_FAILED,
+            actor_id=CLI_ACTOR_ID,
+            resource_type="knowledge_epoch",
+            resource_id=args.epoch,
+            reason="snapshot validation failed; epoch not sealed",
+            metadata={
+                "skip_validation": False,
+                "error_type": type(exc).__name__,
+                "operator": _operator_name(),
+            },
+        )
+        raise
     logger.info(
         "Validated and sealed epoch %s (Qdrant text/image + Elasticsearch); "
         "switch knowledge_version_epoch only after verification.",
         args.epoch,
+    )
+    audit_event(
+        action=ACTION_EPOCH_SEAL,
+        outcome=OUTCOME_SUCCESS,
+        actor_id=CLI_ACTOR_ID,
+        resource_type="knowledge_epoch",
+        resource_id=args.epoch,
+        metadata={"skip_validation": False, "validated": True, "operator": _operator_name()},
     )
     return 0
 
