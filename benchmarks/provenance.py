@@ -225,13 +225,20 @@ def _config_elastic_field(field: str) -> str | None:
 
 
 def _elastic_principal_fingerprint() -> str | None:
-    """Non-reversible identifier for the Elasticsearch credential in effect."""
+    """Non-reversible identifier for the Elasticsearch principal in effect.
+
+    Only the username is hashed. Including the password would make the artifact an
+    offline password verifier: with a known or predictable username (commonly
+    ``elastic``) an attacker could dictionary-guess candidates and compare digests,
+    and truncating the digest does not prevent that. The username is account
+    identity rather than a secret, and hashing it still separates two principals
+    that may see different corpora under document-level security. The password
+    itself stays unrepresented beyond a presence flag.
+    """
     username = _elastic_username()
-    password = _elastic_password()
-    if not username and not password:
+    if not username:
         return None
-    digest = hashlib.sha256(f"{username or ''}:{password or ''}".encode()).hexdigest()
-    return f"sha256:{digest[:16]}"
+    return "sha256:" + hashlib.sha256(username.encode()).hexdigest()[:16]
 
 
 def _is_secret_key(key: Any) -> bool:
@@ -312,7 +319,11 @@ def effective_retrieval_config() -> dict[str, Any]:
         },
         "embedding": embedding,
         "env_overrides": {
-            name: os.environ.get(name)
+            name: (
+                # The principal itself is a credential component; record only that
+                # it was supplied, matching the config-sourced representation.
+                bool(os.environ.get(name)) if name == "ELASTICSEARCH_USERNAME" else os.environ.get(name)
+            )
             for name in (
                 "QDRANT_HOST",
                 "QDRANT_PORT",

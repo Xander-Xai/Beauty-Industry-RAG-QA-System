@@ -1510,3 +1510,97 @@ def test_principal_fingerprint_is_not_reversible(monkeypatch):
     assert "super-secret" not in rendered
     assert "alice" not in rendered
     assert snapshot["elasticsearch"]["principal_fingerprint"].startswith("sha256:")
+
+
+# ── Round 13: no password-derived verifier, no username in artifacts ─────────
+
+
+def test_fingerprint_is_independent_of_the_password(monkeypatch):
+    """Hashing the password would make the artifact an offline guess verifier."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    def config_for(password):
+        return {"elasticsearch": {"host": "http://es:9200", "username": "elastic", "password": password}}
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: config_for("first-password"))
+    first = provenance.effective_retrieval_config()["elasticsearch"]["principal_fingerprint"]
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: config_for("second-password"))
+    second = provenance.effective_retrieval_config()["elasticsearch"]["principal_fingerprint"]
+    # Same username, different password -> the fingerprint must not change, or it
+    # would leak a per-password digest usable for dictionary guessing.
+    assert first == second
+
+
+def test_fingerprint_differs_per_username(monkeypatch):
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+
+    def config_for(username):
+        return {"elasticsearch": {"host": "http://es:9200", "username": username, "password": "pw"}}
+
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: config_for("alice"))
+    first = provenance.effective_retrieval_config()["elasticsearch"]["principal_fingerprint"]
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: config_for("bob"))
+    second = provenance.effective_retrieval_config()["elasticsearch"]["principal_fingerprint"]
+    assert first != second
+
+
+def test_no_password_digest_is_published(monkeypatch):
+    """A known-username digest over username:password is a password oracle."""
+    import hashlib
+    import json as _json
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    password = "hunter2"
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "http://es:9200", "username": "elastic", "password": password}},
+    )
+    rendered = _json.dumps(provenance.effective_retrieval_config())
+    # The attacker knows the username and can compute this digest offline.
+    guessable = hashlib.sha256(f"elastic:{password}".encode()).hexdigest()[:16]
+    assert guessable not in rendered
+    assert password not in rendered
+
+
+def test_env_username_is_not_persisted_in_plaintext(monkeypatch):
+    """ELASTICSEARCH_USERNAME must be a presence flag, not the value."""
+    import json as _json
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+    monkeypatch.setenv("ELASTICSEARCH_USERNAME", "envuser")
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "envpass")
+    snapshot = provenance.effective_retrieval_config()
+    assert snapshot["env_overrides"]["ELASTICSEARCH_USERNAME"] is True
+    rendered = _json.dumps(snapshot)
+    assert "envuser" not in rendered
+    assert "envpass" not in rendered
+    # The username is still identifiable via the fingerprint.
+    assert snapshot["elasticsearch"]["username_set"] is True
+    assert snapshot["elasticsearch"]["principal_fingerprint"].startswith("sha256:")
+
+
+def test_fingerprint_absent_without_a_username(monkeypatch):
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+    snapshot = provenance.effective_retrieval_config()
+    assert snapshot["elasticsearch"]["principal_fingerprint"] is None
+    assert snapshot["elasticsearch"]["password_set"] is False
