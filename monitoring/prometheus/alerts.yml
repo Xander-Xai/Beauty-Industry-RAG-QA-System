@@ -1,0 +1,147 @@
+# Prometheus alert rules — RAG query service
+#
+# SCOPE: these rules cover the canonical FastAPI monolith (`app.py`) only.
+#
+# EVERY THRESHOLD IN THIS FILE IS A `DESIGN_TARGET`.
+# None was derived from production history, because no production telemetry for
+# this system exists. They are starting points to be tuned against real traffic,
+# and are recorded in docs/slo-runbook.md as such.
+#
+# Every metric referenced below is verified to be emitted by
+# monitoring/otel_tracer.py::MetricsCollector, which is the collector
+# `/api/metrics` actually serves. That mapping is enforced by a test
+# (tests/monitoring/test_prometheus_alerts.py), so a rule cannot reference a
+# metric this application never emits.
+#
+# Metric inventory actually available on the canonical path:
+#   rag_http_requests                        counter
+#   rag_http_responses_2xx / _4xx / _5xx     counter
+#   rag_http_rate_limited                    counter (429s; absent until one occurs)
+#   rag_http_active_requests                 gauge
+#   rag_http_request_duration_seconds{quantile=...} + _count   summary
+#   rag_redis_degraded_mode                  gauge (0/1, set by the real fallback path)
+#   rag_redis_degraded_events                counter
+#   rag_uptime_seconds                       gauge
+#   up{job="rag-api"}                        provided by Prometheus itself
+#
+# DELIBERATELY NOT ALERTED, because no metric exists for them:
+#   Qdrant down / Elasticsearch down. `/api/health` reports them as JSON, not as
+#   Prometheus series, and this repository emits no gauge for either. Writing a
+#   rule against a metric that does not exist would create an alert that can
+#   never fire and looks like coverage. Their runbook procedures exist and are
+#   driven by the health endpoint; the metric instrumentation is the missing
+#   piece. See docs/slo-runbook.md.
+#
+# ALERTING IS NOT VALIDATED IN PRODUCTION. These rules are tested as
+# configuration (YAML shape, required alerts, metric correspondence, and
+# absence of impossible alerts). No production Prometheus scrapes this system.
+
+groups:
+  - name: rag-availability
+    interval: 30s
+    rules:
+      - alert: RagAppDown
+        expr: up{job="rag-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          slo: SLO-1
+        annotations:
+          summary: "RAG API target is not scrapeable"
+          description: >-
+            Prometheus cannot scrape {{ $labels.job }}. The API is down, or the
+            bearer token on the scrape config is rejected (GET /api/metrics
+            requires authentication and returns 401 without it).
+          runbook: docs/slo-runbook.md#high-error-rate
+
+      - alert: RagHighErrorRate
+        expr: >-
+          (
+            sum(rate(rag_http_responses_5xx[5m]))
+            /
+            clamp_min(sum(rate(rag_http_requests[5m])), 0.000001)
+          ) > 0.01
+          and
+          sum(rate(rag_http_requests[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          slo: SLO-2
+        annotations:
+          summary: "5xx ratio above the 1% target"
+          description: >-
+            Server error ratio is {{ $value | humanizePercentage }} over 5
+            minutes, against a DESIGN_TARGET of < 1%. Traffic is present, so
+            this is a real error ratio rather than a single idle 500.
+          runbook: docs/slo-runbook.md#high-error-rate
+
+  - name: rag-latency
+    interval: 30s
+    rules:
+      - alert: RagHighLatencyP95
+        expr: >-
+          rag_http_request_duration_seconds{quantile="0.95"} > 2
+          and
+          rate(rag_http_request_duration_seconds_count[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          slo: SLO-3
+        annotations:
+          summary: "p95 request latency above the 2000 ms target"
+          description: >-
+            p95 latency is {{ $value }}s against a DESIGN_TARGET of <= 2s. The
+            request-count guard is load-bearing: a Prometheus summary keeps
+            reporting its last quantile indefinitely, so without it a single
+            slow request would keep this alert firing long after traffic stopped.
+          runbook: docs/slo-runbook.md#high-latency
+
+  - name: rag-dependencies
+    interval: 30s
+    rules:
+      - alert: RagRedisDegraded
+        expr: rag_redis_degraded_mode == 1
+        for: 5m
+        labels:
+          severity: warning
+          slo: SLO-4
+        annotations:
+          summary: "Redis is unavailable; sessions fell back to process memory"
+          description: >-
+            The real Redis fallback path in core/pipeline_context.py has fired.
+            Sessions are no longer shared across workers and login rate limiting
+            has degraded from a shared counter to per-process counting. No data
+            is lost; the service keeps serving.
+          runbook: docs/slo-runbook.md#redisunavailable
+
+      - alert: RagHighLoginRateLimit
+        expr: increase(rag_http_rate_limited[5m]) > 0
+        for: 0m
+        labels:
+          severity: info
+          slo: SLO-2
+        annotations:
+          summary: "Login rate limiting is firing"
+          description: >-
+            {{ $value }} login attempt(s) were rate limited in the last 5
+            minutes. Usually credential stuffing or a client retry loop. If Redis
+            is down this also degrades to per-process counting, which weakens
+            the limit across workers.
+          runbook: docs/slo-runbook.md#redisunavailable
+
+  - name: rag-saturation
+    interval: 30s
+    rules:
+      - alert: RagRequestSaturation
+        expr: rag_http_active_requests > 50
+        for: 10m
+        labels:
+          severity: warning
+          slo: SLO-3
+        annotations:
+          summary: "In-flight request count is elevated"
+          description: >-
+            {{ $value }} requests are in flight. The bound is a DESIGN_TARGET
+            placeholder, not a measured capacity limit; this repository holds no
+            load artifact that would justify a specific number.
+          runbook: docs/slo-runbook.md#high-latency

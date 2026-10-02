@@ -631,10 +631,16 @@ class MetricsCollector:
             if not values:
                 continue
             safe_name = name.replace(".", "_")
-            lines.append(f"# HELP rag_{safe_name} Histogram for {name}")
-            lines.append(f"# TYPE rag_{safe_name} summary")
-            lines.append(f'rag_{{quantile="0.5"}} {self._percentile(values, 0.5):.2f}')
-            lines.append(f'rag_{{quantile="0.95"}} {self._percentile(values, 0.95):.2f}')
-            lines.append(f'rag_{{quantile="0.99"}} {self._percentile(values, 0.99):.2f}')
+            # The metric name was missing from the sample lines: `safe_name` was
+            # computed and then never used, so each quantile was emitted as
+            # `rag_{quantile="0.5"}`. That is not valid Prometheus exposition
+            # format, so these latency quantiles were silently unscrapeable and
+            # any latency alert would have had no data behind it.
+            lines.append(f"# HELP rag_{safe_name}_seconds Histogram for {name}")
+            lines.append(f"# TYPE rag_{safe_name}_seconds summary")
+            lines.append(f'rag_{safe_name}_seconds{{quantile="0.5"}} {self._percentile(values, 0.5):.2f}')
+            lines.append(f'rag_{safe_name}_seconds{{quantile="0.95"}} {self._percentile(values, 0.95):.2f}')
+            lines.append(f'rag_{safe_name}_seconds{{quantile="0.99"}} {self._percentile(values, 0.99):.2f}')
+            lines.append(f"rag_{safe_name}_seconds_count {len(values)}")
 
         return "\n".join(lines) + "\n"

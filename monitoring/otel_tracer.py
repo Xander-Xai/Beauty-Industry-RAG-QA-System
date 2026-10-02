@@ -190,7 +190,42 @@ class MetricsCollector:
         self._gauges = defaultdict(float)
         self._histograms = defaultdict(list)
         self._start_time = time.time()
+        # Redis 降级状态：0=正常，1=降级到进程内内存。由真实降级路径设置，
+        # 不是默认常量——没有真实降级发生时它保持 0，告警才不会误报。
+        self._gauges["redis_degraded_mode"] = 0.0
         logger.info("MetricsCollector 初始化完成")
+
+    def record_http_request(self, status_code: int, duration_ms: float) -> None:
+        """记录一次 HTTP 请求。
+
+        与 :meth:`record_request` 的区别：后者只在一次完整 RAG 查询成功后调用，
+        因此在 LLM / Qdrant / ES 不可用时不会更新。前者是 HTTP 层的真实观测，
+        错误率与延迟告警必须建立在它之上，否则依赖故障恰好是最需要告警的时刻
+        却没有指标。
+
+        ``duration_ms`` 只在真正拿到响应耗时时才记入延迟直方图，避免把一个
+        没有时延观测的请求混进分位数。
+        """
+        self.increment("http.requests")
+        bucket = f"http.responses.{status_code // 100}xx"
+        self.increment(bucket)
+        if status_code == 429:
+            self.increment("http.rate_limited")
+        if duration_ms is not None and duration_ms >= 0:
+            self.observe_histogram("http.request.duration", duration_ms)
+
+    def set_active_requests(self, count: int) -> None:
+        """当前在途请求数（用于饱和度观测）。"""
+        self._gauges["http.active_requests"] = float(count)
+
+    def set_redis_degraded(self, degraded: bool) -> None:
+        """Redis 降级状态。
+
+        由 core.pipeline_context 的真实降级路径调用，而不是由告警规则凭空假设。
+        """
+        self._gauges["redis_degraded_mode"] = 1.0 if degraded else 0.0
+        if degraded:
+            self.increment("redis.degraded_events")
 
     def increment(self, name: str, value: int = 1):
         """递增计数器"""
