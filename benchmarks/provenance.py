@@ -199,14 +199,17 @@ def redact_url_userinfo(value: Any) -> Any:
     if not isinstance(value, str) or "@" not in value:
         return value
     try:
-        parts = urlsplit(value)
+        # Without a "//" prefix, urlsplit reads "user:password@host:9200" as a
+        # scheme of "user" with an empty netloc, so the userinfo would survive.
+        parts = urlsplit(value if "//" in value else f"//{value}")
     except ValueError:
         return value
     if not parts.netloc or "@" not in parts.netloc:
         return value
     host = parts.netloc.rsplit("@", 1)[-1]
     redacted = urlunsplit((parts.scheme, f"***:***@{host}", parts.path, parts.query, parts.fragment))
-    return redacted
+    # urlunsplit emits an absolute URL; preserve the original scheme-less form.
+    return redacted if "//" in value else redacted.removeprefix("//")
 
 
 def _elastic_username() -> str | None:

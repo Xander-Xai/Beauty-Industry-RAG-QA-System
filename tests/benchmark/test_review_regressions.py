@@ -1970,3 +1970,121 @@ def test_env_presence_never_records_values(monkeypatch):
     monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "value-must-not-appear")
     rendered = _json.dumps(provenance.effective_retrieval_config())
     assert "value-must-not-appear" not in rendered
+
+
+# ── Round 16: scheme-less redaction, percent-encoding, duplicate configs ─────
+
+
+def test_scheme_less_userinfo_is_redacted():
+    """urlsplit reads "user:password@host:9200" as a scheme without a netloc."""
+    from benchmarks.provenance import redact_url_userinfo
+
+    redacted = redact_url_userinfo("user:password@host:9200")
+    assert "password" not in redacted
+    assert redacted == "***:***@host:9200"
+
+
+def test_scheme_less_url_does_not_gain_a_prefix():
+    from benchmarks.provenance import redact_url_userinfo
+
+    assert redact_url_userinfo("es:9200") == "es:9200"
+    assert not redact_url_userinfo("user:pw@host:9200").startswith("//")
+
+
+def test_scheme_less_url_credentials_do_not_leak_into_metadata(monkeypatch):
+    import json as _json
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "user:password@host:9200", "index": "i"}},
+    )
+    rendered = _json.dumps(provenance.effective_retrieval_config())
+    # Only key names such as password_set may appear; the credential must not.
+    assert "***:***@host:9200" in rendered
+    assert "user:password@host:9200" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("https://user:p%40ss@host:9200", ("user", "p@ss")),
+        ("https://user:p%3Aw@host:9200", ("user", "p:w")),
+        ("https://user@host:9200", ("user", None)),
+        ("https://u:p@host:9200", ("u", "p")),
+    ],
+)
+def test_percent_escaped_credentials_are_decoded(raw, expected):
+    from benchmarks.backends import elastic_url_userinfo
+
+    assert elastic_url_userinfo(raw) == expected
+
+
+def test_escaped_credentials_are_used_for_auth(monkeypatch):
+    """Sending the escaped form would authenticate with the wrong password."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    captured = {}
+
+    def fake_get(url, auth=None):
+        captured["auth"] = auth
+        return True, {"count": 5}
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://user:p%40ss@host:9200", "enabled": True}},
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", fake_get)
+    assert backends.probe_bm25().available is True
+    assert captured["auth"] == ("user", "p@ss")
+
+
+@pytest.mark.parametrize("value", ["bm25,bm25", "bm25,dense,bm25", "dense,dense"])
+def test_duplicate_config_names_are_rejected(value):
+    """A repeated name would run twice but collapse into one summary entry."""
+    import argparse
+
+    import benchmarks.retrieval_benchmark as cli
+
+    with pytest.raises(SystemExit, match="duplicate"):
+        cli._resolve_configs(argparse.Namespace(config=None, configs=value))
+
+
+def test_distinct_config_names_are_accepted():
+    import argparse
+
+    import benchmarks.retrieval_benchmark as cli
+
+    args = argparse.Namespace(config=None, configs="bm25,dense,hybrid_rrf")
+    assert cli._resolve_configs(args) == ["bm25", "dense", "hybrid_rrf"]
+
+
+def test_duplicate_rejected_before_any_artifact_is_written(tmp_path):
+    import benchmarks.retrieval_benchmark as cli
+
+    # Consistent with the other invalid --configs input: rejected before any run.
+    with pytest.raises(SystemExit, match="duplicate"):
+        cli.main(
+            [
+                "--configs",
+                "bm25,bm25",
+                "--limit",
+                "2",
+                "--dataset",
+                "tests/evaluation/golden_set.jsonl",
+                "--output-dir",
+                str(tmp_path),
+                "--allow-dirty",
+            ]
+        )
+    assert not list(tmp_path.glob("*/metadata.json"))

@@ -84,6 +84,12 @@ def _resolve_configs(args: argparse.Namespace) -> list[str]:
             # `--configs ,,` must not become an empty experiment that still
             # writes a "multi" artifact and exits successfully.
             raise SystemExit("--configs was provided but contained no configuration names")
+        # A repeated name would be run twice but collapsed into one summary entry
+        # (and would duplicate per-query rows), so the artifact would misreport the
+        # requested scope.
+        duplicates = sorted({name for name in requested if requested.count(name) > 1})
+        if duplicates:
+            raise SystemExit(f"--configs contains duplicate configuration name(s): {', '.join(duplicates)}")
         return requested
     return ["bm25", "dense", "hybrid_rrf"]
 

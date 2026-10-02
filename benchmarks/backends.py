@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urlunsplit
+from urllib.parse import unquote, urlparse, urlunsplit
 
 from benchmarks.models import BackendAvailability
 
@@ -154,7 +154,11 @@ def elastic_url_userinfo(host: str) -> tuple[str | None, str | None]:
         return None, None
     if not parsed.username:
         return None, None
-    return parsed.username, parsed.password
+    # urlparse leaves escapes in place ("p%40ss"), but the semantic credential is
+    # "p@ss"; sending the escaped form would authenticate with the wrong password.
+    username = unquote(parsed.username)
+    password = unquote(parsed.password) if parsed.password is not None else None
+    return username, password
 
 
 def _qdrant_settings() -> tuple[str, int, str]:
