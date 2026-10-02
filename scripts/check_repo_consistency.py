@@ -208,10 +208,6 @@ LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE = re.compile(
 # The LOCAL_REAL_VALIDATION marker must be attached to the actual completed
 # dependencies and an affirmative validation statement, so silently deleting the
 # evidence claim (leaving only a glossary mention) is detected.
-_LOCAL_VALIDATION_DEPENDENCY_RE = re.compile(
-    r"Redis|nginx|反向代理|Elasticsearch|Prometheus|(?<![A-Za-z])ES(?![A-Za-z])",
-    re.IGNORECASE,
-)
 _LOCAL_VALIDATION_AFFIRMATIVE_RE = re.compile(
     r"validated|verified|完成|已验证|验证|执行|已",
     re.IGNORECASE,
@@ -620,6 +616,7 @@ _STATUS_NEGATION_BEFORE_RE = re.compile(
     r"(?:can't|won't|isn't|aren't|wasn't|weren't|couldn't|shouldn't|wouldn't|doesn't|don't|didn't)\s+"
     r"(?:\w+\s+){0,3}$|"
     r"(?:never|not)\s+(?:\w+\s+){0,3}$|"
+    r"(?:is|are|was|were)?\s*not\s+(?:guaranteed|required|expected)\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:fails?|failed)\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:is|are|was|were)?\s*unable\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:不|未|无法|不能|不会|未能)[^\n]{0,4}$",
@@ -649,7 +646,7 @@ def _ragas_failure_segments(text: str) -> list[str]:
 def _ragas_status_affirmative(segment: str) -> bool:
     """True when the segment asserts the non-zero/fail-fast status affirmatively."""
     for match in RAGAS_FAILURE_STATUS_REQUIRED_RE.finditer(segment):
-        prefix = segment[max(0, match.start() - 24) : match.start()]
+        prefix = segment[max(0, match.start() - 40) : match.start()]
         if _STATUS_NEGATION_BEFORE_RE.search(prefix):
             continue
         return True
@@ -736,13 +733,26 @@ def stale_local_validation_claims(text: str) -> list[str]:
     return claims
 
 
+_LOCAL_VALIDATION_REQUIRED_DEPS = [
+    re.compile(r"Redis", re.IGNORECASE),
+    re.compile(r"nginx|反向代理", re.IGNORECASE),
+    re.compile(r"Elasticsearch|(?<![A-Za-z])ES(?![A-Za-z])", re.IGNORECASE),
+    re.compile(r"Prometheus", re.IGNORECASE),
+]
+_VALIDATION_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?]+")
+
+
 def _local_validation_affirmative_scope(text: str) -> bool:
-    """True when a LOCAL_REAL_VALIDATION mention is near an affirmative dependency claim."""
+    """True when a sentence near the marker affirms all required local validations."""
     marker = "LOCAL_REAL_VALIDATION"
-    for match in re.finditer(marker, text):
-        window = text[max(0, match.start() - 400) : match.end() + 400]
-        if _LOCAL_VALIDATION_DEPENDENCY_RE.search(window) and _affirmative_validation_in(window):
-            return True
+    normalized = text.replace("\n", " ")
+    for match in re.finditer(marker, normalized):
+        window = normalized[max(0, match.start() - 800) : match.end() + 800]
+        for sentence in _VALIDATION_SENTENCE_SPLIT_RE.split(window):
+            if not _affirmative_validation_in(sentence):
+                continue
+            if all(dependency.search(sentence) for dependency in _LOCAL_VALIDATION_REQUIRED_DEPS):
+                return True
     return False
 
 

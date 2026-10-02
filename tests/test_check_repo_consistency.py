@@ -458,6 +458,23 @@ def test_contracted_status_negation_is_rejected(tmp_path, monkeypatch):
     assert any("unsuccessful/non-zero" in error for error in errors)
 
 
+def test_non_guaranteed_status_is_rejected(tmp_path, monkeypatch):
+    """`not guaranteed to return` negates the non-zero status guarantee."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "RAGAS unavailable is not guaranteed to return a non-zero status and produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+
+
 def test_ragas_report_guarantee_must_share_failure_clause_with_comma(tmp_path, monkeypatch):
     """A comma-joined non-failure RAGAS clause must not satisfy the no-report half."""
     import scripts.check_repo_consistency as guard
@@ -717,6 +734,23 @@ def test_local_validation_marker_requires_non_negated_assertion(tmp_path, monkey
     monkeypatch.setattr(guard, "ROOT", tmp_path)
     (tmp_path / "doc.md").write_text(
         "LOCAL_REAL_VALIDATION is an evidence category.\nProduction Redis is not yet validated.\n",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_local_runtime_validation_contract(errors)
+    assert any("affirmatively" in error for error in errors)
+
+
+def test_local_validation_requires_all_dependencies(tmp_path, monkeypatch):
+    """A single unrelated dependency must not stand in for the required set."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "LOCAL_VALIDATION_DOCS", ["doc.md"])
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "doc.md").write_text(
+        "LOCAL_REAL_VALIDATION is an evidence category. Redis documentation is available."
+        " The Qdrant integration is validated.\n",
         encoding="utf-8",
     )
 
