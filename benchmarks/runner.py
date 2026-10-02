@@ -62,6 +62,7 @@ class ConfigRun:
 
     outcome: ConfigOutcome
     results: list[QueryBenchmarkResult] = field(default_factory=list)
+    failures: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def executed(self) -> bool:
@@ -126,10 +127,24 @@ def run_configuration(
 
     retriever = retriever_factory(config_name)
     results: list[QueryBenchmarkResult] = []
+    failures: list[dict[str, str]] = []
     for query in queries:
         latency = new_latency_record()
-        with timed_stage(latency, "total_retrieval_ms"):
-            items = retriever.retrieve(query, top_k)
+        # A single failed query (for example a transient backend timeout) must
+        # not discard every completed measurement, so the failure is recorded and
+        # the remaining queries continue.
+        try:
+            with timed_stage(latency, "total_retrieval_ms"):
+                items = retriever.retrieve(query, top_k)
+        except Exception as exc:  # noqa: BLE001 - record any retriever failure
+            failures.append(
+                {
+                    "sample_id": query.sample_id,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc)[:200],
+                }
+            )
+            continue
         deduped = dedupe_preserving_rank(items)[:top_k]
         scored = score_ranking(
             [item.key for item in query.relevant_items],
@@ -155,8 +170,18 @@ def run_configuration(
                 latency_ms=latency,
             )
         )
+    if failures and not results:
+        # Every sample failed: report the configuration as failed, never as a
+        # measurement.
+        outcome = ConfigOutcome(
+            config_name,
+            STATUS_BLOCKED,
+            f"all {len(failures)} sampled queries failed during retrieval",
+            probed,
+        )
+        return ConfigRun(outcome, [], failures)
     outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "synthetic fixture retriever (not a benchmark)", probed)
-    return ConfigRun(outcome, results)
+    return ConfigRun(outcome, results, failures)
 
 
 def summarize_run(runs: Sequence[ConfigRun]) -> dict[str, Any]:
@@ -165,6 +190,9 @@ def summarize_run(runs: Sequence[ConfigRun]) -> dict[str, Any]:
     latency: dict[str, Any] = {}
     for run in runs:
         entry = run.outcome.as_dict()
+        if run.failures:
+            entry["failures"] = run.failures
+            entry["failure_count"] = len(run.failures)
         if run.executed:
             entry["metrics"] = aggregate_results(run.results)
             entry["latency"] = summarize_latency([result.latency_ms for result in run.results])

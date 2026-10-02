@@ -270,3 +270,112 @@ def test_config_credentials_used_when_env_absent(monkeypatch):
     )
     _, _, _, auth = backends._elastic_settings()
     assert auth == ("from-config", "cfg-pass")
+
+
+# ── Round 3: effective config hash, per-query failures, empty collection ─────
+
+
+def test_config_hash_covers_effective_runtime_config(monkeypatch):
+    """Two runs against different collections must not share a config hash."""
+    from benchmarks.provenance import effective_retrieval_config, sha256_json
+    from common import config as common_config
+
+    base = {
+        "retrieval": {"rrf": {"k": 60}},
+        "qdrant": {"host": "qdrant", "collections": {}},
+        "embedding": {"text": {"collection": "rag_text_768"}},
+    }
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: base)
+    first = sha256_json({"configs": ["bm25"], "top_k": 10, "effective_config": effective_retrieval_config()})
+
+    changed = {
+        "retrieval": {"rrf": {"k": 60}},
+        "qdrant": {"host": "qdrant", "collections": {}},
+        "embedding": {"text": {"collection": "rag_text_custom"}},
+    }
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: changed)
+    second = sha256_json({"configs": ["bm25"], "top_k": 10, "effective_config": effective_retrieval_config()})
+    assert first != second
+
+
+def test_effective_config_snapshot_has_no_secret_values(monkeypatch):
+    from benchmarks.provenance import effective_retrieval_config
+    from common import config as common_config
+
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "hunter2")
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "h", "index": "i", "password": "cfg-hunter2"}},
+    )
+    snapshot = effective_retrieval_config()
+    text = json.dumps(snapshot)
+    assert "hunter2" not in text
+    assert snapshot["elasticsearch"]["password_set"] is True
+
+
+def test_empty_qdrant_collection_is_rejected(monkeypatch):
+    from benchmarks import backends
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 0}}))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert availability.reason == backends.REASON_SERVICE_NO_DATA
+    assert "0 points" in (availability.detail or "")
+
+
+def test_non_empty_qdrant_collection_with_weights_is_available(monkeypatch):
+    from benchmarks import backends
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 42}}))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    assert backends.probe_dense().available is True
+
+
+def test_one_failed_query_does_not_discard_measurements(make_query):
+    """A failing query is recorded; other queries still produce metrics."""
+    from benchmarks.runner import run_configuration, summarize_run
+
+    class FlakyRetriever:
+        name = "flaky"
+
+        def retrieve(self, query, top_k):
+            if query.sample_id == "0001":
+                raise TimeoutError("backend timeout")
+            from benchmarks.relevance import text_key
+
+            return [
+                __import__("benchmarks.models", fromlist=["RetrievedItem"]).RetrievedItem(
+                    rank=1, key=text_key("alpha passage"), score=1.0, source="flaky"
+                )
+            ]
+
+    queries = [make_query("0000", ["alpha passage"]), make_query("0001", ["beta passage"])]
+    run = run_configuration("bm25", queries, retriever_factory=lambda name: FlakyRetriever())
+    assert run.executed
+    assert len(run.results) == 1
+    assert len(run.failures) == 1
+    assert run.failures[0]["sample_id"] == "0001"
+    assert run.failures[0]["error_type"] == "TimeoutError"
+    summary = summarize_run([run])
+    assert summary["configs"]["bm25"]["failure_count"] == 1
+
+
+def test_all_failed_queries_block_the_configuration(make_query):
+    from benchmarks.runner import run_configuration
+
+    class DeadRetriever:
+        name = "dead"
+
+        def retrieve(self, query, top_k):
+            raise ConnectionError("service down")
+
+    queries = [make_query("0000", ["alpha passage"])]
+    run = run_configuration("bm25", queries, retriever_factory=lambda name: DeadRetriever())
+    assert run.executed is False
+    assert run.results == []
+    assert run.failures
+    assert "failed during retrieval" in run.outcome.reason

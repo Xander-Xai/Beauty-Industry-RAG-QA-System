@@ -34,6 +34,7 @@ from benchmarks.dataset import (
 from benchmarks.models import STATUS_EXECUTED
 from benchmarks.provenance import (
     collect_environment,
+    effective_retrieval_config,
     git_provenance,
     new_run_id,
     now_utc,
@@ -146,7 +147,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     run_id = new_run_id()
-    config_payload = {"configs": configs, "top_k": args.top_k, "dataset_sha256": sha256_file(dataset_path)}
+    effective_config = effective_retrieval_config()
+    config_payload = {
+        "configs": configs,
+        "top_k": args.top_k,
+        "dataset_sha256": sha256_file(dataset_path),
+        # Snapshot of the settings that actually apply, so two runs against
+        # different indexes/collections/model revisions cannot share a hash.
+        "effective_config": effective_config,
+    }
     metadata = {
         "run_id": run_id,
         "timestamp_utc": now_utc(),

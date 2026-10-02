@@ -179,6 +179,60 @@ def render_environment(environment: dict[str, Any]) -> dict[str, Any]:
     return rendered
 
 
+def effective_retrieval_config() -> dict[str, Any]:
+    """A sanitized snapshot of the retrieval settings that actually apply.
+
+    Hashing only the requested configuration names is not enough to reproduce a
+    run: a different ``CONFIG_PATH`` or Qdrant/Elasticsearch environment
+    override can query a different index, collection or model revision while
+    producing the same configuration hash. The snapshot therefore includes the
+    env-overridden config values plus the environment variables the retrieval
+    layer reads. Secret values are reduced to presence flags.
+    """
+    from common.config import get_config_dict
+
+    config = get_config_dict() or {}
+    retrieval = config.get("retrieval", {}) or {}
+    elastic = config.get("elasticsearch", {}) or {}
+    qdrant = config.get("qdrant", {}) or {}
+    embedding = config.get("embedding", {}) or {}
+    return {
+        "config_path": os.environ.get("CONFIG_PATH") or "config.json",
+        "knowledge_version_epoch": config.get("knowledge_version_epoch"),
+        "retrieval": retrieval,
+        "rrf": retrieval.get("rrf"),
+        "parallel_paths": retrieval.get("parallel_paths"),
+        "rerank": retrieval.get("rerank"),
+        "bi_encoder": retrieval.get("bi_encoder"),
+        "elasticsearch": {
+            "host": elastic.get("host"),
+            "index": elastic.get("index"),
+            "enabled": elastic.get("enabled"),
+            "username_set": bool(os.environ.get("ELASTICSEARCH_USERNAME") or elastic.get("username")),
+            "password_set": bool(os.environ.get("ELASTICSEARCH_PASSWORD") or elastic.get("password")),
+        },
+        "qdrant": {
+            "host": qdrant.get("host"),
+            "port": qdrant.get("port"),
+            "grpc_port": qdrant.get("grpc_port"),
+            "collections": qdrant.get("collections"),
+        },
+        "embedding": embedding,
+        "env_overrides": {
+            name: os.environ.get(name)
+            for name in (
+                "QDRANT_HOST",
+                "QDRANT_PORT",
+                "QDRANT_GRPC_PORT",
+                "ELASTICSEARCH_USERNAME",
+                "TRUSTED_PROXIES",
+            )
+            if os.environ.get(name)
+        },
+        "secret_env_presence": credential_env_state(),
+    }
+
+
 def write_gitignore_entry(repo_root: Path, entry: str) -> bool:
     """Append ``entry`` to ``.gitignore`` when absent. Returns True if written."""
     gitignore = repo_root / ".gitignore"

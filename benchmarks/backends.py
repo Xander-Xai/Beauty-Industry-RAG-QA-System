@@ -184,6 +184,19 @@ def probe_dense() -> BackendAvailability:
         )
     if not ok:
         return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
+    points = None
+    if isinstance(payload, dict):
+        result = payload.get("result")
+        if isinstance(result, dict):
+            points = result.get("points_count")
+    if points is not None and int(points) == 0:
+        # An existing but empty collection cannot answer any retrieval query.
+        return BackendAvailability(
+            "dense",
+            False,
+            REASON_SERVICE_NO_DATA,
+            f"collection {collection} exists but holds 0 points",
+        )
     weights_ok, model_path = _model_weights_available()
     if not weights_ok:
         return BackendAvailability(
