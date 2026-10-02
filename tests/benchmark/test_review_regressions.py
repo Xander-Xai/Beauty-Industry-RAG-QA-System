@@ -196,7 +196,8 @@ def test_qdrant_http_error_is_not_treated_as_available(monkeypatch):
     def _raise_401(request, timeout=None):
         raise urllib.error.HTTPError("http://x", 401, "Unauthorized", None, None)
 
-    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    # gRPC closed so the REST branch is the one under test.
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port != 6334)
     monkeypatch.setattr(backends.urllib.request, "urlopen", _raise_401)
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
     availability = backends.probe_dense()
@@ -317,7 +318,8 @@ def test_effective_config_snapshot_has_no_secret_values(monkeypatch):
 def test_empty_qdrant_collection_is_rejected(monkeypatch):
     from benchmarks import backends
 
-    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    # gRPC closed so the REST branch is the one under test.
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port != 6334)
     monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 0}}))
     monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
     availability = backends.probe_dense()
@@ -1292,3 +1294,94 @@ def test_es_host_is_parsed_as_a_hostname(monkeypatch, url):
     assert "[" not in (seen["host"] or "")
     assert "user" not in (seen["host"] or "")
     assert availability.available is True
+
+
+# ── Round 11: URL credential redaction, gRPC precedence, empty weight index ──
+
+
+def test_url_userinfo_is_redacted():
+    from benchmarks.provenance import redact_url_userinfo
+
+    assert redact_url_userinfo("https://user:password@host:9200") == "https://***:***@host:9200"
+    assert redact_url_userinfo("http://es:9200") == "http://es:9200"
+    assert redact_url_userinfo("plain-value") == "plain-value"
+    assert redact_url_userinfo(None) is None
+
+
+def test_snapshot_redacts_elasticsearch_url_credentials(monkeypatch):
+    """A password embedded in elasticsearch.host must not reach metadata.json."""
+    import json as _json
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://esuser:espassword@es:9200", "index": "cosmetics_docs"}},
+    )
+    rendered = _json.dumps(provenance.effective_retrieval_config())
+    assert "espassword" not in rendered
+    assert "esuser" not in rendered
+    assert "es:9200" in rendered
+
+
+def test_snapshot_redacts_nested_url_credentials():
+    from benchmarks.provenance import sanitize
+
+    sanitized = sanitize({"backends": [{"url": "https://u:p@svc:9200"}]})
+    assert "p@" not in str(sanitized)
+    assert "svc:9200" in str(sanitized)
+
+
+def test_grpc_populated_overrides_rest_http_error(monkeypatch):
+    """A REST 401 from a proxy must not block when gRPC can serve the collection."""
+    import urllib.error
+
+    from benchmarks import backends
+
+    def _raise_401(request, timeout=None):
+        raise urllib.error.HTTPError("http://x", 401, "Unauthorized", None, None)
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends.urllib.request, "urlopen", _raise_401)
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (7, "ok"))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    availability = backends.probe_dense()
+    assert availability.available is True, availability.detail
+
+
+def test_grpc_failure_overrides_rest_success(monkeypatch):
+    """gRPC is the production transport, so its failure is decisive."""
+    from benchmarks import backends
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 42}}))
+    monkeypatch.setattr(backends, "_grpc_collection_points", lambda host, port, coll: (None, "grpc denied"))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    availability = backends.probe_dense()
+    assert availability.available is False
+    assert "grpc denied" in availability.detail
+
+
+def test_rest_only_path_still_works_when_grpc_closed(monkeypatch):
+    from benchmarks import backends
+
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: port == 6333)
+    monkeypatch.setattr(backends, "_http_get", lambda url, auth=None: (True, {"result": {"points_count": 9}}))
+    monkeypatch.setattr(backends, "_model_weights_available", lambda: (True, "model"))
+    assert backends.probe_dense().available is True
+
+
+def test_zero_byte_weight_index_is_rejected(tmp_path):
+    """An empty index file is an interrupted download, not an absent index."""
+    from benchmarks.backends import _looks_like_model_dir
+
+    path = tmp_path / "model"
+    path.mkdir()
+    for name in ("config.json", "tokenizer.json", "model-00001-of-00002.safetensors"):
+        (path / name).write_text("x" * 10, encoding="utf-8")
+    (path / "model.safetensors.index.json").write_bytes(b"")
+    ok, detail = _looks_like_model_dir(path)
+    assert ok is False
+    assert "weight index" in detail

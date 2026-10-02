@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 UNAVAILABLE = "unavailable"
 
@@ -188,6 +189,26 @@ def render_environment(environment: dict[str, Any]) -> dict[str, Any]:
 _SECRET_KEY_MARKERS = ("password", "secret", "token", "api_key", "credential", "access_key", "private_key")
 
 
+def redact_url_userinfo(value: Any) -> Any:
+    """Strip ``user:password@`` credentials from a URL string.
+
+    The sanitizer matches on *keys*, so a credential embedded in a URL under a
+    harmless key such as ``host`` would survive untouched. Any URL-shaped string
+    that is persisted is redacted here instead.
+    """
+    if not isinstance(value, str) or "@" not in value:
+        return value
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if not parts.netloc or "@" not in parts.netloc:
+        return value
+    host = parts.netloc.rsplit("@", 1)[-1]
+    redacted = urlunsplit((parts.scheme, f"***:***@{host}", parts.path, parts.query, parts.fragment))
+    return redacted
+
+
 def _is_secret_key(key: Any) -> bool:
     lowered = str(key).lower()
     return any(marker in lowered for marker in _SECRET_KEY_MARKERS)
@@ -206,7 +227,7 @@ def sanitize(value: Any) -> Any:
         return [sanitize(item) for item in value]
     if isinstance(value, tuple):
         return [sanitize(item) for item in value]
-    return value
+    return redact_url_userinfo(value)
 
 
 def _sanitize_models(models: Any) -> dict[str, Any]:

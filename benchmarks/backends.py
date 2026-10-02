@@ -219,8 +219,12 @@ def _declared_shards(path: Path) -> list[str] | None | str:
     """
     for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
         index_file = path / index_name
-        if not _non_empty(index_file):
+        if not index_file.is_file():
             continue
+        if not _non_empty(index_file):
+            # Present but zero-byte: an interrupted download, not "no index".
+            # from_pretrained still reads it, so it must not be skipped.
+            return INVALID_WEIGHT_INDEX
         try:
             index = json.loads(index_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -328,44 +332,17 @@ def probe_dense() -> BackendAvailability:
         if grpc_port is not None:
             probed += f" (rest) / {host}:{grpc_port} (grpc)"
         return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, probed)
-    # The production client prefers gRPC, so a reachable gRPC endpoint is enough
-    # to attempt retrieval; the HTTP collection listing stays as the cheap probe
-    # when REST is the only thing answering.
     ok, payload = _http_get(f"http://{host}:{port}/collections/{collection}") if rest_reachable else (False, None)
-    if rest_reachable and ok == "http":
-        # HTTP-level answer proves reachability; the blocker is the collection.
-        return BackendAvailability(
-            "dense",
-            False,
-            REASON_SERVICE_NO_DATA,
-            f"collection {collection} answered HTTP {payload} (absent or inaccessible)",
-        )
-    points = None
+    # The production client prefers gRPC (QdrantClient(..., prefer_grpc=True)), so
+    # gRPC is the decisive transport whenever it is reachable: a working REST port
+    # — or a REST 401/403/404 from an unauthenticated proxy — does not prove that
+    # real retrieval would succeed.
+    rest_points = None
     if isinstance(payload, dict):
         result = payload.get("result")
         if isinstance(result, dict):
-            points = result.get("points_count")
-    # Without a collection listing, the collection's existence and point count
-    # cannot be confirmed over REST, so verify it over gRPC — the transport
-    # production retrieval actually uses — before declaring availability.
-    if points is None:
-        if not grpc_reachable or grpc_port is None:
-            return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
-        grpc_points, grpc_note = _grpc_collection_points(host, grpc_port, collection)
-        if grpc_points is None:
-            return BackendAvailability("dense", False, REASON_SERVICE_NO_DATA, grpc_note)
-        points = grpc_points
-    if int(points) == 0:
-        # An existing but empty collection cannot answer any retrieval query.
-        return BackendAvailability(
-            "dense",
-            False,
-            REASON_SERVICE_NO_DATA,
-            f"collection {collection} exists but holds 0 points",
-        )
-    # Production constructs QdrantClient(..., prefer_grpc=True), so a working REST
-    # port does not prove the transport retrieval actually uses. When gRPC is
-    # reachable it must verify the collection too.
+            rest_points = result.get("points_count")
+
     if grpc_reachable and grpc_port is not None:
         grpc_points, grpc_note = _grpc_collection_points(host, grpc_port, collection)
         if grpc_points is None:
@@ -376,6 +353,25 @@ def probe_dense() -> BackendAvailability:
                 False,
                 REASON_SERVICE_NO_DATA,
                 f"collection {collection} exists but holds 0 points over gRPC",
+            )
+    else:
+        # gRPC is not available, so the REST listing is the only evidence there can be.
+        if rest_reachable and ok == "http":
+            # HTTP-level answer proves reachability; the blocker is the collection.
+            return BackendAvailability(
+                "dense",
+                False,
+                REASON_SERVICE_NO_DATA,
+                f"collection {collection} answered HTTP {payload} (absent or inaccessible)",
+            )
+        if rest_points is None:
+            return BackendAvailability("dense", False, REASON_SERVICE_UNREACHABLE, f"collection {collection}")
+        if int(rest_points) == 0:
+            return BackendAvailability(
+                "dense",
+                False,
+                REASON_SERVICE_NO_DATA,
+                f"collection {collection} exists but holds 0 points",
             )
     weights_ok, model_path = _model_weights_available()
     if not weights_ok:
