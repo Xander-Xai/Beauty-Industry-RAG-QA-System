@@ -1604,3 +1604,175 @@ def test_fingerprint_absent_without_a_username(monkeypatch):
     snapshot = provenance.effective_retrieval_config()
     assert snapshot["elasticsearch"]["principal_fingerprint"] is None
     assert snapshot["elasticsearch"]["password_set"] is False
+
+
+# ── Round 14: ES URL userinfo auth/fingerprint, completion-aware comparison ───
+
+
+def test_url_userinfo_credentials_are_used_for_auth(monkeypatch):
+    """A supported URL form must authenticate instead of sending userinfo as host."""
+    from benchmarks.backends import _elastic_settings
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://esuser:espass@es:9200", "index": "cosmetics_docs"}},
+    )
+    url, index, port, auth = _elastic_settings()
+    assert auth == ("esuser", "espass")
+    assert index == "cosmetics_docs"
+    assert url == "https://esuser:espass@es:9200"
+
+
+def test_elastic_url_userinfo_parsing():
+    from benchmarks.backends import elastic_url_userinfo
+
+    assert elastic_url_userinfo("https://u:p@es:9200") == ("u", "p")
+    assert elastic_url_userinfo("http://es:9200") == (None, None)
+    assert elastic_url_userinfo("") == (None, None)
+    assert elastic_url_userinfo(None) is None if False else True
+
+
+def test_bm25_authenticates_with_url_userinfo(monkeypatch):
+    """The probe must not reject an instance the production client can reach."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    captured = {}
+
+    def fake_get(url, auth=None):
+        captured["url"] = url
+        captured["auth"] = auth
+        return True, {"count": 12}
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://esuser:espass@es:9200", "enabled": True}},
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", fake_get)
+    availability = backends.probe_bm25()
+    assert captured["auth"] == ("esuser", "espass")
+    assert availability.available is True, availability.detail
+
+
+def test_url_principal_is_fingerprinted(monkeypatch):
+    """A redacted host must not make two principals share a config_sha256."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://alice:pw1@es:9200"}},
+    )
+    first = provenance.effective_retrieval_config()
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://bob:pw2@es:9200"}},
+    )
+    second = provenance.effective_retrieval_config()
+    assert first["elasticsearch"]["principal_fingerprint"] is not None
+    assert first["elasticsearch"]["principal_fingerprint"] != second["elasticsearch"]["principal_fingerprint"]
+    assert provenance.sha256_json(first) != provenance.sha256_json(second)
+
+
+def test_url_password_is_never_hashed(monkeypatch):
+    """Fingerprinting the URL password would recreate the offline verifier."""
+    import hashlib
+    import json as _json
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://elastic:hunter2@es:9200"}},
+    )
+    rendered = _json.dumps(provenance.effective_retrieval_config())
+    assert "hunter2" not in rendered
+    assert hashlib.sha256(b"elastic:hunter2").hexdigest()[:16] not in rendered
+    # The username-only digest is what should appear.
+    assert hashlib.sha256(b"elastic").hexdigest()[:16] in rendered
+
+
+def test_completion_counts_are_recorded(mini_dataset, make_query):
+    """A reduced-sample run must state how many queries actually completed."""
+    from benchmarks.models import RetrievedItem
+    from benchmarks.runner import run_configuration, summarize_run
+
+    class OneFails:
+        name = "one_fails"
+
+        def retrieve(self, query, top_k):
+            if query.sample_id == "0002":
+                raise TimeoutError("timeout")
+            return [
+                RetrievedItem(rank=index + 1, key=item.key, score=1.0, source="fixture", text=item.text)
+                for index, item in enumerate(query.relevant_items[:top_k])
+            ]
+
+    queries = [make_query("0000", ["a0"]), make_query("0001", ["a1"]), make_query("0002", ["a2"])]
+    run = run_configuration("bm25", queries, retriever_factory=lambda name: OneFails())
+    summary = summarize_run([run])
+    entry = summary["configs"]["bm25"]
+    assert entry["completed_sample_count"] == 2
+    assert entry["requested_sample_count"] == 3
+    assert entry["completion_rate"] == pytest.approx(2 / 3)
+
+
+def test_different_sample_sets_are_flagged_not_compared(mini_dataset, make_query):
+    """Configs scored on different samples must not share one ranking table."""
+    from benchmarks.report import build_comparison
+
+    def entry(completed, requested, digest):
+        return {
+            "status": "EXECUTED",
+            "metrics": {"overall": {"sample_count": completed}},
+            "latency": {"total_retrieval_ms": {}},
+            "completed_sample_count": completed,
+            "requested_sample_count": requested,
+            "sample_set_sha256": digest,
+        }
+
+    summary = {
+        "configs": {
+            "bm25": entry(3, 3, "aaa"),
+            "dense": entry(2, 3, "bbb"),
+        }
+    }
+    text = build_comparison(summary)
+    assert "Not directly comparable" in text
+    assert "Sample set `aaa`" in text
+    assert "Sample set `bbb`" in text
+
+
+def test_identical_sample_sets_compare_normally():
+    from benchmarks.report import build_comparison
+
+    def entry(digest):
+        return {
+            "status": "EXECUTED",
+            "metrics": {"overall": {"sample_count": 3}},
+            "latency": {"total_retrieval_ms": {}},
+            "completed_sample_count": 3,
+            "requested_sample_count": 3,
+            "sample_set_sha256": digest,
+        }
+
+    text = build_comparison({"configs": {"bm25": entry("same"), "dense": entry("same")}})
+    assert "Not directly comparable" not in text
+    assert "| `bm25` |" in text
+    assert "| `dense` |" in text

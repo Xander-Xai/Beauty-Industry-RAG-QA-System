@@ -17,6 +17,7 @@ by accident.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,10 +64,20 @@ class ConfigRun:
     outcome: ConfigOutcome
     results: list[QueryBenchmarkResult] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
+    requested_sample_count: int = 0
 
     @property
     def executed(self) -> bool:
         return self.outcome.produced_results
+
+
+def _completed_sample_set_hash(results: Sequence[QueryBenchmarkResult]) -> str:
+    """Fingerprint of the sample ids that actually produced a measurement."""
+    digest = hashlib.sha256()
+    for result in sorted(results, key=lambda item: item.sample_id):
+        digest.update(result.sample_id.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
 
 
 def _probe_backends(config_name: str, dataset_queries: int) -> tuple[BackendAvailability, ...]:
@@ -179,9 +190,9 @@ def run_configuration(
             f"all {len(failures)} sampled queries failed during retrieval",
             probed,
         )
-        return ConfigRun(outcome, [], failures)
+        return ConfigRun(outcome, [], failures, requested_sample_count=len(queries))
     outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "synthetic fixture retriever (not a benchmark)", probed)
-    return ConfigRun(outcome, results, failures)
+    return ConfigRun(outcome, results, failures, requested_sample_count=len(queries))
 
 
 def summarize_run(
@@ -201,6 +212,14 @@ def summarize_run(
             entry["failures"] = run.failures
             entry["failure_count"] = len(run.failures)
         if run.executed:
+            entry["requested_sample_count"] = run.requested_sample_count or len(run.results)
+            entry["completed_sample_count"] = len(run.results)
+            entry["completion_rate"] = (
+                len(run.results) / entry["requested_sample_count"] if entry["requested_sample_count"] else None
+            )
+            # A fingerprint of the completed sample set, so two configurations can
+            # only be compared when they were scored on exactly the same queries.
+            entry["sample_set_sha256"] = _completed_sample_set_hash(run.results)
             entry["metrics"] = aggregate_results(run.results, available_buckets=available_buckets)
             entry["latency"] = summarize_latency([result.latency_ms for result in run.results])
             entry["stage_availability"] = stage_availability([r.latency_ms for r in run.results])

@@ -107,9 +107,35 @@ def _elastic_settings() -> tuple[str, str, int, tuple[str, str] | None]:
     # retrieval succeed while the probe reports a 401.
     username = os.environ.get("ELASTICSEARCH_USERNAME") or elastic.get("username") or ""
     password = os.environ.get("ELASTICSEARCH_PASSWORD") or elastic.get("password") or ""
+    if not username or not password:
+        # Credentials may instead be embedded in the host URL userinfo
+        # ("https://user:password@host:9200"), which is a supported form.
+        userinfo_username, userinfo_password = elastic_url_userinfo(str(elastic.get("host") or ""))
+        username = username or userinfo_username
+        password = password or userinfo_password
     if username and password:
         auth = (str(username), str(password))
     return url, index, port, auth
+
+
+def elastic_url_userinfo(host: str) -> tuple[str | None, str | None]:
+    """Extract ``(username, password)`` from a URL's userinfo component.
+
+    A URL such as ``https://user:password@host:9200`` is a supported way to
+    configure Elasticsearch. urllib does not turn the userinfo into an
+    Authorization header, so without this the probe would send the raw
+    ``user:password@host`` as the request host and could reject an instance the
+    production client authenticates against successfully.
+    """
+    if not host or "@" not in host:
+        return None, None
+    try:
+        parsed = urlparse(host if "//" in host else f"//{host}")
+    except ValueError:
+        return None, None
+    if not parsed.username:
+        return None, None
+    return parsed.username, parsed.password
 
 
 def _qdrant_settings() -> tuple[str, int, str]:

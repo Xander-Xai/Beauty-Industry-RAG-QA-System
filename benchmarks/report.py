@@ -141,7 +141,12 @@ def build_report(
     for name in executed:
         entry = summary["configs"][name]
         metrics = entry.get("metrics", {})
-        lines += [f"## Overall Metrics — `{name}`", ""]
+        completed = entry.get("completed_sample_count")
+        requested = entry.get("requested_sample_count")
+        heading = f"## Overall Metrics — `{name}`"
+        if requested and completed is not None and completed != requested:
+            heading += f" (completed {completed}/{requested})"
+        lines += [heading, ""]
         lines += _metric_table(metrics.get("overall", {}))
         lines.append("")
         for attribute, label in (("business_type", "Business Type"), ("difficulty", "Difficulty")):
@@ -221,6 +226,32 @@ def build_comparison(summary: dict[str, Any]) -> str:
     if not executed:
         lines.append("No configuration executed; no comparison is available.")
         return "\n".join(lines) + "\n"
+
+    # Configurations scored on different sample sets are not comparable: a
+    # backend that times out on the hard queries would otherwise look better than
+    # one that answered all of them. Group them and say so instead of printing a
+    # single clean ranking.
+    groups: dict[str, list[str]] = {}
+    for name in executed:
+        digest = (summary["configs"][name].get("sample_set_sha256") or "unknown").strip()
+        groups.setdefault(digest, []).append(name)
+    if len(groups) > 1:
+        lines += [
+            "> **Not directly comparable.** These configurations completed different",
+            "> sample sets (failed queries are excluded from the metric denominators), so",
+            "> the numbers below rank runs, not retrieval quality. Tables are grouped by",
+            "> the exact set of samples each configuration answered.",
+            "",
+        ]
+    for digest, names in sorted(groups.items()):
+        if len(groups) > 1:
+            completed = summary["configs"][names[0]].get("completed_sample_count")
+            requested = summary["configs"][names[0]].get("requested_sample_count")
+            lines += [
+                f"## Sample set `{digest}` ({completed}/{requested} queries completed)",
+                "",
+            ]
+
     lines += [
         "| config | Recall@1 | Recall@3 | Recall@5 | Recall@10 | MRR@10 | NDCG@10 | P50 | P95 | P99 | sample_count |",
         "|---|---|---|---|---|---|---|---|---|---|---|",

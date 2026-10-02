@@ -210,11 +210,30 @@ def redact_url_userinfo(value: Any) -> Any:
 
 
 def _elastic_username() -> str | None:
-    return os.environ.get("ELASTICSEARCH_USERNAME") or _config_elastic_field("username")
+    return os.environ.get("ELASTICSEARCH_USERNAME") or _config_elastic_field("username") or _elastic_url_username()
+
+
+def _elastic_url_username() -> str | None:
+    """Username embedded in ``elasticsearch.host`` userinfo, if any.
+
+    The host is redacted before persistence, so without this the principal would
+    be invisible and two different URL-authenticated principals would share a
+    ``config_sha256``.
+    """
+    from benchmarks.backends import elastic_url_userinfo
+
+    username, _ = elastic_url_userinfo(_config_elastic_field("host") or "")
+    return username
 
 
 def _elastic_password() -> str | None:
-    return os.environ.get("ELASTICSEARCH_PASSWORD") or _config_elastic_field("password")
+    password = os.environ.get("ELASTICSEARCH_PASSWORD") or _config_elastic_field("password")
+    if password:
+        return password
+    from benchmarks.backends import elastic_url_userinfo
+
+    _, embedded = elastic_url_userinfo(_config_elastic_field("host") or "")
+    return embedded
 
 
 def _config_elastic_field(field: str) -> str | None:
