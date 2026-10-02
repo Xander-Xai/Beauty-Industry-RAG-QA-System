@@ -704,6 +704,49 @@ def test_common_report_suppression_forms_are_accepted(tmp_path, monkeypatch):
     assert errors == []
 
 
+def test_future_tense_report_suppression_is_accepted(tmp_path, monkeypatch):
+    """`will not produce` / `won't produce` are affirmative suppression forms."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    doc = tmp_path / "doc.md"
+
+    doc.write_text(
+        "When RAGAS is unavailable, the CLI returns a non-zero status and will not produce a quality report.",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+    doc.write_text(
+        "When RAGAS is unavailable, the CLI returns a non-zero status and won't produce a quality report.",
+        encoding="utf-8",
+    )
+    errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
+def test_additive_not_only_is_not_negation(tmp_path, monkeypatch):
+    """`not only returns a non-zero status` does not negate the status guarantee."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, the CLI not only returns a non-zero status and produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
 def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)

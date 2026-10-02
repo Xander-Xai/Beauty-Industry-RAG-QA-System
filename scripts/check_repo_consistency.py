@@ -166,6 +166,7 @@ RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
     r"不生成[^\n]{0,16}(?:质量)?(?:报告|report)|不写[^\n]{0,8}(?:报告|report)|"
     r"no\s+quality\s+report|never\s+(?:write|emit|produce)[^\n]{0,20}report|"
     r"does\s+not\s+produce[^\n]{0,24}report|must\s+not\s+produce[^\n]{0,24}report|"
+    r"will\s+not\s+produce[^\n]{0,24}report|won't\s+produce[^\n]{0,24}report|"
     r"without\s+producing[^\n]{0,24}report",
     re.IGNORECASE,
 )
@@ -615,7 +616,7 @@ _STATUS_NEGATION_BEFORE_RE = re.compile(
     r"(?:does|do|will|would|should|could|can|is|are|was|were)\s+not\s+(?:\w+\s+){0,3}$|"
     r"(?:can't|won't|isn't|aren't|wasn't|weren't|couldn't|shouldn't|wouldn't|doesn't|don't|didn't)\s+"
     r"(?:\w+\s+){0,3}$|"
-    r"(?:never|not)\s+(?:\w+\s+){0,3}$|"
+    r"(?:never|not)(?!\s+only)\s+(?:\w+\s+){0,3}$|"
     r"(?:is|are|was|were)?\s*not\s+(?:guaranteed|required|expected)\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:fails?|failed)\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:is|are|was|were)?\s*unable\s+to\s+(?:\w+\s+){0,3}$|"
