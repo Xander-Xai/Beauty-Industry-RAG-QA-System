@@ -24,7 +24,9 @@ All performance figures below are **design targets or model estimates**, not ver
 
 > **注意**：本文档为系统设计阶段的 PRD，描述的是**双卡目标架构**（双 GPU + 微服务）。当前仓库已验证的主线为 **FastAPI 单体后端**（`app.py`），微服务目录保留但尚未完成全链路契约对齐。具体实现以 [`README.md`](README.md) 中的「当前已验证主线」为准。
 
-> **Runtime reconciliation（v2.5）**：以下 PRD 设计与当前实现不一致；正文保留设计意图，但**不得作为当前实现证据**。
+> **版本语义**：本 PRD 与仓库内部分文档使用 “v2.5” 标签。该标签是 **历史 working milestone / development-phase 标签**，**不是**正式发布版本，也不是当前 canonical runtime version。canonical runtime version 为 `config.json` → `system.version` = `2.3.0`，`CHANGELOG.md` 中最新正式 release 亦为 `2.3.0`，其后的变更归入 `[Unreleased]`。
+
+> **Runtime reconciliation（v2.5 working milestone）**：以下 PRD 设计与当前实现不一致；正文保留设计意图，但**不得作为当前实现证据**。
 >
 > | PRD 章节 | PRD 设计 | 当前实现（code/config/tests） |
 > |---|---|---|
@@ -33,9 +35,9 @@ All performance figures below are **design targets or model estimates**, not ver
 > | §13 / §4.1 | 微服务拆分（`/rewrite`、`/generate`、`api-gateway/`）为部署单位 | 已验证主线为 FastAPI 单体 `app.py`；微服务目录保留但未完成与当前前端的全链路契约对齐 |
 > | §2 / §5 / §7 | 延迟/QPS/吞吐数字 | 无 benchmark artifact，均为**设计目标/模型估算**，不是实测生产结果 |
 >
-> **运维契约（v2.5，已实现）**：`GET /api/stats` 与 `GET /api/metrics` 需要身份认证（`require_identity`）；Docker Compose 的 Elasticsearch 启用 `xpack.security.enabled=true` 并要求 `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD`；登录限流仅在配置 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`。操作细节见 [docs/deployment-guide.md](docs/deployment-guide.md) 与 [docs/operations-guide.md](docs/operations-guide.md)。
+> **运维契约（v2.5 working milestone，已实现）**：`GET /api/stats` 与 `GET /api/metrics` 需要身份认证（`require_identity`）；Docker Compose 的 Elasticsearch 启用 `xpack.security.enabled=true` 并要求 `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD`；登录限流仅在配置 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`。操作细节见 [docs/deployment-guide.md](docs/deployment-guide.md) 与 [docs/operations-guide.md](docs/operations-guide.md)。
 >
-> **本地真实验证（v2.5，`LOCAL_REAL_VALIDATION`）**：真实 Redis 多进程会话持久化/跨进程限流、真实 nginx / `TRUSTED_PROXIES`、认证 Elasticsearch、认证 Prometheus 抓取已在本地真实依赖上验证，证据见 [docs/validation/v2.5-runtime-security-validation.md](docs/validation/v2.5-runtime-security-validation.md)。这是本地验证，不是生产集群 / HA / SLO 验证。
+> **本地真实验证（v2.5 working milestone，`LOCAL_REAL_VALIDATION`）**：真实 Redis 多进程会话持久化/跨进程限流、真实 nginx / `TRUSTED_PROXIES`、认证 Elasticsearch、认证 Prometheus 抓取已在本地真实依赖上验证，证据见 [docs/validation/v2.5-runtime-security-validation.md](docs/validation/v2.5-runtime-security-validation.md)。这是本地验证，不是生产集群 / HA / SLO 验证。
 
 > **Historical Production Context（`HISTORICAL_PRODUCTION`）**：以下为作者此前公司生产环境的业务规模与流量背景，用于解释设计动机。公开仓库**不包含**对应的专有语料、生产日志、模型权重或监控数据，因此这些数字不是 `REPO_VERIFIED`，也不是可复现 benchmark：
 > 3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户；高峰短时 10–15 QPS，日均 1500+ 请求。

@@ -1,5 +1,12 @@
 # Benchmark artifacts
 
+Current classification, stated before anything else:
+
+- Retrieval benchmark **framework**: `REPO_VERIFIED` (metrics, provenance,
+  readiness probing and this artifact contract are implemented and test-covered).
+- Retrieval benchmark **result**: `PENDING`. No run artifact is committed, so no
+  retrieval metric is available here.
+
 Runtime output of the reproducible retrieval benchmark lives here:
 
 ```text

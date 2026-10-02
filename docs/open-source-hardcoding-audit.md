@@ -1,6 +1,6 @@
 # Open-source configuration and frontend/backend contract audit
 
-Audit base: original `7b03267` (`origin/main`), refreshed at the 2026-10-02 v2.5 reconciliation on top of merged `main` `f514b27`. This is a static source audit, not proof of a deployed frontend/backend integration. Run the pre-launch checks against each deployment.
+Audit base: original `7b03267` (`origin/main`), refreshed at the 2026-10-02 v2.5 reconciliation on top of merged `main` `f514b27` (`v2.5` is a working-milestone label, not a release; see [Version policy](repository-truth-audit.md#version-policy)). This is a static source audit, not proof of a deployed frontend/backend integration. Run the pre-launch checks against each deployment.
 
 ## Configuration sources
 

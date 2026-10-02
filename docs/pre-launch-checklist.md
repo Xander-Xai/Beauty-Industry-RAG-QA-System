@@ -2,6 +2,8 @@
 
 > 这份清单基于当前仓库真实状态整理，不再把尚未闭环的能力写成“默认已可上线”。
 
+> 部署形态基线：当前 canonical 部署是 **Docker Compose + FastAPI 单体 `app.py`**。本清单不以 Kubernetes、Kafka、GraphRAG 或 Multi-Agent 作为上线前置条件；`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/` 是可选组件，纳入生产前需要各自独立的部署与契约验证。
+
 ## P0 阻塞项
 
 - [ ] 准备知识库索引：运行 `run_offline.py create-index`，或确认已存在由其他流程建立的 Qdrant/Elasticsearch 索引
@@ -60,8 +62,32 @@
 - [ ] 导入 Grafana 仪表盘
 - [ ] 配置 Prometheus 抓取（`/api/metrics` 需要 Bearer token）
 - [ ] 制定 Redis / Qdrant / MinIO 备份策略
+- [ ] **执行一次备份恢复演练并记录结果**（策略文件存在不等于恢复可用）
 - [ ] 准备 HTTPS 与反向代理配置
+- [ ] 验证 HTTPS 终止与反向代理链路：证书、`X-Forwarded-For` 追加、`TRUSTED_PROXIES` 与实际客户端 IP 一致
 - [ ] 组织管理员与运维演练
+
+## P2 可观测性与证据产物
+
+本仓库的确定性测试证明的是实现契约，不是生产运行证据。以下每一项都需要一份可复现的外部产物才算完成：
+
+- [ ] 验证 OpenTelemetry exporter 与后端：启用 exporter（或 OTLP collector）后，在后端实际查询到本服务产生的 span。当前默认无 exporter，追踪钩子不等于导出闭环
+- [ ] 验证 Grafana 仪表盘与告警规则基于真实指标触发，而非默认 0 值
+- [ ] 产出 retrieval benchmark artifact（`artifacts/benchmarks/<run-id>/`），并核对 `docs/repository-truth-audit.md` 中的 artifact 验收字段。**当前没有 artifact，benchmark 框架 = `REPO_VERIFIED`，benchmark 结果 = `PENDING`**
+- [ ] 产出负载/性能 artifact（吞吐、P95/P99、并发），或明确记录 PRD 中的延迟/QPS 数字仍为设计目标
+- [ ] 记录真实 RAGAS evaluator 运行结果，或明确记录其依赖/凭据仍阻塞
+- [ ] 完成真实 4B/14B vLLM GPU 拓扑验证（需要模型权重与 GPU）。**历史生产推理经验不构成该仓库的验证证据**
+
+## 外部模型验证状态（尚未完成）
+
+以下能力在代码与确定性测试中已实现，但真实资产/运行时验证仍未执行，**不得**因为本清单其他项完成而默认视为已验证：
+
+- [ ] 真实配置的 BGE 模型 smoke（`EXTERNAL_MODEL_ASSET_REQUIRED`）
+- [ ] 真实配置的 CLIP 模型 smoke（`EXTERNAL_MODEL_ASSET_REQUIRED`）
+- [ ] 真实 PaddleOCR 运行时 smoke（默认不安装 OCR 运行时）
+- [ ] 真实 Airflow DAG 执行（默认 Compose 不运行 Airflow）
+
+确定性 fake embedder / fake OCR provider / mocked 客户端都不是真实模型或真实基础设施验证。
 
 ## 离线管线状态
 

@@ -116,6 +116,10 @@ python -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 
 当前状态：benchmark 框架为 `REPO_VERIFIED`；**retrieval benchmark 结果为 `PENDING`**，仓库内没有可复现的真实 benchmark artifact。缺少真实依赖时，配置会以 `BLOCKED` 与原因记录，**不会**产出数字。数据质量缺口见 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 说明见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
 
+## Historical production context
+
+作者此前公司生产环境的业务规模与流量背景（3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户、高峰短时 10–15 QPS、日均 1500+ 请求；RTX A5000 ×2 生产推理环境，后续阶段完成 Qwen2.5 → Qwen3-14B / Qwen3-4B 灰度迁移验证）记录在 [docs/interview-evidence-map.md](docs/interview-evidence-map.md)，分类为 `HISTORICAL_PRODUCTION`。公开仓库不包含对应的专有语料、生产日志、模型权重或监控数据，因此这些**不是** `REPO_VERIFIED`，也不可由本仓库复现。
+
 ## 文档入口
 
 请从 [docs/README.md](docs/README.md) 查找当前操作指南、设计文档和历史计划。历史计划不代表当前实现状态。

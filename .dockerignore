@@ -1,0 +1,80 @@
+# The Dockerfile ends with `COPY . .`, so without this file the build context is
+# the whole working tree. On a machine that has downloaded models or installed
+# frontend dependencies that context reached ~1.9 GB, and the untracked model
+# caches were baked into the published image layer.
+
+# Version control and agent/tooling state
+.git
+.gitignore
+.github
+.claude
+.superpowers
+
+# Secrets and local configuration: must never enter an image layer
+.env
+.env.*
+!.env.example
+config_local.json
+keys
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Model caches and weights: supplied by config.json model_path at runtime,
+# never vendored into the image
+models
+blip-image-captioning-large
+chatglm3-6b
+roberta-base
+all-MiniLM-L6-v2
+ms-marco-TinyBERT-L-2-v2
+tinybert
+offline/data
+offline/output
+*.pt
+*.bin
+*.safetensors
+*.onnx
+
+# Frontend dependencies and build output (the image serves the API, not a
+# node toolchain)
+frontend/node_modules
+frontend/dist
+static
+
+# Runtime state, caches and logs
+logs
+data
+*.db
+*.sqlite
+*.sqlite3
+*.log
+.cache
+.coverage
+htmlcov
+__pycache__
+**/__pycache__
+*.py[cod]
+
+# Generated and benchmark evidence: not shipped inside the image
+artifacts/benchmarks/*
+!artifacts/benchmarks/README.md
+reports
+
+# Virtual environments
+.venv
+.venv-ragas
+venv
+env
+
+# Editor and OS noise
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Test-only local configuration
+tests/e2e_remote

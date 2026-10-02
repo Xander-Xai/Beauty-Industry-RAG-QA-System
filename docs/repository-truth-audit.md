@@ -5,14 +5,24 @@
 - Original audit base: `7b03267ccd751178e5e1d69ec6a6ec97281b57cb` (`origin/main`, before the offline merges).
 - Historical merged PRs: #3, #4, #5, #6, #7.
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
-- v2.5 runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
-- Runtime validation: see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)
+- v2.5 working-milestone runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
+- Interview truth and validation-evidence reconciliation merged via PR #15 (squash `aa189d9`).
+- Deterministic retrieval benchmark framework merged via PR #17 (squash `8446d19`). Its final tree is
+  byte-identical to `main`'s, so the merged source branch `feat/reproducible-rag-benchmark` was verified
+  as fully contained in `main` and deleted.
+- Runtime validation: see [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
 a commit cannot embed its own SHA without making the value stale).
 Post-reconciliation verification date: 2026-10-02.
 - Runtime version: `config.json` → `system.version` (`2.3.0`); release history is recorded in
-  `CHANGELOG.md`. The repository has no GitHub Release at audit time.
+  `CHANGELOG.md`. The repository has no GitHub Release and no tag at audit time.
+- Version labelling: the string `v2.5` appears in current docs and in the filename
+  `docs/validation/v2.5-runtime-security-validation.md`. It is a **historical working
+  milestone / development-phase label**, not a repository release and not the canonical
+  runtime version. The canonical runtime version remains `2.3.0` with post-release changes
+  recorded under `[Unreleased]`. Filenames are deliberately not renamed so existing links
+  keep resolving.
 - External validation boundary: see [External validation pending](#external-validation-pending).
   Code + deterministic tests are never evidence of real-model quality, production latency/QPS, or
   large-corpus throughput.
@@ -66,9 +76,31 @@ large-corpus throughput has been established.
 | Runtime version | Runtime version agrees with newest dated changelog release | `common/config.py` reads `config.json` | Consistency script checks the invariant | `config.json` `system.version` = `2.3.0` | `scripts/check_repo_consistency.py` runs in CI | VERIFIED | Keep the check enabled; Unreleased does not bump version |
 | CI | Python checks include tests, compile, collection and repository consistency | `.github/workflows/ci.yml` | Workflow runs pytest and collection checks | Workflow configuration | Verify the current `HEAD` GitHub Actions run for CI | VERIFIED | Require green checks on the reconciliation PR |
 | Ruff | Lint and formatting are configured as CI checks | `.github/workflows/lint.yml` | Ruff check and format check | Workflow configuration | Verify the current `HEAD` GitHub Actions run for Ruff | VERIFIED | Require green checks on the reconciliation PR |
-| Security | Dependency audit and secret scanning configured in CI; RAGAS excluded from default install | `.github/workflows/security.yml`, `requirements.txt` | CI runs pip-audit and secret scan | RAGAS is opt-in | A green security workflow does not imply optional dependency safety | VERIFIED | Do not infer optional dependency safety |
+| Security | Python dependency audit and secret scanning configured in CI; RAGAS excluded from default install | `.github/workflows/security.yml`, `requirements.txt` | CI runs pip-audit and secret scan | RAGAS is opt-in | A green security workflow does not imply optional dependency safety; see the frontend advisory note below | VERIFIED | Do not infer optional dependency safety |
 | Runtime artifacts | Tracked PID/stopped markers were tool state, not product files | Exact markers removed | Consistency check rejects tracked PID/state markers | `.gitignore` excludes local state paths | Verify using `git ls-files` and CI invariant | VERIFIED | Keep runtime state untracked |
 | Documentation governance | Current guides and historical plans have separate roles | `docs/README.md`, current guides and `docs/superpowers/` | Consistency checks link/path and stale-claim invariants | No runtime config claim | CI validates stable docs invariants | VERIFIED | Keep plans/specs out of current implementation evidence |
+
+## External validation tracker map
+
+Repository-side GitHub state is governance audit, not an offline consistency invariant, so it is
+recorded here for human readers and is deliberately **not** enforced by `scripts/check_repo_consistency.py`.
+Re-query GitHub before relying on any row; the states below are a snapshot at the verification date
+recorded in [Audit lineage](#audit-lineage).
+
+- PR #15 — interview truth and validation-evidence reconciliation: merged.
+- PR #17 — deterministic retrieval benchmark **framework**: merged.
+- [#16](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/16) — benchmark framework
+  implementation scope: closed (`completed`), delivered by PR #17.
+- [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval
+  benchmark execution: open.
+- [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) — umbrella external
+  validation (real BGE / CLIP / PaddleOCR / Airflow / benchmark artifact): open.
+- [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) — runtime / security
+  external validation (real RAGAS, 4B/14B vLLM GPU topology): open.
+
+Closing #16 records that the framework scope is delivered. It does **not** record a benchmark result:
+no artifact exists, so `benchmark result` stays `PENDING` and both execution blockers (no real
+retrieval executor, no independent corpus) stay open in #18.
 
 ## External validation pending
 
@@ -78,7 +110,12 @@ These are implemented in code but not validated against real external assets/run
 - Real configured CLIP model smoke — `EXTERNAL_MODEL_ASSET_REQUIRED`.
 - Real PaddleOCR smoke — external runtime not installed.
 - Real Airflow DAG execution — Airflow not installed.
-- Production evaluation / benchmark — no reproducible artifact checked in.
+- Production evaluation / benchmark — no reproducible artifact checked in. The benchmark framework
+  exists and is `REPO_VERIFIED`; two structural blockers keep execution open: **no real retrieval
+  executor is wired for CLI runs**, and **no independent corpus** covers the golden-set relevance
+  truth (building one from `golden_set.contexts` would be label leakage). See
+  [benchmark data quality](benchmark-data-quality.md) and
+  [artifacts/benchmarks/README.md](../artifacts/benchmarks/README.md).
 - Real RAGAS evaluation with a permitted dependency and evaluator API key — not run: no
   `OPENAI_API_KEY`, `ragas 0.4.x` is import-broken, and the importable `ragas 0.2.15` pulls
   `langchain 0.3.x` with advisories (see [real RAGAS validation](validation/real-ragas-evaluation.md)).
@@ -87,11 +124,32 @@ These are implemented in code but not validated against real external assets/run
 - Non-nginx reverse proxies (Cloudflare / ALB / Traefik) — require deployment-specific configuration.
 
 Validated locally on 2026-10-02 as `LOCAL_REAL_VALIDATION` (see
-[v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)):
+[v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)):
 real Redis multi-process session persistence and login rate limiting, real nginx proxy-trust resolution,
 authenticated Elasticsearch online + offline paths, and an authenticated Prometheus scrape. Local
 `LOCAL_REAL_VALIDATION` is not a production benchmark, does not imply production HA/SLO, and must not be
 rewritten as "never validated".
+
+## Known frontend dependency advisories (disclosed, not gating)
+
+`npm ci` in `frontend/` currently reports 4 advisories: 1 moderate
+(`baseline-browser-mapping`) and 3 high (`browserslist`, `nanoid`, `postcss`).
+
+Scope, stated precisely:
+
+- All four are **transitive** build-toolchain dependencies reached through
+  `vite`. None is declared in `frontend/package.json`.
+- They are build-time tooling, not code the browser executes as application
+  logic. `postcss` and `browserslist` run at build time; `nanoid` and
+  `baseline-browser-mapping` are transitive build-tool dependencies.
+- This is therefore **not** a claim of a production runtime vulnerability, and
+  not a claim of safety either.
+
+Why it is not a merge gate: the registry's quick-audit endpoint is deprecated
+and currently returns HTTP 400, so gating on it would produce a flaky red build
+rather than a real signal. CI reports the advisories as a non-blocking step so
+they stay visible. Remediation (a lockfile refresh plus a verified frontend
+build) is open work, not something this reconciliation silently performed.
 
 ## Architecture debt — free-text semantic governance
 
@@ -130,3 +188,19 @@ acceptance behavior and are not regression tests or implementation evidence.
 `CHANGELOG.md` must match it. `Unreleased` records changes after that release without assigning a new
 runtime version. Git tags/releases are separate publication decisions; no GitHub Release exists at
 this audit point.
+
+### `v2.5` is a working-milestone label, not a release
+
+Several current docs and one filename carry a `v2.5` label (for example
+`docs/validation/v2.5-runtime-security-validation.md`). That label names a **historical working
+milestone / development phase** of the runtime-and-security reconciliation work. It is deliberately
+**not**:
+
+- a repository release — the newest dated release heading in `CHANGELOG.md` is `[2.3.0]`;
+- the canonical runtime version — `config.json` → `system.version` is `2.3.0`;
+- a Git tag or GitHub Release — neither exists.
+
+Changes after `2.3.0` are recorded under `[Unreleased]` and do not bump the runtime version. The
+filename and the `v2.5` label are retained rather than renamed so existing cross-document links keep
+resolving; a large rename would create link breakage for no truth gain. `scripts/check_repo_consistency.py`
+enforces that `v2.5` is never described as a formal runtime release.

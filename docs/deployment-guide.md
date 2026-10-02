@@ -1,5 +1,9 @@
 # 化妆品行业 RAG 问答系统部署手册
 
+## 0. 版本语义
+
+本手册描述的运行配置以 `config.json` → `system.version` 为准（当前为 `2.3.0`）。仓库中部分文档与文件名使用的 “v2.5” 是 **历史 working milestone / development-phase 标签**，不是正式发布版本，也不改变本手册的运行时契约；详见 [版本策略](repository-truth-audit.md#version-policy)。
+
 ## 1. 当前推荐部署路径
 
 当前仓库推荐先走 `app.py` 单体部署，再逐步补微服务。原因：
@@ -7,6 +11,8 @@
 - React 前端默认联调的是单体 `/api/*` 接口
 - `Dockerfile`、`docker-compose.yml`、`/api/health` 已对齐
 - 微服务目录仍在，但不是当前验证过的前端主线
+
+canonical 部署形态是 Docker Compose + FastAPI 单体。Kubernetes、Kafka、GraphRAG 与 Multi-Agent **不是**上线前置条件；如需引入，属于独立的架构变更，不能由本手册的上线检查默认视为已具备。
 
 ## 2. 部署前必须确认
 

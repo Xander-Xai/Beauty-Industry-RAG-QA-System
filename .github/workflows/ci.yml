@@ -10,6 +10,95 @@ permissions:
   contents: read
 
 jobs:
+  build-sanity:
+    name: Dockerfile 构建校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # Build *validity* only. Nothing is built, pushed or deployed.
+    #
+    # A full `docker build` is deliberately NOT a merge gate: requirements.txt
+    # pulls torch / CUDA wheels, so a real build is a multi-GB network download
+    # that is slow and flaky. It would trade a cheap signal for an unreliable
+    # one.
+    steps:
+      - uses: actions/checkout@v4
+
+      # `COPY . .` with no .dockerignore sends the whole working tree. On a
+      # machine with models and node_modules downloaded that reached ~1.9 GB,
+      # with ~1.8 GB of it an untracked model cache, and it would include .env
+      # if one existed. These asserts keep the ignore rules from silently
+      # regressing to a no-op.
+      - name: Verify the build context excludes local state
+        run: |
+          set -euo pipefail
+          test -f .dockerignore
+          for pattern in .git .env models blip-image-captioning-large frontend/node_modules logs data; do
+            grep -qxF "$pattern" .dockerignore || grep -qxF "$pattern/**" .dockerignore || {
+              echo "::error file=.dockerignore::missing required exclude: $pattern"
+              exit 1
+            }
+          done
+          # A negation that re-admits secrets or model weights would defeat the
+          # whole file. `!.env.example` is safe (template only) and must not
+          # match, hence the explicit terminator.
+          if grep -nE '^!\s*(\.env|keys|models|blip-image-captioning-large)(/|/[^.]|\s|$)' .dockerignore; then
+            echo "::error file=.dockerignore::secrets/model directories must not be re-admitted"
+            exit 1
+          fi
+
+      - name: Dockerfile build check
+        run: |
+          set -euo pipefail
+          if docker build --help 2>&1 | grep -q -- '--check'; then
+            # Parses the Dockerfile and reports build-time problems. No RUN step
+            # executes, so no dependency is downloaded.
+            docker build --check .
+          else
+            echo "::notice::runner Docker build does not support --check; Dockerfile parse check skipped"
+          fi
+
+  frontend-build:
+    name: 前端构建校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # README documents `npm ci && npm run build` as the way to produce
+    # frontend/dist, and the pre-launch checklist requires a built frontend, yet
+    # nothing in CI verified the build could still succeed. package-lock.json is
+    # complete (lockfileVersion 3) and the build is fast, so this is a cheap
+    # merge gate. `npm ci` installs from the lockfile only; it never resolves
+    # floating ranges.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies from the lockfile
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      # Known, disclosed, not gating: `npm ci` currently reports 4 advisories
+      # (1 moderate, 3 high) in browserslist, nanoid, postcss and
+      # baseline-browser-mapping. All four are transitive build-toolchain
+      # dependencies reached through Vite, not code the browser executes as
+      # application logic. `npm audit` is NOT a merge gate here because the
+      # registry's quick-audit endpoint is deprecated and returns 400, which
+      # would make the gate flaky rather than meaningful. See
+      # docs/repository-truth-audit.md for the recorded state.
+      - name: Report (do not gate) frontend dependency advisories
+        working-directory: frontend
+        continue-on-error: true
+        run: npm audit || true
+
   test:
     name: 测试套件
     runs-on: ubuntu-latest

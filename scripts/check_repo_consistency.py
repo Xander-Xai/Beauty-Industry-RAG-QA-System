@@ -32,6 +32,12 @@ CANONICAL_DOCS = [
     ROOT / "README.md",
     ROOT / "PRD.md",
     *sorted((ROOT / "docs").glob("*.md")),
+    # Validation records and the benchmark artifact contract make the same
+    # evidence claims as the guides, so they are held to the same guard. They
+    # were previously unguarded, which left the most claim-heavy docs free to
+    # drift.
+    *sorted((ROOT / "docs" / "validation").glob("*.md")),
+    ROOT / "artifacts/benchmarks/README.md",
 ]
 STATUSES = {"VERIFIED", "PARTIAL", "PLANNED", "BROKEN", "STALE", "HISTORICAL"}
 
@@ -294,7 +300,284 @@ REQUIRED_AUDIT_AREAS = {
     "Trusted proxy",
     "Observability endpoints",
     "Elasticsearch security",
+    # Retrieval quality is now measured by a real harness, so its classification
+    # must stay visible in the audit instead of living only in prose.
+    "Retrieval benchmark",
 }
+
+
+# --------------------------------------------------------------------------
+# Evidence guards: claims that require an artifact before they may be stated
+# --------------------------------------------------------------------------
+
+# The retrieval benchmark harness exists, but no run artifact is committed. A
+# benchmark *result* therefore requires a checked-in artifact; without one the
+# only true statement is that the framework is implemented. This is a fact about
+# the working tree, so the guard derives it from disk instead of hardcoding a
+# PR number, an issue state or a date.
+BENCHMARK_ARTIFACT_GLOB = "artifacts/benchmarks/*/metadata.json"
+
+# Docs that must keep the framework/result split visible. A reader who sees only
+# "Recall@10" deserves to know whether a number can exist yet.
+BENCHMARK_CLASSIFICATION_DOCS = [
+    "README.md",
+    "docs/README.md",
+    "docs/interview-evidence-map.md",
+    "docs/repository-truth-audit.md",
+    "artifacts/benchmarks/README.md",
+]
+
+_BENCHMARK_SUBJECT_RE = re.compile(
+    r"retrieval\s+benchmark|benchmark|检索(?:基准|评测)|Recall@|HitRate@|NDCG@|MRR@",
+    re.IGNORECASE,
+)
+_FRAMEWORK_CLASSIFIED_RE = re.compile(r"REPO_VERIFIED|已实现|implemented|framework\s*=?\s*", re.IGNORECASE)
+_RESULT_PENDING_RE = re.compile(
+    r"PENDING|尚未|未(?!来)|尚未执行|not\s+(?:yet\s+)?(?:available|produced|exist)", re.IGNORECASE
+)
+
+
+def benchmark_artifact_exists() -> bool:
+    """True when a committed benchmark run artifact is present on disk."""
+    return any(ROOT.glob(BENCHMARK_ARTIFACT_GLOB))
+
+
+def benchmark_classification_errors(name: str, text: str) -> list[str]:
+    """Return classification errors for one document.
+
+    Requires that a doc mentioning the retrieval benchmark either says the
+    framework is implemented or says no result exists yet. While no artifact is
+    on disk, an affirmative result claim is an error regardless of phrasing.
+    """
+    errors: list[str] = []
+    has_subject = _BENCHMARK_SUBJECT_RE.search(text) is not None
+    if not has_subject:
+        return errors
+
+    result_claim = bool(re.search(r"(?:result|结果|指标|metric)", text, re.IGNORECASE))
+    if not result_claim:
+        return errors
+
+    # Only enforce the split where the doc discusses the benchmark's own state.
+    state_window = "\n".join(
+        line
+        for line in text.splitlines()
+        if _BENCHMARK_SUBJECT_RE.search(line)
+        or re.search(r"(?:REPO_VERIFIED|PENDING|framework|result|结果)", line, re.IGNORECASE)
+    )
+    if not _FRAMEWORK_CLASSIFIED_RE.search(state_window) and not _RESULT_PENDING_RE.search(state_window):
+        errors.append(
+            f"{name}: discusses the retrieval benchmark without classifying it "
+            "(framework REPO_VERIFIED vs result PENDING)"
+        )
+    return errors
+
+
+# A sentence that frames the match as a claim to avoid, not as current truth.
+# These docs are *required* to write the denial, so the frame is a signal to
+# skip rather than a signal to fail.
+_PROHIBITION_FRAME_RE = re.compile(
+    r"\bClaiming\b|\bClaims?\b|\bSays?\b|\bDo\s+not\b|\bDon't\b|\bNever\b|\bMust\s+not\b|"
+    r"不能说|不得|不要(?:说|声称)|不应(?:说|声称)",
+    re.IGNORECASE,
+)
+
+# Absence / not-yet wording in the neighbourhood of the match. Covers both the
+# "no result exists" form and the specific "no exporter configured" form that
+# denies a closed tracing loop.
+_NO_EVIDENCE_NEGATION_RE = re.compile(
+    r"PENDING|EXTERNAL_MODEL_ASSET_REQUIRED|"
+    r"未(?:有|能|执行|验证|产生|配置|运行)|尚未|没有|无可|不(?:会|能|得|是)|"
+    r"not\s+(?:yet\s+)?(?:validated|verified|measured|available|produced|configured|"
+    r"reproduced|reproducible|closed)|"
+    r"no\s+(?:such|exporter|OTLP|closed|real\s+benchmark|artifact)|"
+    r"exporter[^\n]{0,12}(?:not|un)\s*configured|"
+    r"never|cannot|can't|without|must\s+not|do(?:es)?\s+not|do(?:es)?n't|"
+    r"design\s+target|目标|blocked",
+    re.IGNORECASE,
+)
+
+
+def forbidden_evidence_claims(text: str) -> list[str]:
+    """Return claims of real-model / real-result validation that have no artifact.
+
+    Deliberately narrow: it matches only an affirmative "validated / 验证通过 /
+    closed loop / score = N" assertion about an external asset or a measured
+    result, and it stays away from metric *names* (which are legitimate) and from
+    any sentence that itself says the thing is pending or absent.
+    """
+    claims: list[str] = []
+    result_number = re.compile(
+        r"(?:Recall|HitRate|MRR|NDCG|F1)(?:@\d+)?\s*(?:=|:|为|＝|：)\s*0?\.\d+|"
+        r"(?:Recall|HitRate|MRR|NDCG)@\d+\s*[:：]\s*\d+"
+    )
+    ragas_score = re.compile(
+        r"RAGAS[^\n]{0,40}?(?:faithfulness|answer_relevancy|context_precision|"
+        r"context_recall|忠实度|相关性)[^\n]{0,12}?(?:score|得分|分数|为|=)\s*\d+(?:\.\d+)?|"
+        r"(?:faithfulness|answer_relevancy|context_precision|context_recall)[^\n]{0,8}?"
+        r"(?:score|得分|分数)\s*[:：=]?\s*\d+(?:\.\d+)?"
+    )
+    external_validated = re.compile(
+        r"(?:真实\s*)?(?:BGE|CLIP|PaddleOCR|Paddle\s*OCR)[^\n]{0,30}"
+        r"(?:已(?:经)?(?:完成|通过)?验证|验证(?:通过|完成)|已运行|实测通过)|"
+        r"real\s+(?:configured\s+)?(?:BGE|CLIP|PaddleOCR)[^\n]{0,30}"
+        r"(?:validated|verified|passed|ran\s+successfully)",
+        re.IGNORECASE,
+    )
+    tracing_closed_loop = re.compile(
+        r"(?:OpenTelemetry|OTel|Jaeger|OTLP)[^\n]{0,40}?(?:已(?:经)?导出|导出(?:成功|已闭环)|closed[- ]?loop|闭环(?:验证|完成)?|"
+        r"export(?:ed|s)?\s+(?:verified|confirmed))",
+        re.IGNORECASE,
+    )
+    load_verified = re.compile(
+        r"(?:已(?:经)?)?(?:实测|测量|验证|压测)[^\n]{0,16}?(?:QPS|吞吐|throughput|P9[59]|TTFT)[^\n]{0,12}?(?:达标|通过|已达成)|"
+        r"(?:QPS|throughput|P9[59])[^\n]{0,16}?(?:verified|validated|measured|achieved)\s+(?:in|at)\s+production",
+        re.IGNORECASE,
+    )
+
+    for line in text.splitlines():
+        for pattern in (result_number, ragas_score, external_validated, tracing_closed_loop, load_verified):
+            for match in pattern.finditer(line):
+                window = line[max(0, match.start() - 50) : match.end() + 50]
+                prefix = line[max(0, match.start() - 60) : match.start()]
+                # A "do not claim this" frame in the same bullet is the opposite of
+                # an overclaim: these documents are required to state the denial.
+                if _PROHIBITION_FRAME_RE.search(prefix):
+                    continue
+                if _NO_EVIDENCE_NEGATION_RE.search(window):
+                    continue
+                if HISTORICAL_MARKERS.search(line):
+                    continue
+                claims.append(match.group(0))
+                break
+    return claims
+
+
+def check_evidence_classification_guards(errors: list[str]) -> None:
+    """Framework/result classification and forbidden real-evidence claims."""
+    artifact = benchmark_artifact_exists()
+
+    for name in BENCHMARK_CLASSIFICATION_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        problems = benchmark_classification_errors(name, text)
+        errors.extend(problems)
+
+        if not artifact:
+            claims = sorted(set(forbidden_evidence_claims(text)))
+            if claims:
+                errors.append(
+                    f"{name}: claims a real-model / real-result validation with no benchmark artifact on disk: {claims}"
+                )
+
+    if artifact:
+        # An artifact exists: the honest statement is that a result is available,
+        # so a lingering "result = PENDING" line becomes the drift instead.
+        for name in BENCHMARK_CLASSIFICATION_DOCS:
+            path = ROOT / name
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if not _BENCHMARK_SUBJECT_RE.search(line):
+                    continue
+                if re.search(
+                    r"(?:no|not)\s+(?:real\s+)?benchmark\s+artifact[^\n]{0,40}(?:exists|committed)|"
+                    r"没有(?:可复现的)?(?:真实)?benchmark\s*artifact",
+                    line,
+                    re.IGNORECASE,
+                ):
+                    errors.append(f"{name}: says no benchmark artifact exists, but one is on disk")
+
+
+# The v2.5 label names a historical working milestone. It must never be upgraded
+# into a release claim without a real release, which would then contradict the
+# config/CHANGELOG invariant checked separately.
+_WORKING_MILESTONE_MARKER_RE = re.compile(
+    r"working\s+milestone|working-milestone|development[- ]phase|开发阶段|工作里程碑|历史\s*v?2\.5|"
+    r"historical\s+working",
+    re.IGNORECASE,
+)
+
+
+def v25_release_claims(text: str) -> list[str]:
+    """Return lines presenting the v2.5 working-milestone label as a release."""
+    claims: list[str] = []
+    for line in text.splitlines():
+        if not re.search(r"\bv?2\.5\b", line):
+            continue
+        if _WORKING_MILESTONE_MARKER_RE.search(line):
+            continue
+        # An explicit denial ("v2.5 is not a release") is the desired wording.
+        if re.search(
+            r"not\s+(?:a|the)\s+(?:formal\s+)?release|不是.{0,6}正式|非正式|no\s+release|不是.{0,4}版本",
+            line,
+            re.IGNORECASE,
+        ):
+            continue
+        if re.search(
+            r"(?:released?|发布(?:版|版本)?|tag(?:ged)?|release[^\n]{0,20}version)[^\n]{0,20}\bv?2\.5\b|"
+            r"\bv?2\.5\b[^\n]{0,20}(?:is\s+the\s+(?:current\s+)?(?:release|runtime\s+version)|"
+            r"released?\s+on|已发布|正式版)",
+            line,
+            re.IGNORECASE,
+        ):
+            claims.append(line.strip())
+    return claims
+
+
+def check_version_label_semantics(errors: list[str]) -> None:
+    """v2.5 must stay a working-milestone label, never a formal runtime release."""
+    for name in (
+        "README.md",
+        "PRD.md",
+        "CHANGELOG.md",
+        "docs/README.md",
+        "docs/repository-truth-audit.md",
+        "docs/interview-architecture-baseline.md",
+        "docs/deployment-guide.md",
+        "docs/operations-guide.md",
+    ):
+        path = ROOT / name
+        if not path.exists():
+            continue
+        claims = v25_release_claims(path.read_text(encoding="utf-8"))
+        if claims:
+            errors.append(f"{name}: presents v2.5 as a formal release/runtime release: {claims}")
+
+
+# The PRD states latency/QPS targets. They must stay labelled as design targets:
+# a target silently promoted to a measurement is exactly the drift the audit
+# exists to prevent.
+_PRD_DESIGN_TARGET_PATTERNS = [
+    r"design\s+target",
+    r"目标(?:值)?",
+    r"不是(?:实测|生产)",
+    r"not\s+(?:a\s+)?(?:measured|production)",
+    r"PENDING",
+]
+
+
+def check_prd_design_targets(errors: list[str]) -> None:
+    """PRD performance figures must remain design targets, never repo benchmarks."""
+    path = ROOT / "PRD.md"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if not any(re.search(pattern, text, re.IGNORECASE) for pattern in _PRD_DESIGN_TARGET_PATTERNS):
+        fail(
+            errors,
+            "PRD.md: latency/QPS figures must be explicitly labelled design targets, not measured results",
+        )
+    claims = sorted(set(forbidden_evidence_claims(text)))
+    if claims:
+        fail(
+            errors,
+            f"PRD.md: presents an unevidenced real result or model validation: {claims}",
+        )
+
 
 # Offline capabilities that now exist in code. They must never be classified as
 # PLANNED/BROKEN in the current truth audit.
@@ -968,6 +1251,9 @@ def main() -> int:
     check_ragas_failure_contract(errors)
     check_local_runtime_validation_contract(errors)
     check_uvicorn_proxy_headers_disabled(errors)
+    check_evidence_classification_guards(errors)
+    check_version_label_semantics(errors)
+    check_prd_design_targets(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
