@@ -661,6 +661,24 @@ def test_additive_budan_is_not_contrast(tmp_path, monkeypatch):
     assert errors == []
 
 
+def test_although_is_scope_changing(tmp_path, monkeypatch):
+    """`although` changes scope, so the leading condition must not propagate."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, the CLI returns a non-zero status,"
+        " although a successful RAGAS dry-run produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+
 def test_bare_non_zero_is_not_a_failure_status(tmp_path, monkeypatch):
     """`non-zero scores` is not a non-zero exit/status guarantee."""
     import scripts.check_repo_consistency as guard
@@ -850,6 +868,24 @@ def test_passive_local_validation_negation_is_rejected(tmp_path, monkeypatch):
     errors: list[str] = []
     guard.check_local_runtime_validation_contract(errors)
     assert errors
+
+
+def test_english_sentence_boundary_scopes_validation(tmp_path, monkeypatch):
+    """ASCII sentence boundaries must separate unrelated validation sentences."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "LOCAL_VALIDATION_DOCS", ["doc.md"])
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "doc.md").write_text(
+        "LOCAL_REAL_VALIDATION is an evidence category."
+        " Redis, nginx, Elasticsearch, and Prometheus are listed dependencies."
+        " The Qdrant integration is validated.\n",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_local_runtime_validation_contract(errors)
+    assert any("affirmatively" in error for error in errors)
 
 
 def test_stale_local_validation_claim_is_rejected(tmp_path, monkeypatch):

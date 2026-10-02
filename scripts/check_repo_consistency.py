@@ -574,7 +574,9 @@ _RAGAS_COMMA_SPLIT_RE = re.compile(r"[，,]+")
 _LOCAL_VALIDATION_COMMA_SPLIT_RE = re.compile(r"[，,：:]+")
 # Contrast conjunctions change scope, so a leading condition must not propagate
 # through them.
-_CONTRAST_SPLIT_RE = re.compile(r"\bbut\b|\bwhereas\b|\bhowever\b|然而|不过|但是|(?<!不)(?<!非)但", re.IGNORECASE)
+_CONTRAST_SPLIT_RE = re.compile(
+    r"\bbut\b|\bwhereas\b|\bhowever\b|\balthough\b|\bthough\b|然而|不过|但是|(?<!不)(?<!非)但", re.IGNORECASE
+)
 
 # A leading qualifier (subordinate condition or scope phrase) governs the whole
 # sentence that follows it, so it must not be split away from its guarantees or
@@ -742,7 +744,7 @@ _LOCAL_VALIDATION_REQUIRED_DEPS = [
     re.compile(r"Elasticsearch|(?<![A-Za-z])ES(?![A-Za-z])", re.IGNORECASE),
     re.compile(r"Prometheus", re.IGNORECASE),
 ]
-_VALIDATION_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?]+")
+_VALIDATION_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?]+|\.(?=\s|$)")
 
 
 def _local_validation_affirmative_scope(text: str) -> bool:
