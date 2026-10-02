@@ -1,14 +1,24 @@
 """
-OpenTelemetry 全链路追踪（readme 12 节）
+OpenTelemetry 全链路追踪 + 全链路指标收集
 
-对应 readme 要求：
-- 全链路追踪（OpenTelemetry + Jaeger）
-- 关键监控指标：L1/L2 命中率、Rewrite 延迟、Evidence Gate 分数、KV Cache 占用率等
+当前实现状态（务必与 `docs/repository-truth-audit.md` 保持一致）：
+
+- **追踪钩子**：已接入在线主链路（`core/pipeline.py` → `OpenTelemetryTracer`）。
+- **OTLP 导出器**：已实现且有确定性测试覆盖（`monitoring/otel_exporter.py`），
+  通过 `OTEL_EXPORT_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT` 显式开启。
+- **默认状态**：**默认关闭**。默认安装不含 exporter 包（`requirements-otel.txt`
+  为可选依赖），未设置环境变量时不构造任何 exporter，span 既不导出也不保留。
+- **闭环证据**：`PENDING`。应用 → exporter → collector → 后端 → 实际查到 span
+  这一整条链路在本仓库没有留下任何运行期证据，因此**不得**表述为
+  "OTel/Jaeger 导出已闭环" 或 "tracing validated"。Jaeger 也不是默认 exporter：
+  `config.json` → `monitoring.jaeger.*` 是历史 thrift agent 路径，OTel SDK 已不再
+  附带 jaeger exporter，当前 OTLP 路径由 `monitoring/otel_exporter.py` 负责。
 
 实现层级：
-- OpenTelemetryTracer: 本地 span 追踪（可选接入 OTel SDK + Jaeger）
-- MetricsCollector: 全链路指标收集
-- AlertingManager: 告警规则引擎
+- OpenTelemetryTracer: span 追踪（OTel SDK provider，或 SDK 缺失/初始化失败时的本地内存模式）
+- MetricsCollector: 全链路指标收集，`/api/metrics` 实际暴露的 `rag_*` series 来源
+- AlertingManager: **遗留**进程内阈值引擎，未接入 canonical 请求路径。
+  正式告警契约是 `monitoring/prometheus/alerts.yml`（外部 Prometheus 规则）。
 """
 
 from __future__ import annotations
@@ -38,8 +48,17 @@ class OpenTelemetryTracer:
     """
     全链路追踪器
 
-    当前实现：本地内存 span 追踪器
-    可选升级：接入 OpenTelemetry SDK + Jaeger 导出器
+    当前实现：走 OpenTelemetry SDK `TracerProvider`。span 导出是**可选**的，由
+    `monitoring/otel_exporter.py` 在 `OTEL_EXPORT_ENABLED=true` 时挂载
+    `BatchSpanProcessor`；默认不挂载，因此 span 既不导出也不保留。只有 OTel SDK
+    未安装或 provider 初始化失败时才退回本地内存 span 模式。
+
+    导出器状态可通过 `exporter_state` / `exporter_detail` 读取，并由
+    `MetricsCollector.set_exporter_state` 暴露为 `rag_otel_exporter_enabled`，
+    便于运维在不读日志的情况下确认 span 是否真的离开了进程。
+
+    注意：exporter **实现存在** 与 **导出闭环已验证** 是两件事。后者在本仓库
+    仍是 `PENDING`，详见 `docs/slo-runbook.md#tracelookup`。
 
     用法：
         tracer = OpenTelemetryTracer()
@@ -457,16 +476,27 @@ class MetricsCollector:
 
 class AlertingManager:
     """
-    告警管理器（readme 12 节）
+    告警规则引擎（**遗留 / 未接入 canonical 请求路径**）
 
-    支持从 config.json 读取告警规则，实时检测阈值并生成告警。
+    状态说明（请勿在文档中把它当作正式告警契约）：
 
-    默认告警规则：
-    - KV Pressure > 0.9 持续 30s
-    - KV Cache > 85%
-    - Rerank Batch 延迟 > 50ms
-    - BLIP 触发率 > 10%
-    - L1/L2 命中率突降 > 30%
+    - 本类**没有**被 `app.py`、`api/*`、`core/pipeline.py` 或
+      `core/pipeline_context.py` 引用。canonical 请求路径上不会构造它，
+      也不会调用 `check_alerts()`。唯一调用方是本仓库的确定性测试。
+    - 本仓库的**正式告警契约**是 `monitoring/prometheus/alerts.yml`：由外部
+      Prometheus 加载、评估并触发 `RagAppDown` / `RagHighErrorRate` /
+      `RagHighLatencyP95` / `RagRedisDegraded` / `RagHighLoginRateLimit` /
+      `RagRequestSaturation`。这些规则只引用 `/api/metrics` 真实 emit 的 series。
+    - 两套机制不可混为一谈：这里是**进程内**阈值比较，`config.json` 曾用于存放
+      本引擎的自定义规则；该配置块已移除，因为它没有 canonical 消费者，留着会
+      形成第二套"看起来像生产告警"的契约。规则阈值全部是 `DESIGN_TARGET`，
+      任何一条都没有在生产触发过。
+    - 若干默认规则依赖的指标（如 `kv_utilization`、`rerank_batch_queue_delay_p99`）
+      在 canonical 路径上没有真实 producer，因此这些规则实际不会触发。这是
+      保留本类的已知理由之一，不是可用的告警覆盖。
+
+    保留本类而不是删除，是为了不破坏既有确定性测试；`tests/monitoring/` 中的
+    reachability 契约测试会在它被真正接入时失败，从而强制同步文档口径。
     """
 
     def __init__(self, metrics: MetricsCollector):
@@ -478,14 +508,16 @@ class AlertingManager:
 
     def _load_alert_rules(self) -> list[dict]:
         """
-        从 config.json 加载告警规则
+        规则来源：**仅**代码内置的默认规则集。
 
-        config.json 中的配置格式：
-        "alerting": {
-            "rules": [
-                {"name": "...", "metric": "...", "threshold": 0.9, "duration_s": 30, "severity": "critical"}
-            ]
-        }
+        这里曾经支持从 `config.json` → `alerting.rules` 读取自定义覆盖。该配置块
+        已移除：本类没有 canonical 消费者，`config.json` 里保留一份告警规则只会
+        让人误以为存在第二套生产告警契约。`config.get("alerting", {})` 的读取
+        保留为空操作路径，便于旧配置文件继续被容忍加载，但不会产生规则。
+
+        注意这些 metric 名是**本引擎内部的 collector 名**（点分小写），不是
+        `monitoring/prometheus/alerts.yml` 使用的 `rag_*` Prometheus series。
+        两套命名不可互换。
         """
         # 默认规则（PRD §12 完整告警清单）
         default_rules = [
@@ -580,7 +612,10 @@ class AlertingManager:
             },
         ]
 
-        # 从 config 加载自定义规则（覆盖默认）
+        # Legacy compatibility path: an `alerting.rules` block may still exist in
+        # an operator's local config.json. It is honoured only when the class is
+        # actually driven by a caller, which today no canonical path does. The
+        # repository's own config.json no longer ships the block.
         custom_rules = config.get("alerting", {}).get("rules", [])
         if custom_rules:
             # 合并：自定义规则覆盖同名默认规则
@@ -686,11 +721,19 @@ class AlertingManager:
             return 0.0
 
         # PRD §12: Prefix Caching 命中率
+        # Counter names must match the writers in record_request /
+        # record_prefix_cache_hit / record_prefix_cache_miss (`prefix_cache.hit`
+        # / `prefix_cache.miss`). They previously read the plural
+        # `prefix_cache.hits` / `prefix_cache.misses`, which no writer ever
+        # increments, so this rule could only ever observe zeros.
         if metric_name == "prefix_cache_hit_rate":
-            hits = self.metrics._counters.get("prefix_cache.hits", 0)
-            misses = self.metrics._counters.get("prefix_cache.misses", 0)
+            hits = self.metrics._counters.get("prefix_cache.hit", 0)
+            misses = self.metrics._counters.get("prefix_cache.miss", 0)
             total = hits + misses
-            return hits / total if total > 0 else 1.0
+            # No samples means "not observed", not "perfect" and not "zero".
+            # Returning None makes check_alerts() skip the rule, so a cold
+            # prefix cache can never fire a false drop alert.
+            return hits / total if total > 0 else None
 
         # PRD §12: BLIP 触发率
         if metric_name == "blip_trigger_rate":

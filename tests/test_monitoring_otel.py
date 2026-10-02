@@ -190,3 +190,72 @@ class TestOpenTelemetryTracerSpans:
         assert fake.span.attributes == {"request_id": "r1"}
         assert "user_query" not in fake.span.attributes
         assert tracer.get_trace_summary() == []
+
+
+class TestPrefixCacheAlertMetricNamingContract:
+    """`AlertingManager` must read the counter names its writers actually increment.
+
+    Regression. The writers in `MetricsCollector` have always used the singular
+    `prefix_cache.hit` / `prefix_cache.miss`, while `_get_metric_value` read
+    `prefix_cache.hits` / `prefix_cache.misses`. Both lookups therefore returned 0,
+    so the `prefix_cache_drop` rule evaluated `0 / 0` and fell through to its
+    hardcoded default instead of the observed rate.
+    """
+
+    @pytest.fixture
+    def alerting(self):
+        from monitoring.otel_tracer import AlertingManager
+
+        return AlertingManager(MetricsCollector())
+
+    def test_one_hit_one_miss_is_one_half(self, alerting):
+        metrics = alerting.metrics
+        metrics.record_prefix_cache_hit()
+        metrics.record_prefix_cache_miss()
+        assert alerting._get_metric_value("prefix_cache_hit_rate") == pytest.approx(0.5)
+
+    def test_two_hits_no_misses_is_one(self, alerting):
+        metrics = alerting.metrics
+        metrics.record_prefix_cache_hit()
+        metrics.record_prefix_cache_hit()
+        assert alerting._get_metric_value("prefix_cache_hit_rate") == pytest.approx(1.0)
+
+    def test_no_hits_two_misses_is_zero(self, alerting):
+        metrics = alerting.metrics
+        metrics.record_prefix_cache_miss()
+        metrics.record_prefix_cache_miss()
+        assert alerting._get_metric_value("prefix_cache_hit_rate") == pytest.approx(0.0)
+
+    def test_no_samples_is_reported_as_unobserved_not_as_a_rate(self, alerting):
+        """Documented neutral behaviour: no samples yields no value, not 1.0 or 0.0.
+
+        `check_alerts()` skips a rule whose value is `None`, so a cold prefix cache
+        can neither fire `prefix_cache_drop` nor be reported as a perfect hit rate.
+        """
+        assert alerting._get_metric_value("prefix_cache_hit_rate") is None
+        assert alerting.get_active_alerts() == []
+        alerting.check_alerts()
+        assert alerting.get_active_alerts() == []
+
+    def test_writer_and_reader_agree_on_the_counter_names(self, alerting):
+        """The contract itself: the reader must not invent plural counter names."""
+        metrics = alerting.metrics
+        metrics.record_prefix_cache_hit()
+        assert "prefix_cache.hit" in metrics._counters
+        assert "prefix_cache.hits" not in metrics._counters
+        assert "prefix_cache.misses" not in metrics._counters
+
+    def test_alert_rule_reads_the_correct_metric_name(self, alerting):
+        rule = next(r for r in alerting._alert_rules if r["name"] == "prefix_cache_drop")
+        assert rule["metric"] == "prefix_cache_hit_rate"
+        assert rule["comparison"] == "lt"
+
+    def test_stats_summary_and_alerting_agree(self, alerting):
+        """`get_stats()` and `_get_metric_value()` must not disagree on the rate."""
+        metrics = alerting.metrics
+        metrics.record_prefix_cache_hit()
+        metrics.record_prefix_cache_miss()
+        metrics.record_prefix_cache_miss()
+        assert metrics.get_stats()["prefix_cache_hit_rate"] == pytest.approx(
+            alerting._get_metric_value("prefix_cache_hit_rate")
+        )

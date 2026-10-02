@@ -320,18 +320,6 @@
     "super_admin_mask": 4294967295,
     "public_mask": 0
   },
-  "alerting": {
-    "rules": [
-      {"name": "blip_trigger_high", "metric": "blip_trigger_rate", "threshold": 0.15,
-       "duration_s": 300, "severity": "warning", "comparison": "gt"},
-      {"name": "cache_hit_L1_drop", "metric": "cache_hit_rate_L1", "threshold": 0.3,
-       "duration_s": 300, "severity": "warning", "comparison": "lt"},
-      {"name": "rerank_batch_queue_high", "metric": "rerank_batch_queue_delay_p99", "threshold": 50,
-       "duration_s": 60, "severity": "warning", "comparison": "gt"},
-      {"name": "redis_degraded_long", "metric": "redis.degraded_events", "threshold": 5,
-       "duration_s": 300, "severity": "warning", "comparison": "gt"}
-    ]
-  },
   "monitoring": {
     "jaeger": {
       "enabled": false,
