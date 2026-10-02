@@ -145,6 +145,39 @@ Changes present on `main` after the 2.3.0 release entry:
   policy is authoritative. Without this, uvicorn's default (`proxy_headers=True`,
   `forwarded_allow_ips=127.0.0.1`) rewrote `request.client` from `X-Forwarded-For` before the
   app-level check and let a direct localhost client spoof its rate-limit identity.
+- Post-enterprise-readiness truth reconciliation. No new capability; the enterprise-readiness
+  framework and its results are unchanged, and no external validation evidence was produced.
+  - `AlertingManager._get_metric_value("prefix_cache_hit_rate")` read `prefix_cache.hits` /
+    `prefix_cache.misses` while every writer increments `prefix_cache.hit` /
+    `prefix_cache.miss`, so the rate was always computed from zeros. It now reads the writer
+    names and returns `None` when there are no samples, which makes the rule skip instead of
+    asserting a perfect or a zero hit rate. `tests/test_monitoring_subsystem.py` previously
+    encoded the wrong names and now pins the correct contract.
+  - `monitoring/otel_tracer.py` module, tracer and `AlertingManager` docstrings described OTel
+    and Jaeger as a future upgrade. They now state the actual split: hook implemented, exporter
+    implemented and test-covered, disabled by default, closed loop `PENDING`.
+  - Removed the `config.json` -> `alerting.rules` block. Its only consumers were the in-process
+    `AlertingManager` here and an unimported `common/tracing.py` copy; nothing in `app.py`,
+    `api/` or `core/` reaches either. It read like a second production alert contract.
+  - Operational docs cited six `rag_*` names the exporter never emits
+    (`rag_cache_hit_rate`, `rag_rewrite_fallback_rate`, `rag_http_responses_total`,
+    `rag_redis_degradation_total`, `rag_login_rate_limited_total`,
+    `rag_admission_rejected_total`). Corrected to the emitted counters, or to an explicit
+    PromQL ratio / `/api/stats` pointer where the value is genuinely derived.
+  - `docs/slo-runbook.md` listed `RagDependencyDown` in the alert -> response map as if it were
+    a rule; it is a `/api/health` condition, and the gap is now stated explicitly.
+  - `docs/repository-truth-audit.md` had two contradictory OpenTelemetry rows. They are unified
+    into hook / exporter / closed-loop states, and the tracker map plus audit lineage now record
+    the enterprise-readiness delivery and this reconciliation.
+  - `scripts/check_repo_consistency.py` gained three drift guards: docs may not describe the
+    implemented exporter as absent; operational docs may only cite emitted `rag_*` series or an
+    explicitly derived ratio; and the audit must keep delivered scope classified and external
+    validation trackers recorded as open. The emitted-series inventory is derived from the
+    collector's own literals by AST, so the guard stays offline and deterministic. The audit
+    table parser now stops at the end of the table instead of parsing later prose tables.
+  - `tests/monitoring/test_alerting_reachability.py` pins the reachability finding: it fails if
+    the in-process engine is ever wired into the canonical path, which is the moment a second
+    alert contract would become real.
 
 ### Fixed
 

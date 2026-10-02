@@ -303,6 +303,18 @@ REQUIRED_AUDIT_AREAS = {
     # Retrieval quality is now measured by a real harness, so its classification
     # must stay visible in the audit instead of living only in prose.
     "Retrieval benchmark",
+    # Enterprise-readiness areas. Each has a framework state and a result state
+    # that must stay separable, so each needs its own row.
+    "OpenTelemetry tracing",
+    "OTLP export",
+    "Prometheus alerting",
+    "Grafana dashboard",
+    "SLO + incident runbook",
+    "Structured audit trail",
+    "Performance evidence",
+    # The second, unwired threshold engine. Without its own row the audit cannot
+    # state that it is not the canonical alerting contract.
+    "In-process AlertingManager",
 }
 
 
@@ -1366,6 +1378,519 @@ def check_observability_is_optional(errors: list[str]) -> None:
             fail(errors, f"docker-compose.observability.yml must provide {required} behind the overlay")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Post-#21 drift guards
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Three classes of drift survived PR #21 because no guard covered them:
+#   1. docs denying the *existence* of an implemented capability;
+#   2. operational docs naming a `rag_*` series the collector never emits;
+#   3. the audit tracker losing the implemented / externally-pending distinction.
+# Each is derived from the working tree, never from GitHub or the clock.
+
+
+# ── 1. exporter existence vs exporter default state ─────────────────────────
+#
+# "no exporter configured" is true of a default install and false as a statement
+# about the implementation. Free text cannot separate those two on one line, so
+# instead of trying to outlaw the phrase this guard requires the *implementation*
+# to be named wherever tracing/exporter is discussed. A doc that only ever says an
+# exporter is absent is the drift; a doc that names `monitoring/otel_exporter.py`
+# or `OTEL_EXPORT_ENABLED` has made the default-off scope explicit.
+
+#: Tokens that name the exporter implementation or its switch.
+_EXPORTER_IMPLEMENTATION_TOKENS = (
+    "monitoring/otel_exporter.py",
+    "otel_exporter",
+    "OTEL_EXPORT_ENABLED",
+    "requirements-otel.txt",
+    "OTLP",
+    "otlp",
+)
+
+#: Docs whose tracing/exporter discussion must name the implementation.
+EXPORTER_TRUTH_DOCS = (
+    "README.md",
+    "docs/README.md",
+    "docs/repository-truth-audit.md",
+    "docs/interview-architecture-baseline.md",
+    "docs/interview-evidence-map.md",
+    "docs/operations-guide.md",
+    "docs/slo-runbook.md",
+    "docs/pre-launch-checklist.md",
+)
+
+_TRACING_SUBJECT_RE = re.compile(
+    r"OpenTelemetry|OTel|OTLP|Jaeger|exporter|追踪|导出",
+    re.IGNORECASE,
+)
+
+
+def exporter_truth_claim_errors(name: str, text: str) -> list[str]:
+    """Return errors for a doc that discusses tracing without naming the exporter."""
+    if not _TRACING_SUBJECT_RE.search(text):
+        return []
+    if any(token in text for token in _EXPORTER_IMPLEMENTATION_TOKENS):
+        return []
+    return [
+        f"{name}: discusses tracing/export but never names the exporter implementation "
+        "(monitoring/otel_exporter.py / OTEL_EXPORT_ENABLED / requirements-otel.txt); "
+        "an exporter that exists must not be described as absent"
+    ]
+
+
+def check_exporter_truth_contract(errors: list[str]) -> None:
+    """The implemented exporter may not be documented as non-existent."""
+    if not otlp_exporter_implemented():
+        return
+    for name in EXPORTER_TRUTH_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        errors.extend(exporter_truth_claim_errors(name, path.read_text(encoding="utf-8")))
+
+
+# The interview baseline is the single architecture truth document, so it must
+# carry both halves of the exporter split explicitly rather than by implication.
+_BASELINE_EXPORTER_IMPLEMENTATION_RE = re.compile(
+    r"OTEL_EXPORT_ENABLED|monitoring/otel_exporter\.py|requirements-otel\.txt",
+)
+_BASELINE_CLOSED_LOOP_PENDING_RE = re.compile(
+    r"PENDING|待验证|pending|未验证",
+    re.IGNORECASE,
+)
+
+
+def check_interview_baseline_exporter_split(errors: list[str]) -> None:
+    """The interview baseline must state exporter implementation AND pending loop."""
+    path = ROOT / "docs/interview-architecture-baseline.md"
+    if not path.exists() or not otlp_exporter_implemented():
+        return
+    text = path.read_text(encoding="utf-8")
+    if not _TRACING_SUBJECT_RE.search(text):
+        return
+    if not _BASELINE_EXPORTER_IMPLEMENTATION_RE.search(text):
+        fail(errors, "docs/interview-architecture-baseline.md: must name the OTLP exporter implementation")
+    if not _BASELINE_CLOSED_LOOP_PENDING_RE.search(text):
+        fail(
+            errors,
+            "docs/interview-architecture-baseline.md: must record the OTLP runtime closed loop as pending",
+        )
+
+
+# ── 2. operational `rag_*` references ───────────────────────────────────────
+#
+# The exporter publishes raw counters and gauges. A ratio such as
+# `rag_cache_hit_rate` is computed by `/api/stats` or by a PromQL expression, and
+# naming it as if it were a series sends an operator looking for a target that does
+# not exist. The inventory below is read statically out of the collector so the
+# guard needs no import of the application and stays deterministic.
+
+COLLECTOR_MODULE = "monitoring/otel_tracer.py"
+EXPORTER_MODULE = "monitoring/otel_exporter.py"
+
+#: Method names on the collector that write a metric.
+_METRIC_WRITER_METHODS = frozenset(
+    {
+        "increment",
+        "set_gauge",
+        "observe_histogram",
+        "set_active_requests",
+        "set_exporter_state",
+        "set_redis_degraded",
+        "record_prefix_cache_hit",
+        "record_prefix_cache_miss",
+        "record_cache_epoch_switch",
+        "record_redis_degraded",
+    }
+)
+
+#: Collector attributes that hold metric names directly.
+_METRIC_STORE_ATTRS = frozenset({"_counters", "_gauges", "_histograms"})
+
+#: `rag_*`-shaped tokens that are not Prometheus series. Qdrant collection names
+#: share the prefix and would otherwise be false positives.
+NON_METRIC_RAG_NAMES = frozenset({"rag_text_768", "rag_image_512"})
+
+#: Names derived from emitted counters rather than emitted themselves. A doc may
+#: use these only where it presents them as derived.
+DERIVED_METRIC_NAMES = frozenset(
+    {
+        "rag_cache_hit_rate",
+        "rag_rewrite_fallback_rate",
+        "rag_blip_trigger_rate",
+        "rag_nli_contradiction_rate",
+        "rag_cache_failure_rate",
+        "rag_http_responses_total",
+    }
+)
+
+#: Markers that make a derived name acceptable: an explicit PromQL expression, an
+#: explicit pointer at `/api/stats`, or an explicit statement that it does not exist.
+_DERIVATION_MARKER_RE = re.compile(
+    r"PromQL|rate\(|increase\(|sum\(|clamp_min\(|/api_stats|"
+    r"derived|ratio|计算|比率|不存在|没有对应的|并非|"
+    r"there\s+is\s+no|there\s+are\s+no|no\s+such|does\s+not\s+exist|"
+    r"is\s+not\s+a\s+(?:real\s+)?(?:prometheus\s+)?(?:series|metric)|"
+    r"never\s+emitted|不是\s*(?:一个)?(?:真实)?(?:series|指标)",
+    re.IGNORECASE,
+)
+
+#: Operational docs whose `rag_*` references an operator will paste into a query.
+OPERATIONAL_METRIC_DOCS = (
+    "docs/operations-guide.md",
+    "docs/slo-runbook.md",
+    "docs/pre-launch-checklist.md",
+    "docs/deployment-guide.md",
+)
+
+
+def _literal(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _prefix_from_formatted(node: ast.AST) -> str | None:
+    """Return the literal head of an f-string / ``"a".format()`` style name."""
+    if isinstance(node, ast.JoinedStr):
+        head = ""
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                head += part.value
+            else:
+                break
+        return head or None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return _literal(node.left)
+    return None
+
+
+def _module_constant(path: Path, name: str) -> str | None:
+    """Return a module-level string constant, e.g. EXPORTER_ENABLED_METRIC."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == name:
+                return _literal(node.value)
+    return None
+
+
+def _prometheus_name(metric: str) -> str:
+    return "rag_" + metric.replace(".", "_").replace("-", "_")
+
+
+def _collect_metric_names(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
+    """Return ``(plain names, histogram names, formatted-name prefixes)``.
+
+    A metric name reaches ``/api/metrics`` through
+    ``MetricsCollector.to_prometheus_text``, which turns ``a.b`` into ``rag_a_b``.
+    Three shapes occur:
+
+    * plain literals written to a counter or gauge — emitted as-is;
+    * histogram observations — additionally exposed as a ``_seconds`` summary with a
+      ``_count`` companion;
+    * names assembled at runtime (``f"cache.hit.{level}"``) — no fixed spelling
+      exists, so only the Prometheus-visible prefix can be recorded.
+
+    Keeping the three apart matters: expanding ``_seconds`` over a gauge would invent
+    series that the exporter never writes.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.Constant, ast.JoinedStr, ast.BinOp)):
+            literal = _literal(node.value) or _prefix_from_formatted(node.value)
+            if literal is None:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    aliases.setdefault(target.id, literal)
+
+    def resolve(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return aliases.get(node.id)
+        return _literal(node) or _prefix_from_formatted(node)
+
+    plain: set[str] = set()
+    histograms: set[str] = set()
+    prefixes: set[str] = set()
+
+    for node in ast.walk(tree):
+        is_histogram = False
+        args: tuple[ast.AST, ...] = ()
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr in _METRIC_WRITER_METHODS:
+                args = tuple(node.args)
+                is_histogram = node.func.attr == "observe_histogram"
+        elif isinstance(node, ast.Subscript):
+            owner = node.value
+            if isinstance(owner, ast.Attribute) and owner.attr in _METRIC_STORE_ATTRS:
+                args = (node.slice,)
+                is_histogram = owner.attr == "_histograms"
+        if not args:
+            continue
+        raw = resolve(args[0])
+        if not raw:
+            continue
+        if raw.endswith((".", "_")) or "{" in raw:
+            prefixes.add(_prometheus_name(raw))
+        elif is_histogram:
+            histograms.add(raw)
+        else:
+            plain.add(raw)
+
+    return plain, histograms, prefixes
+
+
+def emitted_prometheus_metrics() -> set[str]:
+    """Return every ``rag_*`` series the canonical collector can emit.
+
+    Derived by reading the collector's own metric-name literals rather than by
+    importing and driving it, so the guard stays offline and cannot fail because of
+    an unrelated import error. Every emission in the collector goes through a string
+    literal, optionally an f-string, so the literals are the authoritative list of
+    what can appear on ``/api/metrics``.
+
+    Names assembled at runtime have no single spelling and are returned separately by
+    :func:`emitted_prometheus_prefixes`.
+    """
+    collector_path = ROOT / COLLECTOR_MODULE
+    if not collector_path.exists():
+        return set()
+    tree = ast.parse(collector_path.read_text(encoding="utf-8"), filename=str(collector_path))
+    plain, histograms, _ = _collect_metric_names(tree)
+
+    exporter_path = ROOT / EXPORTER_MODULE
+    if exporter_path.exists():
+        enabled_metric = _module_constant(exporter_path, "EXPORTER_ENABLED_METRIC")
+        if enabled_metric:
+            plain.add(enabled_metric)
+
+    series = {_prometheus_name(name) for name in plain}
+    summaries = {_prometheus_name(name) for name in histograms}
+    series |= summaries | {f"{name}_seconds" for name in summaries}
+    series |= {f"{name}_seconds_count" for name in summaries}
+    series.add("rag_uptime_seconds")
+    return series
+
+
+def emitted_prometheus_prefixes() -> set[str]:
+    """Return Prometheus-visible prefixes for metrics assembled at runtime.
+
+    A doc may cite any name under one of these (``rag_cache_hit_L1`` under
+    ``rag_cache_hit_``) because the collector emits a matching series, but no single
+    spelling is canonical, so a doc must not present one as the only option.
+    """
+    collector_path = ROOT / COLLECTOR_MODULE
+    if not collector_path.exists():
+        return set()
+    tree = ast.parse(collector_path.read_text(encoding="utf-8"), filename=str(collector_path))
+    _, _, prefixes = _collect_metric_names(tree)
+    return prefixes
+
+
+def emitted_metric_reference_set() -> set[str]:
+    """Concrete series plus the prefixes that stand for runtime-assembled names."""
+    return emitted_prometheus_metrics() | emitted_prometheus_prefixes()
+
+
+def _rag_tokens(text: str) -> list[tuple[int, str]]:
+    """Return ``(line_index, token)`` for every ``rag_*`` token in the text.
+
+    A bare family prefix is not a series. ``grep rag_http`` names several series at
+    once, so a token that is a strict prefix of a real emitted series or of a
+    runtime-assembled prefix is treated as a family reference rather than as a claim
+    about one missing series.
+    """
+    available = emitted_metric_reference_set()
+    found: list[tuple[int, str]] = []
+    for index, line in enumerate(text.splitlines()):
+        for match in re.finditer(r"\brag_[A-Za-z0-9_]+", line):
+            token = match.group(0)
+            if match.end() < len(line) and line[match.end()] == "_":
+                continue
+            if any(series.startswith(f"{token}_") for series in available):
+                continue
+            found.append((index, token))
+    return found
+
+
+def _line_blocks(lines: list[str]) -> dict[int, str]:
+    """Map each line index to the block of prose that contains it.
+
+    Justification for a derived metric name may legitimately wrap across the lines
+    of one paragraph, so the derivation marker is matched against a whole block
+    rather than a single physical line. A heading is merged into the block it
+    introduces, because a claim made in a heading is elaborated by its body — a
+    heading that names a phantom series is corrected by the paragraph beneath it.
+    """
+    blocks: dict[int, str] = {}
+    start = 0
+    boundaries: list[int] = []
+    for index in range(len(lines) + 1):
+        at_end = index == len(lines)
+        if at_end or not lines[index].strip():
+            if index > start:
+                boundaries.append(index)
+            start = index + 1
+
+    for position, end in enumerate(boundaries):
+        begin = 0 if position == 0 else boundaries[position - 1] + 1
+        body = " ".join(line.strip() for line in lines[begin:end] if line.strip())
+        heading_only = all(
+            not line.strip() or line.lstrip().startswith("#") or line.lstrip().startswith("```")
+            for line in lines[begin:end]
+        )
+        if heading_only and position + 1 < len(boundaries):
+            next_end = boundaries[position + 1]
+            body = " ".join(line.strip() for line in lines[begin:next_end] if line.strip())
+            end = next_end
+        for line_index in range(begin, end):
+            blocks[line_index] = body
+    return blocks
+
+
+def operational_metric_reference_errors(name: str, text: str) -> list[str]:
+    """Return `rag_*` references that name a series the collector never emits."""
+    available = emitted_prometheus_metrics()
+    if not available:
+        return []
+    errors: list[str] = []
+    lines = text.splitlines()
+    blocks = _line_blocks(lines)
+    for index, token in _rag_tokens(text):
+        if token in available or token in NON_METRIC_RAG_NAMES:
+            continue
+        # A derived name must always be justified, even when it happens to sit under
+        # a runtime-assembled family prefix: `rag_cache_hit_rate` starts with
+        # `rag_cache_hit_`, but no such series exists under that family.
+        if token in DERIVED_METRIC_NAMES:
+            if _DERIVATION_MARKER_RE.search(blocks.get(index, "")):
+                continue
+            errors.append(
+                f"{name}:{index + 1}: {token!r} is a derived ratio, not a series emitted by "
+                f"{COLLECTOR_MODULE}; state the PromQL ratio or point at /api/stats"
+            )
+            continue
+        if any(token.startswith(prefix) for prefix in emitted_prometheus_prefixes()):
+            continue
+        errors.append(f"{name}:{index + 1}: {token!r} is not a series emitted by {COLLECTOR_MODULE}")
+    return errors
+
+
+def check_operational_metric_references(errors: list[str]) -> None:
+    """Operational docs may only cite emitted series or explicitly derived ratios."""
+    for name in OPERATIONAL_METRIC_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        errors.extend(operational_metric_reference_errors(name, path.read_text(encoding="utf-8")))
+
+
+# ── 3. audit tracker lineage ────────────────────────────────────────────────
+#
+# The tracker map is a human-facing snapshot, so it must keep completed
+# implementation work and still-open external validation distinguishable without
+# being pinned to a GitHub query at CI time.
+
+#: Areas whose implementation is delivered. Each row must carry an explicit
+#: classification so "implemented" can never be read as "result achieved".
+DELIVERED_AUDIT_AREAS = (
+    "Performance evidence",
+    "Structured audit trail",
+    "SLO + incident runbook",
+    "Prometheus alerting",
+    "Grafana dashboard",
+    "OTLP export",
+)
+
+#: The canonical classification vocabulary. A delivered row that names none of
+#: these is asserting an unclassified capability.
+_CLASSIFICATION_TOKENS = (
+    "REPO_VERIFIED",
+    "DESIGN_TARGET",
+    "PENDING",
+    "STALE",
+    "HISTORICAL",
+    "LOCAL_REAL_VALIDATION",
+    "PARTIAL",
+    "VERIFIED",
+)
+
+#: Long-lived trackers for evidence that only an external environment can produce.
+#: None of this repository's own changes can close them, so the audit must keep
+#: recording them as open. The numbers are stable by construction: a closed tracker
+#: is deleted from this list in the same commit that closes it.
+OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
+
+_BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
+
+
+def _tracker_section(audit_text: str) -> str | None:
+    match = re.search(r"(?ms)^##\s+External validation tracker map\s*$(.*?)(?=^##\s|\Z)", audit_text)
+    return match.group(1) if match else None
+
+
+def _tracker_bullets(tracker: str) -> list[str]:
+    """Split the tracker map into bullets, including hard-wrapped continuations."""
+    starts = [match.start() for match in _BULLET_SPLIT_RE.finditer(tracker)]
+    if not starts:
+        return [tracker]
+    bounds = starts + [len(tracker)]
+    return [tracker[bounds[index] : bounds[index + 1]] for index in range(len(starts))]
+
+
+def audit_tracker_errors(audit_text: str) -> list[str]:
+    """Require the audit to separate delivered scope from open external validation."""
+    errors: list[str] = []
+
+    tracker = _tracker_section(audit_text)
+    if tracker is None:
+        errors.append("repository truth audit: missing the 'External validation tracker map' section")
+        return errors
+
+    bullets = _tracker_bullets(tracker)
+    for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
+        reference = re.compile(r"#[\[({]?" + str(number) + r"\b")
+        line = next((bullet for bullet in bullets if reference.search(bullet)), None)
+        if line is None:
+            errors.append(
+                f"repository truth audit: external validation tracker #{number} is no longer recorded "
+                "in the tracker map; if it was closed, remove it from "
+                "OPEN_EXTERNAL_VALIDATION_TRACKERS in scripts/check_repo_consistency.py"
+            )
+            continue
+        if not re.search(r"\bopen\b", line, re.IGNORECASE):
+            errors.append(
+                f"repository truth audit: tracker #{number} must stay recorded as open; "
+                "no change in this repository produces that external evidence"
+            )
+
+    for area in DELIVERED_AUDIT_AREAS:
+        row = next(
+            (line for line in audit_text.splitlines() if re.match(rf"^\|\s*{re.escape(area)}\s*\|", line)),
+            None,
+        )
+        if row is None:
+            errors.append(f"repository truth audit: no row for delivered area {area!r}")
+            continue
+        if not any(token in row for token in _CLASSIFICATION_TOKENS):
+            errors.append(
+                f"repository truth audit: delivered area {area!r} carries no explicit classification; "
+                "an unclassified delivered capability reads as a completed result"
+            )
+    return errors
+
+
+def check_audit_tracker_lineage(errors: list[str]) -> None:
+    """The audit must keep completed implementation and open validation separable."""
+    path = ROOT / "docs/repository-truth-audit.md"
+    if not path.exists():
+        return
+    errors.extend(audit_tracker_errors(path.read_text(encoding="utf-8")))
+
+
 def check_canonical_runtime_is_not_observability_gated(errors: list[str]) -> None:
     """No forbidden platform may be required by the canonical deployment."""
     for name in ("docker-compose.yml", "Dockerfile"):
@@ -1474,7 +1999,11 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
                 )
 
     audit_lines = audit_text.splitlines()
-    header = next((line for line in audit_lines if line.startswith("| Area |")), "")
+    header_index = next((i for i, line in enumerate(audit_lines) if line.startswith("| Area |")), None)
+    if header_index is None:
+        fail(errors, "repository truth audit must have Area and Status columns")
+        return
+    header = audit_lines[header_index]
     columns_header = [part.strip().lower() for part in header.strip("|").split("|")]
     area_column = columns_header.index("area") if "area" in columns_header else -1
     status_column = columns_header.index("status") if "status" in columns_header else -1
@@ -1483,16 +2012,24 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
         return
 
     seen_areas: dict[str, str] = {}
-    for line_number, line in enumerate(audit_lines, 1):
-        if not line.startswith("|") or "---" in line or line.startswith("| Area"):
+    # Only the contiguous run of `|` lines that starts at the audit header is the
+    # audit table. Later tables in the same document are prose, not audit rows, so
+    # parsing must stop at the first non-table line after the header.
+    for line_number in range(header_index + 1, len(audit_lines)):
+        line = audit_lines[line_number]
+        if not line.startswith("|"):
+            if line.strip():
+                break
+            continue
+        if "---" in line:
             continue
         columns = [part.strip() for part in line.strip("|").split("|")]
         if len(columns) <= max(area_column, status_column):
-            fail(errors, f"repository audit line {line_number}: malformed row")
+            fail(errors, f"repository audit line {line_number + 1}: malformed row")
             continue
         status = columns[status_column]
         if status not in STATUSES:
-            fail(errors, f"repository audit line {line_number}: invalid status {status!r}")
+            fail(errors, f"repository audit line {line_number + 1}: invalid status {status!r}")
             continue
         seen_areas[columns[area_column]] = status
 
@@ -1549,6 +2086,10 @@ def main() -> int:
     check_prd_design_targets(errors)
     check_enterprise_readiness_contracts(errors)
     check_enterprise_readiness_coverage(errors)
+    check_exporter_truth_contract(errors)
+    check_interview_baseline_exporter_split(errors)
+    check_operational_metric_references(errors)
+    check_audit_tracker_lineage(errors)
     check_observability_is_optional(errors)
     check_canonical_runtime_is_not_observability_gated(errors)
 
