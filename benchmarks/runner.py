@@ -80,16 +80,21 @@ def _completed_sample_set_hash(results: Sequence[QueryBenchmarkResult]) -> str:
     return digest.hexdigest()[:16]
 
 
-def _probe_backends(config_name: str, dataset_queries: int) -> tuple[BackendAvailability, ...]:
-    manifest = backends.backend_manifest(config_name, dataset_queries)
+def _probe_backends(probed: Sequence[BackendAvailability]) -> tuple[BackendAvailability, ...]:
+    """Normalize one probe snapshot for the run outcome.
+
+    The same snapshot decides availability and is recorded in the manifest, so the
+    artifact cannot claim a backend was unavailable while the manifest reports it
+    available.
+    """
     return tuple(
         BackendAvailability(
-            name=item["backend"],
-            available=bool(item["available"]),
-            reason=str(item["reason"]),
-            detail=item["detail"],
+            name=item.name,
+            available=bool(item.available),
+            reason=str(item.reason),
+            detail=item.detail,
         )
-        for item in manifest
+        for item in probed
     )
 
 
@@ -114,8 +119,9 @@ def run_configuration(
         outcome = ConfigOutcome(config_name, STATUS_SKIPPED, force_block_reason)
         return ConfigRun(outcome)
 
-    availability = backends.evaluate_config(config_name, len(queries))
-    probed = _probe_backends(config_name, len(queries))
+    # One probe snapshot feeds both the availability verdict and the manifest.
+    probed = _probe_backends(backends.probe_config_backends(config_name, len(queries)))
+    availability = backends.evaluate_config(config_name, len(queries), probed=probed)
 
     if retriever_factory is None:
         if availability.available:

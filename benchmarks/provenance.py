@@ -352,7 +352,11 @@ def effective_retrieval_config() -> dict[str, Any]:
             )
             if os.environ.get(name)
         },
-        "secret_env_presence": credential_env_state(),
+        # Named without a credential-ish substring: sanitize() reduces any key
+        # containing "secret"/"credential"/"token" to a boolean, which would
+        # collapse this presence mapping to a constant `true` and make the
+        # snapshot unable to distinguish which variables were set.
+        "auth_env_presence": credential_env_state(),
     }
     # Applied once at the boundary so a credential nested anywhere in the
     # configuration tree is reduced to a presence flag before it is persisted.

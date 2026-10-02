@@ -1855,3 +1855,118 @@ def test_each_sample_set_gets_its_own_table():
     group_b = text[second:]
     assert "| `dense` |" in group_b
     assert "| `bm25` |" not in group_b
+
+
+# ── Round 15: single probe snapshot, preserved env presence mapping ──────────
+
+
+def test_config_probe_probes_each_backend_once(monkeypatch):
+    """Availability and the manifest must come from one probe snapshot."""
+    from benchmarks import backends
+
+    calls = []
+
+    def make_probe(name, available):
+        def probe():
+            calls.append(name)
+            return backends.BackendAvailability(name, available, backends.REASON_OK, "ok")
+
+        return probe
+
+    monkeypatch.setitem(backends.PROBES, "bm25", make_probe("bm25", True))
+    # The corpus check is dispatched directly rather than through PROBES.
+    monkeypatch.setattr(backends, "probe_corpus", lambda count: make_probe("corpus", True)())
+    probed = backends.probe_config_backends("bm25", 1)
+    assert calls.count("bm25") == 1
+    assert calls.count("corpus") == 1
+    assert len(probed) == 2
+
+
+def test_evaluate_config_reuses_supplied_snapshot(monkeypatch):
+    from benchmarks import backends
+
+    snapshot = (backends.BackendAvailability("bm25", False, backends.REASON_SERVICE_UNREACHABLE, "down"),)
+    monkeypatch.setitem(
+        backends.PROBES,
+        "bm25",
+        lambda: pytest.fail("probe must not run when a snapshot is supplied"),
+    )
+    availability = backends.evaluate_config("bm25", 1, probed=snapshot)
+    assert availability.available is False
+    assert "service_unreachable" in availability.describe()
+
+
+def test_runner_uses_one_snapshot_for_outcome_and_manifest(monkeypatch):
+    """A state change between probes must not split the artifact's story."""
+    from benchmarks import backends
+    from benchmarks.runner import run_configuration
+
+    calls = []
+
+    def flaky_probe():
+        calls.append(1)
+        # Available on the first call, then "changes state" to unavailable.
+        if len(calls) == 1:
+            return backends.BackendAvailability("bm25", True, backends.REASON_OK, "ok")
+        return backends.BackendAvailability("bm25", False, backends.REASON_SERVICE_UNREACHABLE, "down")
+
+    monkeypatch.setitem(backends.PROBES, "bm25", flaky_probe)
+    monkeypatch.setitem(
+        backends.PROBES, "corpus", lambda: backends.BackendAvailability("corpus", True, backends.REASON_OK, "ok")
+    )
+
+    class Unused:
+        name = "unused"
+
+        def retrieve(self, query, top_k):  # pragma: no cover - never reached
+            return []
+
+    run = run_configuration("bm25", [], retriever_factory=lambda name: Unused())
+    assert len(calls) == 1
+    # The manifest recorded in the outcome must agree with the reason it states.
+    recorded = {item.name: item.available for item in run.outcome.backend_availability or ()}
+    assert recorded.get("bm25") is True
+    assert "unavailable" not in run.outcome.reason
+
+
+def test_credential_env_presence_stays_a_mapping(monkeypatch):
+    """sanitize must not collapse the presence mapping to a constant true."""
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+    snapshot = provenance.effective_retrieval_config()
+    presence = snapshot["auth_env_presence"]
+    assert isinstance(presence, dict)
+    assert presence
+    assert all(isinstance(value, bool) for value in presence.values())
+
+
+def test_env_presence_changes_are_visible_to_the_hash(monkeypatch):
+    import os
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+    for name in ("ELASTICSEARCH_PASSWORD", "REDIS_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    baseline = provenance.sha256_json(provenance.effective_retrieval_config())
+
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "set-for-this-test")
+    changed = provenance.sha256_json(provenance.effective_retrieval_config())
+    assert changed != baseline
+
+    os.environ.pop("ELASTICSEARCH_PASSWORD", None)
+
+
+def test_env_presence_never_records_values(monkeypatch):
+    import json as _json
+
+    from benchmarks import provenance
+    from common import config as common_config
+
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+    monkeypatch.setenv("ELASTICSEARCH_PASSWORD", "value-must-not-appear")
+    rendered = _json.dumps(provenance.effective_retrieval_config())
+    assert "value-must-not-appear" not in rendered

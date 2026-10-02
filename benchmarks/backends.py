@@ -25,6 +25,7 @@ import os
 import socket
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -524,21 +525,38 @@ class ConfigAvailability:
         return "; ".join(self.reasons)
 
 
-def evaluate_config(config_name: str, dataset_queries: int) -> ConfigAvailability:
-    """Probe every backend a configuration requires, without executing retrieval."""
+def probe_config_backends(config_name: str, dataset_queries: int) -> tuple[BackendAvailability, ...]:
+    """Probe each backend a configuration requires exactly once.
+
+    The caller reuses this single snapshot for both the availability verdict and
+    the manifest. Probing twice lets a service that changes state between the two
+    calls produce an artifact whose outcome reason and manifest disagree.
+    """
     if config_name not in REQUIRED_BACKENDS:
-        return ConfigAvailability(config_name, False, (f"unknown configuration: {config_name}",), None)
-    reasons: list[str] = []
-    details: list[str] = []
+        return ()
+    probed: list[BackendAvailability] = []
     for backend_name in REQUIRED_BACKENDS[config_name]:
         if backend_name == "corpus":
-            availability = probe_corpus(dataset_queries)
+            probed.append(probe_corpus(dataset_queries))
         else:
-            availability = PROBES[backend_name]()
-        if not availability.available:
-            reasons.append(f"{availability.name}={availability.reason}")
-            if availability.detail:
-                details.append(f"{availability.name}: {availability.detail}")
+            probed.append(PROBES[backend_name]())
+    return tuple(probed)
+
+
+def evaluate_config(
+    config_name: str,
+    dataset_queries: int,
+    probed: Sequence[BackendAvailability] | None = None,
+) -> ConfigAvailability:
+    """Whether a configuration's backends are usable, without executing retrieval.
+
+    ``probed`` reuses an existing probe snapshot instead of probing again.
+    """
+    if config_name not in REQUIRED_BACKENDS:
+        return ConfigAvailability(config_name, False, (f"unknown configuration: {config_name}",), None)
+    probed = tuple(probed) if probed is not None else probe_config_backends(config_name, dataset_queries)
+    reasons = [f"{item.name}={item.reason}" for item in probed if not item.available]
+    details = [f"{item.name}: {item.detail}" for item in probed if not item.available and item.detail]
     return ConfigAvailability(config_name, not reasons, tuple(reasons), "; ".join(details) or None)
 
 
