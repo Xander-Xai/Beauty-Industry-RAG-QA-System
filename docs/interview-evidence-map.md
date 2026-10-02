@@ -55,7 +55,7 @@ Rules:
 | Answer Gate | `REPO_VERIFIED` | `retrieval/answer_gate.py`; architecture-contract tests | NLI model quality on real assets |
 | 4B routing | `REPO_VERIFIED` (routing contract) | `router/stateless_router.py`, `models/llm_client.py`; `tests/test_architecture_contract.py` | Real vLLM 4B GPU deployment |
 | 14B routing | `REPO_VERIFIED` (routing contract) | `router/stateless_router.py`, `config.json` `gpu0.models.gen_14b`; contract tests | Real vLLM 14B GPU deployment |
-| RAGAS evaluation | `PENDING` (harness `REPO_VERIFIED`) | `tests/evaluation/ragas_eval.py`; deterministic guard; missing dependency/credential fails fast with no report | Approved evaluator provider + API key + real run |
+| RAGAS evaluation | `PENDING` (harness `REPO_VERIFIED`) | `tests/evaluation/ragas_eval.py`; deterministic guard; library `evaluate()` keeps a non-quality unavailable fallback, while `--require-ragas` fails fast with no report | Approved evaluator provider + API key + real run |
 | Performance benchmark | `PENDING` | Load-test utilities under `tests/load/`; no checked-in artifact | A reproducible benchmark artifact (see criteria below) |
 | QLoRA fine-tuning | `PENDING` | `offline/finetune_qlora.py`; utility + mocked tests only | Reproducible training run + adapter artifact |
 | Airflow scheduling | `PENDING` | `dags/knowledge_base_dags.py`; DAG registration tests only | Real Airflow DAG execution |

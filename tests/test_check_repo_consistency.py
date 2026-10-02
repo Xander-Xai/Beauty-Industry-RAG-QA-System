@@ -213,17 +213,65 @@ def test_ragas_fallback_claim_fails_consistency_guard(tmp_path, monkeypatch):
     assert errors
 
 
+def test_ragas_failure_status_and_no_report_are_independent_contracts(tmp_path, monkeypatch):
+    """Status and report-suppression are checked independently, not as one OR."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    doc = tmp_path / "doc.md"
+
+    doc.write_text("RAGAS unavailable fails fast with a non-zero exit.", encoding="utf-8")
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("does not produce a quality report" in error for error in errors)
+    assert not any("unsuccessful/non-zero" in error for error in errors)
+
+    doc.write_text("RAGAS unavailable 不生成质量报告。", encoding="utf-8")
+    errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+    assert not any("does not produce a quality report" in error for error in errors)
+
+    doc.write_text("RAGAS unavailable fails fast with a non-zero exit and no quality report.", encoding="utf-8")
+    errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
+def test_ragas_unavailable_condition_does_not_count_as_negation():
+    """The 不 in 不可用 negates the condition, not the fallback action."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("RAGAS 不可用时返回零分")
+
+
+def test_ragas_not_installed_condition_does_not_count_as_negation():
+    """The not in 'not installed' negates the condition, not the fallback."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("When RAGAS is not installed it returns zero scores.")
+
+
+def test_explicit_zero_fallback_denial_is_allowed():
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("RAGAS unavailable 时不会返回零分质量报告。") == []
+    assert ragas_zero_fallback_claims("The CLI never returns zero-score reports.") == []
+
+
 def test_ragas_failfast_statement_is_accepted():
-    """A truthful fail-fast statement must pass without being flagged."""
+    """A truthful fail-fast statement must satisfy both contracts independently."""
     from scripts import check_repo_consistency as guard
 
     positive = "RAGAS unavailable 时 evaluator fail fast，返回非零状态且不生成 quality report。"
     assert guard.ragas_zero_fallback_claims(positive) == []
-    assert guard.RAGAS_FAILFAST_REQUIRED_RE.search(positive)
+    assert guard.RAGAS_FAILURE_STATUS_REQUIRED_RE.search(positive)
+    assert guard.RAGAS_NO_REPORT_REQUIRED_RE.search(positive)
 
-    # A truthful denial of the old fallback is not a claim either.
-    denial = "RAGAS 不可用时绝不返回零分，也不会生成 _warning fallback 报告。"
-    assert guard.ragas_zero_fallback_claims(denial) == []
+    # A bare UNAVAILABLE marker must not satisfy the failure-status contract.
+    assert not guard.RAGAS_FAILURE_STATUS_REQUIRED_RE.search("RAGAS UNAVAILABLE")
 
 
 def test_local_runtime_validation_contract():
@@ -244,6 +292,36 @@ def test_stale_local_validation_claim_is_rejected(tmp_path, monkeypatch):
     errors: list[str] = []
     guard.check_local_runtime_validation_contract(errors)
     assert errors
+
+
+def test_completed_local_redis_validation_cannot_regress():
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证。")
+    assert stale_local_validation_claims("真实 nginx TRUSTED_PROXIES 尚未验证。")
+    assert stale_local_validation_claims("认证 Elasticsearch 本地集成尚未验证。")
+    assert stale_local_validation_claims("真实 Prometheus authenticated scrape 尚未验证。")
+
+
+def test_redis_cluster_boundary_is_allowed():
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("Redis Cluster/Sentinel 生产拓扑尚未验证。") == []
+    assert stale_local_validation_claims("Redis Cluster 仍需验证。") == []
+
+
+def test_multinode_es_tls_boundary_is_allowed():
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("多节点 Elasticsearch/TLS 尚未验证。") == []
+    assert stale_local_validation_claims("multi-node Elasticsearch TLS not yet validated.") == []
+
+
+def test_long_run_prometheus_grafana_boundary_is_allowed():
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("长期 Prometheus/Grafana 运维尚未验证。") == []
+    assert stale_local_validation_claims("production Prometheus HA/SLO not yet validated.") == []
 
 
 def test_metrics_auth_contract():

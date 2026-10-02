@@ -54,7 +54,7 @@ export OPENAI_API_KEY=sk-your-key-here
 
 ### 2.3 运行评估
 
-一次 run 只调用 evaluator 一次；缺少依赖或 evaluator key 时明确失败且不生成报告。
+一次 run 只调用 evaluator 一次。库级 `evaluate()` 在 evaluator 不可用时保留 fallback（该结果不是质量结果，`_last_available=False`）；使用 `--require-ragas` 时，缺少依赖或 evaluator key 会 fail fast，返回非零状态且不生成报告。
 
 ```bash
 # 评估器 smoke（使用数据集 reference 答案；不代表真实 pipeline 质量）
@@ -69,7 +69,7 @@ python -m tests.evaluation.ragas_eval --require-ragas --pipeline \
   --sample-ids 0000-ab12cd34 0007-ef56ab78
 ```
 
-退出码：缺 RAGAS 依赖 `2`；缺 evaluator key `3`；管线初始化失败 `4`；全部样本失败 `5`；
+使用 `--require-ragas` 时的退出码：缺 RAGAS 依赖 `2`；缺 evaluator key `3`；管线初始化失败 `4`；全部样本失败 `5`；
 成功 `0`。任何失败路径都不会写出“成功”报告。
 
 ### 2.4 查看报告
@@ -138,7 +138,7 @@ python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden
 ### 4.1 端到端管线评估
 
 ```bash
-python -m tests.evaluation.ragas_eval --pipeline --tag v1.0-review --dataset tests/evaluation/golden_set.jsonl
+python -m tests.evaluation.ragas_eval --require-ragas --pipeline --tag v1.0-review --dataset tests/evaluation/golden_set.jsonl
 ```
 
 管线模式会：

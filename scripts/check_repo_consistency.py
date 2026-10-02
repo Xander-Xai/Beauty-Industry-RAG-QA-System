@@ -112,34 +112,56 @@ RAGAS_REQUIRED_DOCS = [
 
 RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS = [
     r"返回零分",
+    r"生成零分",
     r"零分\s*\+?\s*[`_]?\s*warning",
     r"[`_]warning[`_]?[^\n]{0,8}零分",
-    r"zero(?:\s+score[s]?)?\s+(?:when|if)\s+ragas\s+(?:is\s+)?(?:unavailable|missing)",
+    r"returns?\s+(?:all\s+)?zero(?:\s+score[s]?)?",
+    r"return(?:s|ing)?\s+(?:an?\s+)?zero",
+    r"zero(?:\s+score[s]?)?\s+(?:when|if)\s+ragas\s+(?:is\s+)?(?:unavailable|missing|not\s+installed)",
     r"all[- ]zero\s+ragas\s+fallback",
     r"ragas\s+fallback[^\n]{0,12}(?:zero|全\s*0|零)",
 ]
 
-RAGAS_FAILFAST_REQUIRED_RE = re.compile(
-    r"fail[- ]?fast|非\s*0\s*退出|非零退出|non-?zero\s+exit|UNAVAILABLE|退出码\s*[2-5]|"
-    r"不生成[^\n]{0,16}(?:质量)?报告|no\s+quality\s+report|不写[^\n]{0,8}报告|"
-    r"never\s+(?:write|emit|produce)[^\n]{0,20}report",
+# Explicit denial of the fallback *action*. This is deliberately narrow: a bare
+# "不"/"not" is NOT a denial, because it usually negates the *condition*
+# ("RAGAS 不可用时...", "RAGAS is not installed...") rather than the fallback.
+RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS = [
+    r"(?:不会|不再|绝不|从未|未曾|没能|没有|不)\s*(?:再)?\s*(?:返回|生成|产生|输出|写出|写)\s*零",
+    r"never\s+(?:returns?|emits?|produces?|writes?)\b[^\n]{0,24}zero",
+    r"does\s+not\s+(?:return|emit|produce|write)\b[^\n]{0,24}zero",
+    r"doesn't\s+(?:return|emit|produce|write)\b[^\n]{0,24}zero",
+    r"no\s+longer\s+(?:returns?|emits?|produces?|writes?)\b[^\n]{0,24}zero",
+]
+
+# Two independent RAGAS failure contracts. They must each be documented, and a
+# bare "UNAVAILABLE" must not satisfy the non-zero/failure-status half.
+RAGAS_FAILURE_STATUS_REQUIRED_RE = re.compile(
+    r"fail[- ]?fast|非\s*0\s*退出|非零退出|非零状态|non-?zero(?:\s+(?:status|exit))?|退出码\s*[2-5]",
     re.IGNORECASE,
 )
-
-_RAGAS_NEGATION_RE = re.compile(
-    r"不|绝不|从未|never|not\b|does\s+not|doesn't|no\s+longer",
+RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
+    r"不生成[^\n]{0,16}(?:质量)?(?:报告|report)|不写[^\n]{0,8}(?:报告|report)|"
+    r"no\s+quality\s+report|never\s+(?:write|emit|produce)[^\n]{0,20}report|"
+    r"does\s+not\s+produce[^\n]{0,24}report",
     re.IGNORECASE,
 )
 
 # The v2.5 runtime/security work completed local validation against real Redis,
 # real nginx, authenticated Elasticsearch and authenticated Prometheus. Canonical
 # docs must classify that as LOCAL_REAL_VALIDATION and must not regress to
-# "never actually validated" wording. Production cluster/HA claims are still out
-# of scope and remain valid to mark as external boundaries.
+# "never actually validated" wording. Production cluster/HA/SLO and other
+# external topologies are still out of scope and remain valid to mark as
+# unverified, so lines that explicitly describe such a boundary are exempt.
 LOCAL_VALIDATION_DOCS = [
     "docs/interview-architecture-baseline.md",
     "docs/repository-truth-audit.md",
 ]
+
+LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE = re.compile(
+    r"Cluster|Sentinel|production|生产|HA\b|SLO\b|cloud|云|load\s+balancer|\bLB\b|"
+    r"multi-?node|多节点|TLS|long[- ]run|长期|Grafana",
+    re.IGNORECASE,
+)
 
 STALE_LOCAL_VALIDATION_CLAIM_PATTERNS = [
     r"(?:Redis|反向代理|代理|Elasticsearch|ES|Prometheus)[^\n]{0,24}"
@@ -441,8 +463,8 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
             match = re.search(pattern, line, flags=re.IGNORECASE)
             if not match:
                 continue
-            context = line[max(0, match.start() - 12) : match.end() + 12]
-            if _RAGAS_NEGATION_RE.search(context):
+            window = line[max(0, match.start() - 24) : match.end() + 24]
+            if any(re.search(denial, window, flags=re.IGNORECASE) for denial in RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS):
                 continue
             claims.append(match.group(0))
             break
@@ -450,12 +472,12 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
 
 
 def check_ragas_failure_contract(errors: list[str]) -> None:
-    """RAGAS docs must describe fail-fast, not a zero-score fallback.
+    """RAGAS docs must describe both failure contracts, not a zero fallback.
 
-    No canonical doc may present the retired missing-RAGAS zero + ``_warning``
-    fallback as current behavior. The core RAGAS docs must additionally state
-    that a missing evaluator dependency/credential fails with a non-zero status
-    and no quality report.
+    No canonical doc may present the retired missing-RAGAS zero fallback as
+    current behavior. The core RAGAS docs must independently document that an
+    unavailable/failed evaluator is unsuccessful (fail fast / non-zero), and
+    that it does not produce a quality report.
     """
     for path in CANONICAL_DOCS:
         if not path.exists():
@@ -470,12 +492,37 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
         path = ROOT / name
         if not path.exists():
             continue
-        if not RAGAS_FAILFAST_REQUIRED_RE.search(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        if not RAGAS_FAILURE_STATUS_REQUIRED_RE.search(text):
             fail(
                 errors,
-                f"{name}: must state that a missing RAGAS dependency/credential fails fast "
-                "with a non-zero status and no quality report",
+                f"{name}: must document unavailable/failure as unsuccessful/non-zero",
             )
+        if not RAGAS_NO_REPORT_REQUIRED_RE.search(text):
+            fail(
+                errors,
+                f"{name}: must document that unavailable/failure does not produce a quality report",
+            )
+
+
+def stale_local_validation_claims(text: str) -> list[str]:
+    """Return local-validation denial claims, exempting production boundaries.
+
+    A line that explicitly describes an external/production boundary (Redis
+    Cluster/Sentinel, cloud LB, multi-node ES/TLS, long-run Prometheus/Grafana,
+    production HA/SLO) is an allowed boundary statement, not a regression of the
+    completed single-host local validation.
+    """
+    claims: list[str] = []
+    for line in text.splitlines():
+        if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(line):
+            continue
+        for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:
+            match = re.search(pattern, line, flags=re.IGNORECASE)
+            if match:
+                claims.append(match.group(0))
+                break
+    return claims
 
 
 def check_local_runtime_validation_contract(errors: list[str]) -> None:
@@ -490,13 +537,12 @@ def check_local_runtime_validation_contract(errors: list[str]) -> None:
                 errors,
                 f"{name}: must classify the completed Redis/nginx/ES/Prometheus validation as LOCAL_REAL_VALIDATION",
             )
-        for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
-            if match:
-                fail(
-                    errors,
-                    f"{name}: stale 'not really validated' local-runtime claim matched {pattern!r}: {match.group(0)!r}",
-                )
+        claims = sorted(set(stale_local_validation_claims(text)))
+        if claims:
+            fail(
+                errors,
+                f"{name}: stale 'not really validated' local-runtime claim: {claims}",
+            )
 
 
 def check_metrics_auth_contract(errors: list[str]) -> None:
