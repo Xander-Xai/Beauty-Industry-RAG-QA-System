@@ -110,6 +110,18 @@ RAGAS_REQUIRED_DOCS = [
     "docs/interview-architecture-baseline.md",
 ]
 
+# Historical exemption for the RAGAS zero-fallback scanner. Deliberately
+# narrower than HISTORICAL_MARKERS: ambiguous transition words such as
+# "no longer" or "dropped" can appear in a current-state sentence and must not
+# suppress the guard.
+RAGAS_HISTORICAL_MARKERS = re.compile(
+    r"historical|target\s+design|at\s+that\s+time|release\s+history|"
+    r"before\s+PR\s*#\d+\s+merged|retained\s+unchanged|superseded|"
+    r"retired|obsolete|deprecated|"
+    r"历史|当时|发布历史|保留不变|目标设计|原设计",
+    re.IGNORECASE,
+)
+
 RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS = [
     r"返回零分",
     r"生成零分",
@@ -469,7 +481,7 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
     for line in text.splitlines():
         if "ragas" not in line.lower():
             continue
-        if HISTORICAL_MARKERS.search(line):
+        if RAGAS_HISTORICAL_MARKERS.search(line):
             continue
         for pattern in RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS:
             match = re.search(pattern, line, flags=re.IGNORECASE)

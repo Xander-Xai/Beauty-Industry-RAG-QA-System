@@ -205,6 +205,15 @@ def test_unrelated_zero_wording_is_not_a_ragas_fallback():
     assert ragas_zero_fallback_claims("The cache hit rate returns zero when no requests exist.") == []
 
 
+def test_no_longer_zero_fallback_is_not_historically_exempt():
+    """Ambiguous transition words must not suppress the zero-fallback guard."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    assert ragas_zero_fallback_claims("RAGAS unavailable no longer fails fast and returns zero scores")
+    # Genuine historical narration stays exempt.
+    assert ragas_zero_fallback_claims("Historical note: RAGAS previously returned zero scores.") == []
+
+
 def test_ragas_fallback_claim_fails_consistency_guard(tmp_path, monkeypatch):
     """A canonical doc with the retired fallback claim must fail the full guard."""
     import scripts.check_repo_consistency as guard
