@@ -25,7 +25,7 @@
 |---|---|---|
 | `RagAppDown` | 先确认 scrape token 是否有效：`curl -i http://localhost:8000/api/metrics \| head -1`。401 说明是 token 问题，不是服务挂了 | [HighErrorRate](slo-runbook.md#higherrorrate) |
 | `RagHighErrorRate` | 看 `rag_http_responses_5xx` 占比与 `GET /api/health` 三个依赖位，定位到具体依赖 | [HighErrorRate](slo-runbook.md#higherrorrate) |
-| `RagHighLatencyP95` | 先看 `rag_cache_hit_rate`（Redis 故障会同时打掉缓存），再看 `rag_kv_pressure` | [HighLatency](slo-runbook.md#highlatency) |
+| `RagHighLatencyP95` | 先看缓存命中率（Redis 故障会同时打掉缓存），再看 `rag_kv_pressure`。缓存命中率**没有**对应的 `rag_*` series，算法见下方「缓存命中率怎么查」 | [HighLatency](slo-runbook.md#highlatency) |
 | `RagRedisDegraded` | 会话已降级到进程内、限流已退化为单进程计数。确认 Redis 存活即可，不要重启业务进程 | [RedisUnavailable](slo-runbook.md#redisunavailable) |
 | `RagHighLoginRateLimit` | 多数是撞库或客户端重试风暴；若 Redis 同时不可用，限流在多 worker 下会被削弱 | [RedisUnavailable](slo-runbook.md#redisunavailable) |
 | `RagRequestSaturation` | 在途请求偏高，优先降并发而不是加超时 | [HighLatency](slo-runbook.md#highlatency) |
@@ -34,11 +34,47 @@ Qdrant 与 Elasticsearch 故障**没有**告警规则：`/api/health` 以 JSON �
 
 所有告警阈值均为 `DESIGN_TARGET`，不是生产历史调优结果；本仓库没有任何告警在生产触发过的证据。
 
+### 缓存命中率怎么查（不要找 `rag_cache_hit_rate`）
+
+**不存在**名为 `rag_cache_hit_rate` 的 Prometheus series。exporter 只暴露原始计数器：
+
+```text
+rag_cache_hit_L1     counter   L1 命中次数
+rag_cache_hit_L2     counter   L2 命中次数
+rag_cache_total      counter   参与缓存判定的请求总数
+```
+
+比率由两个地方计算，**都不是** exporter 直接吐出的 series：
+
+1. `/api/stats` 的计算字段 `cache_hit_rate.{L1,L2,L2_SESSION}`（需要认证）：
+
+   ```bash
+   curl -s http://localhost:8000/api/stats -H "Authorization: Bearer $TOKEN" \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["cache_hit_rate"])'
+   ```
+
+2. 基于真实 emitted counter 的 PromQL ratio：
+
+   ```promql
+   rate(rag_cache_hit_L1[5m]) / clamp_min(rate(rag_cache_total[5m]), 0.000001)
+   rate(rag_cache_hit_L2[5m]) / clamp_min(rate(rag_cache_total[5m]), 0.000001)
+   ```
+
+`clamp_min` 不是可选的：分母为 0 时该表达式返回 `NaN`，而不是 0。
+
+### 仓库里唯一正式的告警契约
+
+`monitoring/prometheus/alerts.yml`（6 条规则，由外部 Prometheus 加载）。
+本仓库不存在第二套告警规则：`config.json` 里的 `alerting.rules` 配置块已移除，
+`monitoring/otel_tracer.py` 里的进程内 `AlertingManager` 是**未接入 canonical 请求路径的遗留类**，
+不要把它的规则当成 Prometheus 规则。判定依据见
+[Repository Truth Audit](repository-truth-audit.md#two-alerting-mechanisms-and-which-one-is-canonical)。
+
 ## 1.2 审计与追踪查询
 
 - 审计事件查询：`tail -n 200 logs/audit/$(date +%F).jsonl`
 - 按 request_id 串联网关日志、访问日志与审计：`grep "$REQUEST_ID" logs/*.log logs/audit/*.jsonl`
-- 追踪状态确认：默认**没有配置 exporter**，后端查不到 span；启用方式见 [slo-runbook.md#tracelookup](slo-runbook.md#tracelookup)
+- 追踪状态确认：默认**不启用**导出（`OTEL_EXPORT_ENABLED=false`，exporter 是可选依赖），后端查不到 span。exporter 实现本身已存在且有测试覆盖；启用方式见 [slo-runbook.md#tracelookup](slo-runbook.md#tracelookup)
 - 导出是否生效：`rag_otel_exporter_enabled`（0=未启用或不可用，1=已启用）
 
 ## 2. 当前值得盯的指标

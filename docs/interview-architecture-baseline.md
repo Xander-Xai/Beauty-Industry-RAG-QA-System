@@ -102,11 +102,74 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 ## 可观测性与评测边界
 
-- Prometheus 风格指标、健康检查与系统统计已接入在线主链路。
-- OpenTelemetry 追踪钩子位于主链路（`core/pipeline.py` → `monitoring/otel_tracer.py`）。默认依赖会安装 `opentelemetry-sdk`，但 `config.json` → `monitoring.jaeger.enabled=false` 且没有配置任何 exporter，此时 tracer 走 OTel SDK provider 且没有 exporter（span 既不导出也不保留）；只有 OTel SDK 未安装或初始化失败时才退回本地内存 span 模式。因此只能说“追踪钩子已接入主链路”，不能说“OpenTelemetry/Jaeger 导出已闭环”，也不能把默认 0 值的指标当作已闭合生产指标。
-- Jaeger 是可选导出器，当前配置默认关闭，不能说成默认运行。
-- RAGAS harness / reporter / validator 与 Golden Set 已存在：最初 seed 27 条，现 300+ 条，实际条数以 `validate_golden_set` 输出为准。**格式校验通过 ≠ 领域事实正确**。
-- RAGAS 是隔离的可选 evaluator，不在默认依赖中。库级 `evaluate()` 保留 evaluator-unavailable fallback（该结果不是质量结果）；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast**：返回非零状态且不生成任何 quality report。当前没有经过验证的真实 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
+面试时最重要的一句区分：**「实现了」不等于「生产验证过」**。下面按证据等级分层，不要跨层表述。
+
+### REPO_VERIFIED（本仓库代码 + 确定性测试覆盖）
+
+| 能力 | 实现位置 | 说明 |
+|---|---|---|
+| Prometheus 指标端点 | `api/routes.py` → `monitoring/otel_tracer.py::MetricsCollector` | `/api/metrics` 暴露 `rag_*` series；`/api/stats` 暴露计算字段 |
+| 结构化企业动作审计 | `common/audit.py` | 统一 9 字段 schema、强制脱敏、request_id 关联、Redis Stream + 每日 JSONL |
+| 性能产物框架 | `benchmarks/performance.py`、`artifacts/performance/` | 七文件契约；未测量即 `null`，绝不写 `0`；状态由实际观测推导 |
+| Prometheus 告警规则 | `monitoring/prometheus/alerts.yml` | 6 条规则，只引用真实 emit 的 series |
+| Grafana 仪表盘 JSON | `monitoring/grafana/dashboards/rag-overview.json` | 10 个面板，只用真实指标 |
+| SLO 与故障 Runbook | `docs/slo-runbook.md` | 5 个目标 + 8 个处置流程，按代码中真实存在的降级路径编写 |
+| OTLP exporter 实现 | `monitoring/otel_exporter.py` | 可选启用、失败不影响业务、span 属性白名单 |
+
+### LOCAL_REAL_VALIDATION（本地单主机、真实依赖上跑过）
+
+只有这五项，不要扩大：
+
+- Redis 多进程会话持久化
+- Redis 跨进程登录限流
+- nginx / `TRUSTED_PROXIES` 反向代理客户端 IP 解析
+- 认证 Elasticsearch（在线 BM25 + 离线 writer）
+- 带 Bearer token 的 Prometheus 抓取（无 token 401 / Bearer 200 / target `up == 1`）
+
+### DESIGN_TARGET（写进文档的目标值，没有任何实测支撑）
+
+- SLO 全部目标值（99.5% / <1% / ≤2000ms / ≥99% / 100%）
+- Prometheus 告警阈值（6 条规则里的每一个数字）
+- 容量阈值（例如 `RagRequestSaturation` 的在途请求上限 50）
+- PRD 的 P95≈2s / P99≤3s / QPS 12–18 —— 均为推导模型，不是实测
+
+### PENDING（代码在，但缺的资产/凭据/运行记录在这里拿不到）
+
+- **OTLP 运行期闭环 — PENDING**：应用 → exporter → collector → 后端 → 查到 span 这条链路没有任何运行记录；exporter 已实现且默认关闭
+- 真实性能产物 — PENDING：仓库内没有 artifact，因此 QPS/P95/P99 一次都没测过
+- 告警在生产触发 — PENDING：规则存在，但没有任何生产 Prometheus 评估过它们
+- Grafana 面板被真实数据填充 — PENDING：JSON 从未导入过运行中的 Grafana
+- 真实 RAGAS 质量结果 — PENDING：无获批 evaluator 凭据
+- 真实 4B/14B vLLM GPU 拓扑 — PENDING：权重不在仓库，`vllm` 未安装
+- 真实检索 benchmark 结果 — PENDING：框架已实现，无可复现 artifact
+- 真实 BGE / CLIP / PaddleOCR smoke — PENDING：`EXTERNAL_MODEL_ASSET_REQUIRED`
+
+### 追踪钩子的准确说法
+
+追踪钩子在主链路（`core/pipeline.py` → `monitoring/otel_tracer.py`），默认走 OpenTelemetry SDK
+`TracerProvider`；只有 OTel SDK 未安装或 provider 初始化失败时，才退回本地内存 span 模式。
+导出是**已实现但默认关闭**的可选能力：`OTEL_EXPORT_ENABLED=false` 时不挂载
+任何 span processor，span 既不导出也不保留；exporter 包本身是 `requirements-otel.txt` 里的
+可选依赖。导出是否生效可以看 `rag_otel_exporter_enabled`。
+
+所以只能说：**「追踪钩子已接入，OTLP exporter 已实现且默认关闭，运行期闭环是 PENDING」**。
+不能说「OpenTelemetry/Jaeger 导出已闭环」「tracing 已验证」「Jaeger 已上线」——
+本仓库没有任何一个 span 被后端查询到过。旧 PRD / 旧计划里的 Jaeger thrift agent 路径
+（`config.json` → `monitoring.jaeger.*`）是历史配置，当前 exporter 走 OTLP，不走 Jaeger agent。
+
+### 两套告警机制不要混淆
+
+- **正式告警契约**：`monitoring/prometheus/alerts.yml`，由外部 Prometheus 加载评估。
+- **`monitoring/otel_tracer.py::AlertingManager`**：更早的进程内阈值引擎，**没有**接入
+  canonical 请求路径，`config.json` 里喂它的 `alerting.rules` 配置块也已移除。它是遗留代码，
+  不是 Prometheus 规则的一部分，面试时不要提。
+
+### 评测
+
+RAGAS harness / reporter / validator 与 Golden Set 已存在：最初 seed 27 条，现 300+ 条，实际条数以
+`validate_golden_set` 输出为准。**格式校验通过 ≠ 领域事实正确**。
+
+RAGAS 是隔离的可选 evaluator，不在默认依赖中。库级 `evaluate()` 保留 evaluator-unavailable fallback（该结果不是质量结果）；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast**：返回非零状态且不生成任何 quality report。当前没有经过验证的真实 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
 
 ## Q12 标准回答
 
@@ -118,9 +181,11 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 融合结果经过 BiEncoder 宽保留和双 CrossEncoder 精排。生成前，Evidence Gate 综合 Top 1、Top 3、多路一致性和文档间一致性，决定正常生成、增强证据生成或拒答；生成后，Answer Gate 再校验答案是否忠于核心证据，法规类矛盾会直接拒答。
 
-生成层使用单一共享 4B vLLM 端点处理 Query Rewrite 与简单生成，复杂请求路由到 Qwen3-14B，并结合 KV 压力做截断、降级或拒绝。工程侧提供健康检查、指标、审计和可选 OpenTelemetry/Jaeger 追踪，`/api/stats` 与 `/api/metrics` 需要认证。需要说明的是，当前仓库默认是开发模式，模型权重、完整基础设施和有效 RAGAS 运行结果仍需在部署环境验收。
+生成层使用单一共享 4B vLLM 端点处理 Query Rewrite 与简单生成，复杂请求路由到 Qwen3-14B，并结合 KV 压力做截断、降级或拒绝。
 
-一句话总结：这是一套以 Qdrant 和 Elasticsearch 为多模态知识底座、以动态 2 至 4 路召回和两级重排保障检索质量、以双层 Gate 和 RBAC 保障可信与权限安全的企业内部 RAG 系统。
+工程侧我分三层说，因为这三层的证据强度不一样。**已实现并有测试覆盖**的是：指标端点、结构化业务动作审计、性能产物契约、Prometheus 告警规则、Grafana 仪表盘 JSON、SLO 与故障 Runbook，以及一个默认关闭的 OTLP exporter。**在本地真实依赖上验证过**的只有 Redis 多进程、nginx 代理信任、认证 Elasticsearch 和认证 Prometheus 抓取。**还没有证据**的是：真实性能数字、告警在生产触发、Grafana 面板被真实数据填充，以及 exporter 到 collector 到后端再查到 span 的完整闭环——这个闭环我一次都没跑通过，所以只能说 exporter 已实现，不能说 tracing 已闭环。另外 `config.json` 里的延迟和 QPS 目标值是设计目标，不是实测。
+
+一句话总结：这是一套以 Qdrant 和 Elasticsearch 为多模态知识底座、以动态 2 至 4 路召回和两级重排保障检索质量、以双层 Gate 和 RBAC保障可信与权限安全的企业内部 RAG 系统；运维证据闭环已经建好，但真实运行数据还需要在部署环境补齐。
 
 ## 防止答案再次漂移
 

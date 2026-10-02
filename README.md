@@ -133,7 +133,11 @@ python -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 | OTLP 运行时闭环（应用 → exporter → collector → 后端 → 查到 span） | `PENDING` |
 | SLO 达成 | `PENDING`（全部为 `DESIGN_TARGET`） |
 
+本仓库的**唯一**告警契约是 [`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)，由外部 Prometheus 加载评估。`monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，它**没有**接入 canonical 请求路径，属于遗留代码；喂给它的 `config.json` → `alerting.rules` 配置块已移除，因为没有 canonical 消费者、且看起来像第二套生产告警契约。判定依据见 [audit](docs/repository-truth-audit.md#two-alerting-mechanisms-and-which-one-is-canonical)。
+
 生产级依赖降级路径（Redis→进程内会话、ES→空结果走 dense、Qdrant→BM25-only、rewrite→简单档位）是代码中真实存在的实现，Runbook 按这些真实降级模式编写。
+
+排障时引用的 `rag_*` 指标名必须真实存在。exporter 只暴露原始计数器（例如 `rag_cache_hit_L1`、`rag_cache_total`），**没有** `rag_cache_hit_rate` 或 `rag_rewrite_fallback_rate` 这类 series；比率要么用基于已 emit counter 的 PromQL ratio，要么读 `/api/stats` 的计算字段。`scripts/check_repo_consistency.py` 会强制这条契约。
 
 详见 [docs/slo-runbook.md](docs/slo-runbook.md)、[docs/interview-evidence-map.md](docs/interview-evidence-map.md) 与 [docs/repository-truth-audit.md](docs/repository-truth-audit.md)。
 

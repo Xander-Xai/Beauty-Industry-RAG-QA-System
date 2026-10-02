@@ -65,11 +65,13 @@ Rules:
 | Grafana dashboard | `REPO_VERIFIED` (JSON) / `PENDING` (validated against a live stack) | `monitoring/grafana/dashboards/rag-overview.json`; 10 panels, only metrics this application emits; no hallucination-rate, live-RAGAS or GPU panel | Import it into a running Grafana and confirm the panels populate |
 | OTLP exporter | `REPO_VERIFIED` (implementation) | `monitoring/otel_exporter.py`; opt-in via `OTEL_EXPORT_ENABLED`, non-fatal on failure, span-attribute allow-list; `requirements-otel.txt`; `tests/monitoring/test_observability.py` | Install the exporter package and enable it |
 | OTLP backend closed loop | `PENDING` | No recorded evidence under `monitoring/evidence/`. Export state is observable as `rag_otel_exporter_enabled` | Application -> exporter -> collector -> backend -> a span actually queried |
-| Prometheus metrics endpoint | `REPO_VERIFIED` | `monitoring/otel_tracer.py` serves `/api/metrics`; `rag_http_*`, `rag_redis_degraded_mode`, `rag_otel_exporter_enabled`; `tests/monitoring/` asserts every alert metric exists | A scrape job in a running Prometheus |
+| Prometheus metrics endpoint | `REPO_VERIFIED` | `api/routes.py` serves `/api/metrics` from `monitoring/otel_tracer.py::MetricsCollector`; `rag_http_*`, `rag_redis_degraded_mode`, `rag_otel_exporter_enabled`; `tests/monitoring/` asserts every alert metric exists | A scrape job in a running Prometheus |
 | QLoRA fine-tuning | `PENDING` | `offline/finetune_qlora.py`; utility + mocked tests only | Reproducible training run + adapter artifact |
 | Airflow scheduling | `PENDING` | `dags/knowledge_base_dags.py`; DAG registration tests only | Real Airflow DAG execution |
-| OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py` covers `MetricsCollector` and the `OpenTelemetryTracer` local/OTel span paths; default is the OTel SDK provider with no exporter configured (in-memory fallback when the SDK is absent or init fails) | Real OTLP/Jaeger backend export |
-| Jaeger exporter | `PENDING` | `docker-compose.microservices.yml` service; `config.json` `monitoring.jaeger.enabled=false`; exporter package not in default requirements | Enable exporter + verify spans in Jaeger |
+| OpenTelemetry tracing hook | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; the tracer runs on the OTel SDK `TracerProvider` and reduces span attributes to an allow-list; `tests/test_monitoring_otel.py` and `tests/monitoring/test_observability.py` cover the collector, the local and OTel span paths, and the export switch | A recorded span from a real request |
+| OTLP exporter | `REPO_VERIFIED` (implementation) | `monitoring/otel_exporter.py`; opt-in via `OTEL_EXPORT_ENABLED` (**disabled by default**), non-fatal on failure, span-attribute allow-list; `requirements-otel.txt`; `.env.example` documents the switch | Enable it against a real collector |
+| Legacy Jaeger agent config | `HISTORICAL` (superseded path) | `config.json` → `monitoring.jaeger.enabled=false`; `JAEGER_AGENT_HOST`/`PORT` in `.env.example`; no Python module reads these keys, and the OTel SDK no longer ships a Jaeger exporter | Nothing — do not present this as the exporter path |
+| OTLP backend closed loop | `PENDING` | No recorded evidence under `monitoring/evidence/`. Export state is observable as `rag_otel_exporter_enabled`. `docker-compose.observability.yml` can start a collector and a backend, but starting them is not evidence a span arrived | Application -> exporter -> collector -> backend -> a span actually queried |
 
 ## Business scale — historical production context
 
@@ -158,10 +160,14 @@ a repository benchmark.
   Qwen2.5 → Qwen3 gray migration) as evidence that this repository's 4B/14B vLLM
   topology was validated. It was not; that remains `PENDING`.
 - Treating a company award as runtime technical validation of this codebase.
-- Claiming OpenTelemetry/Jaeger export is closed-loop when the default is the
-  OTel SDK provider with no exporter configured (spans neither exported nor
-  retained).
+- Claiming OpenTelemetry/Jaeger export is closed-loop. The exporter is implemented
+  and test-covered but disabled by default, and no span has ever been queried from a
+  backend.
 - Presenting default-zero monitoring gauges without hooks as live metrics.
+- Citing a `rag_*` series the exporter does not emit. There is no
+  `rag_cache_hit_rate` and no `rag_rewrite_fallback_rate`; the exporter publishes raw
+  counters and the ratios are either a PromQL ratio over them or a computed field on
+  `/api/stats`.
 - Quoting any retrieval metric. The framework is `REPO_VERIFIED`; the result is
   `PENDING` and no artifact exists.
 - Saying "performance is verified" as one phrase. The artifact *framework* is

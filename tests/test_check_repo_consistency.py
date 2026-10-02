@@ -980,12 +980,21 @@ def test_leading_production_qualifier_is_preserved():
 
 
 def test_tracing_default_is_not_misdescribed_as_local_memory_spans():
-    """The default install uses the OTel SDK provider with no exporter."""
+    """The default install uses the OTel SDK provider, not the in-memory fallback.
+
+    The wording this test used to pin ("没有配置任何 exporter") was the drift
+    Issue #22 removed: it read as "the exporter does not exist", while the truth is
+    "the exporter is implemented and disabled by default". The intent is kept and
+    the assertion now targets the default-off scope plus the SDK fallback boundary.
+    """
     from pathlib import Path
 
     text = Path("docs/interview-architecture-baseline.md").read_text(encoding="utf-8")
-    assert "没有配置任何 exporter" in text
-    assert "OTel SDK 未安装或初始化失败" in text
+    assert "TracerProvider" in text
+    assert "OTel SDK 未安装" in text and "初始化失败" in text
+    assert "OTEL_EXPORT_ENABLED=false" in text
+    # The superseded denial must not come back.
+    assert "没有配置任何 exporter" not in text
 
 
 def test_metrics_auth_contract():
@@ -1349,3 +1358,227 @@ def test_explicit_denial_of_a_claim_is_not_flagged():
         "The service has not been validated in production.",
     ):
         assert enterprise_claim_errors("x.md", denial + "\n") == [], denial
+
+
+# ── post-#21 drift guards ───────────────────────────────────────────────────
+
+
+def test_emitted_prometheus_metrics_are_derived_from_the_collector():
+    """The inventory must come from the collector's own literals, not a hardcoded list."""
+    from scripts.check_repo_consistency import emitted_prometheus_metrics, emitted_prometheus_prefixes
+
+    available = emitted_prometheus_metrics()
+    # Spot-check the series the alert rules and runbook depend on.
+    assert {
+        "rag_http_requests",
+        "rag_http_rate_limited",
+        "rag_http_request_duration_seconds",
+        "rag_http_active_requests",
+        "rag_redis_degraded_mode",
+        "rag_redis_degraded_events",
+        "rag_kv_pressure",
+        "rag_cache_total",
+        "rag_otel_exporter_enabled",
+        "rag_uptime_seconds",
+    } <= available
+    # Names that do not exist. The confirmed pre-#21 drift was operational docs
+    # sending operators to these.
+    for phantom in ("rag_cache_hit_rate", "rag_rewrite_fallback_rate", "rag_http_responses_total"):
+        assert phantom not in available
+
+    # `cache.hit.<level>` and `http.responses.<class>xx` are assembled at runtime, so
+    # the exporter has no single spelling for them and only the prefix is canonical.
+    prefixes = emitted_prometheus_prefixes()
+    assert {"rag_cache_hit_", "rag_http_responses_"} <= prefixes
+
+
+def test_emitted_metric_inventory_matches_the_live_collector():
+    """The static inventory must agree with what the collector really exposes.
+
+    A static derivation is only trustworthy while it tracks the code, so it is
+    cross-checked against a live run: every series the collector writes must either
+    be named outright, or fall under a declared runtime-assembled prefix.
+    """
+    import re
+
+    from monitoring.otel_tracer import MetricsCollector
+    from scripts.check_repo_consistency import emitted_prometheus_metrics, emitted_prometheus_prefixes
+
+    collector = MetricsCollector()
+    collector.set_active_requests(3)
+    for status in (200, 401, 429, 500):
+        collector.record_http_request(status, 12.5)
+    collector.set_redis_degraded(True)
+    collector.set_redis_degraded(False)
+    collector.increment("cache.hit.L1")
+    collector.increment("cache.hit.L2")
+    collector.increment("cache.total")
+    collector.observe_histogram("latency.rewrite", 8.0)
+
+    live = set(re.findall(r"^(rag_[A-Za-z0-9_]+)", collector.to_prometheus_text(), flags=re.MULTILINE))
+    prefixes = emitted_prometheus_prefixes()
+
+    uncovered = {
+        name
+        for name in live
+        if name not in emitted_prometheus_metrics() and not any(name.startswith(prefix) for prefix in prefixes)
+    }
+    assert not uncovered, f"live series the static inventory cannot explain: {sorted(uncovered)}"
+
+    # And the prefixes must correspond to names the collector really assembles.
+    for expected in ("rag_cache_hit_L1", "rag_http_responses_5xx", "rag_latency_rewrite_seconds"):
+        assert expected in live, f"fixture no longer produces {expected}"
+        assert any(expected.startswith(prefix) for prefix in prefixes), f"{expected} is not covered by a prefix"
+
+
+def test_summary_series_are_not_invented_for_gauges():
+    """Only histograms gain a `_seconds` summary; a gauge must not grow one."""
+    from scripts.check_repo_consistency import emitted_prometheus_metrics
+
+    available = emitted_prometheus_metrics()
+    assert "rag_http_request_duration_seconds" in available
+    assert "rag_redis_degraded_mode_seconds" not in available
+    assert "rag_kv_pressure_seconds" not in available
+
+
+def test_operational_docs_only_cite_emitted_series():
+    from scripts.check_repo_consistency import check_operational_metric_references
+
+    errors: list[str] = []
+    check_operational_metric_references(errors)
+    assert errors == []
+
+
+def test_non_existent_cache_hit_rate_series_is_flagged():
+    """Regression: `rag_cache_hit_rate` sent operators to a target that never existed."""
+    from scripts.check_repo_consistency import operational_metric_reference_errors
+
+    text = "先看 `rag_cache_hit_rate`，再看 `rag_kv_pressure`。\n"
+    errors = operational_metric_reference_errors("docs/x.md", text)
+    assert errors, "a bare reference to a non-emitted series must be flagged"
+    assert "rag_cache_hit_rate" in errors[0]
+
+
+def test_metric_guard_is_inert_without_a_collector(monkeypatch, tmp_path):
+    """With no collector on disk there is no inventory, so the guard claims nothing."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/operations-guide.md").write_text("look at `rag_cache_hit_rate`\n", encoding="utf-8")
+    errors: list[str] = []
+    guard.check_operational_metric_references(errors)
+    assert errors == []
+
+
+def test_derived_ratio_with_promql_is_allowed():
+    from scripts.check_repo_consistency import operational_metric_reference_errors
+
+    text = (
+        "Cache hit rate:\n\n"
+        "```promql\n"
+        "rate(rag_cache_hit_L1[5m]) / clamp_min(rate(rag_cache_total[5m]), 0.000001)\n"
+        "```\n\n"
+        "There is no `rag_cache_hit_rate` series; it is a derived ratio.\n"
+    )
+    assert operational_metric_reference_errors("docs/x.md", text) == []
+
+
+def test_stats_pointer_is_enough_to_justify_a_derived_name():
+    from scripts.check_repo_consistency import operational_metric_reference_errors
+
+    text = "命中率见 `/api/stats` 的 `cache_hit_rate`；不存在 `rag_cache_hit_rate`。\n"
+    assert operational_metric_reference_errors("docs/x.md", text) == []
+
+
+def test_qdrant_collection_names_are_not_treated_as_metrics():
+    from scripts.check_repo_consistency import operational_metric_reference_errors
+
+    text = "核对 Qdrant 集合名：`rag_text_768`、`rag_image_512`\n"
+    assert operational_metric_reference_errors("docs/x.md", text) == []
+
+
+def test_grep_family_prefix_is_not_treated_as_a_series():
+    from scripts.check_repo_consistency import operational_metric_reference_errors
+
+    text = "curl -s http://localhost:8000/api/metrics | grep rag_http\n"
+    assert operational_metric_reference_errors("docs/x.md", text) == []
+
+
+def test_exporter_truth_contract_passes_for_current_docs():
+    from scripts.check_repo_consistency import check_exporter_truth_contract
+
+    errors: list[str] = []
+    check_exporter_truth_contract(errors)
+    assert errors == []
+
+
+def test_doc_that_only_denies_an_exporter_is_flagged():
+    """The pre-#21 drift: docs described the exporter as absent, not as disabled."""
+    from scripts.check_repo_consistency import exporter_truth_claim_errors
+
+    stale = "默认依赖会安装 opentelemetry-sdk，但没有配置任何 exporter，span 既不导出也不保留。\n"
+    assert exporter_truth_claim_errors("docs/x.md", stale)
+
+    current = "默认 `OTEL_EXPORT_ENABLED=false`，exporter 实现位于 `monitoring/otel_exporter.py`，默认不启用。\n"
+    assert exporter_truth_claim_errors("docs/x.md", current) == []
+
+    # A doc that never discusses tracing is out of scope.
+    assert exporter_truth_claim_errors("docs/x.md", "# Deployment\n\nRun docker compose up.\n") == []
+
+
+def test_interview_baseline_must_split_exporter_implementation_from_closed_loop():
+    from scripts.check_repo_consistency import check_interview_baseline_exporter_split
+
+    errors: list[str] = []
+    check_interview_baseline_exporter_split(errors)
+    assert errors == []
+
+
+def test_audit_tracker_requires_open_external_validation():
+    from scripts.check_repo_consistency import audit_tracker_errors
+
+    audit = (Path("docs/repository-truth-audit.md")).read_text(encoding="utf-8")
+    assert audit_tracker_errors(audit) == []
+
+    closed = audit.replace(
+        "[#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval\n"
+        "  benchmark execution: open.",
+        "[#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval\n"
+        "  benchmark execution: closed.",
+    )
+    assert closed != audit, "fixture must actually change the tracker state"
+    assert audit_tracker_errors(closed)
+
+
+def test_audit_tracker_requires_a_classification_on_delivered_areas():
+    from scripts.check_repo_consistency import _CLASSIFICATION_TOKENS, DELIVERED_AUDIT_AREAS, audit_tracker_errors
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    for area in DELIVERED_AUDIT_AREAS:
+        assert area in audit, f"delivered area {area!r} must keep its audit row"
+
+    lines = audit.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.startswith("| OTLP export |"):
+            stripped = line
+            for token in _CLASSIFICATION_TOKENS:
+                stripped = stripped.replace(token, "")
+            assert stripped != line, "fixture must actually remove the classification"
+            lines[index] = stripped
+            break
+    else:  # pragma: no cover - the row is required by REQUIRED_AUDIT_AREAS
+        raise AssertionError("OTLP export row not found")
+
+    assert audit_tracker_errors("".join(lines))
+
+
+def test_truth_audit_parser_ignores_tables_outside_the_audit():
+    """A later, narrower table in the audit is prose, not a malformed audit row."""
+    import scripts.check_repo_consistency as guard
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert "|---|---|" in audit.split("## External validation tracker map")[0]
+    errors: list[str] = []
+    guard.check_truth_audit(errors)
+    assert errors == []

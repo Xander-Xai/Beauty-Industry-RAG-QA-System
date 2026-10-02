@@ -84,9 +84,19 @@ production history, because no production history for this system exists.
 | `RagHighErrorRate` | SLO-2 breach | [HighErrorRate](#higherrorrate) |
 | `RagRequestSaturation` | in-flight requests elevated | [HighLatency](#highlatency) |
 | `RagHighLatencyP95` | SLO-3 breach | [HighLatency](#highlatency) |
-| `RagDependencyDown` | SLO-4 breach | per-dependency sections below |
 | `RagRedisDegraded` | Redis degraded to process-local memory | [RedisUnavailable](#redisunavailable) |
 | `RagHighLoginRateLimit` | login rate limiting firing broadly | [RedisUnavailable](#redisunavailable) |
+
+Those six rows are the complete rule set; `tests/monitoring/test_prometheus_alerts.py`
+asserts both that every rule is covered here and that every rule references an emitted
+metric.
+
+`RagDependencyDown` is **not** a Prometheus alert. It is a `GET /api/health` condition
+(`redis=false`, `elasticsearch=false`, `qdrant=false`) and is used as shorthand in the
+per-dependency sections below. There is deliberately no alert rule for it: the repository
+emits no per-dependency gauge, so such a rule could never fire and would only look like
+coverage. Those scenarios are driven by health-endpoint inspection plus the procedures
+below.
 
 ---
 
@@ -140,10 +150,10 @@ was changed, revert the change and restart.
 
 **Evidence to collect**
 
-- `rag_redis_degraded_mode` and `rag_redis_degradation_total` over the window.
+- `rag_redis_degraded_mode` and `rag_redis_degraded_events` over the window.
 - `GET /api/health` dependency block.
 - Redis `INFO clients` / `INFO memory` if the process is reachable.
-- Login 429 rate before and after (`rag_login_rate_limited_total`).
+- Login 429 rate before and after (`rag_http_rate_limited`).
 
 **Recovery verification**
 
@@ -241,9 +251,10 @@ reachability, and the `rag_degradation_total` counter.
 
 ## LlmEndpointUnavailable
 
-**Alert** — rising `rag_rewrite_fallback_rate`, or a rise in
-`rag_admission_rejected_total` with `rag_kv_pressure` near the configured
-threshold. This path is **not** covered by a dedicated Prometheus alert: the
+**Alert** — a rising rewrite-fallback ratio, or a rise in
+`rag_admission_rejected` with `rag_kv_pressure` near the configured
+threshold. There is no `rag_rewrite_fallback_rate` series; the emitted
+counter is `rag_rewrite_fallback` (see [HighLatency](#cache-hit-rate-and-fallback-ratio) for the ratio). This path is **not** covered by a dedicated Prometheus alert: the
 repository does not emit a per-endpoint model-error counter, so it is detected
 via the proxy's own 5xx and the two metrics above.
 
@@ -274,10 +285,10 @@ nvidia-smi                                 # GPU present and busy?
 
 **Rollback** — revert the routing/threshold config change and restart.
 
-**Evidence to collect** — `rag_rewrite_fallback_rate`, `rag_kv_pressure`,
-`rag_admission_rejected_total`, the model endpoint logs, and `nvidia-smi`.
+**Evidence to collect** — the rewrite-fallback ratio, `rag_kv_pressure`,
+`rag_admission_rejected`, the model endpoint logs, and `nvidia-smi`.
 
-**Recovery verification** — `rag_rewrite_fallback_rate` returns to its baseline
+**Recovery verification** — the rewrite-fallback ratio returns to its baseline
 and a complex query routes to the 14B endpoint again.
 
 **Boundary** — single 4B/14B vLLM GPU topology validation is `PENDING`. Historical
@@ -309,7 +320,8 @@ The audit stream records `outcome: failed` for admin mutations and epoch seals,
 which distinguishes an application bug from an infrastructure failure.
 
 **Immediate mitigation** — identify the dominant status class from
-`rag_http_responses_total`, then follow the matching dependency runbook.
+`rag_http_responses_5xx` (with `rag_http_responses_4xx` for context), then
+follow the matching dependency runbook.
 
 **Degraded mode** — see the dependency sections; each has a defined reduced mode.
 
@@ -337,12 +349,15 @@ then also burns the error budget.
 
 ```bash
 curl -s http://localhost:8000/api/metrics -H "Authorization: Bearer $TOKEN" \
-  | grep -E "rag_http_request_duration|rag_kv_pressure|rag_cache_hit_rate|rag_redis"
+  | grep -E "rag_http_request_duration|rag_kv_pressure|rag_cache_hit_|rag_cache_total|rag_redis"
 ```
 
-Read the cache hit rate first: a collapse in `rag_cache_hit_rate` produces
-retrieval work that would otherwise have been skipped. Then check
-`rag_kv_pressure` and the model endpoint.
+Read the cache hit rate first: a collapse in cache hits produces retrieval
+work that would otherwise have been skipped. There is no
+`rag_cache_hit_rate` series — see
+[Cache hit rate and fallback ratio](#cache-hit-rate-and-fallback-ratio) for
+the two correct ways to read it. Then check `rag_kv_pressure` and the model
+endpoint.
 
 **Immediate mitigation**
 
@@ -457,28 +472,74 @@ correctly for at least two roles.
 
 ---
 
+## Cache hit rate and fallback ratio
+
+Neither of these ratios is a Prometheus series. The exporter publishes raw counters only,
+so an operator who looks for `rag_cache_hit_rate` or `rag_rewrite_fallback_rate` will
+find nothing and may conclude the metric is missing when it is merely derived.
+
+| Ratio | Emitted counters it is computed from |
+|---|---|
+| Cache hit rate | `rag_cache_hit_L1`, `rag_cache_hit_L2`, `rag_cache_total` |
+| Rewrite fallback rate | `rag_rewrite_fallback`, `rag_rewrite_success`, `rag_rewrite_fail` |
+
+Two correct ways to read them:
+
+1. `/api/stats` (requires authentication) returns both as computed fields:
+   `cache_hit_rate.{L1,L2,L2_SESSION}` and `rewrite_fallback_rate`.
+
+   ```bash
+   curl -s http://localhost:8000/api/stats -H "Authorization: Bearer $TOKEN" \
+     | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["cache_hit_rate"], d["rewrite_fallback_rate"])'
+   ```
+
+2. PromQL over the counters the collector really emits:
+
+   ```promql
+   rate(rag_cache_hit_L1[5m]) / clamp_min(rate(rag_cache_total[5m]), 0.000001)
+   rate(rag_cache_hit_L2[5m]) / clamp_min(rate(rag_cache_total[5m]), 0.000001)
+   rate(rag_rewrite_fallback[5m])
+     / clamp_min(rate(rag_rewrite_success[5m]) + rate(rag_rewrite_fail[5m]), 0.000001)
+   ```
+
+`clamp_min` is load-bearing: without it an idle window yields `0/0` → `NaN`.
+
+`tests/monitoring/test_observability.py` asserts that no panel, and
+`tests/monitoring/test_prometheus_alerts.py` asserts that no alert rule, references a
+derived name as if it were emitted.
+
+---
+
 ## TraceLookup
 
 Not an incident — the procedure for using tracing during any of the above.
 
 **Current state.** The tracing hook is on the online pipeline path
-(`core/pipeline.py` → `monitoring/otel_tracer.py`). By default there is **no
-exporter configured**: the OTel SDK provider is used with spans neither exported
-nor retained, so no span is queryable until an exporter is enabled.
+(`core/pipeline.py` → `monitoring/otel_tracer.py`) and runs through the OpenTelemetry
+SDK `TracerProvider`. Span export is **implemented but disabled by default**: with
+`OTEL_EXPORT_ENABLED` unset or false no span processor is attached, so spans are
+neither exported nor retained and no span is queryable. The exporter package itself is
+an optional dependency (`requirements-otel.txt`), which is why a default install has
+no exporter attached — that is a packaging decision, not a missing feature.
 
 ```bash
 # confirm export state (default: disabled)
 grep -E "OTEL_EXPORT_ENABLED|OTEL_EXPORTER_OTLP_ENDPOINT" .env
+curl -s http://localhost:8000/api/metrics -H "Authorization: Bearer $TOKEN" \
+  | grep rag_otel_exporter_enabled
 ```
 
 To enable, set `OTEL_EXPORT_ENABLED=true` and an OTLP endpoint, then restart and
 confirm the startup log reports an initialised exporter. Exporter initialisation
 failure is non-fatal by design: the service continues and logs a warning.
 
-**Boundary.** Exporter implementation is `REPO_VERIFIED`. Application →
-exporter → collector → backend → queried span is a **separate** claim; until a
-local closed-loop run is recorded it stays `PENDING`. This document does not
-claim production tracing validation.
+**Boundary.** Three states, kept separate: the exporter is **implemented and
+test-covered** (`REPO_VERIFIED`); it is **disabled by default**; and the
+application → exporter → collector → backend → queried span loop is **PENDING**. That
+last one needs a recorded run under `monitoring/evidence/`, which does not exist, so
+this document claims no production tracing validation and no Jaeger/OTLP backend has
+been queried. `docker-compose.observability.yml` can start a collector and a backend,
+but starting them is not evidence that a span made the trip.
 
 ---
 

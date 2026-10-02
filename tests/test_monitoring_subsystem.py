@@ -9,6 +9,8 @@ import time
 import types
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["DEPLOYMENT_MODE"] = "development"
 
@@ -365,12 +367,18 @@ class TestAlertingManagerTriggering:
         assert "rerank_batch_delay" in active
 
     def test_alert_lt_comparison(self):
-        """< 比较应正确判断（prefix_cache_hit_rate < 0.5）。"""
+        """< 比较应正确判断（prefix_cache_hit_rate < 0.5）。
+
+        计数器名必须与写入方一致：`prefix_cache.hit` / `prefix_cache.miss`。
+        这两个名字曾被写成 `prefix_cache.hits` / `prefix_cache.misses`，于是规则
+        永远读到 0，命中率恒为 0/0，`< 0.5` 断言反而依赖了错误的默认值。
+        """
         metrics = _make_collector()
-        # 设置 prefix_cache_hit_rate < 0.5
-        metrics._counters["prefix_cache.hits"] = 1
-        metrics._counters["prefix_cache.misses"] = 9
+        metrics.record_prefix_cache_hit()
+        for _ in range(9):
+            metrics.record_prefix_cache_miss()
         mgr = _make_alerting(metrics)
+        assert mgr._get_metric_value("prefix_cache_hit_rate") == pytest.approx(0.1)
         now = time.time()
         mgr._alert_timestamps["prefix_cache_drop"] = now - 600
         mgr.check_alerts()
