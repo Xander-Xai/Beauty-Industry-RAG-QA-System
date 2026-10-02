@@ -97,6 +97,59 @@ HISTORICAL_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
+# RAGAS is an isolated, optional evaluator. After the correctness work merged via
+# PR #14, a missing evaluator dependency or credential must fail fast with a
+# non-zero exit code and must not write a quality report. The retired
+# "missing-RAGAS returns a zero score plus `_warning`" fallback must never be
+# presented as the current canonical behavior. Matching is negation-aware so a
+# truthful denial ("never emit a zero-score report") stays allowed, and lines
+# carrying an explicit historical marker are exempt.
+RAGAS_REQUIRED_DOCS = [
+    "README.md",
+    "docs/ragas-evaluation-guide.md",
+    "docs/interview-architecture-baseline.md",
+]
+
+RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS = [
+    r"返回零分",
+    r"零分\s*\+?\s*[`_]?\s*warning",
+    r"[`_]warning[`_]?[^\n]{0,8}零分",
+    r"zero(?:\s+score[s]?)?\s+(?:when|if)\s+ragas\s+(?:is\s+)?(?:unavailable|missing)",
+    r"all[- ]zero\s+ragas\s+fallback",
+    r"ragas\s+fallback[^\n]{0,12}(?:zero|全\s*0|零)",
+]
+
+RAGAS_FAILFAST_REQUIRED_RE = re.compile(
+    r"fail[- ]?fast|非\s*0\s*退出|非零退出|non-?zero\s+exit|UNAVAILABLE|退出码\s*[2-5]|"
+    r"不生成[^\n]{0,16}(?:质量)?报告|no\s+quality\s+report|不写[^\n]{0,8}报告|"
+    r"never\s+(?:write|emit|produce)[^\n]{0,20}report",
+    re.IGNORECASE,
+)
+
+_RAGAS_NEGATION_RE = re.compile(
+    r"不|绝不|从未|never|not\b|does\s+not|doesn't|no\s+longer",
+    re.IGNORECASE,
+)
+
+# The v2.5 runtime/security work completed local validation against real Redis,
+# real nginx, authenticated Elasticsearch and authenticated Prometheus. Canonical
+# docs must classify that as LOCAL_REAL_VALIDATION and must not regress to
+# "never actually validated" wording. Production cluster/HA claims are still out
+# of scope and remain valid to mark as external boundaries.
+LOCAL_VALIDATION_DOCS = [
+    "docs/interview-architecture-baseline.md",
+    "docs/repository-truth-audit.md",
+]
+
+STALE_LOCAL_VALIDATION_CLAIM_PATTERNS = [
+    r"(?:Redis|反向代理|代理|Elasticsearch|ES|Prometheus)[^\n]{0,24}"
+    r"(?:尚待|仍待|仍需|尚未|还未|未[^\n]{0,6}(?:验证|验收))",
+    r"(?:尚待|仍待|仍需|尚未|还未)[^\n]{0,16}"
+    r"(?:Redis|反向代理|Elasticsearch|Prometheus)[^\n]{0,16}(?:验收|验证)",
+    r"(?:Redis|proxy|Elasticsearch|Prometheus)[^\n]{0,40}"
+    r"not\s+(?:yet\s+)?(?:validated|verified)",
+]
+
 # Qdrant IVF tuning parameters (nlist/nprobe) are not part of the implemented
 # collection contract, so current docs must not present them as implemented.
 # Matching is negation-aware: an affirmative implementation/tuning claim is
@@ -373,20 +426,77 @@ def check_docs_index(errors: list[str]) -> None:
             fail(errors, f"docs/README.md must index {token!r}")
 
 
-def check_ragas_unavailable_contract(errors: list[str]) -> None:
-    """Docs must state that a missing-RAGAS zero result is not a quality score."""
-    disclaimer = re.compile(
-        r"零分|UNAVAILABLE|未运行|not\s+a\s+(?:valid\s+)?quality|不是质量|不代表质量",
-        re.IGNORECASE,
-    )
-    for name in (
-        "README.md",
-        "docs/ragas-evaluation-guide.md",
-        "docs/interview-architecture-baseline.md",
-    ):
+def ragas_zero_fallback_claims(text: str) -> list[str]:
+    """Return missing-RAGAS zero-score fallback claims presented as current.
+
+    Line-scoped and negation-aware: a denial such as "never emit a zero-score
+    report" is not a claim, and lines with an explicit historical marker are
+    exempt. Deterministic: no PR number, GitHub API, git history or wall clock.
+    """
+    claims: list[str] = []
+    for line in text.splitlines():
+        if HISTORICAL_MARKERS.search(line):
+            continue
+        for pattern in RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS:
+            match = re.search(pattern, line, flags=re.IGNORECASE)
+            if not match:
+                continue
+            context = line[max(0, match.start() - 12) : match.end() + 12]
+            if _RAGAS_NEGATION_RE.search(context):
+                continue
+            claims.append(match.group(0))
+            break
+    return claims
+
+
+def check_ragas_failure_contract(errors: list[str]) -> None:
+    """RAGAS docs must describe fail-fast, not a zero-score fallback.
+
+    No canonical doc may present the retired missing-RAGAS zero + ``_warning``
+    fallback as current behavior. The core RAGAS docs must additionally state
+    that a missing evaluator dependency/credential fails with a non-zero status
+    and no quality report.
+    """
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        claims = sorted(set(ragas_zero_fallback_claims(path.read_text(encoding="utf-8"))))
+        if claims:
+            fail(
+                errors,
+                f"{_display(path)}: missing-RAGAS zero / `_warning` fallback presented as current behavior: {claims}",
+            )
+    for name in RAGAS_REQUIRED_DOCS:
         path = ROOT / name
-        if path.exists() and not disclaimer.search(path.read_text(encoding="utf-8")):
-            fail(errors, f"{name}: must state that a missing-RAGAS zero result is not a quality result")
+        if not path.exists():
+            continue
+        if not RAGAS_FAILFAST_REQUIRED_RE.search(path.read_text(encoding="utf-8")):
+            fail(
+                errors,
+                f"{name}: must state that a missing RAGAS dependency/credential fails fast "
+                "with a non-zero status and no quality report",
+            )
+
+
+def check_local_runtime_validation_contract(errors: list[str]) -> None:
+    """Canonical docs must not deny the completed local real-dependency validation."""
+    for name in LOCAL_VALIDATION_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "LOCAL_REAL_VALIDATION" not in text:
+            fail(
+                errors,
+                f"{name}: must classify the completed Redis/nginx/ES/Prometheus validation as LOCAL_REAL_VALIDATION",
+            )
+        for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                fail(
+                    errors,
+                    f"{name}: stale 'not really validated' local-runtime claim matched {pattern!r}: {match.group(0)!r}",
+                )
 
 
 def check_metrics_auth_contract(errors: list[str]) -> None:
@@ -567,7 +677,8 @@ def main() -> int:
     check_metrics_auth_contract(errors)
     check_rbac_mask_contract(errors)
     check_docs_index(errors)
-    check_ragas_unavailable_contract(errors)
+    check_ragas_failure_contract(errors)
+    check_local_runtime_validation_contract(errors)
     check_uvicorn_proxy_headers_disabled(errors)
 
     contract_dir = ROOT / "tests/contracts"

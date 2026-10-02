@@ -7,9 +7,10 @@ from scripts.check_repo_consistency import (
     check_docs_index,
     check_documented_offline_commands,
     check_forbidden_current_claims,
+    check_local_runtime_validation_contract,
     check_metrics_auth_contract,
     check_metrics_route_contract,
-    check_ragas_unavailable_contract,
+    check_ragas_failure_contract,
     check_rbac_mask_contract,
     check_stale_offline_claims,
     check_truth_audit,
@@ -180,10 +181,69 @@ def test_docs_index_includes_current_canonical_docs():
     assert errors == []
 
 
-def test_ragas_unavailable_disclaimer_contract():
+def test_ragas_failure_contract_passes():
     errors: list[str] = []
-    check_ragas_unavailable_contract(errors)
+    check_ragas_failure_contract(errors)
     assert errors == []
+
+
+def test_ragas_zero_fallback_claim_is_rejected():
+    """The retired zero + `_warning` fallback must not pass as current behavior."""
+    from scripts.check_repo_consistency import ragas_zero_fallback_claims
+
+    stale = "缺少 RAGAS 时 evaluator 返回零分并附 _warning。"
+    assert ragas_zero_fallback_claims(stale)
+
+    english = "returns zero score when ragas unavailable and adds a _warning fallback."
+    assert ragas_zero_fallback_claims(english)
+
+
+def test_ragas_fallback_claim_fails_consistency_guard(tmp_path, monkeypatch):
+    """A canonical doc with the retired fallback claim must fail the full guard."""
+    import scripts.check_repo_consistency as guard
+
+    stale = tmp_path / "stale.md"
+    stale.write_text("缺少 RAGAS 时 evaluator 返回零分并附 _warning。", encoding="utf-8")
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [stale])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", [])
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors
+
+
+def test_ragas_failfast_statement_is_accepted():
+    """A truthful fail-fast statement must pass without being flagged."""
+    from scripts import check_repo_consistency as guard
+
+    positive = "RAGAS unavailable 时 evaluator fail fast，返回非零状态且不生成 quality report。"
+    assert guard.ragas_zero_fallback_claims(positive) == []
+    assert guard.RAGAS_FAILFAST_REQUIRED_RE.search(positive)
+
+    # A truthful denial of the old fallback is not a claim either.
+    denial = "RAGAS 不可用时绝不返回零分，也不会生成 _warning fallback 报告。"
+    assert guard.ragas_zero_fallback_claims(denial) == []
+
+
+def test_local_runtime_validation_contract():
+    errors: list[str] = []
+    check_local_runtime_validation_contract(errors)
+    assert errors == []
+
+
+def test_stale_local_validation_claim_is_rejected(tmp_path, monkeypatch):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "LOCAL_VALIDATION_DOCS", ["stale.md"])
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "stale.md").write_text(
+        "真实 Redis 多 worker、反向代理、认证 ES 与 Prometheus 抓取仍需部署环境验收。\nLOCAL_REAL_VALIDATION\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    guard.check_local_runtime_validation_contract(errors)
+    assert errors
 
 
 def test_metrics_auth_contract():

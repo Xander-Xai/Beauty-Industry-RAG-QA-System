@@ -5,7 +5,7 @@
 - Original audit base: `7b03267ccd751178e5e1d69ec6a6ec97281b57cb` (`origin/main`, before the offline merges).
 - Historical merged PRs: #3, #4, #5, #6, #7.
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
-- Current v2.5 reconciliation branch: based on the merged `main` plus the v2.5 runtime/security work.
+- v2.5 runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
 - Runtime validation: see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
@@ -56,7 +56,8 @@ large-corpus throughput has been established.
 | AdapterManager | PEFT lifecycle code integrates with `LLMClient` | `models/adapter_manager.py`, `models/llm_client.py` | `tests/test_adapter_manager.py`, `tests/test_llm_client.py` | `config.json` adapter path and `peft_config.auto_discover` | CI covers mocked/unit paths, not external weights | PARTIAL | Keep asset boundary explicit |
 | RRF | Weighted reciprocal rank fusion implemented in retrieval | `retrieval/parallel_recall.py`, `retrieval-service/rerank/rrf_fusion.py` | `tests/test_rrf_fusion.py`, `tests/test_parallel_recall.py` | Fusion weights in `config.json` | CI unit coverage; no relevance benchmark | VERIFIED | Claim implementation only |
 | BiEncoder | BiEncoder reranking implemented in the online pipeline | `retrieval/bi_encoder.py`, `core/pipeline.py` | `tests/test_bi_encoder_rerank.py` | BGE model paths in `config.json`; weights external | CI uses mocks; no production model run | PARTIAL | Model assets and evaluation are separate |
-| RAGAS | Harness/reporter/validator and a 300+ entry golden set exist; single-evaluation flow, real pipeline answer/contexts, failure accounting and report provenance implemented; no real quality score produced | `tests/evaluation/ragas_eval.py`, `ragas_report.py`, `validate_golden_set.py` | `tests/evaluation/test_ragas_eval.py`, `test_ragas_report.py` | Optional package omitted from default requirements; isolated `requirements-ragas.txt` (pinned, carries recorded advisories); `config.json` → `ragas` | CI deterministic evaluation guard passes without real RAGAS; real evaluator smoke and pipeline evaluation are BLOCKED (no `OPENAI_API_KEY`; latest `ragas` import-broken, importable `ragas 0.2.15` has advisories) | PARTIAL | Never present fallback zeros as a quality result; real eval pending key uptime |
+| RAGAS | Harness/reporter/validator and a 300+ entry golden set exist; single-evaluation flow, real pipeline answer/contexts, failure accounting and report provenance implemented; missing dependency/credential fails fast with a non-zero exit and no quality report; no real quality score produced | `tests/evaluation/ragas_eval.py`, `ragas_report.py`, `validate_golden_set.py` | `tests/evaluation/test_ragas_eval.py`, `test_ragas_report.py` | Optional package omitted from default requirements; isolated `requirements-ragas.txt` (pinned, carries recorded advisories); `config.json` → `ragas` | CI deterministic evaluation guard passes without real RAGAS; real evaluator smoke and pipeline evaluation are BLOCKED (no `OPENAI_API_KEY`; latest `ragas` import-broken, importable `ragas 0.2.15` has advisories) | PARTIAL | Missing dependency/credential must fail fast (exit 2/3) with no report; real eval pending an approved provider |
+| OpenTelemetry tracing | Tracing hook is on the online pipeline path in local in-memory span mode; OTel SDK export / Jaeger is optional and disabled by default | `core/pipeline.py`, `monitoring/otel_tracer.py` | `tests/test_monitoring_otel.py` | `config.json` → `monitoring.jaeger.enabled=false`; `opentelemetry-api`/`-sdk` only, no exporter package | CI exercises the tracer without an exporter; no Jaeger/OTLP backend verified | PARTIAL | Say "tracing hook wired", not "OTel/Jaeger export closed loop" |
 | RBAC | Auth and bitmask authorization code exists under a uint32 mask contract; missing/malformed metadata fails closed, and text/image retrieval plus `/api/media/{doc_id}` are epoch/RBAC aware | `auth/`, `common/auth.py`, `retrieval/parallel_recall.py`, `api/routes.py` | `tests/test_bitmask_rbac.py`, `tests/test_retrieval_authorization_contract.py`, `tests/test_media_route.py`, `tests/offline/test_image_processing.py` | `config.json` RBAC section and environment settings | CI unit/API tests; no production policy audit | PARTIAL | Describe implemented paths without deployment claims |
 | Cache | Cache implementations and metrics exist; full invalidation model not certified | `cache/`, cache service, metrics code | `tests/test_cache.py`, `tests/test_metrics_endpoint.py` | Cache settings in `config.json` | CI unit tests; no workload benchmark | PARTIAL | Keep full design behavior unverified |
 | Frontend contract | React client reads auth/RBAC metadata and routes single-query, chat, session and stats panels to the monolith API | `frontend/src/App.jsx`, `api/routes_auth.py` metadata endpoint | `tests/test_auth_metadata.py`; frontend build is separate | `config.json` UI metadata | CI does not build the frontend here | PARTIAL | Frontend integration remains build/validation-scoped |
@@ -84,10 +85,12 @@ These are implemented in code but not validated against real external assets/run
 - Production Redis topology (cluster/Sentinel) and HTTP multi-worker behind a load balancer.
 - Non-nginx reverse proxies (Cloudflare / ALB / Traefik) — require deployment-specific configuration.
 
-Validated locally on 2026-10-02 (see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)):
+Validated locally on 2026-10-02 as `LOCAL_REAL_VALIDATION` (see
+[v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)):
 real Redis multi-process session persistence and login rate limiting, real nginx proxy-trust resolution,
 authenticated Elasticsearch online + offline paths, and an authenticated Prometheus scrape. Local
-validation is not a production benchmark.
+`LOCAL_REAL_VALIDATION` is not a production benchmark, does not imply production HA/SLO, and must not be
+rewritten as "never validated".
 
 ## Offline history check
 

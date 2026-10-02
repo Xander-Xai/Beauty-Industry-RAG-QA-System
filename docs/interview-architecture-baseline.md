@@ -90,19 +90,21 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 ## v2.5 运行时与安全契约
 
-- **会话状态**：`SessionState` 在配置 Redis 时跨 worker 持久化（TTL 7200s），Redis 不可用时降级进程内内存。序列化使用稳定 schema，`QueryRewriteResult`/`RecallResult` 会重建；真实多 worker Redis 行为尚待部署验收。
-- **登录限流**：5 次/分钟；多 worker 走 Redis 计数，Redis 不可用降级单进程内存。仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`，否则客户端伪造 XFF 无法绕过限流。
-- **可观测端点**：`GET /api/stats` 与 `GET /api/metrics` 需要认证（`require_identity`）；`GET /api/health` 公开。Prometheus 抓取需 Bearer token。
-- **Elasticsearch 安全**：Compose 启用 `xpack.security.enabled=true`，在线/离线客户端优先读取环境凭据。
+- **会话状态**：`SessionState` 在配置 Redis 时跨 worker 持久化（TTL 7200s），Redis 不可用时降级进程内内存。序列化使用稳定 schema，`QueryRewriteResult`/`RecallResult` 会重建。真实 Redis 多进程行为已在本地完成 `LOCAL_REAL_VALIDATION`（写入进程 A、进程 B 类型化恢复、进程 C 观察到更新、TTL 刷新）；Redis Cluster/Sentinel 生产拓扑仍属外部验证边界。
+- **登录限流**：5 次/分钟；多 worker 走 Redis 计数，Redis 不可用降级单进程内存。仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`，否则客户端伪造 XFF 无法绕过限流。真实 Redis 跨进程限流与真实 nginx 反向代理客户端 IP 解析均已完成 `LOCAL_REAL_VALIDATION`。
+- **可观测端点**：`GET /api/stats` 与 `GET /api/metrics` 需要认证（`require_identity`）；`GET /api/health` 公开。Prometheus 抓取需 Bearer token；本地已用真实 Prometheus 完成认证抓取验证（无 token 401、Bearer 200、target `up == 1`）。
+- **Elasticsearch 安全**：Compose 启用 `xpack.security.enabled=true`，在线/离线客户端优先读取环境凭据；本地已用真实认证 ES 8.11 验证（匿名/错误凭据 401、writer mapping + `search_after`、在线 BM25 检索）。
 - **知识版本激活**：构建/校验/封存可自动化，但**激活 `knowledge_version_epoch` 是显式人工发布步骤**，没有自动 activation。
-- **外部验收边界**：上述能力均有代码与确定性测试，但真实 Redis 多 worker、反向代理客户端 IP、认证 ES、Prometheus 抓取与单 4B/14B GPU 部署仍需部署环境验收。
+- **本地真实验证等级（LOCAL_REAL_VALIDATION）**：上述 Redis 多进程、nginx / `TRUSTED_PROXIES`、认证 ES、认证 Prometheus 抓取均已在本地真实依赖上执行，证据见 [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)。这**不等于**生产集群验证。
+- **仍属外部验证边界**：Redis Cluster/Sentinel 生产拓扑、云负载均衡拓扑、多节点 ES/TLS、长期 Prometheus/Grafana 运维、生产 HA/SLO，以及单 4B / 14B vLLM GPU 部署，均未在本仓库验证。
 
 ## 可观测性与评测边界
 
-- Prometheus 风格指标、健康检查、系统统计和 OpenTelemetry 追踪代码已经接入。
+- Prometheus 风格指标、健康检查与系统统计已接入在线主链路。
+- OpenTelemetry 追踪钩子位于主链路（`core/pipeline.py` → `monitoring/otel_tracer.py`），但默认运行在**本地内存 span 模式**：`config.json` → `monitoring.jaeger.enabled=false`，且 `opentelemetry-exporter-jaeger` 不在默认 `requirements.txt` 中。因此只能说“追踪钩子已接入主链路”，不能说“OpenTelemetry/Jaeger 导出已闭环”，也不能把默认 0 值的指标当作已闭合生产指标。
 - Jaeger 是可选导出器，当前配置默认关闭，不能说成默认运行。
 - RAGAS harness / reporter / validator 与 Golden Set 已存在：最初 seed 27 条，现 300+ 条，实际条数以 `validate_golden_set` 输出为准。**格式校验通过 ≠ 领域事实正确**。
-- RAGAS 不在默认依赖中；缺少 `ragas` 时 evaluator 返回零分 + `_warning`，**零分表示“未运行”，不是质量结果**。当前没有经过验证的 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
+- RAGAS 是隔离的可选 evaluator，不在默认依赖中。缺少 evaluator dependency（退出码 2）或 evaluator credential（退出码 3）时 **fail fast**：返回明确非零退出码，且不生成任何 quality report（历史库级零值 fallback 不属于 CLI 成功路径）。当前没有经过验证的真实 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
 
 ## Q12 标准回答
 

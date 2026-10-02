@@ -27,6 +27,9 @@
 
 - [Interview architecture baseline](interview-architecture-baseline.md): the current
   end-to-end retrieval/generation contract an interviewer can hold the code to.
+- [Interview evidence map](interview-evidence-map.md): classification of every claim
+  as `HISTORICAL_PRODUCTION`, `REPO_VERIFIED`, `LOCAL_REAL_VALIDATION`, `DESIGN_TARGET`
+  or `PENDING`.
 
 ## Design
 

@@ -257,7 +257,7 @@ CI **分为两个职责分离的 job**（见 `.github/workflows/ci.yml`）：
 - golden set schema / 条目数 / 分类校验（`validate_golden_set`）
 - RAGAS harness 与 reporter 单元测试（`pytest tests/evaluation/`）
 
-这保证了“缺依赖时的降级路径”是可测试的、不会被误读为质量结果。
+这保证了“缺依赖时的失败路径”是可测试的：CLI 不会生成被误读为质量结果的报告。
 
 ### 6.2 real RAGAS evaluation（显式启用）
 
@@ -304,7 +304,7 @@ python -m tests.evaluation.ragas_eval \
 | 问题 | 原因 | 解决 |
 |------|------|------|
 | `No module named 'ragas'` / `langchain_community...vertexai` | RAGAS 未安装，或最新版 `ragas` 与 `langchain-community` 不兼容 | 在隔离 venv 中 `pip install -r requirements-ragas.txt`；CLI 报 UNAVAILABLE 且不生成报告 |
-| 所有分数为 0.0 | RAGAS 不可用时的降级标记 | CLI 会以非 0 退出且不写报告；用 `--require-ragas` 强制真实依赖 |
+| evaluate() 返回全 0 分数 | 库级 fallback，不是质量结果 | CLI 已 fail fast：以非 0 退出且不写报告；用 `--require-ragas` 强制真实依赖 |
 | `RAGAS BLOCKED` / exit 3 | 真实 evaluator 缺少 provider API key | `export OPENAI_API_KEY=...` |
 | `AuthenticationError` | API Key 无效或未配置 | 检查 `OPENAI_API_KEY` 与 provider/base_url |
 | 管线评估报错 / exit 4 | 基础设施未就绪 | 确保 vLLM / Qdrant / ES / Redis 在运行 |
