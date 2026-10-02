@@ -165,7 +165,8 @@ RAGAS_FAILURE_STATUS_REQUIRED_RE = re.compile(
 RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
     r"不生成[^\n]{0,16}(?:质量)?(?:报告|report)|不写[^\n]{0,8}(?:报告|report)|"
     r"no\s+quality\s+report|never\s+(?:write|emit|produce)[^\n]{0,20}report|"
-    r"does\s+not\s+produce[^\n]{0,24}report|must\s+not\s+produce[^\n]{0,24}report|"
+    r"does\s+not\s+produce[^\n]{0,24}report|doesn't\s+produce[^\n]{0,24}report|"
+    r"don't\s+produce[^\n]{0,24}report|must\s+not\s+produce[^\n]{0,24}report|"
     r"will\s+not\s+produce[^\n]{0,24}report|won't\s+produce[^\n]{0,24}report|"
     r"without\s+producing[^\n]{0,24}report",
     re.IGNORECASE,
@@ -214,7 +215,8 @@ _LOCAL_VALIDATION_AFFIRMATIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _VALIDATION_AFFIRMATIVE_NEGATION_BEFORE_RE = re.compile(
-    r"not\s+(?:yet\s+)?\s*$|never\s*$|尚未\s*$|未能\s*$|还未\s*$|未\s*$|无法\s*$|不能\s*$",
+    r"not\s+(?:\w+\s+){0,2}$|never\s+(?:\w+\s+){0,2}$|"
+    r"尚未\s*$|未能\s*$|还未\s*$|未\s*$|无法\s*$|不能\s*$",
     re.IGNORECASE,
 )
 
@@ -235,7 +237,7 @@ STALE_LOCAL_VALIDATION_CLAIM_PATTERNS = [
     r"(?:尚待|仍待|仍需|尚未|还未)[^\n]{0,16}"
     r"(?:Redis|反向代理|Elasticsearch|Prometheus)[^\n]{0,16}(?:验收|验证)",
     r"(?:Redis|proxy|Elasticsearch|Prometheus)[^\n]{0,40}"
-    r"not\s+(?:yet\s+)?(?:validated|verified)",
+    r"(?:not\s+(?:yet\s+)?(?:been\s+)?(?:actually\s+)?|never\s+(?:been\s+)?(?:actually\s+)?)(?:validated|verified)",
 ]
 
 # Qdrant IVF tuning parameters (nlist/nprobe) are not part of the implemented
@@ -572,7 +574,7 @@ _RAGAS_COMMA_SPLIT_RE = re.compile(r"[，,]+")
 _LOCAL_VALIDATION_COMMA_SPLIT_RE = re.compile(r"[，,：:]+")
 # Contrast conjunctions change scope, so a leading condition must not propagate
 # through them.
-_CONTRAST_SPLIT_RE = re.compile(r"\bbut\b|\bwhereas\b|\bhowever\b|然而|不过|但是|但", re.IGNORECASE)
+_CONTRAST_SPLIT_RE = re.compile(r"\bbut\b|\bwhereas\b|\bhowever\b|然而|不过|但是|(?<!不)(?<!非)但", re.IGNORECASE)
 
 # A leading qualifier (subordinate condition or scope phrase) governs the whole
 # sentence that follows it, so it must not be split away from its guarantees or
@@ -620,7 +622,7 @@ _STATUS_NEGATION_BEFORE_RE = re.compile(
     r"(?:is|are|was|were)?\s*not\s+(?:guaranteed|required|expected)\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:fails?|failed)\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:is|are|was|were)?\s*unable\s+to\s+(?:\w+\s+){0,3}$|"
-    r"(?:不|未|无法|不能|不会|未能)[^\n]{0,4}$",
+    r"(?:不(?!但)|未|无法|不能|不会|未能)[^\n]{0,4}$",
     re.IGNORECASE,
 )
 

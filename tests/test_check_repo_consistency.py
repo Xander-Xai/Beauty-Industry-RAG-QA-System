@@ -644,6 +644,23 @@ def test_contrast_clause_does_not_inherit_leading_condition(tmp_path, monkeypatc
     assert any("does not produce a quality report" in error for error in errors)
 
 
+def test_additive_budan_is_not_contrast(tmp_path, monkeypatch):
+    """Additive `不但` must not be split as a contrast conjunction."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "当 RAGAS 不可用时，CLI 不但返回非零状态且不生成质量报告。",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
 def test_bare_non_zero_is_not_a_failure_status(tmp_path, monkeypatch):
     """`non-zero scores` is not a non-zero exit/status guarantee."""
     import scripts.check_repo_consistency as guard
@@ -730,6 +747,23 @@ def test_future_tense_report_suppression_is_accepted(tmp_path, monkeypatch):
     assert errors == []
 
 
+def test_contracted_report_suppression_is_accepted(tmp_path, monkeypatch):
+    """`doesn't produce` is an affirmative report-suppression form."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, the CLI returns a non-zero status and doesn't produce a quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
 def test_additive_not_only_is_not_negation(tmp_path, monkeypatch):
     """`not only returns a non-zero status` does not negate the status guarantee."""
     import scripts.check_repo_consistency as guard
@@ -800,6 +834,22 @@ def test_local_validation_requires_all_dependencies(tmp_path, monkeypatch):
     errors: list[str] = []
     guard.check_local_runtime_validation_contract(errors)
     assert any("affirmatively" in error for error in errors)
+
+
+def test_passive_local_validation_negation_is_rejected(tmp_path, monkeypatch):
+    """`have not been validated` must not satisfy the local-validation contract."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "LOCAL_VALIDATION_DOCS", ["doc.md"])
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / "doc.md").write_text(
+        "LOCAL_REAL_VALIDATION: Redis, nginx, Elasticsearch, and Prometheus have not been validated locally.\n",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_local_runtime_validation_contract(errors)
+    assert errors
 
 
 def test_stale_local_validation_claim_is_rejected(tmp_path, monkeypatch):
