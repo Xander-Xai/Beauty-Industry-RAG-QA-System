@@ -1,5 +1,9 @@
 # 化妆品行业 RAG 问答系统运维手册
 
+## 0. 版本语义
+
+本手册描述的运行配置以 `config.json` → `system.version` 为准（当前为 `2.3.0`）。仓库中部分文档与文件名使用的 “v2.5” 是 **历史 working milestone / development-phase 标签**，不是正式发布版本，也不改变本手册的运行时契约；详见 [版本策略](repository-truth-audit.md#version-policy)。
+
 ## 1. 先明确当前运维范围
 
 当前仓库已经能确认的在线运维对象是单体 FastAPI 应用：

@@ -1,6 +1,6 @@
 # 药妆助手面试架构唯一事实基线
 
-更新时间：2026-10-02（v2.5 运行时/安全 reconciliation）
+更新时间：2026-10-02（v2.5 working milestone 的运行时/安全 reconciliation；`v2.5` 不是正式发布版本）
 
 本文件是“整体架构”“几路召回”“如何重排”“如何控制幻觉”等面试问题的唯一事实基线。README、PRD、代码注释和历史面试稿发生冲突时，以当前主链路代码、配置和架构契约测试为准。
 
@@ -90,12 +90,14 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 ## v2.5 运行时与安全契约
 
+> **版本语义**：`v2.5` 是本节契约的历史 working milestone / development-phase 标签，**不是**正式发布版本。当前 canonical runtime version 为 `config.json` → `system.version` = `2.3.0`，`CHANGELOG.md` 最新正式 release 亦为 `2.3.0`，其后的变更记在 `[Unreleased]`。
+
 - **会话状态**：`SessionState` 在配置 Redis 时跨 worker 持久化（TTL 7200s），Redis 不可用时降级进程内内存。序列化使用稳定 schema，`QueryRewriteResult`/`RecallResult` 会重建。真实 Redis 多进程行为已在本地完成 `LOCAL_REAL_VALIDATION`（写入进程 A、进程 B 类型化恢复、进程 C 观察到更新、TTL 刷新）；Redis Cluster/Sentinel 生产拓扑仍属外部验证边界。
 - **登录限流**：5 次/分钟；多 worker 走 Redis 计数，Redis 不可用降级单进程内存。仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`，否则客户端伪造 XFF 无法绕过限流。真实 Redis 跨进程限流与真实 nginx 反向代理客户端 IP 解析均已完成 `LOCAL_REAL_VALIDATION`。
 - **可观测端点**：`GET /api/stats` 与 `GET /api/metrics` 需要认证（`require_identity`）；`GET /api/health` 公开。Prometheus 抓取需 Bearer token；本地已用真实 Prometheus 完成认证抓取验证（无 token 401、Bearer 200、target `up == 1`）。
 - **Elasticsearch 安全**：Compose 启用 `xpack.security.enabled=true`，在线/离线客户端优先读取环境凭据；本地已用真实认证 ES 8.11 验证（匿名/错误凭据 401、writer mapping + `search_after`、在线 BM25 检索）。
 - **知识版本激活**：构建/校验/封存可自动化，但**激活 `knowledge_version_epoch` 是显式人工发布步骤**，没有自动 activation。
-- **本地真实验证等级（LOCAL_REAL_VALIDATION）**：上述 Redis 多进程、nginx / `TRUSTED_PROXIES`、认证 ES、认证 Prometheus 抓取均已在本地真实依赖上执行，证据见 [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)。这**不等于**生产集群验证。
+- **本地真实验证等级（LOCAL_REAL_VALIDATION）**：上述 Redis 多进程、nginx / `TRUSTED_PROXIES`、认证 ES、认证 Prometheus 抓取均已在本地真实依赖上执行，证据见 [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)。这**不等于**生产集群验证。
 - **仍属外部验证边界**：Redis Cluster/Sentinel 生产拓扑、云负载均衡拓扑、多节点 ES/TLS、长期 Prometheus/Grafana 运维、生产 HA/SLO，以及单 4B / 14B vLLM GPU 部署，均未在本仓库验证。
 
 ## 可观测性与评测边界

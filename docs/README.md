@@ -1,5 +1,16 @@
 # Documentation index
 
+## Version labelling
+
+Canonical runtime version is `config.json` → `system.version` = `2.3.0`; the newest dated
+release heading in `CHANGELOG.md` is `[2.3.0]` and everything after it is recorded under
+`[Unreleased]`.
+
+Where a doc or filename says **v2.5**, that is a **historical working milestone /
+development-phase label**, not a release and not the current runtime version — see
+[Version policy](repository-truth-audit.md#version-policy). Files are not renamed to avoid
+breaking existing links.
+
 ## Canonical / Current
 
 - [Project overview and quick start](../README.md)
@@ -27,8 +38,9 @@ retrieval metric is claimed anywhere in the repository.
 
 ## Validation
 
-- [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md): Redis
-  multi-worker, trusted proxy, authenticated Elasticsearch and Prometheus evidence.
+- [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md):
+  Redis multi-worker, trusted proxy, authenticated Elasticsearch and Prometheus evidence.
+  (`v2.5` is a working-milestone label, not a release.)
 - [Real RAGAS evaluation](validation/real-ragas-evaluation.md): evaluator dependency
   isolation, correctness fixes, and the real-evaluation blockers.
 

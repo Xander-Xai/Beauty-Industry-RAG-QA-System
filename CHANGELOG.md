@@ -39,6 +39,31 @@ Changes present on `main` after the 2.3.0 release entry:
   including a stable serialization schema for nested Pydantic objects.
 - Redis-backed login rate limiting with in-memory fallback for multi-worker deployments.
 - Prefix-cache hit/miss metrics and Locust report improvements.
+- Deterministic retrieval benchmark framework (`benchmarks/`, artifact contract under
+  `artifacts/benchmarks/`). This is the **framework only**:
+  - Pure-function retrieval metrics: `Recall@1`, `Recall@3`, `Recall@5`, `Recall@10`,
+    `HitRate@1`, `HitRate@3`, `HitRate@5`, `HitRate@10`, `MRR@10` and binary `NDCG@10`.
+  - Conservative relevance matching — stable id when present, otherwise NFKC- and
+    whitespace-normalized exact text. No LLM judge, no fuzzy threshold.
+  - Provenance metadata: git state, dataset sha256, a sanitized effective-configuration
+    sha256 plus the snapshot it hashes, environment versions, and credential **presence
+    flags** only (never secret values; URL userinfo is redacted and a non-reversible
+    principal fingerprint separates principals).
+  - Per-stage latency artifact contract: `embedding_ms` / `bm25_ms` / `dense_search_ms` /
+    `rrf_ms` / `biencoder_ms` / `crossencoder_ms`. A stage that never ran is recorded as
+    `null`, never `0` and never mirrored from end-to-end time.
+  - `BLOCKED` / `PENDING` semantics: every configuration is probed live and reports
+    `BLOCKED` with a recorded reason rather than producing numbers. Dirty-tree runs are
+    refused unless `--allow-dirty`.
+  - Backend and model readiness probing (Elasticsearch, Qdrant over the gRPC transport the
+    production client actually uses, model config/weights/tokenizer completeness) so a
+    partial or interrupted asset cache cannot look loadable.
+
+  **Framework implementation is not a benchmark result.** No retrieval metric is claimed
+  anywhere in this repository: no benchmark artifact is committed, and every configuration
+  currently reports `BLOCKED` (no live Elasticsearch/Qdrant, no BGE weights, and no corpus
+  containing the golden-set passages). Benchmark framework = `REPO_VERIFIED`, benchmark
+  result = `PENDING`.
 
 ### Changed
 
@@ -104,7 +129,8 @@ Changes present on `main` after the 2.3.0 release entry:
 - Local runtime validation added real dependency evidence for Redis multi-worker session
   persistence and login rate limiting, trusted-proxy client-IP resolution through nginx,
   authenticated Elasticsearch online/offline paths, and an authenticated Prometheus scrape
-  (see `docs/validation/v2.5-runtime-security-validation.md`).
+  (see `docs/validation/v2.5-runtime-security-validation.md`; `v2.5` is a working-milestone label,
+  not a release).
 - RAGAS CLI no longer evaluates twice: `main()` evaluates once and the reporter builds the
   report from the stored run (`build_report`), halving evaluator cost and avoiding drift.
 - RAGAS `--pipeline` reports now use the real pipeline answer and retrieved contexts instead
@@ -125,6 +151,16 @@ does not retroactively make the original 2.3.0 claim true.
 ### Version policy
 
 `config.json` → `system.version` is the canonical runtime version and must match the latest dated release heading below. `Unreleased` records changes without assigning a new version. A changelog version does not imply a GitHub Release or tag; no GitHub Release existed at the reconciliation base.
+
+### `v2.5` is a working-milestone label, not a release
+
+Repository docs and the filename `docs/validation/v2.5-runtime-security-validation.md` carry a
+`v2.5` label. It names a historical **working milestone / development phase** of the
+runtime-and-security reconciliation work. It is not a release, not the canonical runtime version,
+and not a tag. The canonical runtime version remains `2.3.0`; every change listed under
+`[Unreleased]` above happened after `2.3.0` without bumping it. Filenames and links are kept
+stable rather than renamed. See
+[`docs/repository-truth-audit.md`](docs/repository-truth-audit.md#version-policy).
 
 ## [2.3.0] - 2026-06-06
 

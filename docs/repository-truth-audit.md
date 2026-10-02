@@ -5,18 +5,24 @@
 - Original audit base: `7b03267ccd751178e5e1d69ec6a6ec97281b57cb` (`origin/main`, before the offline merges).
 - Historical merged PRs: #3, #4, #5, #6, #7.
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
-- v2.5 runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
+- v2.5 working-milestone runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
 - Interview truth and validation-evidence reconciliation merged via PR #15 (squash `aa189d9`).
 - Deterministic retrieval benchmark framework merged via PR #17 (squash `8446d19`). Its final tree is
   byte-identical to `main`'s, so the merged source branch `feat/reproducible-rag-benchmark` was verified
   as fully contained in `main` and deleted.
-- Runtime validation: see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)
+- Runtime validation: see [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
 a commit cannot embed its own SHA without making the value stale).
 Post-reconciliation verification date: 2026-10-02.
 - Runtime version: `config.json` → `system.version` (`2.3.0`); release history is recorded in
-  `CHANGELOG.md`. The repository has no GitHub Release at audit time.
+  `CHANGELOG.md`. The repository has no GitHub Release and no tag at audit time.
+- Version labelling: the string `v2.5` appears in current docs and in the filename
+  `docs/validation/v2.5-runtime-security-validation.md`. It is a **historical working
+  milestone / development-phase label**, not a repository release and not the canonical
+  runtime version. The canonical runtime version remains `2.3.0` with post-release changes
+  recorded under `[Unreleased]`. Filenames are deliberately not renamed so existing links
+  keep resolving.
 - External validation boundary: see [External validation pending](#external-validation-pending).
   Code + deterministic tests are never evidence of real-model quality, production latency/QPS, or
   large-corpus throughput.
@@ -118,7 +124,7 @@ These are implemented in code but not validated against real external assets/run
 - Non-nginx reverse proxies (Cloudflare / ALB / Traefik) — require deployment-specific configuration.
 
 Validated locally on 2026-10-02 as `LOCAL_REAL_VALIDATION` (see
-[v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)):
+[v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)):
 real Redis multi-process session persistence and login rate limiting, real nginx proxy-trust resolution,
 authenticated Elasticsearch online + offline paths, and an authenticated Prometheus scrape. Local
 `LOCAL_REAL_VALIDATION` is not a production benchmark, does not imply production HA/SLO, and must not be
@@ -161,3 +167,19 @@ acceptance behavior and are not regression tests or implementation evidence.
 `CHANGELOG.md` must match it. `Unreleased` records changes after that release without assigning a new
 runtime version. Git tags/releases are separate publication decisions; no GitHub Release exists at
 this audit point.
+
+### `v2.5` is a working-milestone label, not a release
+
+Several current docs and one filename carry a `v2.5` label (for example
+`docs/validation/v2.5-runtime-security-validation.md`). That label names a **historical working
+milestone / development phase** of the runtime-and-security reconciliation work. It is deliberately
+**not**:
+
+- a repository release — the newest dated release heading in `CHANGELOG.md` is `[2.3.0]`;
+- the canonical runtime version — `config.json` → `system.version` is `2.3.0`;
+- a Git tag or GitHub Release — neither exists.
+
+Changes after `2.3.0` are recorded under `[Unreleased]` and do not bump the runtime version. The
+filename and the `v2.5` label are retained rather than renamed so existing cross-document links keep
+resolving; a large rename would create link breakage for no truth gain. `scripts/check_repo_consistency.py`
+enforces that `v2.5` is never described as a formal runtime release.
