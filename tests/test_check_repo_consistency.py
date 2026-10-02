@@ -274,6 +274,33 @@ def test_ragas_failfast_statement_is_accepted():
     assert not guard.RAGAS_FAILURE_STATUS_REQUIRED_RE.search("RAGAS UNAVAILABLE")
 
 
+def test_ragas_contracts_are_scoped_to_ragas_clause(tmp_path, monkeypatch):
+    """Unrelated fail-fast wording must not satisfy the RAGAS status contract."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    doc = tmp_path / "doc.md"
+
+    doc.write_text(
+        "Docker Compose will fail-fast on missing env.\nRAGAS unavailable produces no quality report.",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("unsuccessful/non-zero" in error for error in errors)
+
+    doc.write_text(
+        "Docker Compose will fail-fast on missing env.\n"
+        "RAGAS unavailable returns a non-zero status and no quality report.",
+        encoding="utf-8",
+    )
+    errors = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
 def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)
@@ -322,6 +349,13 @@ def test_long_run_prometheus_grafana_boundary_is_allowed():
 
     assert stale_local_validation_claims("长期 Prometheus/Grafana 运维尚未验证。") == []
     assert stale_local_validation_claims("production Prometheus HA/SLO not yet validated.") == []
+
+
+def test_production_boundary_exemption_is_clause_scoped():
+    """A production boundary in one clause must not hide a stale claim elsewhere."""
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证；production cluster 也未验证")
 
 
 def test_metrics_auth_contract():

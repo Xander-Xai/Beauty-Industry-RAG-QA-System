@@ -471,13 +471,24 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
     return claims
 
 
+def _ragas_scoped_text(text: str) -> str:
+    """Return only lines that actually mention RAGAS.
+
+    Keeps the failure contracts tied to the RAGAS statement instead of letting
+    unrelated wording (for example a Docker Compose ``fail-fast`` sentence)
+    satisfy them.
+    """
+    return "\n".join(line for line in text.splitlines() if "ragas" in line.lower())
+
+
 def check_ragas_failure_contract(errors: list[str]) -> None:
     """RAGAS docs must describe both failure contracts, not a zero fallback.
 
     No canonical doc may present the retired missing-RAGAS zero fallback as
     current behavior. The core RAGAS docs must independently document that an
     unavailable/failed evaluator is unsuccessful (fail fast / non-zero), and
-    that it does not produce a quality report.
+    that it does not produce a quality report. Both assertions are scoped to
+    RAGAS-related lines so unrelated text cannot satisfy them.
     """
     for path in CANONICAL_DOCS:
         if not path.exists():
@@ -492,13 +503,13 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
         path = ROOT / name
         if not path.exists():
             continue
-        text = path.read_text(encoding="utf-8")
-        if not RAGAS_FAILURE_STATUS_REQUIRED_RE.search(text):
+        scoped = _ragas_scoped_text(path.read_text(encoding="utf-8"))
+        if not RAGAS_FAILURE_STATUS_REQUIRED_RE.search(scoped):
             fail(
                 errors,
                 f"{name}: must document unavailable/failure as unsuccessful/non-zero",
             )
-        if not RAGAS_NO_REPORT_REQUIRED_RE.search(text):
+        if not RAGAS_NO_REPORT_REQUIRED_RE.search(scoped):
             fail(
                 errors,
                 f"{name}: must document that unavailable/failure does not produce a quality report",
@@ -506,22 +517,24 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
 
 
 def stale_local_validation_claims(text: str) -> list[str]:
-    """Return local-validation denial claims, exempting production boundaries.
+    """Return local-validation denial claims, exempting external-boundary clauses.
 
-    A line that explicitly describes an external/production boundary (Redis
-    Cluster/Sentinel, cloud LB, multi-node ES/TLS, long-run Prometheus/Grafana,
-    production HA/SLO) is an allowed boundary statement, not a regression of the
-    completed single-host local validation.
+    The exemption is clause-scoped: a clause that explicitly describes an
+    external/production boundary (Redis Cluster/Sentinel, cloud LB, multi-node
+    ES/TLS, long-run Prometheus/Grafana, production HA/SLO) is allowed, while a
+    stale claim about the completed single-host local validation in another
+    clause on the same line is still flagged.
     """
     claims: list[str] = []
     for line in text.splitlines():
-        if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(line):
-            continue
-        for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:
-            match = re.search(pattern, line, flags=re.IGNORECASE)
-            if match:
-                claims.append(match.group(0))
-                break
+        for clause in re.split(r"[；;。]+", line):
+            if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(clause):
+                continue
+            for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:
+                match = re.search(pattern, clause, flags=re.IGNORECASE)
+                if match:
+                    claims.append(match.group(0))
+                    break
     return claims
 
 

@@ -59,7 +59,7 @@ Rules:
 | Performance benchmark | `PENDING` | Load-test utilities under `tests/load/`; no checked-in artifact | A reproducible benchmark artifact (see criteria below) |
 | QLoRA fine-tuning | `PENDING` | `offline/finetune_qlora.py`; utility + mocked tests only | Reproducible training run + adapter artifact |
 | Airflow scheduling | `PENDING` | `dags/knowledge_base_dags.py`; DAG registration tests only | Real Airflow DAG execution |
-| OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py`; default local memory-span mode | Real OTLP/Jaeger backend export |
+| OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py`; default is the OTel SDK provider with no exporter configured (in-memory fallback only when the SDK is absent) | Real OTLP/Jaeger backend export |
 | Jaeger exporter | `PENDING` | `docker-compose.microservices.yml` service; `config.json` `monitoring.jaeger.enabled=false`; exporter package not in default requirements | Enable exporter + verify spans in Jaeger |
 
 ## Business scale — historical production context
@@ -123,6 +123,7 @@ a repository benchmark.
 - Describing `LOCAL_REAL_VALIDATION` as production cluster / HA / SLO.
 - Describing deterministic fake models as real BGE/CLIP/OCR validation.
 - Presenting `HISTORICAL_PRODUCTION` scale as `REPO_VERIFIED`.
-- Claiming OpenTelemetry/Jaeger export is closed-loop when the default is a
-  local in-memory span buffer with Jaeger disabled.
+- Claiming OpenTelemetry/Jaeger export is closed-loop when the default is the
+  OTel SDK provider with no exporter configured (spans neither exported nor
+  retained).
 - Presenting default-zero monitoring gauges without hooks as live metrics.
