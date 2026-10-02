@@ -76,7 +76,7 @@ large-corpus throughput has been established.
 | Runtime version | Runtime version agrees with newest dated changelog release | `common/config.py` reads `config.json` | Consistency script checks the invariant | `config.json` `system.version` = `2.3.0` | `scripts/check_repo_consistency.py` runs in CI | VERIFIED | Keep the check enabled; Unreleased does not bump version |
 | CI | Python checks include tests, compile, collection and repository consistency | `.github/workflows/ci.yml` | Workflow runs pytest and collection checks | Workflow configuration | Verify the current `HEAD` GitHub Actions run for CI | VERIFIED | Require green checks on the reconciliation PR |
 | Ruff | Lint and formatting are configured as CI checks | `.github/workflows/lint.yml` | Ruff check and format check | Workflow configuration | Verify the current `HEAD` GitHub Actions run for Ruff | VERIFIED | Require green checks on the reconciliation PR |
-| Security | Dependency audit and secret scanning configured in CI; RAGAS excluded from default install | `.github/workflows/security.yml`, `requirements.txt` | CI runs pip-audit and secret scan | RAGAS is opt-in | A green security workflow does not imply optional dependency safety | VERIFIED | Do not infer optional dependency safety |
+| Security | Python dependency audit and secret scanning configured in CI; RAGAS excluded from default install | `.github/workflows/security.yml`, `requirements.txt` | CI runs pip-audit and secret scan | RAGAS is opt-in | A green security workflow does not imply optional dependency safety; see the frontend advisory note below | VERIFIED | Do not infer optional dependency safety |
 | Runtime artifacts | Tracked PID/stopped markers were tool state, not product files | Exact markers removed | Consistency check rejects tracked PID/state markers | `.gitignore` excludes local state paths | Verify using `git ls-files` and CI invariant | VERIFIED | Keep runtime state untracked |
 | Documentation governance | Current guides and historical plans have separate roles | `docs/README.md`, current guides and `docs/superpowers/` | Consistency checks link/path and stale-claim invariants | No runtime config claim | CI validates stable docs invariants | VERIFIED | Keep plans/specs out of current implementation evidence |
 
@@ -129,6 +129,27 @@ real Redis multi-process session persistence and login rate limiting, real nginx
 authenticated Elasticsearch online + offline paths, and an authenticated Prometheus scrape. Local
 `LOCAL_REAL_VALIDATION` is not a production benchmark, does not imply production HA/SLO, and must not be
 rewritten as "never validated".
+
+## Known frontend dependency advisories (disclosed, not gating)
+
+`npm ci` in `frontend/` currently reports 4 advisories: 1 moderate
+(`baseline-browser-mapping`) and 3 high (`browserslist`, `nanoid`, `postcss`).
+
+Scope, stated precisely:
+
+- All four are **transitive** build-toolchain dependencies reached through
+  `vite`. None is declared in `frontend/package.json`.
+- They are build-time tooling, not code the browser executes as application
+  logic. `postcss` and `browserslist` run at build time; `nanoid` and
+  `baseline-browser-mapping` are transitive build-tool dependencies.
+- This is therefore **not** a claim of a production runtime vulnerability, and
+  not a claim of safety either.
+
+Why it is not a merge gate: the registry's quick-audit endpoint is deprecated
+and currently returns HTTP 400, so gating on it would produce a flaky red build
+rather than a real signal. CI reports the advisories as a non-blocking step so
+they stay visible. Remediation (a lockfile refresh plus a verified frontend
+build) is open work, not something this reconciliation silently performed.
 
 ## Architecture debt — free-text semantic governance
 
