@@ -420,6 +420,23 @@ def test_ragas_report_guarantee_must_share_failure_clause_with_comma(tmp_path, m
     assert any("does not produce a quality report" in error for error in errors)
 
 
+def test_negated_no_report_assertion_is_rejected(tmp_path, monkeypatch):
+    """A denied report-suppression statement must not satisfy the no-report half."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "RAGAS unavailable returns a non-zero status but this does not mean no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert any("does not produce a quality report" in error for error in errors)
+
+
 def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)

@@ -539,6 +539,29 @@ def _ragas_status_affirmative(segment: str) -> bool:
     return False
 
 
+# A no-report guarantee is denied when the suppression itself is negated, e.g.
+# "this does not mean no quality report", "并非不生成报告". The affirmative forms
+# ("does not produce a report", "不生成报告") include the negation in the match
+# itself, so only a meta-negation before the phrase counts.
+_REPORT_NEGATION_BEFORE_RE = re.compile(
+    r"(?:does|do|did)\s+not\s+mean\s+(?:\w+\s+){0,2}$|"
+    r"(?:doesn't|don't|didn't)\s+mean\s+(?:\w+\s+){0,2}$|"
+    r"not\s+that\s+(?:\w+\s+){0,2}$|"
+    r"(?:并非|不代表|不等于|并不意味着|不能说明)[^\n]{0,6}$",
+    re.IGNORECASE,
+)
+
+
+def _ragas_report_affirmative(segment: str) -> bool:
+    """True when the segment asserts report suppression affirmatively."""
+    for match in RAGAS_NO_REPORT_REQUIRED_RE.finditer(segment):
+        prefix = segment[max(0, match.start() - 32) : match.start()]
+        if _REPORT_NEGATION_BEFORE_RE.search(prefix):
+            continue
+        return True
+    return False
+
+
 def check_ragas_failure_contract(errors: list[str]) -> None:
     """RAGAS docs must describe both failure contracts, not a zero fallback.
 
@@ -567,7 +590,7 @@ def check_ragas_failure_contract(errors: list[str]) -> None:
                 errors,
                 f"{name}: must document unavailable/failure as unsuccessful/non-zero",
             )
-        if not any(RAGAS_NO_REPORT_REQUIRED_RE.search(segment) for segment in segments):
+        if not any(_ragas_report_affirmative(segment) for segment in segments):
             fail(
                 errors,
                 f"{name}: must document that unavailable/failure does not produce a quality report",
