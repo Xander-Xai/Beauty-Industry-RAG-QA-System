@@ -28,7 +28,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
 
 from benchmarks.models import BackendAvailability
 
@@ -115,7 +115,25 @@ def _elastic_settings() -> tuple[str, str, int, tuple[str, str] | None]:
         password = password or userinfo_password
     if username and password:
         auth = (str(username), str(password))
-    return url, index, port, auth
+    # The credentials travel in the Authorization header, so the userinfo must be
+    # removed from the URL: urllib keeps it as part of the connection host, which
+    # breaks DNS/connection setup even though the header is correct.
+    return strip_url_userinfo(url), index, port, auth
+
+
+def strip_url_userinfo(url: str) -> str:
+    """Return ``url`` without its ``user:password@`` component."""
+    if not url or "@" not in url:
+        return url
+    try:
+        parsed = urlparse(url if "//" in url else f"//{url}")
+    except ValueError:
+        return url
+    if not parsed.netloc or "@" not in parsed.netloc:
+        return url
+    host = parsed.netloc.rsplit("@", 1)[-1]
+    rebuilt = urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+    return rebuilt if "://" in url else f"//{rebuilt}"
 
 
 def elastic_url_userinfo(host: str) -> tuple[str | None, str | None]:

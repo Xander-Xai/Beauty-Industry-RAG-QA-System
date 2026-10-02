@@ -243,6 +243,12 @@ def build_comparison(summary: dict[str, Any]) -> str:
             "> the exact set of samples each configuration answered.",
             "",
         ]
+    header = [
+        "| config | Recall@1 | Recall@3 | Recall@5 | Recall@10 | MRR@10 | NDCG@10 | P50 | P95 | P99 | sample_count |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    # One table per sample set: a table must never mix configurations that were
+    # scored over different queries, or the ranking would compare unlike samples.
     for digest, names in sorted(groups.items()):
         if len(groups) > 1:
             completed = summary["configs"][names[0]].get("completed_sample_count")
@@ -251,30 +257,27 @@ def build_comparison(summary: dict[str, Any]) -> str:
                 f"## Sample set `{digest}` ({completed}/{requested} queries completed)",
                 "",
             ]
-
-    lines += [
-        "| config | Recall@1 | Recall@3 | Recall@5 | Recall@10 | MRR@10 | NDCG@10 | P50 | P95 | P99 | sample_count |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
-    ]
-    for name in executed:
-        entry = summary["configs"][name]
-        overall = entry.get("metrics", {}).get("overall", {})
-        latency = entry.get("latency", {}).get("total_retrieval_ms", {})
-        lines.append(
-            "| `{c}` | {r1} | {r3} | {r5} | {r10} | {mrr} | {ndcg} | {p50} | {p95} | {p99} | {n} |".format(
-                c=name,
-                r1=_fmt(overall.get("recall_at_1")),
-                r3=_fmt(overall.get("recall_at_3")),
-                r5=_fmt(overall.get("recall_at_5")),
-                r10=_fmt(overall.get("recall_at_10")),
-                mrr=_fmt(overall.get("mrr_at_10")),
-                ndcg=_fmt(overall.get("ndcg_at_10")),
-                p50=_fmt(latency.get("p50"), 2),
-                p95=_fmt(latency.get("p95"), 2),
-                p99=_fmt(latency.get("p99"), 2),
-                n=overall.get("sample_count"),
+        lines += header
+        for name in names:
+            entry = summary["configs"][name]
+            overall = entry.get("metrics", {}).get("overall", {})
+            latency = entry.get("latency", {}).get("total_retrieval_ms", {})
+            lines.append(
+                "| `{c}` | {r1} | {r3} | {r5} | {r10} | {mrr} | {ndcg} | {p50} | {p95} | {p99} | {n} |".format(
+                    c=name,
+                    r1=_fmt(overall.get("recall_at_1")),
+                    r3=_fmt(overall.get("recall_at_3")),
+                    r5=_fmt(overall.get("recall_at_5")),
+                    r10=_fmt(overall.get("recall_at_10")),
+                    mrr=_fmt(overall.get("mrr_at_10")),
+                    ndcg=_fmt(overall.get("ndcg_at_10")),
+                    p50=_fmt(latency.get("p50"), 2),
+                    p95=_fmt(latency.get("p95"), 2),
+                    p99=_fmt(latency.get("p99"), 2),
+                    n=overall.get("sample_count"),
+                )
             )
-        )
+        lines.append("")
     lines.append("")
     return "\n".join(lines)
 

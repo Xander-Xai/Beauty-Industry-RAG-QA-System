@@ -1624,7 +1624,10 @@ def test_url_userinfo_credentials_are_used_for_auth(monkeypatch):
     url, index, port, auth = _elastic_settings()
     assert auth == ("esuser", "espass")
     assert index == "cosmetics_docs"
-    assert url == "https://esuser:espass@es:9200"
+    # The probed URL must not keep the userinfo: urllib would use it as the host.
+    assert url == "https://es:9200"
+    assert "esuser" not in url
+    assert "espass" not in url
 
 
 def test_elastic_url_userinfo_parsing():
@@ -1659,6 +1662,7 @@ def test_bm25_authenticates_with_url_userinfo(monkeypatch):
     monkeypatch.setattr(backends, "_http_get", fake_get)
     availability = backends.probe_bm25()
     assert captured["auth"] == ("esuser", "espass")
+    assert "@" not in captured["url"]
     assert availability.available is True, availability.detail
 
 
@@ -1776,3 +1780,78 @@ def test_identical_sample_sets_compare_normally():
     assert "Not directly comparable" not in text
     assert "| `bm25` |" in text
     assert "| `dense` |" in text
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("https://u:p@es:9200", "https://es:9200"),
+        ("http://u:p@es:9200", "http://es:9200"),
+        ("http://es:9200", "http://es:9200"),
+        ("https://es:9200/prefix", "https://es:9200/prefix"),
+        ("", ""),
+    ],
+)
+def test_strip_url_userinfo(raw, expected):
+    from benchmarks.backends import strip_url_userinfo
+
+    assert strip_url_userinfo(raw) == expected
+
+
+def test_probe_url_never_contains_userinfo(monkeypatch):
+    """The request URL is what urllib resolves; userinfo must not remain."""
+    from benchmarks import backends
+    from common import config as common_config
+
+    captured = {}
+
+    def fake_get(url, auth=None):
+        captured["url"] = url
+        return True, {"count": 3}
+
+    monkeypatch.delenv("ELASTICSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "https://esuser:espass@es:9200", "enabled": True}},
+    )
+    monkeypatch.setattr(backends, "_tcp_reachable", lambda host, port: True)
+    monkeypatch.setattr(backends, "_http_get", fake_get)
+    backends.probe_bm25()
+    assert captured["url"] == "https://es:9200/cosmetics_docs/_count"
+
+
+def test_each_sample_set_gets_its_own_table():
+    """Grouped configurations must not share a combined ranking table."""
+    from benchmarks.report import build_comparison
+
+    def entry(digest, completed, requested):
+        return {
+            "status": "EXECUTED",
+            "metrics": {"overall": {"sample_count": completed, "recall_at_1": 0.5}},
+            "latency": {"total_retrieval_ms": {}},
+            "completed_sample_count": completed,
+            "requested_sample_count": requested,
+            "sample_set_sha256": digest,
+        }
+
+    summary = {
+        "configs": {
+            "bm25": entry("aaa", 3, 3),
+            "hybrid": entry("aaa", 3, 3),
+            "dense": entry("bbb", 2, 3),
+        }
+    }
+    text = build_comparison(summary)
+    first = text.index("Sample set `aaa`")
+    second = text.index("Sample set `bbb`")
+    # Each group must contain its own table, and bm25/hybrid must sit under aaa.
+    assert text.count("| config | Recall@1 |") == 2
+    group_a = text[first:second]
+    assert "| `bm25` |" in group_a
+    assert "| `hybrid` |" in group_a
+    assert "| `dense` |" not in group_a
+    group_b = text[second:]
+    assert "| `dense` |" in group_b
+    assert "| `bm25` |" not in group_b
