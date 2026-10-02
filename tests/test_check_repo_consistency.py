@@ -544,6 +544,23 @@ def test_unrelated_missing_data_does_not_bootstrap_failure_scope(tmp_path, monke
     assert any("does not produce a quality report" in error for error in errors)
 
 
+def test_conditional_ragas_clause_keeps_guarantees(tmp_path, monkeypatch):
+    """A leading `When ...` condition must not be split from its guarantees."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    monkeypatch.setattr(guard, "CANONICAL_DOCS", [])
+    monkeypatch.setattr(guard, "RAGAS_REQUIRED_DOCS", ["doc.md"])
+    (tmp_path / "doc.md").write_text(
+        "When RAGAS is unavailable, the CLI fails fast with a non-zero status and produces no quality report.",
+        encoding="utf-8",
+    )
+
+    errors: list[str] = []
+    guard.check_ragas_failure_contract(errors)
+    assert errors == []
+
+
 def test_local_runtime_validation_contract():
     errors: list[str] = []
     check_local_runtime_validation_contract(errors)
@@ -625,13 +642,21 @@ def test_production_boundary_exemption_splits_colons():
     assert stale_local_validation_claims("真实 Redis 多进程行为尚未验证: production cluster 也未验证")
 
 
+def test_leading_production_qualifier_is_preserved():
+    """A leading scope qualifier must govern the clause that follows it."""
+    from scripts.check_repo_consistency import stale_local_validation_claims
+
+    assert stale_local_validation_claims("In production, Redis is not yet validated") == []
+    assert stale_local_validation_claims("对于生产环境，Redis 尚未验证") == []
+
+
 def test_tracing_default_is_not_misdescribed_as_local_memory_spans():
     """The default install uses the OTel SDK provider with no exporter."""
     from pathlib import Path
 
     text = Path("docs/interview-architecture-baseline.md").read_text(encoding="utf-8")
     assert "没有配置任何 exporter" in text
-    assert "只有 OTel SDK 未安装时" in text
+    assert "OTel SDK 未安装或初始化失败" in text
 
 
 def test_metrics_auth_contract():

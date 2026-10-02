@@ -523,6 +523,37 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
 
 
 _RAGAS_SEGMENT_SPLIT_RE = re.compile(r"[；;。！!？?，,\n]+")
+_LOCAL_VALIDATION_SPLIT_RE = re.compile(r"[；;。，,：:\n]+")
+
+# A leading qualifier (subordinate condition or scope phrase) governs the clause
+# that follows it, so it must not be split away from its guarantee/boundary.
+_LEADING_QUALIFIER_RE = re.compile(
+    r"^\s*(?:when|if|while|unless|because|since|given|for|in\s+case|provided|"
+    r"in\s+production|in\s+prod|对于|关于|针对|在|当|若|如果|假如|一旦|鉴于)",
+    re.IGNORECASE,
+)
+
+
+def _split_clauses(line: str, split_re: re.Pattern[str]) -> list[str]:
+    """Split a line into clauses, keeping leading qualifiers attached.
+
+    A clause that starts with a subordinate condition (or ends with ``时`` /
+    ``的话``) is merged with the next clause so the qualifier governs it.
+    """
+    pieces = [piece for piece in split_re.split(line) if piece.strip()]
+    merged: list[str] = []
+    index = 0
+    while index < len(pieces):
+        piece = pieces[index]
+        has_qualifier = _LEADING_QUALIFIER_RE.match(piece) or piece.rstrip().endswith(("时", "的话"))
+        if has_qualifier and index + 1 < len(pieces):
+            merged.append(f"{piece}，{pieces[index + 1]}")
+            index += 2
+        else:
+            merged.append(piece)
+            index += 1
+    return merged
+
 
 # A status guarantee is negated when an auxiliary/negation directly governs it,
 # e.g. "does not fail fast", "will not return a non-zero status", "fails to
@@ -541,14 +572,15 @@ _STATUS_NEGATION_BEFORE_RE = re.compile(
 
 
 def _ragas_failure_segments(text: str) -> list[str]:
-    """Return sentence/clause segments that describe an unavailable/failed evaluator.
+    """Return clauses that describe an unavailable/failed evaluator.
 
-    Segments are split on sentence/clause punctuation (not commas), so a
-    guarantee must live in the same clause as the evaluator-failure condition.
+    Clauses are split on sentence and comma punctuation, but a leading
+    subordinate condition is merged with the clause it governs so the guarantees
+    stay attached to the evaluator-failure condition.
     """
     segments: list[str] = []
     for line in text.splitlines():
-        for segment in _RAGAS_SEGMENT_SPLIT_RE.split(line):
+        for segment in _split_clauses(line, _RAGAS_SEGMENT_SPLIT_RE):
             if not segment.strip():
                 continue
             if "ragas" not in segment.lower() and "evaluator" not in segment.lower():
@@ -637,7 +669,7 @@ def stale_local_validation_claims(text: str) -> list[str]:
     """
     claims: list[str] = []
     for line in text.splitlines():
-        for clause in re.split(r"[；;。，,：:]+", line):
+        for clause in _split_clauses(line, _LOCAL_VALIDATION_SPLIT_RE):
             if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(clause):
                 continue
             for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:

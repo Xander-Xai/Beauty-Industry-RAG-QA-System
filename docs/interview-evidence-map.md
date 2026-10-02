@@ -59,7 +59,7 @@ Rules:
 | Performance benchmark | `PENDING` | Load-test utilities under `tests/load/`; no checked-in artifact | A reproducible benchmark artifact (see criteria below) |
 | QLoRA fine-tuning | `PENDING` | `offline/finetune_qlora.py`; utility + mocked tests only | Reproducible training run + adapter artifact |
 | Airflow scheduling | `PENDING` | `dags/knowledge_base_dags.py`; DAG registration tests only | Real Airflow DAG execution |
-| OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py` covers `MetricsCollector` and the `OpenTelemetryTracer` local/OTel span paths; default is the OTel SDK provider with no exporter configured (in-memory fallback only when the SDK is absent) | Real OTLP/Jaeger backend export |
+| OpenTelemetry tracing | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; `tests/test_monitoring_otel.py` covers `MetricsCollector` and the `OpenTelemetryTracer` local/OTel span paths; default is the OTel SDK provider with no exporter configured (in-memory fallback when the SDK is absent or init fails) | Real OTLP/Jaeger backend export |
 | Jaeger exporter | `PENDING` | `docker-compose.microservices.yml` service; `config.json` `monitoring.jaeger.enabled=false`; exporter package not in default requirements | Enable exporter + verify spans in Jaeger |
 
 ## Business scale — historical production context

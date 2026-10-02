@@ -101,7 +101,7 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 ## 可观测性与评测边界
 
 - Prometheus 风格指标、健康检查与系统统计已接入在线主链路。
-- OpenTelemetry 追踪钩子位于主链路（`core/pipeline.py` → `monitoring/otel_tracer.py`）。默认依赖会安装 `opentelemetry-sdk`，但 `config.json` → `monitoring.jaeger.enabled=false` 且没有配置任何 exporter，此时 tracer 走 OTel SDK provider 且没有 exporter（span 既不导出也不保留）；只有 OTel SDK 未安装时才退回本地内存 span 模式。因此只能说“追踪钩子已接入主链路”，不能说“OpenTelemetry/Jaeger 导出已闭环”，也不能把默认 0 值的指标当作已闭合生产指标。
+- OpenTelemetry 追踪钩子位于主链路（`core/pipeline.py` → `monitoring/otel_tracer.py`）。默认依赖会安装 `opentelemetry-sdk`，但 `config.json` → `monitoring.jaeger.enabled=false` 且没有配置任何 exporter，此时 tracer 走 OTel SDK provider 且没有 exporter（span 既不导出也不保留）；只有 OTel SDK 未安装或初始化失败时才退回本地内存 span 模式。因此只能说“追踪钩子已接入主链路”，不能说“OpenTelemetry/Jaeger 导出已闭环”，也不能把默认 0 值的指标当作已闭合生产指标。
 - Jaeger 是可选导出器，当前配置默认关闭，不能说成默认运行。
 - RAGAS harness / reporter / validator 与 Golden Set 已存在：最初 seed 27 条，现 300+ 条，实际条数以 `validate_golden_set` 输出为准。**格式校验通过 ≠ 领域事实正确**。
 - RAGAS 是隔离的可选 evaluator，不在默认依赖中。库级 `evaluate()` 保留 evaluator-unavailable fallback（该结果不是质量结果）；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast**：返回非零状态且不生成任何 quality report。当前没有经过验证的真实 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
