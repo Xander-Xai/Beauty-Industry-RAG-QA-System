@@ -102,6 +102,20 @@ Compose 需要 Redis、Qdrant、Elasticsearch 等服务。启动前检查 compos
 
 这些能力的实现边界和证据列于 [audit](docs/repository-truth-audit.md)。性能数字如未附 benchmark 产物，不视为已验证结果。
 
+## Retrieval benchmark
+
+`benchmarks/` 提供**确定性、可复现的 retrieval benchmark**：纯函数实现 Recall@1/3/5/10、HitRate@1/3/5/10、MRR@10、NDCG@10，自动产出 provenance 与 artifact，并支持 `overall` / `business_type` / `difficulty` 分桶。
+
+```bash
+# 查看当前环境实际可执行的配置（实时探测，不使用替身 retriever）
+python -m benchmarks.retrieval_benchmark --list-configs
+
+# 尝试真实运行
+python -m benchmarks.retrieval_benchmark --config bm25 --limit 5
+```
+
+当前状态：benchmark 框架为 `REPO_VERIFIED`；**retrieval benchmark 结果为 `PENDING`**，仓库内没有可复现的真实 benchmark artifact。缺少真实依赖时，配置会以 `BLOCKED` 与原因记录，**不会**产出数字。数据质量缺口见 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 说明见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
+
 ## 文档入口
 
 请从 [docs/README.md](docs/README.md) 查找当前操作指南、设计文档和历史计划。历史计划不代表当前实现状态。
