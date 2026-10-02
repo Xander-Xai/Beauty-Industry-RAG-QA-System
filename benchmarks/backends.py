@@ -88,9 +88,11 @@ def _tcp_reachable(host: str, port: int) -> bool:
 def _elastic_settings() -> tuple[str, str, int, tuple[str, str] | None]:
     """Return ``(url, index, port, auth)`` derived from the live configuration.
 
-    The port comes from the URL when it embeds one, unless the configuration
-    overrides it, so ``http://localhost:19200`` is probed on 19200 rather than on
-    the 9200 default.
+    The port is taken from the URL only. ``BM25Retriever`` passes just
+    ``hosts=[host]`` to the Elasticsearch client, so a separate ``port`` field in
+    ``config.json`` is never used by production. Honouring it here would make the
+    TCP pre-check probe a port retrieval never touches, and a closed listener
+    there would block a configuration whose real retrieval path works.
     """
     from urllib.parse import urlparse
 
@@ -101,7 +103,7 @@ def _elastic_settings() -> tuple[str, str, int, tuple[str, str] | None]:
     url = str(elastic.get("host") or "http://elasticsearch:9200")
     index = str(elastic.get("index") or "cosmetics_docs")
     parsed = urlparse(url if "//" in url else f"//{url}")
-    port = int(elastic.get("port") or parsed.port or (443 if parsed.scheme == "https" else 9200))
+    port = parsed.port or (443 if parsed.scheme == "https" else 9200)
     auth: tuple[str, str] | None = None
     # Mirror the production BM25Retriever precedence exactly: environment first,
     # config.json only as a fallback, otherwise a rotated credential makes real

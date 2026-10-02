@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import re
 import subprocess
 import sys
 import uuid
@@ -198,7 +199,28 @@ def render_environment(environment: dict[str, Any]) -> dict[str, Any]:
     return rendered
 
 
-_SECRET_KEY_MARKERS = ("password", "secret", "token", "api_key", "credential", "access_key", "private_key")
+# Markers are stored separator-free because key names are normalized the same way
+# before matching: matching the literal spelling "api_key" would miss "apiKey"
+# and "api-key", which are at least as common in a hand-written config and would
+# then be persisted verbatim.
+_SECRET_KEY_MARKERS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "apikey",
+    "authorization",
+    "bearer",
+    "credential",
+    "accesskey",
+    "privatekey",
+)
+_KEY_SEPARATOR_RE = re.compile(r"[^a-z0-9]")
+
+
+def _normalized_key(key: Any) -> str:
+    """Lower-case a key and drop every separator, so spelling variants collide."""
+    return _KEY_SEPARATOR_RE.sub("", str(key).lower())
 
 
 def redact_url_userinfo(value: Any) -> Any:
@@ -279,8 +301,8 @@ def _elastic_principal_fingerprint() -> str | None:
 
 
 def _is_secret_key(key: Any) -> bool:
-    lowered = str(key).lower()
-    return any(marker in lowered for marker in _SECRET_KEY_MARKERS)
+    normalized = _normalized_key(key)
+    return any(marker in normalized for marker in _SECRET_KEY_MARKERS)
 
 
 def sanitize(value: Any) -> Any:

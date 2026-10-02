@@ -2237,3 +2237,56 @@ def test_environment_versions_are_in_the_rendered_artifact():
     rendered = render_environment(collect_environment())
     assert "transformers_version" in rendered
     assert "sentence_transformers_version" in rendered
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["apiKey", "api-key", "API_KEY", "authorization", "Authorization", "passwd", "access-key", "privateKey"],
+)
+def test_credential_key_spellings_are_all_redacted(key):
+    """Separator and case variants must not survive into a persisted artifact."""
+    from benchmarks.provenance import sanitize
+
+    assert sanitize({key: "super-secret-value"})[key] is True
+
+
+def test_authorization_header_value_is_not_written_verbatim():
+    from benchmarks.provenance import sanitize
+
+    rendered = sanitize({"auth": {"Authorization": "Bearer abc123def456"}})
+    assert "abc123def456" not in str(rendered)
+
+
+def test_benign_config_keys_are_still_preserved():
+    """Over-matching would destroy the configuration provenance entirely."""
+    from benchmarks.provenance import sanitize
+
+    payload = {"host": "http://es:9200", "index": "cosmetics_docs", "device": "cuda:1", "num_labels": 2}
+    assert sanitize(payload) == payload
+
+
+def test_elastic_port_comes_from_the_url_not_a_separate_field(monkeypatch):
+    """Production passes only `hosts=[host]`, so a separate `port` is ignored."""
+    from benchmarks.backends import _elastic_settings
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "http://es:9200", "port": 19200}},
+    )
+    url, _index, port, _auth = _elastic_settings()
+    assert url == "http://es:9200"
+    assert port == 9200, "the TCP pre-check must probe the port production actually dials"
+
+
+def test_elastic_url_port_is_still_honoured(monkeypatch):
+    from benchmarks.backends import _elastic_settings
+    from common import config as common_config
+
+    monkeypatch.setattr(
+        common_config,
+        "get_config_dict",
+        lambda: {"elasticsearch": {"host": "http://localhost:19200"}},
+    )
+    assert _elastic_settings()[2] == 19200
