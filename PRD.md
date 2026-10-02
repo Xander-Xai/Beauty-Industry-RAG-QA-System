@@ -34,6 +34,12 @@ All performance figures below are **design targets or model estimates**, not ver
 > | §2 / §5 / §7 | 延迟/QPS/吞吐数字 | 无 benchmark artifact，均为**设计目标/模型估算**，不是实测生产结果 |
 >
 > **运维契约（v2.5，已实现）**：`GET /api/stats` 与 `GET /api/metrics` 需要身份认证（`require_identity`）；Docker Compose 的 Elasticsearch 启用 `xpack.security.enabled=true` 并要求 `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD`；登录限流仅在配置 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`。操作细节见 [docs/deployment-guide.md](docs/deployment-guide.md) 与 [docs/operations-guide.md](docs/operations-guide.md)。
+>
+> **本地真实验证（v2.5，`LOCAL_REAL_VALIDATION`）**：真实 Redis 多进程会话持久化/跨进程限流、真实 nginx / `TRUSTED_PROXIES`、认证 Elasticsearch、认证 Prometheus 抓取已在本地真实依赖上验证，证据见 [docs/validation/v2.5-runtime-security-validation.md](docs/validation/v2.5-runtime-security-validation.md)。这是本地验证，不是生产集群 / HA / SLO 验证。
+
+> **Historical Production Context（`HISTORICAL_PRODUCTION`）**：以下为作者此前公司生产环境的业务规模与流量背景，用于解释设计动机。公开仓库**不包含**对应的专有语料、生产日志、模型权重或监控数据，因此这些数字不是 `REPO_VERIFIED`，也不是可复现 benchmark：
+> 3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户；高峰短时 10–15 QPS，日均 1500+ 请求。
+> 生产观测（production observation）与仓库可复现基准（repository reproducible benchmark）不得互相替代；未经仓库内 benchmark artifact 证明，不得把上述规模或性能当作当前仓库已验证能力。
 
 1. 项目背景
 面向中小型化妆品企业（研发/品质/法规/销售），构建统一知识问答系统，解决成分/法规/配方知识分散、法规体系复杂（8大体系）、非结构化数据占比高、传统知识库不支持多轮与跨模态查询等问题。
@@ -65,8 +71,10 @@ QPS ≈ 有效并发 / 平均延迟
 ● QPS 模型示例：若假设 Avg latency=1.6s、有效并发=25，则数学推导 QPS≈15.6；这是未经 workload benchmark 验证的估算，不是生产结果。
 注：QPS 为推导值而非固定配置，实际承载能力随 workload mix、序列长度分布、KV 动态占用而变化。轻量 rewrite 的 25–60 QPS 也是设计估值，未经可复现实测。
 3. 离线知识库构建
-3.1 数据范围
+3.1 数据范围（设计阶段 baseline）
+以下为早期设计阶段的规模基线，用于约束架构选型，**不是当前仓库可复现的生产规模**：
 500+ 文档（PDF/Word/Excel）、包装图片/扫描件，覆盖 2000+ 成分、3000+ 配方（原料研发配方种类）、1500+ 产品（实际制造产品）、8 大法规体系。
+历史生产环境的真实规模与流量上下文见文档顶部 **Historical Production Context（`HISTORICAL_PRODUCTION`）**；两者不得互相替换。
 3.2 文档处理
 **实现状态：** 当前实现按**字符**切块（默认 500 字符、10% 重叠），不是 tokenizer 切块；设计中的
 JSON Lines 中间产物未采用，解析结果以有序 block（含 page/heading/paragraph/table/row_window

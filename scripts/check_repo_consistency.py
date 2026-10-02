@@ -97,6 +97,149 @@ HISTORICAL_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
+# RAGAS is an isolated, optional evaluator. After the correctness work merged via
+# PR #14, a missing evaluator dependency or credential must fail fast with a
+# non-zero exit code and must not write a quality report. The retired
+# "missing-RAGAS returns a zero score plus `_warning`" fallback must never be
+# presented as the current canonical behavior. Matching is negation-aware so a
+# truthful denial ("never emit a zero-score report") stays allowed, and lines
+# carrying an explicit historical marker are exempt.
+RAGAS_REQUIRED_DOCS = [
+    "README.md",
+    "docs/ragas-evaluation-guide.md",
+    "docs/interview-architecture-baseline.md",
+]
+
+# Historical exemption for the RAGAS zero-fallback scanner. Deliberately
+# narrower than HISTORICAL_MARKERS: ambiguous transition words such as
+# "no longer" or "dropped" can appear in a current-state sentence and must not
+# suppress the guard.
+RAGAS_HISTORICAL_MARKERS = re.compile(
+    r"historical|target\s+design|at\s+that\s+time|release\s+history|"
+    r"before\s+PR\s*#\d+\s+merged|retained\s+unchanged|superseded|"
+    r"retired|obsolete|deprecated|"
+    r"历史|当时|发布历史|保留不变|目标设计|原设计",
+    re.IGNORECASE,
+)
+
+RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS = [
+    r"返回零分",
+    r"生成零分",
+    r"零分\s*\+?\s*[`_]?\s*warning",
+    r"[`_]warning[`_]?[^\n]{0,8}零分",
+    r"returns?\s+(?:all\s+)?zero(?:\s+score[s]?)?",
+    r"return(?:s|ing)?\s+(?:an?\s+)?zero",
+    r"zero(?:\s+score[s]?)?\s+(?:when|if)\s+ragas\s+(?:is\s+)?(?:unavailable|missing|not\s+installed)",
+    r"all[- ]zero\s+ragas\s+fallback",
+    r"ragas\s+fallback[^\n]{0,12}(?:zero|全\s*0|零)",
+]
+
+# Explicit denial of the fallback *action*. This is deliberately narrow: a bare
+# "不"/"not" is NOT a denial, because it usually negates the *condition*
+# ("RAGAS 不可用时...", "RAGAS is not installed...") rather than the fallback.
+RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS = [
+    r"(?:不会|不再|绝不|从未|未曾|没能|没有|不)\s*(?:再)?\s*(?:返回|生成|产生|输出|写出|写)\s*零",
+    r"never\s+(?:returns?|emits?|produces?|writes?)\b[^\n]{0,24}zero",
+    r"does\s+not\s+(?:return|emit|produce|write)\b[^\n]{0,24}zero",
+    r"doesn't\s+(?:return|emit|produce|write)\b[^\n]{0,24}zero",
+    r"no\s+longer\s+(?:returns?|emits?|produces?|writes?)\b[^\n]{0,24}zero",
+]
+
+# A zero match only counts as the retired score fallback when the surrounding
+# window refers to a score/result/report/fallback or to an unavailable
+# evaluator. This keeps truthful statements such as "returns zero failed
+# samples" or "returns zero exit status" out of the guard.
+_RAGAS_ZERO_CONTEXT_RE = re.compile(
+    r"score|scores|result|results|report|reports|fallback|零分|_warning|warning|"
+    r"unavailable|missing|not\s+installed|缺少|缺失|不可用|未安装",
+    re.IGNORECASE,
+)
+
+# Two independent RAGAS failure contracts. They must each be documented, and a
+# bare "UNAVAILABLE" must not satisfy the non-zero/failure-status half.
+RAGAS_FAILURE_STATUS_REQUIRED_RE = re.compile(
+    r"fail(?:s|ed)?[- ]?fast|非\s*0\s*退出|非零退出|非零状态|"
+    r"non-?zero\s+(?:status|exit(?:\s+code)?|code)|退出码\s*[2-5]",
+    re.IGNORECASE,
+)
+RAGAS_NO_REPORT_REQUIRED_RE = re.compile(
+    r"不生成[^\n]{0,16}(?:质量)?(?:报告|report)|不写[^\n]{0,8}(?:报告|report)|"
+    r"no\s+quality\s+report|never\s+(?:write|emit|produce)[^\n]{0,20}report|"
+    r"does\s+not\s+produce[^\n]{0,24}report|doesn't\s+produce[^\n]{0,24}report|"
+    r"don't\s+produce[^\n]{0,24}report|must\s+not\s+produce[^\n]{0,24}report|"
+    r"will\s+not\s+produce[^\n]{0,24}report|won't\s+produce[^\n]{0,24}report|"
+    r"without\s+producing[^\n]{0,24}report",
+    re.IGNORECASE,
+)
+
+# Only clauses that describe an unavailable/failed *evaluator* count as the
+# failure clause. Availability wording must bind to the evaluator, dependency or
+# credentials (not unrelated data), and the guarantee wording itself (`fail fast`,
+# `非零`, exit codes) is excluded so a successful-run statement cannot bootstrap
+# its own failure scope.
+_RAGAS_AVAIL = r"(?:unavailable|missing|not\s+installed)"
+_RAGAS_AVAIL_CN = r"(?:缺少|缺失|不可用|未安装)"
+_RAGAS_ANCHOR = r"(?:evaluator|dependenc(?:y|ies)|credential(?:s)?|api\s+key)"
+_RAGAS_ANCHOR_CN = r"(?:evaluator|评估器|依赖|凭据)"
+RAGAS_FAILURE_CONDITION_RE = re.compile(
+    rf"(?:{_RAGAS_ANCHOR}|{_RAGAS_ANCHOR_CN})[^\n]{{0,24}}(?:{_RAGAS_AVAIL}|{_RAGAS_AVAIL_CN})|"
+    rf"(?:{_RAGAS_AVAIL}|{_RAGAS_AVAIL_CN})[^\n]{{0,24}}(?:{_RAGAS_ANCHOR}|{_RAGAS_ANCHOR_CN})|"
+    rf"ragas\s+(?:is\s+)?(?:unavailable|missing|not\s+installed)|"
+    rf"ragas\s*(?:{_RAGAS_AVAIL_CN})|"
+    rf"(?:unavailable|not\s+installed|{_RAGAS_AVAIL_CN})[^\n]{{0,8}}ragas",
+    re.IGNORECASE,
+)
+
+# The v2.5 runtime/security work completed local validation against real Redis,
+# real nginx, authenticated Elasticsearch and authenticated Prometheus. Canonical
+# docs must classify that as LOCAL_REAL_VALIDATION and must not regress to
+# "never actually validated" wording. Production cluster/HA/SLO and other
+# external topologies are still out of scope and remain valid to mark as
+# unverified, so lines that explicitly describe such a boundary are exempt.
+LOCAL_VALIDATION_DOCS = [
+    "docs/interview-architecture-baseline.md",
+    "docs/repository-truth-audit.md",
+]
+
+LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE = re.compile(
+    r"Cluster|Sentinel|production|生产|HA\b|SLO\b|cloud|云|load\s+balancer|\bLB\b|"
+    r"multi-?node|多节点|TLS|long[- ]run|长期|Grafana",
+    re.IGNORECASE,
+)
+
+# The LOCAL_REAL_VALIDATION marker must be attached to the actual completed
+# dependencies and an affirmative validation statement, so silently deleting the
+# evidence claim (leaving only a glossary mention) is detected.
+_LOCAL_VALIDATION_AFFIRMATIVE_RE = re.compile(
+    r"validated|verified|完成|已验证|验证|执行|已",
+    re.IGNORECASE,
+)
+_VALIDATION_AFFIRMATIVE_NEGATION_BEFORE_RE = re.compile(
+    r"not\s+(?:\w+\s+){0,2}$|never\s+(?:\w+\s+){0,2}$|"
+    r"尚未\s*$|未能\s*$|还未\s*$|未\s*$|无法\s*$|不能\s*$",
+    re.IGNORECASE,
+)
+
+
+def _affirmative_validation_in(window: str) -> bool:
+    """True when ``window`` contains a non-negated completed-validation phrase."""
+    for match in _LOCAL_VALIDATION_AFFIRMATIVE_RE.finditer(window):
+        prefix = window[max(0, match.start() - 24) : match.start()]
+        if _VALIDATION_AFFIRMATIVE_NEGATION_BEFORE_RE.search(prefix):
+            continue
+        return True
+    return False
+
+
+STALE_LOCAL_VALIDATION_CLAIM_PATTERNS = [
+    r"(?:Redis|反向代理|代理|Elasticsearch|Prometheus|(?<![A-Za-z])ES(?![A-Za-z]))[^\n]{0,24}"
+    r"(?:尚待|仍待|仍需|尚未|还未|未[^\n]{0,6}(?:验证|验收))",
+    r"(?:尚待|仍待|仍需|尚未|还未)[^\n]{0,16}"
+    r"(?:Redis|反向代理|Elasticsearch|Prometheus)[^\n]{0,16}(?:验收|验证)",
+    r"(?:Redis|proxy|Elasticsearch|Prometheus)[^\n]{0,40}"
+    r"(?:not\s+(?:yet\s+)?(?:been\s+)?(?:actually\s+)?|never\s+(?:been\s+)?(?:actually\s+)?)(?:validated|verified)",
+]
+
 # Qdrant IVF tuning parameters (nlist/nprobe) are not part of the implemented
 # collection contract, so current docs must not present them as implemented.
 # Matching is negation-aware: an affirmative implementation/tuning claim is
@@ -373,20 +516,275 @@ def check_docs_index(errors: list[str]) -> None:
             fail(errors, f"docs/README.md must index {token!r}")
 
 
-def check_ragas_unavailable_contract(errors: list[str]) -> None:
-    """Docs must state that a missing-RAGAS zero result is not a quality score."""
-    disclaimer = re.compile(
-        r"零分|UNAVAILABLE|未运行|not\s+a\s+(?:valid\s+)?quality|不是质量|不代表质量",
-        re.IGNORECASE,
-    )
-    for name in (
-        "README.md",
-        "docs/ragas-evaluation-guide.md",
-        "docs/interview-architecture-baseline.md",
-    ):
+_RAGAS_CLAUSE_BOUNDARY_RE = re.compile(r"[；;。，,：:]")
+
+
+def _clause_start(line: str, index: int) -> int:
+    """Return the start of the clause containing ``index`` on ``line``."""
+    start = 0
+    for boundary in _RAGAS_CLAUSE_BOUNDARY_RE.finditer(line[:index]):
+        start = boundary.end()
+    return start
+
+
+def _clause_end(line: str, index: int) -> int:
+    """Return the end of the clause containing ``index`` on ``line``."""
+    boundary = _RAGAS_CLAUSE_BOUNDARY_RE.search(line, index)
+    return boundary.start() if boundary else len(line)
+
+
+def ragas_zero_fallback_claims(text: str) -> list[str]:
+    """Return missing-RAGAS zero-score fallback claims presented as current.
+
+    Line-scoped and negation-aware: a denial such as "never emit a zero-score
+    report" is not a claim, and lines with an explicit historical marker are
+    exempt. Only RAGAS lines are considered, so unrelated zero wording (for
+    example a cache hit-rate sentence) is not misread as this fallback.
+    Deterministic: no PR number, GitHub API, git history or wall clock.
+    """
+    claims: list[str] = []
+    for line in text.splitlines():
+        if "ragas" not in line.lower():
+            continue
+        for pattern in RAGAS_ZERO_FALLBACK_CLAIM_PATTERNS:
+            found = False
+            for match in re.finditer(pattern, line, flags=re.IGNORECASE):
+                clause = line[_clause_start(line, match.start()) : _clause_end(line, match.end())]
+                if RAGAS_HISTORICAL_MARKERS.search(clause):
+                    continue
+                context = line[max(0, match.start() - 40) : match.end() + 40]
+                if not _RAGAS_ZERO_CONTEXT_RE.search(context):
+                    continue
+                denial_window = line[_clause_start(line, match.start()) : match.end()]
+                if any(
+                    re.search(denial, denial_window, flags=re.IGNORECASE)
+                    for denial in RAGAS_ZERO_FALLBACK_DENIAL_PATTERNS
+                ):
+                    continue
+                claims.append(match.group(0))
+                found = True
+                break
+            if found:
+                break
+    return claims
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?\n]+")
+_RAGAS_COMMA_SPLIT_RE = re.compile(r"[，,]+")
+_LOCAL_VALIDATION_COMMA_SPLIT_RE = re.compile(r"[，,：:]+")
+# Contrast conjunctions change scope, so a leading condition must not propagate
+# through them.
+_CONTRAST_SPLIT_RE = re.compile(
+    r"\bbut\b|\bwhereas\b|\bhowever\b|\balthough\b|\bthough\b|然而|不过|但是|(?<!不)(?<!非)但", re.IGNORECASE
+)
+
+# A leading qualifier (subordinate condition or scope phrase) governs the whole
+# sentence that follows it, so it must not be split away from its guarantees or
+# boundary. Sentences that do not start with a qualifier are split normally.
+_LEADING_QUALIFIER_RE = re.compile(
+    r"^\s*(?:when|if|while|unless|because|since|given|for|in\s+case|provided|"
+    r"in\s+production|in\s+prod|对于|关于|针对|在|当|若|如果|假如|一旦|鉴于)",
+    re.IGNORECASE,
+)
+
+
+def _split_clauses(line: str, comma_split_re: re.Pattern[str]) -> list[str]:
+    """Split a line into clauses, keeping leading qualifiers attached.
+
+    Sentences are split on terminal punctuation first. Within a sentence, if the
+    leading clause is a subordinate condition (or ends with ``时`` / ``的话``),
+    the whole sentence is kept together so the qualifier governs every
+    coordinated clause.
+    """
+    segments: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(line):
+        for sub_sentence in _CONTRAST_SPLIT_RE.split(sentence):
+            if not sub_sentence.strip():
+                continue
+            pieces = [piece for piece in comma_split_re.split(sub_sentence) if piece.strip()]
+            if not pieces:
+                continue
+            first = pieces[0]
+            if _LEADING_QUALIFIER_RE.match(first) or first.rstrip().endswith(("时", "的话")):
+                segments.append("，".join(pieces))
+            else:
+                segments.extend(pieces)
+    return segments
+
+
+# A status guarantee is negated when an auxiliary/negation directly governs it,
+# e.g. "does not fail fast", "will not return a non-zero status", "fails to
+# return a non-zero status", "is unable to return", "不会 fail fast",
+# "不返回非零状态". A bare "not installed" earlier in the segment does not count.
+_STATUS_NEGATION_BEFORE_RE = re.compile(
+    r"(?:does|do|will|would|should|could|can|is|are|was|were)\s+not\s+(?:\w+\s+){0,3}$|"
+    r"(?:can't|won't|isn't|aren't|wasn't|weren't|couldn't|shouldn't|wouldn't|doesn't|don't|didn't)\s+"
+    r"(?:\w+\s+){0,3}$|"
+    r"(?:never|not)(?!\s+only)\s+(?:\w+\s+){0,3}$|"
+    r"(?:is|are|was|were)?\s*not\s+(?:guaranteed|required|expected)\s+to\s+(?:\w+\s+){0,3}$|"
+    r"(?:fails?|failed)\s+to\s+(?:\w+\s+){0,3}$|"
+    r"(?:is|are|was|were)?\s*unable\s+to\s+(?:\w+\s+){0,3}$|"
+    r"(?:不(?!但)|未|无法|不能|不会|未能)[^\n]{0,4}$",
+    re.IGNORECASE,
+)
+
+
+def _ragas_failure_segments(text: str) -> list[str]:
+    """Return clauses that describe an unavailable/failed evaluator.
+
+    Clauses are split on sentence and comma punctuation, but a leading
+    subordinate condition is merged with the clause it governs so the guarantees
+    stay attached to the evaluator-failure condition.
+    """
+    segments: list[str] = []
+    for line in text.splitlines():
+        for segment in _split_clauses(line, _RAGAS_COMMA_SPLIT_RE):
+            if not segment.strip():
+                continue
+            if "ragas" not in segment.lower() and "evaluator" not in segment.lower():
+                continue
+            if RAGAS_FAILURE_CONDITION_RE.search(segment):
+                segments.append(segment)
+    return segments
+
+
+def _ragas_status_affirmative(segment: str) -> bool:
+    """True when the segment asserts the non-zero/fail-fast status affirmatively."""
+    for match in RAGAS_FAILURE_STATUS_REQUIRED_RE.finditer(segment):
+        prefix = segment[max(0, match.start() - 40) : match.start()]
+        if _STATUS_NEGATION_BEFORE_RE.search(prefix):
+            continue
+        return True
+    return False
+
+
+# A no-report guarantee is denied when the suppression itself is negated, e.g.
+# "this does not mean no quality report", "并非不生成报告". The affirmative forms
+# ("does not produce a report", "不生成报告") include the negation in the match
+# itself, so only a meta-negation before the phrase counts.
+_REPORT_NEGATION_BEFORE_RE = re.compile(
+    r"(?:does|do|did)\s+not\s+(?:guarantee|assert|imply|ensure|mean)\s+(?:\w+\s+){0,2}$|"
+    r"(?:doesn't|don't|didn't)\s+(?:guarantee|assert|imply|ensure|mean)\s+(?:\w+\s+){0,2}$|"
+    r"not\s+that\s+(?:\w+\s+){0,2}$|"
+    r"(?:并非|不代表|不等于|并不意味着|不能说明)[^\n]{0,6}$",
+    re.IGNORECASE,
+)
+
+
+def _ragas_report_affirmative(segment: str) -> bool:
+    """True when the segment asserts report suppression affirmatively."""
+    for match in RAGAS_NO_REPORT_REQUIRED_RE.finditer(segment):
+        prefix = segment[max(0, match.start() - 32) : match.start()]
+        if _REPORT_NEGATION_BEFORE_RE.search(prefix):
+            continue
+        return True
+    return False
+
+
+def check_ragas_failure_contract(errors: list[str]) -> None:
+    """RAGAS docs must describe both failure contracts, not a zero fallback.
+
+    No canonical doc may present the retired missing-RAGAS zero fallback as
+    current behavior. The core RAGAS docs must independently document that an
+    unavailable/failed evaluator is unsuccessful (fail fast / non-zero), and
+    that it does not produce a quality report. Both assertions are scoped to
+    evaluator-failure clauses and the status half must not be negated.
+    """
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        claims = sorted(set(ragas_zero_fallback_claims(path.read_text(encoding="utf-8"))))
+        if claims:
+            fail(
+                errors,
+                f"{_display(path)}: missing-RAGAS zero / `_warning` fallback presented as current behavior: {claims}",
+            )
+    for name in RAGAS_REQUIRED_DOCS:
         path = ROOT / name
-        if path.exists() and not disclaimer.search(path.read_text(encoding="utf-8")):
-            fail(errors, f"{name}: must state that a missing-RAGAS zero result is not a quality result")
+        if not path.exists():
+            continue
+        segments = _ragas_failure_segments(path.read_text(encoding="utf-8"))
+        if not any(_ragas_status_affirmative(segment) for segment in segments):
+            fail(
+                errors,
+                f"{name}: must document unavailable/failure as unsuccessful/non-zero",
+            )
+        if not any(_ragas_report_affirmative(segment) for segment in segments):
+            fail(
+                errors,
+                f"{name}: must document that unavailable/failure does not produce a quality report",
+            )
+
+
+def stale_local_validation_claims(text: str) -> list[str]:
+    """Return local-validation denial claims, exempting external-boundary clauses.
+
+    The exemption is clause-scoped: a clause that explicitly describes an
+    external/production boundary (Redis Cluster/Sentinel, cloud LB, multi-node
+    ES/TLS, long-run Prometheus/Grafana, production HA/SLO) is allowed, while a
+    stale claim about the completed single-host local validation in another
+    clause on the same line is still flagged.
+    """
+    claims: list[str] = []
+    for line in text.splitlines():
+        for clause in _split_clauses(line, _LOCAL_VALIDATION_COMMA_SPLIT_RE):
+            if LOCAL_VALIDATION_EXTERNAL_BOUNDARY_RE.search(clause):
+                continue
+            for pattern in STALE_LOCAL_VALIDATION_CLAIM_PATTERNS:
+                match = re.search(pattern, clause, flags=re.IGNORECASE)
+                if match:
+                    claims.append(match.group(0))
+                    break
+    return claims
+
+
+_LOCAL_VALIDATION_REQUIRED_DEPS = [
+    re.compile(r"Redis", re.IGNORECASE),
+    re.compile(r"nginx|反向代理", re.IGNORECASE),
+    re.compile(r"Elasticsearch|(?<![A-Za-z])ES(?![A-Za-z])", re.IGNORECASE),
+    re.compile(r"Prometheus", re.IGNORECASE),
+]
+_VALIDATION_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?]+|\.(?=\s|$)")
+
+
+def _local_validation_affirmative_scope(text: str) -> bool:
+    """True when a sentence near the marker affirms all required local validations."""
+    marker = "LOCAL_REAL_VALIDATION"
+    normalized = text.replace("\n", " ")
+    for match in re.finditer(marker, normalized):
+        window = normalized[max(0, match.start() - 800) : match.end() + 800]
+        for sentence in _VALIDATION_SENTENCE_SPLIT_RE.split(window):
+            if not _affirmative_validation_in(sentence):
+                continue
+            if all(dependency.search(sentence) for dependency in _LOCAL_VALIDATION_REQUIRED_DEPS):
+                return True
+    return False
+
+
+def check_local_runtime_validation_contract(errors: list[str]) -> None:
+    """Canonical docs must affirm the completed local real-dependency validation."""
+    for name in LOCAL_VALIDATION_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        marker = "LOCAL_REAL_VALIDATION"
+        if marker not in text:
+            fail(
+                errors,
+                f"{name}: must classify the completed Redis/nginx/ES/Prometheus validation as LOCAL_REAL_VALIDATION",
+            )
+        elif not _local_validation_affirmative_scope(text):
+            fail(
+                errors,
+                f"{name}: must affirmatively state that Redis/nginx/Elasticsearch/Prometheus were validated locally",
+            )
+        claims = sorted(set(stale_local_validation_claims(text)))
+        if claims:
+            fail(
+                errors,
+                f"{name}: stale 'not really validated' local-runtime claim: {claims}",
+            )
 
 
 def check_metrics_auth_contract(errors: list[str]) -> None:
@@ -567,7 +965,8 @@ def main() -> int:
     check_metrics_auth_contract(errors)
     check_rbac_mask_contract(errors)
     check_docs_index(errors)
-    check_ragas_unavailable_contract(errors)
+    check_ragas_failure_contract(errors)
+    check_local_runtime_validation_contract(errors)
     check_uvicorn_proxy_headers_disabled(errors)
 
     contract_dir = ROOT / "tests/contracts"

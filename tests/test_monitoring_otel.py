@@ -122,3 +122,66 @@ class TestMetricsCollectorPrefixCache:
         metrics.record_prefix_cache_miss()
         output = metrics.to_prometheus_text()
         assert "prefix_cache" in output
+
+
+class TestOpenTelemetryTracerSpans:
+    """Cover the tracer span paths (local fallback and OTel-provider mode)."""
+
+    def _tracer(self, monkeypatch):
+        from monitoring import otel_tracer as module
+
+        monkeypatch.setattr(module.OpenTelemetryTracer, "_try_init_otel", lambda self: None)
+        tracer = module.OpenTelemetryTracer()
+        assert tracer._use_otel is False
+        return tracer
+
+    def test_local_mode_records_span(self, monkeypatch):
+        tracer = self._tracer(monkeypatch)
+        with tracer.trace("unit.span", {"k": "v"}):
+            pass
+        summary = tracer.get_trace_summary()
+        assert [span["name"] for span in summary] == ["unit.span"]
+        assert summary[0]["status"] == "OK"
+        assert summary[0]["attributes"] == {"k": "v"}
+
+    def test_local_mode_marks_error_span(self, monkeypatch):
+        tracer = self._tracer(monkeypatch)
+        with pytest.raises(ValueError):
+            with tracer.trace("unit.error"):
+                raise ValueError("boom")
+        summary = tracer.get_trace_summary()
+        assert summary[0]["status"] == "ERROR"
+        assert summary[0]["error"] == "boom"
+
+    def test_otel_mode_does_not_retain_local_spans(self, monkeypatch):
+        import contextlib
+
+        tracer = self._tracer(monkeypatch)
+        tracer._use_otel = True
+
+        class FakeSpan:
+            def __init__(self):
+                self.attributes = {}
+                self.status = None
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+            def set_status(self, status):
+                self.status = status
+
+        class FakeOtel:
+            def __init__(self):
+                self.span = None
+
+            @contextlib.contextmanager
+            def start_as_current_span(self, name):
+                self.span = FakeSpan()
+                yield self.span
+
+        fake = FakeOtel()
+        tracer._otel_tracer = fake
+        with tracer.trace("otel.span", {"a": "b"}):
+            pass
+        assert fake.span.attributes == {"a": "b"}
+        assert tracer.get_trace_summary() == []

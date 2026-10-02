@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 class MetricsCollector:
     """
-    指标收集器（完整版，对齐 otel_tracer.py）
+    指标收集器（monitoring-service 独立组件；与 `monitoring/otel_tracer.py` 的
+    MetricsCollector 指标名有重叠，但两者是各自维护的实现，并非严格对齐）
 
     收集 PRD §12 要求的关键指标：
     - L1/L2/L2_SESSION 命中率（按权限分区统计）
@@ -50,6 +51,9 @@ class MetricsCollector:
     - Rerank Batch Aggregator 指标
       - Batch 填充率 (rerank_batch_fill_rate)
       - 批处理排队延迟 P99 (rerank_batch_queue_latency_p99)
+
+    注意：`blip_trigger_rate` 与 `clip_sync_timeout_rate` 目前只是预初始化为 0
+    的 gauge（采集 hook 仍为 TODO），不能当作已闭合的生产指标。
     """
 
     def __init__(self):

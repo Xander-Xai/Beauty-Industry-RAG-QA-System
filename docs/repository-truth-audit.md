@@ -5,7 +5,7 @@
 - Original audit base: `7b03267ccd751178e5e1d69ec6a6ec97281b57cb` (`origin/main`, before the offline merges).
 - Historical merged PRs: #3, #4, #5, #6, #7.
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
-- Current v2.5 reconciliation branch: based on the merged `main` plus the v2.5 runtime/security work.
+- v2.5 runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
 - Runtime validation: see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
@@ -38,8 +38,8 @@ large-corpus throughput has been established.
 | OCR | OCR adapter and image pipeline exist; real PaddleOCR runtime is external | `offline/image_processor.py` | `tests/offline/test_image_processing.py` (deterministic provider) | `knowledge_base.ocr.*`; optional `offline/requirements-ocr.txt` | PaddleOCR not installed in default CI; real OCR smoke not run | PARTIAL | Real PaddleOCR smoke pending external runtime |
 | BGE | BGE text embedding adapter shares the online pooling contract | `offline/embeddings.py`, `offline/text_ingestion.py` | `tests/offline/*`, `tests/test_offline_text_ingestion.py`; `scripts/smoke_bge_ingestion.py` | `embedding.text.model_path`/`model_revision`/`dimension` | CI uses deterministic embedder; real model smoke `EXTERNAL_MODEL_ASSET_REQUIRED` | PARTIAL | Real configured BGE smoke pending external asset |
 | CLIP | CLIP image embedding adapter (512d) shares the online preprocessing contract | `offline/embeddings.py` | `tests/offline/test_image_processing.py` | `embedding.image_clip.*` | Deterministic embedder integration; real CLIP smoke not run | PARTIAL | Real configured CLIP smoke pending external asset |
-| Qdrant text | Text writer with epoch/seal/staging lifecycle | `offline/text_ingestion.py` | `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py` | `embedding.text.collection`, `qdrant.*` | In-memory Qdrant + real Qdrant integration | VERIFIED | Keep lifecycle contract covered |
-| Qdrant image | Epoch-aware image writer; legacy points retrievable in `default` | `offline/qdrant_writer.py` | `tests/offline/test_image_processing.py` | `embedding.image_clip.collection` | In-memory Qdrant + real Qdrant integration | VERIFIED | Keep epoch-isolation regression coverage |
+| Qdrant text | Text writer with epoch/seal/staging lifecycle | `offline/text_ingestion.py` | `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py` | `embedding.text.collection`, `qdrant.*` | In-memory `QdrantClient` integration only; no real Qdrant service runtime test | VERIFIED | Keep lifecycle contract covered |
+| Qdrant image | Epoch-aware image writer; legacy points retrievable in `default` | `offline/qdrant_writer.py` | `tests/offline/test_image_processing.py` | `embedding.image_clip.collection` | In-memory `QdrantClient` integration only; no real Qdrant service runtime test | VERIFIED | Keep epoch-isolation regression coverage |
 | Elasticsearch | `cosmetics_docs` writer with explicit mapping and `search_after` epoch pagination | `offline/elasticsearch_writer.py` | `tests/offline/test_elasticsearch_writer.py`, `tests/offline/test_offline_end_to_end.py` | `elasticsearch.*`; `requirements.txt` pins client `<9` | Fake client unit tests (the fake rejects `_id` sorting) + real Elasticsearch integration; epoch reads sort on `chunk_id` | VERIFIED | Keep mapping and pagination-sort regression coverage |
 | Elasticsearch security | Compose enables `xpack.security.enabled=true`; online/offline clients prefer env credentials over `config.json` | `docker-compose.yml`, `retrieval/bm25_retriever.py`, `common/config.py` | `tests/test_docker_compose.py`, `scripts/validation/validate_es_auth.py` | `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` | Compose config parsing + local authenticated ES 8.11 (anon/wrong 401; writer mapping + `search_after`; BM25 online search). Cluster/TLS/multi-node not validated | VERIFIED | Production ES topology stays deployment-specific |
 | Source state | SQLite incremental state; content-hash and permission-mask authoritative, committed only after a successful snapshot | `offline/state_store.py`, `offline/snapshot_builder.py` | `tests/offline/test_state_store.py`, `tests/offline/test_reconciliation_fixes.py` | `knowledge_base.state_db_path` | Temp DB tests; runtime DB untracked | VERIFIED | Do not claim an mtime/size short-circuit |
@@ -56,7 +56,8 @@ large-corpus throughput has been established.
 | AdapterManager | PEFT lifecycle code integrates with `LLMClient` | `models/adapter_manager.py`, `models/llm_client.py` | `tests/test_adapter_manager.py`, `tests/test_llm_client.py` | `config.json` adapter path and `peft_config.auto_discover` | CI covers mocked/unit paths, not external weights | PARTIAL | Keep asset boundary explicit |
 | RRF | Weighted reciprocal rank fusion implemented in retrieval | `retrieval/parallel_recall.py`, `retrieval-service/rerank/rrf_fusion.py` | `tests/test_rrf_fusion.py`, `tests/test_parallel_recall.py` | Fusion weights in `config.json` | CI unit coverage; no relevance benchmark | VERIFIED | Claim implementation only |
 | BiEncoder | BiEncoder reranking implemented in the online pipeline | `retrieval/bi_encoder.py`, `core/pipeline.py` | `tests/test_bi_encoder_rerank.py` | BGE model paths in `config.json`; weights external | CI uses mocks; no production model run | PARTIAL | Model assets and evaluation are separate |
-| RAGAS | Harness/reporter/validator and a 300+ entry golden set exist; single-evaluation flow, real pipeline answer/contexts, failure accounting and report provenance implemented; no real quality score produced | `tests/evaluation/ragas_eval.py`, `ragas_report.py`, `validate_golden_set.py` | `tests/evaluation/test_ragas_eval.py`, `test_ragas_report.py` | Optional package omitted from default requirements; isolated `requirements-ragas.txt` (pinned, carries recorded advisories); `config.json` → `ragas` | CI deterministic evaluation guard passes without real RAGAS; real evaluator smoke and pipeline evaluation are BLOCKED (no `OPENAI_API_KEY`; latest `ragas` import-broken, importable `ragas 0.2.15` has advisories) | PARTIAL | Never present fallback zeros as a quality result; real eval pending key uptime |
+| RAGAS | Harness/reporter/validator and a 300+ entry golden set exist; single-evaluation flow, real pipeline answer/contexts, failure accounting and report provenance implemented; library `evaluate()` keeps a non-quality unavailable fallback, while `--require-ragas` fails fast with a non-zero exit and no quality report; no real quality score produced | `tests/evaluation/ragas_eval.py`, `ragas_report.py`, `validate_golden_set.py` | `tests/evaluation/test_ragas_eval.py`, `test_ragas_report.py` | Optional package omitted from default requirements; isolated `requirements-ragas.txt` (pinned, carries recorded advisories); `config.json` → `ragas` | CI deterministic evaluation guard passes without real RAGAS; real evaluator smoke and pipeline evaluation are BLOCKED (no `OPENAI_API_KEY`; latest `ragas` import-broken, importable `ragas 0.2.15` has advisories) | PARTIAL | `--require-ragas` missing dependency/credential must fail fast (exit 2/3) with no report; real eval pending an approved provider |
+| OpenTelemetry tracing | Tracing hook is on the online pipeline path; default install routes through the OTel SDK provider with no exporter configured (spans neither exported nor retained), falling back to an in-memory span buffer only when the OTel SDK is absent or initialization fails | `core/pipeline.py`, `monitoring/otel_tracer.py` | `tests/test_monitoring_otel.py` | `config.json` → `monitoring.jaeger.enabled=false`; `opentelemetry-api`/`-sdk` installed, no exporter package | CI exercises the tracer without an exporter; no Jaeger/OTLP backend verified | PARTIAL | Say "tracing hook wired, no exporter configured", not "OTel/Jaeger export closed loop" |
 | RBAC | Auth and bitmask authorization code exists under a uint32 mask contract; missing/malformed metadata fails closed, and text/image retrieval plus `/api/media/{doc_id}` are epoch/RBAC aware | `auth/`, `common/auth.py`, `retrieval/parallel_recall.py`, `api/routes.py` | `tests/test_bitmask_rbac.py`, `tests/test_retrieval_authorization_contract.py`, `tests/test_media_route.py`, `tests/offline/test_image_processing.py` | `config.json` RBAC section and environment settings | CI unit/API tests; no production policy audit | PARTIAL | Describe implemented paths without deployment claims |
 | Cache | Cache implementations and metrics exist; full invalidation model not certified | `cache/`, cache service, metrics code | `tests/test_cache.py`, `tests/test_metrics_endpoint.py` | Cache settings in `config.json` | CI unit tests; no workload benchmark | PARTIAL | Keep full design behavior unverified |
 | Frontend contract | React client reads auth/RBAC metadata and routes single-query, chat, session and stats panels to the monolith API | `frontend/src/App.jsx`, `api/routes_auth.py` metadata endpoint | `tests/test_auth_metadata.py`; frontend build is separate | `config.json` UI metadata | CI does not build the frontend here | PARTIAL | Frontend integration remains build/validation-scoped |
@@ -84,10 +85,25 @@ These are implemented in code but not validated against real external assets/run
 - Production Redis topology (cluster/Sentinel) and HTTP multi-worker behind a load balancer.
 - Non-nginx reverse proxies (Cloudflare / ALB / Traefik) — require deployment-specific configuration.
 
-Validated locally on 2026-10-02 (see [v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)):
+Validated locally on 2026-10-02 as `LOCAL_REAL_VALIDATION` (see
+[v2.5 runtime/security validation](validation/v2.5-runtime-security-validation.md)):
 real Redis multi-process session persistence and login rate limiting, real nginx proxy-trust resolution,
 authenticated Elasticsearch online + offline paths, and an authenticated Prometheus scrape. Local
-validation is not a production benchmark.
+`LOCAL_REAL_VALIDATION` is not a production benchmark, does not imply production HA/SLO, and must not be
+rewritten as "never validated".
+
+## Architecture debt — free-text semantic governance
+
+The drift guards in `scripts/check_repo_consistency.py` enforce repository-truth
+invariants by parsing natural-language documentation with scoped regexes. This
+works today, but free-text semantic matching has an unbounded edge space: every
+new phrasing requires another pattern, which is ongoing maintenance cost rather
+than a one-time fix.
+
+Future improvement (deliberately out of scope for this reconciliation):
+replace the free-text semantic regex governance with structured repository
+facts / a machine-readable truth schema, and validate documents against that
+schema instead of against prose.
 
 ## Offline history check
 

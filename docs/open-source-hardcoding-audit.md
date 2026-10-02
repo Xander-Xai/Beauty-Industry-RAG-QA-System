@@ -9,7 +9,7 @@ Audit base: original `7b03267` (`origin/main`), refreshed at the 2026-10-02 v2.5
 | Runtime settings | `common/config.py` loads root `config.json`, honors `CONFIG_PATH`, reads environment overrides, and applies `QDRANT_HOST`/`QDRANT_PORT` env overrides | VERIFIED in source |
 | Direct config access | `common/audit.py` independently opens root `config.json`; this path does not use the shared `CONFIG_PATH` resolver | PARTIAL; consider consolidating |
 | Secrets | `.env.example` documents environment settings; real secrets must not be committed | Requires deployment configuration |
-| Elasticsearch security | Compose enables `xpack.security.enabled=true`; clients read `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` from the env with `config.json` fallback | VERIFIED in source; real authenticated integration pending |
+| Elasticsearch security | Compose enables `xpack.security.enabled=true`; clients read `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` from the env with `config.json` fallback | VERIFIED in source; local authenticated integration validated (`LOCAL_REAL_VALIDATION`, single node) |
 | Trusted proxy / client IP | Login rate limiting uses the TCP peer unless it is inside `TRUSTED_PROXIES`; forwarded chains are walked right-to-left | VERIFIED in source + tests |
 | Generation topology | One shared 4B endpoint (`gpu1.models.vllm_4b`) serves rewrite + simple generation; no separate `vllm_rewrite`/`vllm_gen_4b` in current config | VERIFIED in source |
 | Runtime version | `config.json` → `system.version` is canonical and is checked against the latest dated changelog heading | Guarded |

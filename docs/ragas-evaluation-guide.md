@@ -54,7 +54,7 @@ export OPENAI_API_KEY=sk-your-key-here
 
 ### 2.3 运行评估
 
-一次 run 只调用 evaluator 一次；缺少依赖或 evaluator key 时明确失败且不生成报告。
+一次 run 只调用 evaluator 一次。库级 `evaluate()` 在 evaluator 不可用时保留 fallback（该结果不是质量结果，`_last_available=False`）；使用 `--require-ragas` 时，缺少依赖或 evaluator key 会 fail fast 并返回非零状态且不生成报告。
 
 ```bash
 # 评估器 smoke（使用数据集 reference 答案；不代表真实 pipeline 质量）
@@ -69,7 +69,7 @@ python -m tests.evaluation.ragas_eval --require-ragas --pipeline \
   --sample-ids 0000-ab12cd34 0007-ef56ab78
 ```
 
-退出码：缺 RAGAS 依赖 `2`；缺 evaluator key `3`；管线初始化失败 `4`；全部样本失败 `5`；
+使用 `--require-ragas` 时的退出码：缺 RAGAS 依赖 `2`；缺 evaluator key `3`；管线初始化失败 `4`；全部样本失败 `5`；
 成功 `0`。任何失败路径都不会写出“成功”报告。
 
 ### 2.4 查看报告
@@ -138,7 +138,7 @@ python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden
 ### 4.1 端到端管线评估
 
 ```bash
-python -m tests.evaluation.ragas_eval --pipeline --tag v1.0-review --dataset tests/evaluation/golden_set.jsonl
+python -m tests.evaluation.ragas_eval --require-ragas --pipeline --tag v1.0-review --dataset tests/evaluation/golden_set.jsonl
 ```
 
 管线模式会：
@@ -257,7 +257,7 @@ CI **分为两个职责分离的 job**（见 `.github/workflows/ci.yml`）：
 - golden set schema / 条目数 / 分类校验（`validate_golden_set`）
 - RAGAS harness 与 reporter 单元测试（`pytest tests/evaluation/`）
 
-这保证了“缺依赖时的降级路径”是可测试的、不会被误读为质量结果。
+这保证了“缺依赖时的失败路径”是可测试的：CLI 不会生成被误读为质量结果的报告。
 
 ### 6.2 real RAGAS evaluation（显式启用）
 
@@ -304,7 +304,7 @@ python -m tests.evaluation.ragas_eval \
 | 问题 | 原因 | 解决 |
 |------|------|------|
 | `No module named 'ragas'` / `langchain_community...vertexai` | RAGAS 未安装，或最新版 `ragas` 与 `langchain-community` 不兼容 | 在隔离 venv 中 `pip install -r requirements-ragas.txt`；CLI 报 UNAVAILABLE 且不生成报告 |
-| 所有分数为 0.0 | RAGAS 不可用时的降级标记 | CLI 会以非 0 退出且不写报告；用 `--require-ragas` 强制真实依赖 |
+| evaluate() 返回全 0 分数 | 库级 fallback，不是质量结果 | CLI 已 fail fast：以非 0 退出且不写报告；用 `--require-ragas` 强制真实依赖 |
 | `RAGAS BLOCKED` / exit 3 | 真实 evaluator 缺少 provider API key | `export OPENAI_API_KEY=...` |
 | `AuthenticationError` | API Key 无效或未配置 | 检查 `OPENAI_API_KEY` 与 provider/base_url |
 | 管线评估报错 / exit 4 | 基础设施未就绪 | 确保 vLLM / Qdrant / ES / Redis 在运行 |

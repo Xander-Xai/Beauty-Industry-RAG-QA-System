@@ -98,7 +98,7 @@ Compose 需要 Redis、Qdrant、Elasticsearch 等服务。启动前检查 compos
 - 可配置的 BiEncoder rerank 阶段及 CrossEncoder ensemble 代码。
 - PEFT `AdapterManager` 与 `LLMClient` 集成；是否实际加载 adapter 取决于本地模型、依赖和配置。仓库没有随附训练后的 adapter 权重。
 - QLoRA 微调脚本和小型样本数据；脚本存在不代表本仓库已验证训练结果。
-- RAGAS evaluation harness / reporter / validator 与 golden set 存在（最初 seed 27 条，当前已扩展到 300+ 条；实际条目数以 `validate_golden_set` 输出和 `golden_set.jsonl` 为准）。RAGAS 不在默认依赖中（等待上游安全修复）。缺失 RAGAS 时 evaluator 返回零分并附 `_warning` 降级标记：**零分表示“未运行”，不是质量结果**，当前没有经过验证的 RAGAS quality score。
+- RAGAS evaluation harness / reporter / validator 与 golden set 存在（最初 seed 27 条，当前已扩展到 300+ 条；实际条目数以 `validate_golden_set` 输出和 `golden_set.jsonl` 为准）。RAGAS 是隔离的可选 evaluator，不在默认依赖中（等待上游安全修复）。库级 `evaluate()` 保留 evaluator-unavailable fallback，该结果不是质量结果；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast** 并返回非零状态且不生成 quality report。当前仓库没有经过验证的真实 RAGAS quality score。
 
 这些能力的实现边界和证据列于 [audit](docs/repository-truth-audit.md)。性能数字如未附 benchmark 产物，不视为已验证结果。
 
