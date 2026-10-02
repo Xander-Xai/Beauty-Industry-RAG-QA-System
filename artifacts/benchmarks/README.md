@@ -23,6 +23,29 @@ python -m benchmarks.retrieval_benchmark --list-configs
 python -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 ```
 
+## Not wired yet: a real run still cannot produce a metric
+
+Two structural gaps mean `--config bm25` reports `BLOCKED` even on a machine with
+live Elasticsearch, Qdrant, BGE and CrossEncoder weights. Both are deliberate
+refusals rather than defects, but they are the work still outstanding for a first
+real artifact:
+
+1. **No real retrieval executor is constructed.** `run_configuration` receives a
+   `retriever_factory` only from tests. A CLI run passes none, so once every
+   probe passes the run still stops with `no real retrieval executor is wired for
+   this configuration yet`. The metric, aggregation, provenance and artifact code
+   is exercised; the BM25 / dense / RRF / BiEncoder / CrossEncoder executors that
+   would call the real clients are not written.
+2. **No corpus can satisfy the `corpus` backend.** `probe_corpus` always reports
+   unavailable, because the repository contains no corpus holding the golden-set
+   passages (262 distinct passages across 301 queries) and indexing the ground
+   truth itself would make every configuration score recall 1.0 by construction.
+   Unblocking this needs an independently sourced corpus plus a way to register
+   and verify it; inventing either would produce a meaningless number.
+
+Until both are resolved, `--list-configs` is the honest ceiling of what this
+harness can do, and no configuration may be reported as `EXECUTED`.
+
 ## Reading the output honestly
 
 * A run in which **no** configuration executed contains **no** retrieval-quality
