@@ -118,6 +118,8 @@ limitations
 Anything less is `PENDING`, a design target, or a production observation — never
 a repository benchmark.
 
+| Retrieval benchmark | `REPO_VERIFIED` (framework) / `PENDING` (result) | `benchmarks/`; `tests/benchmark/`; artifacts under `artifacts/benchmarks/`; no real benchmark artifact is committed, so no retrieval metric is claimed | A reproducible artifact produced by a real Elasticsearch/Qdrant run over a corpus that contains the ground-truth passages |
+
 ## Known claim risks to avoid
 
 - Describing `LOCAL_REAL_VALIDATION` as production cluster / HA / SLO.

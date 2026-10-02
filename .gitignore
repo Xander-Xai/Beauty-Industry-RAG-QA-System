@@ -90,3 +90,5 @@ PRD.md
 AUDIT_REPORT.md
 .coverage
 __pycache__/
+artifacts/benchmarks/*
+!artifacts/benchmarks/README.md

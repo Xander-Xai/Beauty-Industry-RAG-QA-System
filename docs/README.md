@@ -15,6 +15,8 @@
 
 - [RAGAS evaluation guide](ragas-evaluation-guide.md): offline quality-evaluation harness,
   golden set, reporter and CI boundary.
+- [Benchmark data quality](benchmark-data-quality.md): measured golden-set field coverage and the
+  buckets the retrieval benchmark deliberately does not produce.
 
 ## Validation
 
