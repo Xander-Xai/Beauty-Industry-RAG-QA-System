@@ -54,7 +54,7 @@ export OPENAI_API_KEY=sk-your-key-here
 
 ### 2.3 运行评估
 
-一次 run 只调用 evaluator 一次。库级 `evaluate()` 在 evaluator 不可用时保留 fallback（该结果不是质量结果，`_last_available=False`）；使用 `--require-ragas` 时，缺少依赖或 evaluator key 会 fail fast，返回非零状态且不生成报告。
+一次 run 只调用 evaluator 一次。库级 `evaluate()` 在 evaluator 不可用时保留 fallback（该结果不是质量结果，`_last_available=False`）；使用 `--require-ragas` 时，缺少依赖或 evaluator key 会 fail fast 并返回非零状态且不生成报告。
 
 ```bash
 # 评估器 smoke（使用数据集 reference 答案；不代表真实 pipeline 质量）

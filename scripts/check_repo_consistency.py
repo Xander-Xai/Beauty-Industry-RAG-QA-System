@@ -483,14 +483,17 @@ def ragas_zero_fallback_claims(text: str) -> list[str]:
     return claims
 
 
-_RAGAS_SEGMENT_SPLIT_RE = re.compile(r"[；;。！!？?\n]+")
+_RAGAS_SEGMENT_SPLIT_RE = re.compile(r"[；;。！!？?，,\n]+")
 
 # A status guarantee is negated when an auxiliary/negation directly governs it,
-# e.g. "does not fail fast", "will not return a non-zero status", "不会 fail fast",
+# e.g. "does not fail fast", "will not return a non-zero status", "fails to
+# return a non-zero status", "is unable to return", "不会 fail fast",
 # "不返回非零状态". A bare "not installed" earlier in the segment does not count.
 _STATUS_NEGATION_BEFORE_RE = re.compile(
     r"(?:does|do|will|would|should|could|can|is|are|was|were)\s+not\s+(?:\w+\s+){0,3}$|"
     r"(?:never|not)\s+(?:\w+\s+){0,3}$|"
+    r"(?:fails?|failed)\s+to\s+(?:\w+\s+){0,3}$|"
+    r"(?:is|are|was|were)?\s*unable\s+to\s+(?:\w+\s+){0,3}$|"
     r"(?:不|未|无法|不能|不会|未能)[^\n]{0,4}$",
     re.IGNORECASE,
 )
