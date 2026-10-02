@@ -141,11 +141,17 @@ def _ram_bytes() -> int | None:
     return int(page_size * page_count)
 
 
-def credential_env_state() -> dict[str, str]:
-    """Report only *whether* a credential variable is set — never its value."""
-    state: dict[str, str] = {}
+def credential_env_state() -> dict[str, bool]:
+    """Report only *whether* a credential variable is set — never its value.
+
+    The value must be a real boolean. ``sanitize`` reduces any value stored under
+    a credential-ish key to ``bool(...)``, so a sentinel string such as
+    ``"unset"`` would be truthy and every variable would be recorded as set.
+    Booleans survive that reduction unchanged.
+    """
+    state: dict[str, bool] = {}
     for name in CREDENTIAL_ENV_NAMES:
-        state[name] = "set" if os.environ.get(name) else "unset"
+        state[name] = bool(os.environ.get(name))
     return state
 
 

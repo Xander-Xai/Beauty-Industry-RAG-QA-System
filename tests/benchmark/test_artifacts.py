@@ -32,7 +32,7 @@ def test_environment_never_exposes_secret_values(monkeypatch):
     state = credential_env_state()
     assert set(state) == set(CREDENTIAL_ENV_NAMES)
     # only presence is reported
-    assert state["OPENAI_API_KEY"] == "set"
+    assert state["OPENAI_API_KEY"] is True
     assert "super-secret-value" not in json.dumps(rendered)
 
 

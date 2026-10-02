@@ -1942,6 +1942,30 @@ def test_credential_env_presence_stays_a_mapping(monkeypatch):
     assert all(isinstance(value, bool) for value in presence.values())
 
 
+def test_unset_credential_env_is_recorded_as_false(monkeypatch):
+    """An unset credential variable must not be reported as set.
+
+    ``sanitize`` reduces values under credential-ish keys to ``bool(...)``. A
+    sentinel string such as "unset" is truthy, so it would survive as ``True``
+    and every variable would be recorded as present regardless of the real
+    environment.
+    """
+    from benchmarks import provenance
+    from common import config as common_config
+
+    for name in provenance.CREDENTIAL_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "present-value")
+    monkeypatch.setattr(common_config, "get_config_dict", lambda: {"elasticsearch": {"host": "http://es:9200"}})
+
+    presence = provenance.effective_retrieval_config()["auth_env_presence"]
+    assert presence["OPENAI_API_KEY"] is True
+    assert presence["ELASTICSEARCH_PASSWORD"] is False
+    assert presence["REDIS_PASSWORD"] is False
+    # metadata.json and environment.json must agree about the same fact.
+    assert provenance.credential_env_state()["ELASTICSEARCH_PASSWORD"] is False
+
+
 def test_env_presence_changes_are_visible_to_the_hash(monkeypatch):
     import os
 
