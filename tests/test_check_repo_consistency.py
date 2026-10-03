@@ -2877,3 +2877,35 @@ def test_guard_fails_when_the_question_count_drifts(tmp_path, monkeypatch):
     check_enumerated_section_counts(errors)
     assert len(errors) == 1
     assert "六个问题" in errors[0]
+
+
+def test_bold_cross_reference_is_not_an_enumerated_item():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    # A reference to an item is prose, not a second item. Reading "**Q7**" as a
+    # marker made the section enumerate [1, 7] and reported a broken sequence,
+    # so ordinary documentation wording could fail the consistency check.
+    text = "## G\n\n**Q1 · a?**\n**Q2 · b?**\n\nSee **Q7** in the architecture note.\n"
+    assert enumerated_count_errors("README.md", text) == []
+    bare = "## G\n\n**Q1 · a?**\n**Q2 · b?**\n\n**Q7**\n"
+    assert enumerated_count_errors("README.md", bare) == []
+
+
+def test_english_count_beyond_ten_is_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    # The marker syntax accepts any Q<n>, so a list that outgrew "ten" must not
+    # outgrow the prose rule: "Twelve questions" over Q1..Q12 is the same drift.
+    items = "".join(f"**Q{n} · q?**\n" for n in range(1, 13))
+    errors = enumerated_count_errors("README.md", f"## G\n\nTwelve questions follow.\n\n{items}")
+    assert len(errors) == 1
+    assert "Twelve questions" in errors[0]
+    assert "12 items" in errors[0]
+    assert enumerated_count_errors("README.md", f"## G\n\n{items}") == []
+
+
+def test_compound_english_count_is_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    text = "## G\n\nThe guide answers twenty-one questions.\n\n**Q1 · a?**\n**Q2 · b?**\n"
+    assert "twenty-one questions" in enumerated_count_errors("README.md", text)[0]

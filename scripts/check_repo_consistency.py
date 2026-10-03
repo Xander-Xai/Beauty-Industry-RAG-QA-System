@@ -3021,16 +3021,29 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
 # that merely mentions "12 个问题" carries no enumerator and is never inspected.
 
 #: An enumeration item, e.g. ``**Q1 · 这个系统解决什么业务问题？**``. The bold
-#: marker is required so an inline reference such as ``Q12`` in prose or a
-#: heading like ``## Q12 标准回答`` is not read as a list item.
-_ENUMERATED_ITEM_RE = re.compile(r"\*\*Q(\d+)\b")
+#: marker has to *open the line* and be followed by whitespace plus the item
+#: title, so nothing but a real item line is counted: an inline cross-reference
+#: (``See **Q7**``), a bare ``**Q7**`` and a heading like ``## Q12 标准回答`` all
+#: leave the section with no enumeration, which is what makes the guard safe to
+#: run over every canonical document instead of tripping CI on ordinary prose.
+_ENUMERATED_ITEM_RE = re.compile(r"^\*\*Q(\d+)\s+\S", re.MULTILINE)
+
+#: English count words that may precede "questions". The list runs well past
+#: "ten" on purpose: the marker syntax accepts any ``Q<n>``, so a list that grows
+#: to twelve or twenty-one items must be guarded exactly like a shorter one.
+_COUNT_WORDS = (
+    "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen"
+    "|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty"
+    "|fifty|sixty|seventy|eighty|ninety|hundred|thousand"
+)
 
 #: Prose that restates how many items the list has, in the two languages this
 #: repository documents in. Spacing is optional because both "六个问题" and
-#: "7 个问题" occur in practice.
+#: "7 个问题" occur in practice, and a compound count such as "twenty-one
+#: questions" is accepted for the same reason.
 _RESTATED_COUNT_RE = re.compile(
     r"(?:[一二两三四五六七八九十]|\d+)\s*个\s*问题"
-    r"|\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+questions\b",
+    r"|\b(?:\d+|" + _COUNT_WORDS + r")(?:[-\s](?:" + _COUNT_WORDS + r"))?\s+questions\b",
     re.IGNORECASE,
 )
 
