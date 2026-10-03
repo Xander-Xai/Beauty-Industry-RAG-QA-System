@@ -1582,3 +1582,77 @@ def test_truth_audit_parser_ignores_tables_outside_the_audit():
     errors: list[str] = []
     guard.check_truth_audit(errors)
     assert errors == []
+
+
+def test_capability_rows_are_unique_in_current_evidence_map():
+    """The interview evidence map must give each capability exactly one row."""
+    from scripts.check_repo_consistency import check_capability_rows_are_unique
+
+    errors: list[str] = []
+    check_capability_rows_are_unique(errors)
+    assert errors == []
+
+
+def test_repeated_capability_row_is_flagged():
+    """Two rows for one capability are the drift, even when they agree."""
+    from scripts.check_repo_consistency import duplicate_capability_errors
+
+    text = (
+        "## Capability evidence\n"
+        "\n"
+        "| Capability | Level | Repository evidence | Upgrade path |\n"
+        "|---|---|---|---|\n"
+        "| Some exporter | `REPO_VERIFIED` | a.py | none |\n"
+        "| Other thing | `PENDING` | b.py | a real run |\n"
+        "| Some exporter | `PENDING` | c.py | a queried span |\n"
+    )
+    errors = duplicate_capability_errors("docs/x.md", text)
+    assert len(errors) == 1
+    assert "Some exporter" in errors[0]
+    assert "more than one row" in errors[0]
+
+
+def test_capability_names_are_compared_case_insensitively():
+    from scripts.check_repo_consistency import duplicate_capability_errors
+
+    text = (
+        "## Capability evidence\n"
+        "\n"
+        "| Capability | Level | Repository evidence | Upgrade path |\n"
+        "|---|---|---|---|\n"
+        "| Redis session persistence | `LOCAL_REAL_VALIDATION` | a.py | none |\n"
+        "| Redis Session Persistence | `PENDING` | b.py | a real run |\n"
+    )
+    assert duplicate_capability_errors("docs/x.md", text)
+
+
+def test_duplicate_detection_ignores_tables_after_the_capability_table():
+    """Later tables (e.g. historical business scale) are not capability rows."""
+    from scripts.check_repo_consistency import duplicate_capability_errors
+
+    text = (
+        "## Capability evidence\n"
+        "\n"
+        "| Capability | Level | Repository evidence | Upgrade path |\n"
+        "|---|---|---|---|\n"
+        "| One thing | `REPO_VERIFIED` | a.py | none |\n"
+        "\n"
+        "## Business scale\n"
+        "\n"
+        "| Metric | Value | Level | Boundary |\n"
+        "|---|---|---|---|\n"
+        "| One thing | 3000+ | `HISTORICAL_PRODUCTION` | not in this repository |\n"
+    )
+    assert duplicate_capability_errors("docs/x.md", text) == []
+
+
+def test_missing_capability_section_is_flagged(tmp_path, monkeypatch):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    (tmp_path / guard.INTERVIEW_EVIDENCE_MAP).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / guard.INTERVIEW_EVIDENCE_MAP).write_text("# Evidence\n\nNo table here.\n", encoding="utf-8")
+
+    errors: list[str] = []
+    guard.check_capability_rows_are_unique(errors)
+    assert any("Capability evidence" in error for error in errors)

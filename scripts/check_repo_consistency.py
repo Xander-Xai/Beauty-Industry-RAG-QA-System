@@ -1478,6 +1478,69 @@ def check_interview_baseline_exporter_split(errors: list[str]) -> None:
         )
 
 
+# ── 1b. one canonical row per capability in the evidence map ────────────────
+#
+# The capability table is the interview contract: every row is one claim with
+# one level. A capability listed twice is worse than a missing row, because the
+# two rows can disagree about the level and an interviewer quoting either one is
+# quoting an arbitrary pick. This guard derives the capability names from the
+# table itself, so it holds for any capability, present or future.
+
+INTERVIEW_EVIDENCE_MAP = "docs/interview-evidence-map.md"
+_CAPABILITY_SECTION = "## Capability evidence"
+
+
+def duplicate_capability_errors(name: str, text: str) -> list[str]:
+    """Return errors for capability names repeated in the main capability table."""
+    lines = text.splitlines()
+    section = next((i for i, line in enumerate(lines) if line.strip() == _CAPABILITY_SECTION), None)
+    if section is None:
+        return [f"{name}: is missing the {_CAPABILITY_SECTION!r} section"]
+
+    # Only the contiguous run of `|` lines that starts at the capability header is
+    # the main table; tables further down the document are prose, not capability
+    # rows, so parsing stops at the first non-table line after the header.
+    header = next(
+        (i for i in range(section + 1, len(lines)) if lines[i].strip().lower().startswith("| capability |")),
+        None,
+    )
+    if header is None:
+        return [f"{name}: {_CAPABILITY_SECTION!r} has no '| Capability |' header row"]
+
+    first_seen: dict[str, int] = {}
+    errors: list[str] = []
+    for offset in range(header + 1, len(lines)):
+        line = lines[offset]
+        if not line.startswith("|"):
+            if line.strip():
+                break
+            continue
+        if "---" in line:
+            continue
+        capability = line.strip("|").split("|")[0].strip()
+        if not capability:
+            continue
+        # Case-folded so a `Redis session` / `Redis Session` pair is one capability.
+        key = capability.casefold()
+        if key in first_seen:
+            errors.append(
+                f"{name}: capability {capability!r} has more than one row in "
+                f"{_CAPABILITY_SECTION!r} (lines {first_seen[key]} and {offset + 1}); "
+                "merge them into a single canonical row"
+            )
+            continue
+        first_seen[key] = offset + 1
+    return errors
+
+
+def check_capability_rows_are_unique(errors: list[str]) -> None:
+    """The interview evidence map must give each capability exactly one row."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return
+    errors.extend(duplicate_capability_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
+
+
 # ── 2. operational `rag_*` references ───────────────────────────────────────
 #
 # The exporter publishes raw counters and gauges. A ratio such as
@@ -2088,6 +2151,7 @@ def main() -> int:
     check_enterprise_readiness_coverage(errors)
     check_exporter_truth_contract(errors)
     check_interview_baseline_exporter_split(errors)
+    check_capability_rows_are_unique(errors)
     check_operational_metric_references(errors)
     check_audit_tracker_lineage(errors)
     check_observability_is_optional(errors)
