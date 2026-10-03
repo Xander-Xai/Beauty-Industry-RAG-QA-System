@@ -422,6 +422,13 @@ _PROHIBITION_FRAME_RE = re.compile(
 # Absence / not-yet wording in the neighbourhood of the match. Covers both the
 # "no result exists" form and the specific "no exporter configured" form that
 # denies a closed tracing loop.
+#
+# Two junctions here carry no separator at all and must not be routed through the
+# mandatory-gap rule above: the `un` prefix of "unconfigured", and the contraction
+# in "doesn't" / "don't". Both are spelled without a space in ordinary English, so
+# they are spelled out as their own zero-gap alternatives. _EMPHASIS_GAP itself is
+# unchanged, so every other junction still demands a separator and "notvalidated"
+# still does not read as "not validated".
 _NO_EVIDENCE_NEGATION_RE = re.compile(
     r"PENDING|EXTERNAL_MODEL_ASSET_REQUIRED|"
     r"未(?:有|能|执行|验证|产生|配置|运行)|尚未|没有|无可|不(?:会|能|得|是)|"
@@ -429,9 +436,9 @@ _NO_EVIDENCE_NEGATION_RE = re.compile(
     r"(?:validated|verified|measured|available|produced|configured|"
     r"reproduced|reproducible|closed)|"
     r"no" + _EMPHASIS_GAP + r"(?:such|exporter|OTLP|closed|real" + _EMPHASIS_GAP + r"benchmark|artifact)|"
-    r"exporter[^\n]{0,12}(?:not|un)" + _EMPHASIS_GAP + r"configured|"
+    r"exporter[^\n]{0,12}(?:not" + _EMPHASIS_GAP + r"|un)configured|"
     r"never|cannot|can't|without|must" + _EMPHASIS_GAP + r"not|"
-    r"do(?:es)?" + _EMPHASIS_GAP + r"not|do(?:es)?" + _EMPHASIS_GAP + r"n't|"
+    r"do(?:es)?" + _EMPHASIS_GAP + r"not|do(?:es)?" + _EMPHASIS_GAP + r"n't|do(?:es)?n't|"
     r"design" + _EMPHASIS_GAP + r"target|目标|blocked",
     re.IGNORECASE,
 )

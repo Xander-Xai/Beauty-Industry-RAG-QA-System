@@ -1722,6 +1722,59 @@ def test_denial_on_another_line_does_not_excuse_a_claim_on_this_line():
     assert forbidden_evidence_claims(text) == ["OTLP runtime closed loop"]
 
 
+# ── Some denials carry no space at all ──────────────────────────────────────
+#
+# _EMPHASIS_GAP requires at least one separator, which is exactly right between a
+# negation and its complement ("not verified", "**not** verified") but wrong for the
+# two forms that carry no separator by construction: the contraction "doesn't" and
+# the `un` prefix in "unconfigured". Requiring a gap there turned a truthful denial
+# into a reported claim and let a correct document fail the CI consistency check.
+# The gap must therefore stay mandatory everywhere except these two junctions,
+# where the zero-space form is the common spelling rather than the rare one.
+
+
+@pytest.mark.parametrize(
+    "denial",
+    [
+        "Real configured BGE does not count as validated.",
+        "Real configured BGE does **not** count as validated.",
+        "Real configured BGE doesn't count as validated.",
+        "The OTel closed loop needs an exporter, which is not configured.",
+        "The OTel closed loop needs an exporter, which is **not** configured.",
+        "The OTel closed loop needs an exporter, which is unconfigured.",
+    ],
+)
+def test_unspaced_negation_form_is_still_a_denial(denial):
+    assert forbidden_evidence_claims(denial) == []
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Real configured BGE counts as validated.",
+        "Real configured BGE **counts** as validated.",
+        "The OTel closed loop is verified: the exporter is configured and running.",
+        "The OTel closed loop is validated end to end.",
+    ],
+)
+def test_unspaced_negation_fix_does_not_excuse_an_affirmative_claim(claim):
+    """Negative control: only the denial is exempt, never the claim."""
+    assert forbidden_evidence_claims(claim)
+
+
+@pytest.mark.parametrize(
+    "denial",
+    [
+        "The OTel exporter is unconfigured by default.",
+        "Real configured BGE doesn't count as validated.",
+    ],
+)
+def test_unspaced_denial_does_not_carry_to_another_line(denial):
+    """A zero-gap denial is still scoped to its own line."""
+    text = f"{denial}\nThe OTLP runtime closed loop is verified.\n"
+    assert forbidden_evidence_claims(text) == ["OTLP runtime closed loop"]
+
+
 # ── Capability rows may only use evidence levels the vocabulary defines ──────
 #
 # The classification vocabulary is the source of truth for which evidence levels
