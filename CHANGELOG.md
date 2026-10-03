@@ -121,6 +121,20 @@ Changes present on `main` after the 2.3.0 release entry:
   redacts its `extra` payload, so both audit streams share one redaction rule.
 - `tests/test_locust_load.py` asserted `LatencyStats.p50 == 0.0` for an empty sample set,
   encoding a fabricated zero as the contract. Now asserted as `None`.
+- Qdrant validation evidence was stated in one direction only. The current docs claimed
+  in-memory `QdrantClient` coverage with no real-service run anywhere, while the PR #6/#7
+  development record contains a real local Qdrant service/container integration run performed
+  together with a real local Elasticsearch. Both facts are now recorded, in the evidence map,
+  the repository truth audit, the v2.5 validation record and the README, and kept apart:
+  - current reproducible coverage is the in-process `QdrantClient`;
+  - the PR #6/#7 execution is historical lineage with no committed artifact, so it is **not**
+    a current `LOCAL_REAL_VALIDATION` result;
+  - it establishes nothing about production Qdrant HA, cluster performance, model quality,
+    QPS or latency;
+  - upgrading the current evidence requires a **new** real-service run whose artifact is
+    committed. `scripts/check_repo_consistency.py` now rejects "only in-memory ever happened",
+    rejects "a real Qdrant service is currently verified" while no artifact is committed, and
+    rejects the repository holding both claims at once.
 
 ### Changed
 

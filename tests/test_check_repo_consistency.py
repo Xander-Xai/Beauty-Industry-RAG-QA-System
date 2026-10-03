@@ -19,6 +19,7 @@ from scripts.check_repo_consistency import (
     check_metrics_auth_contract,
     check_metrics_route_contract,
     check_prd_design_targets,
+    check_qdrant_evidence_reconciliation,
     check_ragas_failure_contract,
     check_rbac_mask_contract,
     check_stale_offline_claims,
@@ -2491,3 +2492,156 @@ def test_all_invalid_artifacts_stay_false(tmp_path, monkeypatch):
         {"a.json": {"x": 1}, "b.json": _otel_payload(status="BLOCKED"), "c.json": "not json at all"},
     )
     assert guard.otel_runtime_evidence_exists() is False
+
+
+# ── Qdrant evidence reconciliation ───────────────────────────────────────────
+#
+# Qdrant has two independent evidence states that the repository must be able to
+# hold at once: current reproducible coverage is the in-process `QdrantClient`,
+# while the PR #6/#7 development record contains a real local Qdrant
+# service/container execution. Neither "only in memory ever happened" nor "a real
+# service is currently verified" may be asserted, and the two must never be held
+# together.
+
+_QDRANT_ONLY_IN_MEMORY_CLAIMS = [
+    "Qdrant has only ever been tested in memory.",
+    "Only in-memory Qdrant was ever exercised.",
+    "Qdrant was never run against a real service.",
+    "The offline writers were never run against a real Qdrant service.",
+    "Qdrant 从未被真实服务验证过。",
+]
+
+_QDRANT_CURRENTLY_VERIFIED_CLAIMS = [
+    "The real Qdrant service was validated and verified end to end.",
+    "Qdrant is currently verified against a live container.",
+    "Qdrant is `LOCAL_REAL_VALIDATION` for the current tree.",
+    "本地真实 Qdrant 服务已验证通过。",
+]
+
+_QDRANT_HONEST_WORDING = [
+    # Current coverage, honestly scoped.
+    "Current deterministic coverage is the in-memory `QdrantClient`; no checked-in test targets a real Qdrant service.",
+    "The suite never connects to a real Qdrant service.",
+    # The required prohibition framing.
+    'Do not say "Qdrant has only ever been tested in memory." The historical run happened.',
+    # Lineage, which is neither a current result nor an erasure.
+    "Historically, PR #6/#7 ran the writers against a real local Qdrant service/container.",
+    # Absent result.
+    "The Qdrant service run carries no committed artifact, so it is not current evidence.",
+    "Upgrading the current evidence requires a new real Qdrant service run with a committed artifact.",
+]
+
+
+def test_qdrant_evidence_reconciliation_passes_for_current_docs():
+    errors: list[str] = []
+    check_qdrant_evidence_reconciliation(errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize("claim", _QDRANT_ONLY_IN_MEMORY_CLAIMS)
+def test_only_in_memory_ever_claim_is_flagged(claim):
+    from scripts.check_repo_consistency import qdrant_only_ever_claims
+
+    assert qdrant_only_ever_claims(claim)
+
+
+@pytest.mark.parametrize("claim", _QDRANT_CURRENTLY_VERIFIED_CLAIMS)
+def test_currently_verified_claim_is_flagged_without_an_artifact(claim):
+    from scripts.check_repo_consistency import qdrant_evidence_claim_errors
+
+    assert qdrant_evidence_claim_errors("doc.md", claim, artifact_exists=False)
+    # A committed real-service run is what would have to license the claim.
+    assert qdrant_evidence_claim_errors("doc.md", claim, artifact_exists=True) == []
+
+
+@pytest.mark.parametrize("text", _QDRANT_HONEST_WORDING)
+def test_two_state_wording_is_allowed(text):
+    from scripts.check_repo_consistency import (
+        qdrant_currently_verified_claims,
+        qdrant_only_ever_claims,
+    )
+
+    assert qdrant_only_ever_claims(text) == []
+    assert qdrant_currently_verified_claims(text) == []
+
+
+def test_a_denial_without_qdrant_is_not_matched():
+    from scripts.check_repo_consistency import qdrant_only_ever_claims
+
+    assert qdrant_only_ever_claims("Redis was never validated in production and QPS is unmeasured.") == []
+
+
+def test_holding_both_contradictory_qdrant_claims_is_rejected():
+    from scripts.check_repo_consistency import qdrant_contradiction_errors, qdrant_doc_claims
+
+    denials, verified = qdrant_doc_claims(
+        [
+            ("README.md", "Qdrant has only ever been tested in memory."),
+            ("docs/repository-truth-audit.md", "The real Qdrant service was validated and verified."),
+        ]
+    )
+    assert denials and verified
+    errors = qdrant_contradiction_errors(denials, verified)
+    assert errors
+    assert "self-contradictory" in errors[0]
+
+
+def test_one_direction_alone_is_not_a_contradiction():
+    from scripts.check_repo_consistency import qdrant_contradiction_errors, qdrant_doc_claims
+
+    denials, verified = qdrant_doc_claims([("README.md", "Qdrant has only ever been tested in memory.")])
+    assert verified == []
+    assert qdrant_contradiction_errors(denials, verified) == []
+
+
+def test_the_denial_direction_is_still_rejected_on_its_own():
+    from scripts.check_repo_consistency import qdrant_contradiction_errors, qdrant_doc_claims
+
+    denials, _ = qdrant_doc_claims([("README.md", "Qdrant has only ever been tested in memory.")])
+    assert qdrant_contradiction_errors(denials, []) == []
+    from scripts.check_repo_consistency import qdrant_evidence_claim_errors
+
+    assert qdrant_evidence_claim_errors("README.md", "Qdrant has only ever been tested in memory.", False)
+
+
+def test_no_qdrant_runtime_artifact_is_committed():
+    from scripts.check_repo_consistency import qdrant_runtime_artifact_exists
+
+    assert qdrant_runtime_artifact_exists() is False
+
+
+def test_a_qdrant_runtime_artifact_is_derived_from_disk(tmp_path):
+    from scripts.check_repo_consistency import qdrant_runtime_artifact_exists
+
+    run_dir = tmp_path / "artifacts" / "qdrant" / "2026-10-02-local"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text("{}", encoding="utf-8")
+    assert qdrant_runtime_artifact_exists(tmp_path) is True
+
+
+def test_lineage_anchor_requires_the_historical_run():
+    from scripts.check_repo_consistency import qdrant_lineage_errors
+
+    errors = qdrant_lineage_errors(
+        "docs/repository-truth-audit.md",
+        "Current Qdrant coverage is the in-memory client and no artifact is committed.",
+        artifact_exists=False,
+    )
+    assert any("PR #6/#7" in error for error in errors)
+
+
+def test_lineage_anchor_requires_the_artifact_gap_and_upgrade_path():
+    from scripts.check_repo_consistency import qdrant_lineage_errors
+
+    text = "PR #6/#7 ran the writers against a real local Qdrant service/container with Elasticsearch."
+    errors = qdrant_lineage_errors("docs/repository-truth-audit.md", text, artifact_exists=False)
+    assert any("new real-service run" in error for error in errors)
+    assert qdrant_lineage_errors("docs/repository-truth-audit.md", text, artifact_exists=True) == []
+
+
+def test_current_evidence_documents_satisfy_the_lineage_anchor():
+    from scripts.check_repo_consistency import ROOT, qdrant_lineage_errors
+
+    for name in ("docs/interview-evidence-map.md", "docs/repository-truth-audit.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert qdrant_lineage_errors(name, text, artifact_exists=False) == []

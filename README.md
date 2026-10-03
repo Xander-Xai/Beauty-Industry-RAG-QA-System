@@ -33,6 +33,7 @@
 ### 尚未作为生产结果验证
 
 - 真实模型质量、生产延迟/QPS、大规模语料吞吐。真实 BGE/CLIP/PaddleOCR smoke 需要本地模型资产；本仓库当前未执行，状态为 `EXTERNAL_MODEL_ASSET_REQUIRED`，不使用确定性测试 embedder 冒充真实模型验证。
+- Qdrant 的两个证据状态必须分开读：**当前可复现的回归覆盖是进程内 `QdrantClient`（`QdrantClient(":memory:")`）**，仓库中没有连接真实 Qdrant 服务的测试，也没有提交任何真实服务运行的产物；**PR #6/#7 的开发记录中包含一次真实本地 Qdrant 服务/容器的集成运行**（与真实本地 Elasticsearch 同一轮）。后者是开发沿革，不是当前可复现的 `LOCAL_REAL_VALIDATION`，也不代表生产 HA、集群性能、模型质量、QPS 或延迟已验证。升级为当前证据需要**新的**真实服务运行并提交可复现产物。详见 [audit](docs/repository-truth-audit.md#qdrant-evidence-current-coverage-and-historical-execution)。
 
 ### 常用离线命令
 

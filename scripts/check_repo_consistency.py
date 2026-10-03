@@ -34,7 +34,7 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2557,6 +2557,265 @@ def check_audit_tracker_lineage(errors: list[str]) -> None:
     errors.extend(audit_tracker_errors(path.read_text(encoding="utf-8")))
 
 
+# ── 4. Qdrant evidence reconciliation ───────────────────────────────────────
+#
+# Qdrant carries two independent evidence states, and the repository must be able
+# to say both without contradiction:
+#
+#   * current reproducible coverage is the in-process `QdrantClient`, and
+#   * the PR #6/#7 development record contains a real local Qdrant
+#     service/container execution, which is lineage rather than a current result.
+#
+# Two failure modes follow, and the repository must be able to hold neither:
+#
+#   * "Qdrant has only ever run in memory" — erases a recorded execution; and
+#   * "Qdrant is validated against a real service" — asserts current evidence
+#     that no committed artifact supports.
+#
+# The second is additionally derived from disk rather than hardcoded: while no
+# real-service artifact is committed, any current-verification claim is an
+# overclaim no matter how it is phrased. The two claims are also checked against
+# each other, so the repository cannot deny one while asserting the other.
+
+#: Where a current real-service Qdrant run would have to leave its evidence.
+#: Derived from the working tree, like the benchmark and OTLP evidence probes, so
+#: the required wording follows what is actually committed instead of a fixed
+#: expectation.
+QDRANT_RUNTIME_ARTIFACT_GLOB = "artifacts/qdrant/*/metadata.json"
+
+#: The documents that classify Qdrant evidence. Both must keep recording the
+#: historical execution, so deleting the lineage cannot pass silently.
+QDRANT_EVIDENCE_LINEAGE_DOCS = (
+    "docs/interview-evidence-map.md",
+    "docs/repository-truth-audit.md",
+)
+
+#: "Only in-memory ever happened." Each pattern needs an absolute quantifier over
+#: time, because the honest statement about current coverage — "in-memory
+#: `QdrantClient`; no checked-in test targets a real service" — carries no such
+#: quantifier and must stay allowed.
+_QDRANT_ONLY_EVER_PATTERNS = (
+    r"(?:only|just)[^\n]{0,40}\bever\b",
+    r"\bever\b[^\n]{0,24}(?:only|just)\b",
+    r"Qdrant[^\n]{0,48}(?:has|have|had|was|were|is|are)\s+never\b",
+    r"(?:never|not\s+ever)[^\n]{0,48}(?:real|live|container|daemon)\s+(?:Qdrant\s+)?(?:service|server|instance)",
+    r"(?:从未|从来没有|从来没)[^\n]{0,24}Qdrant",
+    r"Qdrant[^\n]{0,24}(?:从未|从来没)",
+)
+
+#: "Real service is currently verified." An affirmative result claim about a real
+#: Qdrant service, in the present tense.
+_QDRANT_CURRENTLY_VERIFIED_PATTERNS = (
+    r"(?:real|live|local)\s+Qdrant[^\n]{0,40}(?:service|server|container|instance|daemon)"
+    r"[^\n]{0,40}(?:validated|verified|confirmed|passed)",
+    r"Qdrant[^\n]{0,40}(?:currently|now|today)[^\n]{0,24}(?:validated|verified|confirmed|reproducible)",
+    r"Qdrant[^\n]{0,32}LOCAL_REAL_VALIDATION",
+    r"(?:真实|本地)[^\n]{0,16}Qdrant[^\n]{0,24}(?:服务|容器)[^\n]{0,16}(?:已验证|验证通过)",
+    r"Qdrant[^\n]{0,24}(?:当前)?(?:已验证|验证通过)",
+)
+
+#: A statement scoped to current coverage cannot erase history, so it is exempt
+#: from the only-in-memory check: "the suite never connects to a real Qdrant
+#: service" describes today's coverage, not the absence of a past run. The words
+#: ``in-memory``/``in process`` are deliberately *not* markers here — the wrong
+#: claim quotes them, so exempting on them would exempt the claim itself.
+_QDRANT_CURRENT_SCOPE_RE = re.compile(
+    r"current(?:ly)?\b|today\b|checked[-\s]in|committed\b|"
+    r"deterministic|regression|\bsuite\b|\btests?\b|artifact|reproduc|pending",
+    re.IGNORECASE,
+)
+
+#: The claim is historical lineage, not a current claim.
+_QDRANT_LINEAGE_SCOPE_RE = re.compile(
+    r"historical|lineage|PR\s*#6|#6/#7|PR\s*#7|development\s+(?:round|record|phase)|"
+    r"at\s+that\s+time|历史|沿革|开发过程",
+    re.IGNORECASE,
+)
+
+#: The claim says the result is absent, which is the honest current state.
+_QDRANT_NO_RESULT_SCOPE_RE = re.compile(
+    r"no\s+(?:checked[-\s]in\s+|committed\s+|current\s+|reproducible\s+|such\s+)?"
+    r"(?:artifact|test|evidence|result)|not\s+(?:a\s+)?(?:current\s+)?"
+    r"(?:reproducible|committed|verified|validated)|nothing\s+committed|"
+    r"PENDING|pending|NOT\s+RUN|out\s+of\s+scope|would\s+require|"
+    r"requires\s+a\s+new|upgrad\w+\s+[^.\n]{0,40}require|"
+    r"没有.{0,10}产物|无产物|尚未|未执行|不在本轮|需要新的|需要.?新",
+    re.IGNORECASE,
+)
+
+#: "Do not say X", written as a prohibition. A document is required to write the
+#: denial, so the frame is a signal to skip rather than a signal to fail. Matches
+#: gerunds too, because these documents quote the wrong claim inside prose. A bare
+#: ``Never`` is deliberately not a frame: "never validated against a real Qdrant
+#: service" is the erasure this guard exists to catch, not a prohibition.
+_QDRANT_PROHIBITION_FRAME_RE = re.compile(
+    r"\bClaim(?:ing|s)?\b|\bSays?\b|\bDo" + _EMPHASIS_GAP + r"not\b|\bDon't\b|"
+    r"\bMust" + _EMPHASIS_GAP + r"not\b|"
+    r"\bwrong\s+claim\b|\bboth\s+directions?\b|\bcollapse[sd]?\b|\berras\w+\b|"
+    r"不能说|不得|不要(?:说|声称)|不应(?:说|声称)",
+    re.IGNORECASE,
+)
+
+_QDRANT_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?\n]+|\.(?=\s|$)")
+
+
+def qdrant_runtime_artifact_exists(root: Path | None = None) -> bool:
+    """True when a committed real-service Qdrant run artifact is on disk."""
+    base = root or ROOT
+    return any(path.is_file() for path in base.glob(QDRANT_RUNTIME_ARTIFACT_GLOB))
+
+
+def _qdrant_claim_patterns(
+    text: str,
+    patterns: tuple[str, ...],
+    extra_exemption: re.Pattern[str] | None = None,
+) -> list[str]:
+    """Return the matched claim fragments for one Qdrant claim family.
+
+    Scoped to sentences that actually name Qdrant, so a generic "never" or
+    "verified" elsewhere in a document cannot trip the guard, and clause markers
+    that scope the sentence to lineage or to an absent result suppress the claim.
+    """
+    claims: list[str] = []
+    for sentence in _QDRANT_SENTENCE_SPLIT_RE.split(text):
+        if "qdrant" not in sentence.casefold():
+            continue
+        if _QDRANT_PROHIBITION_FRAME_RE.search(sentence):
+            continue
+        if _QDRANT_LINEAGE_SCOPE_RE.search(sentence) or _QDRANT_NO_RESULT_SCOPE_RE.search(sentence):
+            continue
+        if extra_exemption is not None and extra_exemption.search(sentence):
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match:
+                claims.append(match.group(0).strip())
+                break
+    return claims
+
+
+def qdrant_only_ever_claims(text: str) -> list[str]:
+    """Return claims that deny any real Qdrant service ever being exercised."""
+    return _qdrant_claim_patterns(text, _QDRANT_ONLY_EVER_PATTERNS, _QDRANT_CURRENT_SCOPE_RE)
+
+
+def qdrant_currently_verified_claims(text: str) -> list[str]:
+    """Return claims that a real Qdrant service is currently validated."""
+    return _qdrant_claim_patterns(text, _QDRANT_CURRENTLY_VERIFIED_PATTERNS)
+
+
+def qdrant_evidence_claim_errors(name: str, text: str, artifact_exists: bool) -> list[str]:
+    """Return the Qdrant evidence-claim errors for one document."""
+    errors: list[str] = []
+    denials = qdrant_only_ever_claims(text)
+    if denials:
+        errors.append(
+            f"{name}: denies that a real Qdrant service was ever exercised, which the PR #6/#7 "
+            f"development record contradicts: {denials}"
+        )
+    verified = qdrant_currently_verified_claims(text)
+    if verified and not artifact_exists:
+        errors.append(
+            f"{name}: claims a real Qdrant service is currently validated with no artifact on disk "
+            f"({QDRANT_RUNTIME_ARTIFACT_GLOB}): {verified}"
+        )
+    return errors
+
+
+def qdrant_doc_claims(docs: Iterable[tuple[str, str]]) -> tuple[list[str], list[str]]:
+    """Return ``(denials, verifications)`` across named documents.
+
+    Denials and verifications are collected together because the contradiction
+    between them is a repository-level property: two documents can disagree
+    without either one disagreeing with itself.
+    """
+    denials: list[str] = []
+    verified: list[str] = []
+    for name, text in docs:
+        denials.extend(f"{name}: {claim}" for claim in qdrant_only_ever_claims(text))
+        verified.extend(f"{name}: {claim}" for claim in qdrant_currently_verified_claims(text))
+    return denials, verified
+
+
+def qdrant_contradiction_errors(denials: list[str], verified: list[str]) -> list[str]:
+    """Reject holding both contradictory Qdrant claims at the same time."""
+    if not (denials and verified):
+        return []
+    return [
+        f"Qdrant evidence is self-contradictory: the repository both denies any real-service "
+        f"execution ({denials}) and claims one is verified ({verified})"
+    ]
+
+
+def qdrant_lineage_errors(name: str, text: str, artifact_exists: bool) -> list[str]:
+    """Require the classifying documents to keep recording both Qdrant states.
+
+    The historical-execution half is permanent: that run happened, so no
+    reconciliation may quietly stop recording it. The "no artifact yet" half is
+    derived from disk, because it stops being true the moment a real-service run
+    commits one.
+    """
+    errors: list[str] = []
+    records_run = re.search(r"#6/#7|PR\s*#6|PR\s*#7", text) and re.search(
+        r"real\s+(?:local\s+)?Qdrant\s+(?:service|container)|"
+        r"Qdrant[^\n]{0,24}(?:service|container)[^\n]{0,24}(?:run|execution)|"
+        r"真实[^\n]{0,12}Qdrant[^\n]{0,12}(?:服务|容器)",
+        text,
+        re.IGNORECASE,
+    )
+    if not records_run:
+        errors.append(
+            f"{name}: must record that the PR #6/#7 development round ran the writers against a real "
+            "local Qdrant service/container, alongside Elasticsearch"
+        )
+    if artifact_exists:
+        return errors
+    if not re.search(
+        r"no\s+(?:checked[-\s]in\s+|committed\s+|current\s+|reproducible\s+)?artifact|"
+        r"not\s+a\s+current\s+reproducible|"
+        r"requires?\s+a\s+new|new\s+real[-\s]service\s+run|"
+        r"没有.{0,10}产物|无产物|需要新的",
+        text,
+        re.IGNORECASE,
+    ):
+        errors.append(
+            f"{name}: must state that no artifact of the historical Qdrant run is committed and that "
+            "upgrading the current evidence requires a new real-service run"
+        )
+    return errors
+
+
+def check_qdrant_evidence_reconciliation(errors: list[str], root: Path | None = None) -> None:
+    """Qdrant must record both evidence states and claim neither away."""
+    base = root or ROOT
+    artifact_exists = qdrant_runtime_artifact_exists(base)
+
+    docs: list[tuple[str, str]] = []
+    for doc in CANONICAL_DOCS:
+        if not doc.exists():
+            continue
+        name = str(doc.relative_to(ROOT)) if doc.is_relative_to(ROOT) else str(doc)
+        text = doc.read_text(encoding="utf-8")
+        docs.append((name, text))
+        errors.extend(qdrant_evidence_claim_errors(name, text, artifact_exists))
+
+    denials, verified = qdrant_doc_claims(docs)
+    errors.extend(qdrant_contradiction_errors(denials, verified))
+
+    for name in QDRANT_EVIDENCE_LINEAGE_DOCS:
+        path = base / name
+        if not path.exists():
+            continue
+        errors.extend(qdrant_lineage_errors(name, path.read_text(encoding="utf-8"), artifact_exists))
+
+    if artifact_exists:
+        fail(
+            errors,
+            f"a Qdrant real-service artifact now exists under {QDRANT_RUNTIME_ARTIFACT_GLOB}; the "
+            "current-evidence wording is now stale and must be re-derived from that artifact",
+        )
+
+
 def check_canonical_runtime_is_not_observability_gated(errors: list[str]) -> None:
     """No forbidden platform may be required by the canonical deployment."""
     for name in ("docker-compose.yml", "Dockerfile"):
@@ -2778,6 +3037,7 @@ def main() -> int:
     check_interview_baseline_exporter_split(errors)
     check_capability_rows_are_unique(errors)
     check_evidence_levels_are_defined(errors)
+    check_qdrant_evidence_reconciliation(errors)
     check_evidence_vocabulary_is_canonical(errors)
     check_docs_index_vocabulary(errors)
     check_operational_metric_references(errors)

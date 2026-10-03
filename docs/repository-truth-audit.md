@@ -3,7 +3,13 @@
 ## Audit lineage
 
 - Original audit base: `7b03267ccd751178e5e1d69ec6a6ec97281b57cb` (`origin/main`, before the offline merges).
-- Historical merged PRs: #3, #4, #5, #6, #7.
+- Historical merged PRs: #3, #4, #5, #6, #7. PR #6/#7 also carry a real-service
+  integration execution in their development record: the offline writers were run
+  against a real local Qdrant service/container together with a real local
+  Elasticsearch (PR #7 exists because `search_after` sorted on `_id` and failed
+  against real Elasticsearch 8). No artifact of that run is committed here, so it
+  is development lineage, not a reproducible artifact — see
+  [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
 - v2.5 working-milestone runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
 - Interview truth and validation-evidence reconciliation merged via PR #15 (squash `aa189d9`).
@@ -76,8 +82,8 @@ or credential is unavailable here, so the capability is not validated.
 | OCR | OCR adapter and image pipeline exist; real PaddleOCR runtime is external | `offline/image_processor.py` | `tests/offline/test_image_processing.py` (deterministic provider) | `knowledge_base.ocr.*`; optional `offline/requirements-ocr.txt` | PaddleOCR not installed in default CI; real OCR smoke not run | `REPO_VERIFIED` (adapter) / `PENDING` (real runtime) | Real PaddleOCR smoke pending external runtime |
 | BGE | BGE text embedding adapter shares the online pooling contract | `offline/embeddings.py`, `offline/text_ingestion.py` | `tests/offline/*`, `tests/test_offline_text_ingestion.py`; `scripts/smoke_bge_ingestion.py` | `embedding.text.model_path`/`model_revision`/`dimension` | CI uses deterministic embedder; real model smoke `EXTERNAL_MODEL_ASSET_REQUIRED` | `REPO_VERIFIED` (adapter contract) / `PENDING` (real weights) | Real configured BGE smoke pending external asset |
 | CLIP | CLIP image embedding adapter (512d) shares the online preprocessing contract | `offline/embeddings.py` | `tests/offline/test_image_processing.py` | `embedding.image_clip.*` | Deterministic embedder integration; real CLIP smoke not run | `REPO_VERIFIED` (adapter contract) / `PENDING` (real weights) | Real configured CLIP smoke pending external asset |
-| Qdrant text | Text writer with epoch/seal/staging lifecycle | `offline/text_ingestion.py` | `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py` | `embedding.text.collection`, `qdrant.*` | In-memory `QdrantClient` integration only; no real Qdrant service runtime test | `REPO_VERIFIED` | Keep lifecycle contract covered |
-| Qdrant image | Epoch-aware image writer; legacy points retrievable in `default` | `offline/qdrant_writer.py` | `tests/offline/test_image_processing.py` | `embedding.image_clip.collection` | In-memory `QdrantClient` integration only; no real Qdrant service runtime test | `REPO_VERIFIED` | Keep epoch-isolation regression coverage |
+| Qdrant text | Text writer with epoch/seal/staging lifecycle | `offline/text_ingestion.py` | `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py` | `embedding.text.collection`, `qdrant.*` | Current deterministic coverage is the in-memory `QdrantClient` (`QdrantClient(":memory:")`); no checked-in test targets a real Qdrant service. PR #6/#7 records a real local Qdrant service/container run together with Elasticsearch — development lineage, not a reproducible artifact (see below) | `REPO_VERIFIED` (deterministic coverage) / `PENDING` (real-service artifact) | Keep lifecycle contract covered; keep the two Qdrant evidence states separate |
+| Qdrant image | Epoch-aware image writer; legacy points retrievable in `default` | `offline/qdrant_writer.py` | `tests/offline/test_image_processing.py` | `embedding.image_clip.collection` | Current deterministic coverage is the in-memory `QdrantClient`; the same PR #6/#7 historical real-service run applies and equally licenses no current result | `REPO_VERIFIED` (deterministic coverage) / `PENDING` (real-service artifact) | Keep epoch-isolation regression coverage |
 | Elasticsearch | `cosmetics_docs` writer with explicit mapping and `search_after` epoch pagination | `offline/elasticsearch_writer.py` | `tests/offline/test_elasticsearch_writer.py`, `tests/offline/test_offline_end_to_end.py` | `elasticsearch.*`; `requirements.txt` pins client `<9` | Fake client unit tests (the fake rejects `_id` sorting) + real Elasticsearch integration; epoch reads sort on `chunk_id` | `REPO_VERIFIED` | Keep mapping and pagination-sort regression coverage |
 | Elasticsearch security | Compose enables `xpack.security.enabled=true`; online/offline clients prefer env credentials over `config.json` | `docker-compose.yml`, `retrieval/bm25_retriever.py`, `common/config.py` | `tests/test_docker_compose.py`, `scripts/validation/validate_es_auth.py` | `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` | Compose config parsing + local authenticated ES 8.11 (anon/wrong 401; writer mapping + `search_after`; BM25 online search). Cluster/TLS/multi-node not validated | `LOCAL_REAL_VALIDATION` | Production ES topology stays deployment-specific |
 | Source state | SQLite incremental state; content-hash and permission-mask authoritative, committed only after a successful snapshot | `offline/state_store.py`, `offline/snapshot_builder.py` | `tests/offline/test_state_store.py`, `tests/offline/test_reconciliation_fixes.py` | `knowledge_base.state_db_path` | Temp DB tests; runtime DB untracked | `REPO_VERIFIED` | Do not claim an mtime/size short-circuit |
@@ -178,6 +184,11 @@ These are implemented in code but not validated against real external assets/run
 - Real configured CLIP model smoke — `EXTERNAL_MODEL_ASSET_REQUIRED`.
 - Real PaddleOCR smoke — external runtime not installed.
 - Real Airflow DAG execution — Airflow not installed.
+- Real Qdrant service/container validation as a reproducible artifact — none is committed. The
+  PR #6/#7 development round ran the writers against a real local Qdrant service, but no artifact of
+  that run exists here, so it cannot be re-executed or verified from this repository. A **new**
+  current real-service run is required to upgrade the current evidence; see
+  [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Production evaluation / benchmark — no reproducible artifact checked in. The benchmark framework
   exists and is `REPO_VERIFIED`; two structural blockers keep execution open: **no real retrieval
   executor is wired for CLI runs**, and **no independent corpus** covers the golden-set relevance
@@ -197,6 +208,40 @@ real Redis multi-process session persistence and login rate limiting, real nginx
 authenticated Elasticsearch online + offline paths, and an authenticated Prometheus scrape. Local
 `LOCAL_REAL_VALIDATION` is not a production benchmark, does not imply production HA/SLO, and must not be
 rewritten as "never validated".
+
+Qdrant is deliberately **not** in that list: that round covered Redis, nginx, Elasticsearch and
+Prometheus only. Qdrant's own two evidence states are recorded separately below, because "not in the
+2026-10-02 round" must not collapse into "never run against a real service".
+
+## Qdrant evidence: current coverage and historical execution
+
+Qdrant has two independent evidence states. Both are true. Collapsing them in either direction is
+the drift this section exists to prevent.
+
+| State | What it is | What it is not |
+|---|---|---|
+| Current reproducible coverage | The deterministic tests use the in-process `QdrantClient` (`QdrantClient(":memory:")`) in `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py`, `tests/offline/test_snapshot_builder.py`, `tests/offline/test_image_processing.py`. Re-running the suite reproduces exactly this. | It is not a real-service test, and no collected test connects to a Qdrant service. |
+| Historical development execution | The PR #6/#7 development record states the writers ran against a real local Qdrant service/container, in the same round as the real local Elasticsearch run that produced PR #7 (`search_after` sorted on `_id`, which real Elasticsearch 8 rejects). | It is not a current, reproducible `LOCAL_REAL_VALIDATION`: no artifact of that run is committed, and nothing here re-runs it. |
+
+Consequences, each of which is a boundary and not a goal:
+
+1. The historical execution is **development lineage**, not current reproducible evidence. It may be
+   described as "the offline writers were exercised against a real local Qdrant service during the
+   PR #6/#7 work"; it may not be described as "this repository validates Qdrant".
+2. It establishes **nothing** about production Qdrant HA, cluster topology or replication, cluster
+   or index performance, retrieval or model quality, QPS or latency. A single-host development run is
+   not a capacity or quality measurement.
+3. The `LOCAL_REAL_VALIDATION` recorded for Elasticsearch comes from the separate 2026-10-02 round in
+   [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md),
+   not from the PR #6/#7 round. The two are separate records and must not be merged.
+4. Upgrading the current evidence requires a **new** real-service run whose artifact is committed and
+   whose command is re-runnable, exactly as `tests/integration/test_es_auth_runtime.py` is for
+   Elasticsearch. Until then the Qdrant rows stay `REPO_VERIFIED` (deterministic coverage) /
+   `PENDING` (real-service artifact).
+5. Do not assert either direction as the only truth: "Qdrant has only ever been tested
+   in memory" is false by the historical record, and "Qdrant is validated against a
+   real service" is unsupported with nothing committed. `scripts/check_repo_consistency.py`
+   rejects both claims, and rejects the repository holding them at the same time.
 
 ## Known frontend dependency advisories (disclosed, not gating)
 
