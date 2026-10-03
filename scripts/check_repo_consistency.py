@@ -2175,7 +2175,36 @@ _CLASSIFICATION_TOKENS = (
 #: is deleted from this list in the same commit that closes it.
 OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
 
+#: Reconciliation lineage, anchored on the tracking issue and never on the PR
+#: number. A PR number ages out: the next PR exists long before the
+#: reconciliation it carries is finished, so "PR #N is the latest / current one"
+#: is not a repository-truth property and must never become an invariant. The
+#: issue number is stable, so the audit is checked against these instead.
+#:
+#: Both move in the same commit that closes the reconciliation issue and updates
+#: ``docs/repository-truth-audit.md``, exactly like
+#: ``OPEN_EXTERNAL_VALIDATION_TRACKERS`` above. A new reconciliation issue
+#: supersedes the previous one; it does not extend it.
+COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22)
+
+#: The single reconciliation issue the audit describes as the current open
+#: scope. At most one is active at a time.
+CURRENT_RECONCILIATION_ISSUE = 24
+
 _BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
+
+#: How a reconciliation bullet records completion. ``closed`` is accepted because
+#: the audit already spells #16's state as ``closed (`completed`)``.
+_COMPLETED_MARKER_RE = re.compile(r"\b(closed|completed|merged|resolved)\b", re.IGNORECASE)
+
+#: Present-tense "this reconciliation is happening now" phrasing. Deliberately
+#: about *scope*, never about a PR number.
+_CURRENT_SCOPE_RE = re.compile(r"\bthe\s+current\s+(one|scope|reconciliation|truth\b)", re.IGNORECASE)
+
+
+def _issue_reference(number: int) -> re.Pattern[str]:
+    """Match a Markdown or bare reference to an issue/PR number."""
+    return re.compile(r"#[\[({]?" + str(number) + r"\b")
 
 
 def _tracker_section(audit_text: str) -> str | None:
@@ -2184,12 +2213,21 @@ def _tracker_section(audit_text: str) -> str | None:
 
 
 def _tracker_bullets(tracker: str) -> list[str]:
-    """Split the tracker map into bullets, including hard-wrapped continuations."""
+    """Split the tracker map into bullets, including hard-wrapped continuations.
+
+    A bullet is the contiguous run of non-blank lines that starts at a list
+    marker. Trailing prose paragraphs inside the section are *not* part of the
+    last bullet: without the blank-line cut-off, a closing note such as
+    "Issue #N being completed records ..." is glued onto whichever bullet happens
+    to precede it, so a guard that looks up issue #N finds the note instead of
+    the row it meant to check.
+    """
     starts = [match.start() for match in _BULLET_SPLIT_RE.finditer(tracker)]
     if not starts:
         return [tracker]
     bounds = starts + [len(tracker)]
-    return [tracker[bounds[index] : bounds[index + 1]] for index in range(len(starts))]
+    bullets = [tracker[bounds[index] : bounds[index + 1]] for index in range(len(starts))]
+    return [re.split(r"(?m)^\s*$", bullet, maxsplit=1)[0] for bullet in bullets]
 
 
 def audit_tracker_errors(audit_text: str) -> list[str]:
@@ -2203,7 +2241,7 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
 
     bullets = _tracker_bullets(tracker)
     for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
-        reference = re.compile(r"#[\[({]?" + str(number) + r"\b")
+        reference = _issue_reference(number)
         line = next((bullet for bullet in bullets if reference.search(bullet)), None)
         if line is None:
             errors.append(
@@ -2217,6 +2255,38 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
                 f"repository truth audit: tracker #{number} must stay recorded as open; "
                 "no change in this repository produces that external evidence"
             )
+
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        bullet = next((item for item in bullets if _issue_reference(number).search(item)), None)
+        if bullet is None:
+            errors.append(
+                f"repository truth audit: completed reconciliation issue #{number} is no longer recorded "
+                "in the tracker map; if its reconciliation reopened, record it as the current scope and "
+                "remove it from COMPLETED_RECONCILIATION_ISSUES in scripts/check_repo_consistency.py"
+            )
+            continue
+        if not _COMPLETED_MARKER_RE.search(bullet):
+            errors.append(f"repository truth audit: reconciliation issue #{number} must stay recorded as completed")
+        if _CURRENT_SCOPE_RE.search(bullet):
+            errors.append(
+                f"repository truth audit: reconciliation issue #{number} is recorded as completed and must "
+                "not also be described as the current reconciliation scope; that is the drift this audit "
+                "exists to prevent"
+            )
+
+    current = next((item for item in bullets if _issue_reference(CURRENT_RECONCILIATION_ISSUE).search(item)), None)
+    if current is None:
+        errors.append(
+            f"repository truth audit: current reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is not "
+            "recorded in the tracker map; record it as the open scope, or move it to "
+            "COMPLETED_RECONCILIATION_ISSUES in the same commit that closes it"
+        )
+    elif _COMPLETED_MARKER_RE.search(current):
+        errors.append(
+            f"repository truth audit: reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is recorded as "
+            "completed but is still the current scope; move it to COMPLETED_RECONCILIATION_ISSUES in the "
+            "same commit that closes it"
+        )
 
     for area in DELIVERED_AUDIT_AREAS:
         row = next(

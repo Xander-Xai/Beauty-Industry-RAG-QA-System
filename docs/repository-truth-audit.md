@@ -14,10 +14,15 @@
   (completed) and delivered by PR #21 (merged): performance artifact contract, structured
   enterprise audit, SLO/runbook, Prometheus alert rules, Grafana dashboard, optional OTLP
   exporter.
-- [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) is the post-merge
-  truth reconciliation for those capabilities. It corrects documentation, one internal metric
-  naming defect and one unconsumed config block; it introduces no new capability and produces
-  no new external validation evidence.
+- Post-merge truth reconciliation for those capabilities was tracked in
+  [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) (completed) and
+  delivered by PR #23 (merged). It corrected documentation, one internal metric naming defect and
+  one unconsumed config block; it introduced no new capability and produced no new external
+  validation evidence.
+- [#24](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/24) is the current
+  final interview-readiness truth reconciliation; PR #25 carries its draft implementation. The
+  issue is the lineage anchor, never the PR — see
+  [Reconciliation lineage invariants](#reconciliation-lineage-invariants).
 - Runtime validation: see [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
@@ -111,7 +116,10 @@ recorded in [Audit lineage](#audit-lineage).
 - [#20](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/20) — enterprise-readiness
   evidence loop: completed, delivered by PR #21.
 - [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) — post-merge truth
-  reconciliation: the current one.
+  reconciliation: completed, delivered by PR #23.
+- [#24](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/24) — final
+  interview-readiness truth reconciliation: the current open scope, implemented in draft by
+  PR #25.
 - [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) — umbrella external
   validation (real BGE / CLIP / PaddleOCR / Airflow / benchmark artifact): open.
 - [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) — runtime / security
@@ -124,6 +132,28 @@ firing, no traced span. Those stay `PENDING` and keep #8, #12 and #18 open.
 Closing #16 records that the framework scope is delivered. It does **not** record a benchmark result:
 no artifact exists, so `benchmark result` stays `PENDING` and both execution blockers (no real
 retrieval executor, no independent corpus) stay open in #18.
+
+Closing #22 likewise records only that the post-merge truth reconciliation was delivered. It does
+**not** record external validation evidence, so #8, #12 and #18 stay open. #24 is a further
+reconciliation over the same surface; it is documentation and guard work, so completing it will not
+close those trackers either.
+
+## Reconciliation lineage invariants
+
+Reconciliation lineage is anchored on the **tracking issue**, never on the PR number.
+
+- The audit records each completed reconciliation issue as completed, and the one open
+  reconciliation issue as the current scope. `COMPLETED_RECONCILIATION_ISSUES` and
+  `CURRENT_RECONCILIATION_ISSUE` in `scripts/check_repo_consistency.py` hold those numbers.
+- Those numbers move in the same commit that closes the issue and updates this document, exactly
+  like `OPEN_EXTERNAL_VALIDATION_TRACKERS` above. A new reconciliation issue supersedes the
+  previous one; it does not extend it.
+- PR numbers stay historical narration in this document. No invariant may claim that a named PR is
+  the latest or the current one: that is false as soon as the next PR exists, and the next PR is
+  not a repository-truth event. Adding PR #26 invalidates nothing recorded here; closing #24 does,
+  and it fails the check loudly instead of going stale.
+- Completed-versus-current is the distinction that carries truth. A reconciliation can be merged
+  while every external-validation row stays `PENDING`, so the two are never derived from each other.
 
 ## External validation pending
 

@@ -1568,6 +1568,69 @@ def test_audit_tracker_requires_open_external_validation():
     assert audit_tracker_errors(closed)
 
 
+def test_audit_tracker_keeps_completed_reconciliation_off_the_current_scope():
+    """#22 completed while a doc still called it "the current one" is the drift to prevent."""
+    from scripts.check_repo_consistency import audit_tracker_errors
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert audit_tracker_errors(audit) == []
+
+    stale = audit.replace(
+        "reconciliation: completed, delivered by PR #23.",
+        "reconciliation: the current one.",
+    )
+    assert stale != audit, "fixture must actually re-open the completed scope"
+    assert any("must \n" not in error and "#22" in error for error in audit_tracker_errors(stale))
+
+
+def test_audit_tracker_requires_the_current_reconciliation_issue_to_be_recorded():
+    from scripts.check_repo_consistency import CURRENT_RECONCILIATION_ISSUE, audit_tracker_errors
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    reference = f"issues/{CURRENT_RECONCILIATION_ISSUE}) — final"
+
+    missing = audit.replace(f"[#{CURRENT_RECONCILIATION_ISSUE}]", "[#9999]").replace(reference, "issues/9999) — final")
+    assert missing != audit, "fixture must actually drop the current scope row"
+    assert any(str(CURRENT_RECONCILIATION_ISSUE) in error for error in audit_tracker_errors(missing))
+
+    closed = audit.replace("reconciliation: the current open scope", "reconciliation: completed")
+    assert closed != audit, "fixture must actually close the current scope"
+    assert any(str(CURRENT_RECONCILIATION_ISSUE) in error for error in audit_tracker_errors(closed))
+
+
+def test_reconciliation_lineage_is_not_pinned_to_a_pr_number():
+    """A newer PR must not falsify the lineage: the invariant is anchored on issues."""
+    from scripts.check_repo_consistency import audit_tracker_errors
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+
+    for extra in (
+        "- PR #26 — unrelated follow-up: open.\n",
+        "- PR #137 — a much later reconciliation: merged.\n",
+    ):
+        tracker_marker = "\n## Reconciliation lineage invariants"
+        assert tracker_marker in audit
+        grown = audit.replace(tracker_marker, extra + tracker_marker, 1)
+        assert grown != audit, "fixture must actually add the later PR row"
+        assert audit_tracker_errors(grown) == [], f"adding {extra.strip()!r} must not break the lineage"
+
+
+def test_completed_reconciliation_issues_must_stay_in_the_tracker_map():
+    from scripts.check_repo_consistency import COMPLETED_RECONCILIATION_ISSUES, audit_tracker_errors
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        assert f"issues/{number})" in audit, f"issue #{number} must stay recorded in the tracker map"
+
+    dropped = audit.replace(
+        "- [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) — post-merge truth\n"
+        "  reconciliation: completed, delivered by PR #23.\n",
+        "",
+    )
+    assert dropped != audit, "fixture must actually remove the completed row"
+    assert any("#22" in error for error in audit_tracker_errors(dropped))
+
+
 def test_audit_tracker_requires_a_classification_on_delivered_areas():
     from scripts.check_repo_consistency import _CLASSIFICATION_TOKENS, DELIVERED_AUDIT_AREAS, audit_tracker_errors
 
