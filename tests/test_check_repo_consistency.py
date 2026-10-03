@@ -2779,3 +2779,133 @@ def test_current_evidence_documents_satisfy_the_lineage_anchor():
     for name in ("docs/interview-evidence-map.md", "docs/repository-truth-audit.md"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert qdrant_lineage_errors(name, text, artifact_exists=False) == []
+
+
+def test_restated_question_count_is_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    text = (
+        "## 2-minute Interviewer Guide\n\n"
+        "给技术面试官的六个问题与本仓库可支撑的答案。\n\n"
+        "**Q1 · a?**\n**Q2 · b?**\n**Q3 · c?**\n"
+        "**Q4 · d?**\n**Q5 · e?**\n**Q6 · f?**\n**Q7 · g?**\n"
+    )
+    errors = enumerated_count_errors("README.md", text)
+    assert len(errors) == 1
+    # The message names the section, the offending phrase and the real item count.
+    assert "2-minute Interviewer Guide" in errors[0]
+    assert "六个问题" in errors[0]
+    assert "7 items" in errors[0]
+
+
+def test_deleting_the_count_clears_the_error():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    text = (
+        "## 2-minute Interviewer Guide\n\n"
+        "给技术面试官的问题清单与本仓库可支撑的答案。\n\n"
+        "**Q1 · a?**\n**Q2 · b?**\n**Q3 · c?**\n"
+    )
+    assert enumerated_count_errors("README.md", text) == []
+
+
+def test_english_count_restatement_is_also_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    text = "## Guide\n\nSix questions for the interviewer.\n\n**Q1 · a?**\n**Q2 · b?**\n"
+    assert enumerated_count_errors("README.md", text)
+    assert enumerated_count_errors("README.md", "## Guide\n\n**Q1 · a?**\n**Q2 · b?**\n") == []
+
+
+def test_spurious_numbered_reference_is_not_an_enumerated_item():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    # "Q12" in prose and a "## Q12 ..." heading are references, not list items, so
+    # the section carries no enumeration and the count rule never inspects it.
+    text = "## Q12 标准回答\n\nThis answers the twelve questions asked.\n\n## Other\n\nNo list here.\n"
+    assert enumerated_count_errors("docs/interview-architecture-baseline.md", text) == []
+
+
+def test_prose_mentioning_a_count_without_an_enumeration_is_not_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    text = "## Design\n\nWe collected 12 个问题 from users and fixed 3 of them.\n"
+    assert enumerated_count_errors("PRD.md", text) == []
+
+
+def test_skipped_or_duplicated_marker_is_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    skipped = "## G\n\n**Q1 · a?**\n**Q2 · b?**\n**Q4 · d?**\n"
+    assert "contiguous" in enumerated_count_errors("README.md", skipped)[0]
+    duplicated = "## G\n\n**Q1 · a?**\n**Q2 · b?**\n**Q2 · b again?**\n"
+    assert "contiguous" in enumerated_count_errors("README.md", duplicated)[0]
+
+
+def test_enumeration_before_the_first_level_two_heading_is_still_checked():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    text = "给技术面试官的六个问题。\n\n**Q1 · a?**\n**Q2 · b?**\n\n## Later\n\nNo items.\n"
+    assert enumerated_count_errors("README.md", text)
+
+
+def test_current_documents_do_not_restate_their_own_enumeration_counts():
+    from scripts.check_repo_consistency import ROOT, enumerated_count_errors
+
+    for name in ("README.md", "PRD.md"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert enumerated_count_errors(name, text) == []
+
+
+def test_guard_fails_when_the_question_count_drifts(tmp_path, monkeypatch):
+    from scripts.check_repo_consistency import check_enumerated_section_counts
+
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "## 2-minute Interviewer Guide\n\n"
+        "给技术面试官的六个问题与本仓库可支撑的答案。\n\n"
+        "**Q1 · a?**\n**Q2 · b?**\n**Q3 · c?**\n"
+        "**Q4 · d?**\n**Q5 · e?**\n**Q6 · f?**\n**Q7 · g?**\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.check_repo_consistency.CANONICAL_DOCS",
+        [readme],
+    )
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    errors: list[str] = []
+    check_enumerated_section_counts(errors)
+    assert len(errors) == 1
+    assert "六个问题" in errors[0]
+
+
+def test_bold_cross_reference_is_not_an_enumerated_item():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    # A reference to an item is prose, not a second item. Reading "**Q7**" as a
+    # marker made the section enumerate [1, 7] and reported a broken sequence,
+    # so ordinary documentation wording could fail the consistency check.
+    text = "## G\n\n**Q1 · a?**\n**Q2 · b?**\n\nSee **Q7** in the architecture note.\n"
+    assert enumerated_count_errors("README.md", text) == []
+    bare = "## G\n\n**Q1 · a?**\n**Q2 · b?**\n\n**Q7**\n"
+    assert enumerated_count_errors("README.md", bare) == []
+
+
+def test_english_count_beyond_ten_is_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    # The marker syntax accepts any Q<n>, so a list that outgrew "ten" must not
+    # outgrow the prose rule: "Twelve questions" over Q1..Q12 is the same drift.
+    items = "".join(f"**Q{n} · q?**\n" for n in range(1, 13))
+    errors = enumerated_count_errors("README.md", f"## G\n\nTwelve questions follow.\n\n{items}")
+    assert len(errors) == 1
+    assert "Twelve questions" in errors[0]
+    assert "12 items" in errors[0]
+    assert enumerated_count_errors("README.md", f"## G\n\n{items}") == []
+
+
+def test_compound_english_count_is_flagged():
+    from scripts.check_repo_consistency import enumerated_count_errors
+
+    text = "## G\n\nThe guide answers twenty-one questions.\n\n**Q1 · a?**\n**Q2 · b?**\n"
+    assert "twenty-one questions" in enumerated_count_errors("README.md", text)[0]
