@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -1840,6 +1841,308 @@ def test_levels_outside_the_capability_level_column_are_not_validated():
 
     text = _evidence_map(_TWO_LEVELS, "| Example | `REPO_VERIFIED` | uses `OTEL_EXPORT_ENABLED` | y |\n")
     assert undefined_evidence_level_errors("docs/x.md", text) == []
+
+
+# ── one canonical evidence taxonomy for every current document ─────────────
+#
+# The evidence map owns the vocabulary. A second status vocabulary in another
+# current document is what let `docs/repository-truth-audit.md` carry
+# `VERIFIED`/`PARTIAL`/`STALE` beside the evidence map's own levels, so these
+# tests pin both the one-way derivation of the legal levels and the cross-document
+# guard that keeps a new vocabulary from reappearing.
+
+_CANONICAL_LEVELS = {
+    "HISTORICAL_PRODUCTION",
+    "HISTORICAL",
+    "REPO_VERIFIED",
+    "LOCAL_REAL_VALIDATION",
+    "DESIGN_TARGET",
+    "PENDING",
+}
+
+#: The retired audit vocabulary, which must never classify anything again.
+_RETIRED_STATUSES = ("VERIFIED", "PARTIAL", "PLANNED", "BROKEN", "STALE")
+
+_CLASSIFYING_DOC = "# Doc\n\n| Area | Status |\n|---|---|\n| One | {status} |\n"
+
+
+def test_canonical_levels_come_from_the_evidence_map_not_a_python_copy():
+    from scripts.check_repo_consistency import _CLASSIFICATION_TOKENS, canonical_evidence_levels
+
+    parsed = canonical_evidence_levels()
+    assert parsed == _CANONICAL_LEVELS
+    # The module-level set the guards actually use is derived, not hand-listed, so
+    # adding a level stays a documentation-only edit.
+    assert _CLASSIFICATION_TOKENS == parsed
+
+
+def test_current_documents_use_only_canonical_evidence_levels():
+    from scripts.check_repo_consistency import check_evidence_vocabulary_is_canonical
+
+    errors: list[str] = []
+    check_evidence_vocabulary_is_canonical(errors)
+    assert errors == []
+
+
+def test_current_documents_are_the_ones_guarded():
+    from scripts.check_repo_consistency import EVIDENCE_VOCABULARY_DOCS
+
+    assert "docs/repository-truth-audit.md" in EVIDENCE_VOCABULARY_DOCS
+    assert "docs/interview-evidence-map.md" in EVIDENCE_VOCABULARY_DOCS
+    # Historical plans are not evidence and must not be dragged into the taxonomy.
+    assert not any(name.startswith("docs/superpowers/") for name in EVIDENCE_VOCABULARY_DOCS)
+
+
+@pytest.mark.parametrize("status", _RETIRED_STATUSES)
+def test_a_retired_status_word_is_not_a_canonical_level(status):
+    from scripts.check_repo_consistency import canonical_evidence_levels, evidence_classification_errors
+
+    assert status not in canonical_evidence_levels()
+    text = _CLASSIFYING_DOC.format(status=f"`{status}`")
+    errors = evidence_classification_errors("docs/x.md", text, _CANONICAL_LEVELS)
+    assert errors, f"{status} must not classify evidence any more"
+    assert status in errors[0]
+
+
+def test_an_invented_level_in_any_current_doc_is_flagged():
+    from scripts.check_repo_consistency import evidence_classification_errors
+
+    text = _CLASSIFYING_DOC.format(status="`RUNTIME_VERIFIED` (real Prometheus scrape)")
+    errors = evidence_classification_errors("docs/x.md", text, _CANONICAL_LEVELS)
+    assert len(errors) == 1
+    # The message must name the offending token and where it may be declared.
+    assert "RUNTIME_VERIFIED" in errors[0]
+    assert "Run outcomes that are not evidence levels" in errors[0]
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "`REPO_VERIFIED`",
+        "`REPO_VERIFIED` (framework) / `PENDING` (result)",
+        "`REPO_VERIFIED` (implementation) / `PENDING` (real weights + evaluation)",
+        "`DESIGN_TARGET` (PRD objectives) / `PENDING` (measured result)",
+        "`REPO_VERIFIED` (document) / `DESIGN_TARGET` (objectives)",
+    ],
+)
+def test_compound_canonical_levels_pass(status):
+    from scripts.check_repo_consistency import evidence_classification_errors
+
+    assert evidence_classification_errors("docs/x.md", _CLASSIFYING_DOC.format(status=status), _CANONICAL_LEVELS) == []
+
+
+def test_a_classification_cell_must_name_a_canonical_level():
+    """An opaque status in any language is a level nobody can audit."""
+    from scripts.check_repo_consistency import evidence_classification_errors
+
+    for status in ("基本可用（可选能力）", "Guarded by the consistency script", "n/a", ""):
+        errors = evidence_classification_errors("docs/x.md", _CLASSIFYING_DOC.format(status=status), _CANONICAL_LEVELS)
+        assert errors, f"{status!r} must not stand in for an evidence level"
+
+
+def test_a_document_with_no_classification_column_is_flagged():
+    """Renaming the column away is itself the drift: the guard must not be dodged."""
+    from scripts.check_repo_consistency import evidence_classification_errors
+
+    text = "# Doc\n\n| Area | Notes |\n|---|---|\n| One | `REPO_VERIFIED` |\n"
+    errors = evidence_classification_errors("docs/x.md", text, _CANONICAL_LEVELS)
+    assert len(errors) == 1
+    assert "no table with an evidence classification column" in errors[0]
+
+
+def test_a_chinese_classification_column_is_guarded_too():
+    from scripts.check_repo_consistency import evidence_classification_errors
+
+    good = "# Doc\n\n| 等级 | 含义 |\n|---|---|\n| `REPO_VERIFIED` | 主链路 |\n"
+    assert evidence_classification_errors("docs/x.md", good, _CANONICAL_LEVELS) == []
+
+    drifted = "# Doc\n\n| 等级 | 含义 |\n|---|---|\n| 基本可用 | 可选能力 |\n"
+    errors = evidence_classification_errors("docs/x.md", drifted, _CANONICAL_LEVELS)
+    assert len(errors) == 1
+    assert "names no canonical evidence level" in errors[0]
+
+
+def test_prose_and_non_classification_columns_are_not_validated():
+    """Only classification cells are evidence levels; honest prose must survive."""
+    from scripts.check_repo_consistency import evidence_classification_errors
+
+    text = (
+        "# Doc\n\n"
+        "Status words in prose such as PARTIAL or a real `EXTERNAL_MODEL_ASSET_REQUIRED`\n"
+        "reason are not classifications.\n\n"
+        "| Area | Status | Evidence basis |\n"
+        "|---|---|---|\n"
+        "| One | `REPO_VERIFIED` | run status `PARTIAL` from `OTEL_EXPORT_ENABLED` |\n"
+    )
+    assert evidence_classification_errors("docs/x.md", text, _CANONICAL_LEVELS) == []
+
+
+def test_run_outcomes_are_declared_and_are_not_evidence_levels():
+    from scripts.check_repo_consistency import canonical_evidence_levels, run_outcome_tokens
+
+    outcomes = run_outcome_tokens()
+    assert {"EXECUTED", "PARTIAL", "BLOCKED", "PASS", "NOT RUN"} <= outcomes
+    # Declaring a run outcome must not quietly widen the evidence vocabulary.
+    assert outcomes & canonical_evidence_levels() == set()
+
+
+def test_a_run_outcome_token_does_not_satisfy_a_classification_cell():
+    """`PARTIAL` in an evidence cell is exactly the drift this reconciliation removed."""
+    from scripts.check_repo_consistency import evidence_classification_errors, run_outcome_tokens
+
+    assert "PARTIAL" in run_outcome_tokens()
+    errors = evidence_classification_errors("docs/x.md", _CLASSIFYING_DOC.format(status="`PARTIAL`"), _CANONICAL_LEVELS)
+    assert len(errors) == 1
+    assert "PARTIAL" in errors[0]
+    assert "REPO_VERIFIED" in errors[0]
+
+
+def test_unreadable_vocabulary_fails_closed_instead_of_accepting_anything():
+    from scripts.check_repo_consistency import evidence_classification_errors
+
+    errors = evidence_classification_errors("docs/x.md", _CLASSIFYING_DOC.format(status="`REPO_VERIFIED`"), set())
+    assert len(errors) == 1
+    assert "missing or unparsable" in errors[0]
+
+
+def test_current_truth_audit_status_column_uses_canonical_levels():
+    """The retired vocabulary must not survive anywhere in the audit table."""
+    from scripts.check_repo_consistency import canonical_evidence_levels
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    lines = audit.splitlines()
+    header = next(index for index, line in enumerate(lines) if line.startswith("| Area |"))
+    columns = [part.strip().lower() for part in lines[header].strip("|").split("|")]
+    status_column = columns.index("status")
+
+    checked = 0
+    for line in lines[header + 1 :]:
+        if not line.startswith("|"):
+            if line.strip():
+                break
+            continue
+        if "---" in line:
+            continue
+        cells = [part.strip() for part in line.strip("|").split("|")]
+        checked += 1
+        levels = re.findall(r"`([A-Z][A-Z0-9_]+)`", cells[status_column])
+        assert levels, f"{cells[0]} has no canonical evidence level"
+        assert set(levels) <= canonical_evidence_levels(), f"{cells[0]} uses a non-canonical level: {levels}"
+    assert checked >= len(REQUIRED_AUDIT_AREAS)
+
+
+def test_truth_audit_rejects_a_retired_status_word(tmp_path):
+    audit = tmp_path / "audit.md"
+    audit.write_text(
+        "Reconciled candidate: `HEAD`\nPost-reconciliation verification date: 2026-10-02\n\n"
+        "| Area | Claim | Status |\n|---|---|---|\n"
+        "| Application | claim | `PARTIAL` |\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_truth_audit(errors, audit)
+    assert any("PARTIAL" in error for error in errors)
+
+
+def test_truth_audit_rejects_a_status_that_names_no_level(tmp_path):
+    audit = tmp_path / "audit.md"
+    audit.write_text(
+        "Reconciled candidate: `HEAD`\nPost-reconciliation verification date: 2026-10-02\n\n"
+        "| Area | Claim | Status |\n|---|---|---|\n"
+        "| Application | claim | Implemented and tested |\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_truth_audit(errors, audit)
+    assert any("names no canonical evidence level" in error for error in errors)
+
+
+def test_truth_audit_rejects_an_existing_offline_capability_as_historical(tmp_path):
+    audit = tmp_path / "audit.md"
+    audit.write_text(
+        "Reconciled candidate: `HEAD`\nPost-reconciliation verification date: 2026-10-02\n\n"
+        "| Area | Claim | Status |\n|---|---|---|\n"
+        "| Qdrant text | claim | `HISTORICAL` |\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_truth_audit(errors, audit)
+    assert any("Qdrant text" in error and "HISTORICAL" in error for error in errors)
+
+
+def test_truth_audit_accepts_canonical_levels(tmp_path):
+    audit = tmp_path / "audit.md"
+    audit.write_text(
+        "Reconciled candidate: `HEAD`\nPost-reconciliation verification date: 2026-10-02\n\n"
+        "| Area | Claim | Status |\n|---|---|---|\n"
+        "| Qdrant text | claim | `REPO_VERIFIED` (writer) / `PENDING` (real service) |\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+    check_truth_audit(errors, audit)
+    assert not any("status" in error for error in errors)
+
+
+# ── the docs index inventory must equal the canonical vocabulary ───────────
+
+_DOCS_INDEX = (
+    "# Index\n\n"
+    "## Evidence vocabulary\n\n"
+    "{bullets}\n\n"
+    "Prose that names run outcomes such as `PARTIAL` and `NOT RUN` is not inventory.\n\n"
+    "## Canonical / Current\n"
+)
+
+
+def test_docs_index_inventory_matches_the_canonical_vocabulary():
+    from scripts.check_repo_consistency import check_docs_index_vocabulary
+
+    errors: list[str] = []
+    check_docs_index_vocabulary(errors)
+    assert errors == []
+
+
+def test_docs_index_inventory_must_list_every_level():
+    from scripts.check_repo_consistency import docs_index_vocabulary_errors
+
+    bullets = "".join(f"- `{level}` — meaning\n" for level in sorted(_CANONICAL_LEVELS - {"HISTORICAL"}))
+    errors = docs_index_vocabulary_errors("docs/README.md", _DOCS_INDEX.format(bullets=bullets), _CANONICAL_LEVELS)
+    assert len(errors) == 1
+    assert "HISTORICAL" in errors[0]
+
+
+def test_docs_index_inventory_must_not_invent_a_level():
+    from scripts.check_repo_consistency import docs_index_vocabulary_errors
+
+    bullets = "".join(f"- `{level}` — meaning\n" for level in sorted(_CANONICAL_LEVELS))
+    bullets += "- `PARTIALLY_VERIFIED` — invented\n"
+    errors = docs_index_vocabulary_errors("docs/README.md", _DOCS_INDEX.format(bullets=bullets), _CANONICAL_LEVELS)
+    assert len(errors) == 1
+    assert "PARTIALLY_VERIFIED" in errors[0]
+
+
+def test_docs_index_inventory_ignores_run_outcome_prose():
+    """The inventory is the bullet list; naming run outcomes in prose is allowed."""
+    from scripts.check_repo_consistency import docs_index_vocabulary_errors
+
+    bullets = "".join(f"- `{level}` — meaning\n" for level in sorted(_CANONICAL_LEVELS))
+    assert docs_index_vocabulary_errors("docs/README.md", _DOCS_INDEX.format(bullets=bullets), _CANONICAL_LEVELS) == []
+
+
+def test_docs_index_inventory_fails_closed_without_the_vocabulary():
+    from scripts.check_repo_consistency import docs_index_vocabulary_errors
+
+    errors = docs_index_vocabulary_errors("docs/README.md", _DOCS_INDEX.format(bullets=""), set())
+    assert len(errors) == 1
+    assert "missing or unparsable" in errors[0]
+
+
+def test_docs_index_without_a_vocabulary_section_is_flagged():
+    from scripts.check_repo_consistency import docs_index_vocabulary_errors
+
+    errors = docs_index_vocabulary_errors("docs/README.md", "# Index\n\n## Canonical / Current\n", _CANONICAL_LEVELS)
+    assert len(errors) == 1
+    assert "Evidence vocabulary" in errors[0]
 
 
 # ── the retired Jaeger thrift-agent config must not come back ──────────────

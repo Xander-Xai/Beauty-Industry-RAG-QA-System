@@ -10,6 +10,15 @@ stale latest-merged-main references), current docs that still present the
 retired dual-4B topology, and an invalid/absent repository truth audit. It does
 not flag historical CHANGELOG text or historical implementation plans.
 
+It also enforces one evidence vocabulary. ``docs/interview-evidence-map.md``
+owns the canonical taxonomy, and every current interview-facing or
+repository-truth document must classify its claims with those levels and no
+others; the docs index inventory must equal that taxonomy exactly. A retired
+status word such as ``VERIFIED`` or ``PARTIAL`` is not a level, and a run
+outcome such as ``BLOCKED`` does not satisfy a classification. The legal levels
+are parsed out of the vocabulary table rather than restated here, so the code can
+never hold a second copy that quietly diverges.
+
 The truth audit is expected to resolve its candidate from ``HEAD`` and to carry
 an ISO ``YYYY-MM-DD`` verification date. The date is validated for shape only;
 the guard never hardcodes a specific date or depends on the current date, a
@@ -40,7 +49,6 @@ CANONICAL_DOCS = [
     *sorted((ROOT / "docs" / "validation").glob("*.md")),
     ROOT / "artifacts/benchmarks/README.md",
 ]
-STATUSES = {"VERIFIED", "PARTIAL", "PLANNED", "BROKEN", "STALE", "HISTORICAL"}
 
 # Current operator-facing docs that must not regress to "offline ingestion is
 # missing" claims. Historical docs (CHANGELOG, the audit's history section) and
@@ -1829,6 +1837,252 @@ def check_evidence_levels_are_defined(errors: list[str]) -> None:
     errors.extend(undefined_evidence_level_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
 
 
+# ── 1d. one canonical taxonomy for every current document ──────────────────
+#
+# The evidence map owns the vocabulary. A second, parallel status vocabulary in
+# another current document is the drift this guard removes: two vocabularies for
+# one kind of claim means two documents can disagree about the same evidence, and
+# a reader cannot tell which one is authoritative. That is exactly how
+# `docs/repository-truth-audit.md` ended up with `VERIFIED`/`PARTIAL`/`STALE`
+# beside the evidence map's own levels.
+#
+# The legal levels are read out of the vocabulary table instead of being restated
+# in Python. A Python copy would be a third place to forget to update, which is how
+# the two vocabularies diverged in the first place.
+
+#: The section of the evidence map that declares run outcomes, i.e. tokens that
+#: describe one execution rather than an evidence level.
+_RUN_OUTCOME_SECTION = "## Run outcomes that are not evidence levels"
+
+#: Column headers that carry an evidence classification. Deliberately narrow: a
+#: `Claim`, `Evidence basis` or prose cell is not a classification, and validating
+#: those would reject honest prose. The Chinese headers are included because this
+#: repository documents its own architecture baseline bilingually, and a
+#: Chinese-labelled status column is where a second vocabulary would reappear.
+EVIDENCE_COLUMN_HEADERS = frozenset(
+    {
+        "level",
+        "status",
+        "classification",
+        "evidence level",
+        "evidence classification",
+        "truth status",
+        "等级",
+        "状态",
+    }
+)
+
+#: A classification token: backticked upper snake case. This is the only shape an
+#: evidence level is written in, so a lowercase identifier or a prose sentence can
+#: never be mistaken for one.
+_CLASSIFICATION_TOKEN_RE = re.compile(r"`([A-Z][A-Z0-9_]+)`")
+
+#: A vocabulary token, which may contain single spaces so that a multi-word run
+#: outcome such as `NOT RUN` is still parsed as one declared token.
+_VOCABULARY_TOKEN_RE = re.compile(r"`([A-Za-z][A-Za-z0-9_]*(?: [A-Za-z][A-Za-z0-9_]*)*)`")
+
+#: A table row separator, e.g. `|---|---|`.
+_ROW_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
+
+#: The canonical level meaning "a superseded artifact in this repository". Named
+#: separately because the guard below asserts a *semantic* rule about it, not a
+#: vocabulary rule.
+SUPERSEDED_LEVEL = "HISTORICAL"
+
+
+def _evidence_vocabulary_tokens(text: str, heading: str, first_column: str) -> set[str]:
+    """Backticked tokens of the first column of the first table under ``heading``."""
+    lines = text.splitlines()
+    section = _section_index(lines, heading)
+    if section is None:
+        return set()
+    header = _header_row_index(lines, section, first_column)
+    if header is None:
+        return set()
+    column = _column_index(_row_cells(lines[header]), first_column)
+    if column is None:
+        return set()
+    tokens: set[str] = set()
+    for _, cells in _table_cells(lines, header):
+        if column < len(cells):
+            tokens.update(_VOCABULARY_TOKEN_RE.findall(cells[column]))
+    return tokens
+
+
+def canonical_evidence_levels() -> set[str]:
+    """The evidence levels this repository defines, parsed from the canonical table."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return set()
+    return _evidence_vocabulary_tokens(path.read_text(encoding="utf-8"), _VOCABULARY_SECTION, "level")
+
+
+def run_outcome_tokens() -> set[str]:
+    """Tokens that describe one execution rather than an evidence level."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return set()
+    return _evidence_vocabulary_tokens(path.read_text(encoding="utf-8"), _RUN_OUTCOME_SECTION, "token")
+
+
+def _pipe_table_blocks(lines: list[str]) -> Iterator[tuple[int, int]]:
+    """Yield (start, end) line indices of each maximal run of consecutive `|` rows."""
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.startswith("|"):
+            if start is None:
+                start = index
+        elif start is not None:
+            yield start, index
+            start = None
+    if start is not None:
+        yield start, len(lines)
+
+
+def evidence_classification_errors(name: str, text: str, legal: set[str]) -> list[str]:
+    """Return errors for classification cells naming something outside ``legal``.
+
+    Every classification column of every table in the document is checked, so a
+    second status vocabulary cannot be introduced by adding a table to a document
+    that already had one, and no document is exempt because its level column
+    happens to be spelled differently.
+    """
+    if not legal:
+        return [
+            f"{name}: cannot validate evidence classifications: the canonical vocabulary in "
+            f"{INTERVIEW_EVIDENCE_MAP} is missing or unparsable"
+        ]
+
+    lines = text.splitlines()
+    errors: list[str] = []
+    classified_tables = 0
+    for start, _ in _pipe_table_blocks(lines):
+        columns = _row_cells(lines[start])
+        if any(_ROW_SEPARATOR_CELL_RE.match(cell) for cell in columns):
+            continue
+        classified = [position for position, cell in enumerate(columns) if cell.lower() in EVIDENCE_COLUMN_HEADERS]
+        if not classified:
+            continue
+        classified_tables += 1
+        for line_number, cells in _table_cells(lines, start):
+            for position in classified:
+                if position >= len(cells):
+                    errors.append(
+                        f"{name}: line {line_number}: malformed row; the evidence classification column is missing"
+                    )
+                    continue
+                cell = cells[position]
+                tokens = _CLASSIFICATION_TOKEN_RE.findall(cell)
+                for token in tokens:
+                    if token in legal:
+                        continue
+                    errors.append(
+                        f"{name}: line {line_number}: {token!r} is not a canonical evidence level; "
+                        f"use one of {sorted(legal)}, or declare {token!r} as a run outcome in "
+                        f"{_RUN_OUTCOME_SECTION!r}"
+                    )
+                # An opaque status written in any language carries no token at all,
+                # which an upper-snake token rule alone would let through.
+                if not tokens:
+                    errors.append(
+                        f"{name}: line {line_number}: the evidence classification cell {cell!r} names no "
+                        f"canonical evidence level; use one of {sorted(legal)}"
+                    )
+
+    # A document that stops classifying evidence loses the guard entirely, so
+    # renaming the column away is itself the drift this catches.
+    if classified_tables == 0:
+        errors.append(
+            f"{name}: has no table with an evidence classification column "
+            f"({'/'.join(sorted(EVIDENCE_COLUMN_HEADERS))}); a document that classifies claims must "
+            "carry the canonical vocabulary"
+        )
+    return errors
+
+
+#: Current, interview-facing and repository-truth documentation. Historical plans
+#: under `docs/superpowers/` are deliberately absent: a superseded plan is not
+#: evidence and is not held to the current taxonomy.
+EVIDENCE_VOCABULARY_DOCS = (
+    "docs/interview-evidence-map.md",
+    "docs/interview-architecture-baseline.md",
+    "docs/repository-truth-audit.md",
+    "docs/open-source-hardcoding-audit.md",
+    "docs/validation/v2.5-runtime-security-validation.md",
+    "docs/validation/real-ragas-evaluation.md",
+)
+
+
+def check_evidence_vocabulary_is_canonical(errors: list[str]) -> None:
+    """No current document may classify evidence with a non-canonical level."""
+    legal = canonical_evidence_levels()
+    for name in EVIDENCE_VOCABULARY_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            fail(errors, f"{name} is missing")
+            continue
+        errors.extend(evidence_classification_errors(name, path.read_text(encoding="utf-8"), legal))
+
+
+#: The docs index section whose bullet list is the repository's vocabulary
+#: inventory. It must enumerate the canonical levels exactly: an inventory that
+#: drifts from the taxonomy is how a reader ends up trusting the wrong one.
+_DOCS_INDEX_VOCABULARY_SECTION = "## Evidence vocabulary"
+
+_BULLET_ITEM_RE = re.compile(r"^\s*[-*]\s")
+
+
+def docs_index_vocabulary_errors(name: str, text: str, levels: set[str]) -> list[str]:
+    """Return errors for an inventory that is not exactly the canonical vocabulary."""
+    if not levels:
+        return [
+            f"{name}: cannot check the vocabulary inventory: the canonical vocabulary in "
+            f"{INTERVIEW_EVIDENCE_MAP} is missing or unparsable"
+        ]
+    lines = text.splitlines()
+    section = _section_index(lines, _DOCS_INDEX_VOCABULARY_SECTION)
+    if section is None:
+        return [f"{name}: is missing the {_DOCS_INDEX_VOCABULARY_SECTION!r} section"]
+
+    # Only the bullet list is the inventory. The prose under it explains where the
+    # vocabulary lives and which tokens are run outcomes, and those tokens are
+    # named on purpose.
+    listed: set[str] = set()
+    for line in lines[section + 1 :]:
+        if line.startswith("#"):
+            break
+        if _BULLET_ITEM_RE.match(line):
+            listed.update(_VOCABULARY_TOKEN_RE.findall(line))
+
+    errors: list[str] = []
+    for token in sorted(levels - listed):
+        errors.append(f"{name}: {_DOCS_INDEX_VOCABULARY_SECTION!r} omits the canonical evidence level {token!r}")
+    for token in sorted(listed - levels):
+        errors.append(
+            f"{name}: {_DOCS_INDEX_VOCABULARY_SECTION!r} lists {token!r}, which is not a canonical "
+            f"evidence level; the inventory must match the vocabulary in {INTERVIEW_EVIDENCE_MAP} exactly"
+        )
+    return errors
+
+
+def check_docs_index_vocabulary(errors: list[str]) -> None:
+    """docs/README.md's vocabulary inventory must equal the canonical vocabulary."""
+    path = ROOT / "docs/README.md"
+    if not path.exists():
+        fail(errors, "docs/README.md is missing")
+        return
+    errors.extend(
+        docs_index_vocabulary_errors("docs/README.md", path.read_text(encoding="utf-8"), canonical_evidence_levels())
+    )
+
+
+#: The canonical classification vocabulary, resolved from the document at import
+#: time. It is empty when the evidence map cannot be read or parsed, and every
+#: guard that uses it treats empty as "cannot validate", so a damaged vocabulary
+#: fails closed instead of silently accepting anything.
+_CLASSIFICATION_TOKENS = frozenset(canonical_evidence_levels())
+
+
 # ── 2. operational `rag_*` references ───────────────────────────────────────
 #
 # The exporter publishes raw counters and gauges. A ratio such as
@@ -2156,18 +2410,10 @@ DELIVERED_AUDIT_AREAS = (
     "OTLP export",
 )
 
-#: The canonical classification vocabulary. A delivered row that names none of
-#: these is asserting an unclassified capability.
-_CLASSIFICATION_TOKENS = (
-    "REPO_VERIFIED",
-    "DESIGN_TARGET",
-    "PENDING",
-    "STALE",
-    "HISTORICAL",
-    "LOCAL_REAL_VALIDATION",
-    "PARTIAL",
-    "VERIFIED",
-)
+#: Where the canonical classification vocabulary is defined. Named so the guard can
+#: point an author at the one place a new level must be declared, rather than
+#: holding a second, diverging copy of the vocabulary here.
+_CLASSIFICATION_SOURCE = "docs/interview-evidence-map.md → Classification vocabulary"
 
 #: Long-lived trackers for evidence that only an external environment can produce.
 #: None of this repository's own changes can close them, so the audit must keep
@@ -2226,10 +2472,17 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
         if row is None:
             errors.append(f"repository truth audit: no row for delivered area {area!r}")
             continue
+        if not _CLASSIFICATION_TOKENS:
+            errors.append(
+                f"repository truth audit: cannot classify delivered area {area!r}: the canonical vocabulary "
+                f"in {_CLASSIFICATION_SOURCE} is missing or unparsable"
+            )
+            continue
         if not any(token in row for token in _CLASSIFICATION_TOKENS):
             errors.append(
                 f"repository truth audit: delivered area {area!r} carries no explicit classification; "
-                "an unclassified delivered capability reads as a completed result"
+                f"an unclassified delivered capability reads as a completed result. Use one of "
+                f"{sorted(_CLASSIFICATION_TOKENS)}"
             )
     return errors
 
@@ -2363,6 +2616,13 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
         return
 
     seen_areas: dict[str, str] = {}
+    legal = canonical_evidence_levels()
+    if not legal:
+        fail(
+            errors,
+            f"repository truth audit cannot be validated: the canonical vocabulary in {INTERVIEW_EVIDENCE_MAP} "
+            "is missing or unparsable",
+        )
     # Only the contiguous run of `|` lines that starts at the audit header is the
     # audit table. Later tables in the same document are prose, not audit rows, so
     # parsing must stop at the first non-table line after the header.
@@ -2379,9 +2639,22 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
             fail(errors, f"repository audit line {line_number + 1}: malformed row")
             continue
         status = columns[status_column]
-        if status not in STATUSES:
-            fail(errors, f"repository audit line {line_number + 1}: invalid status {status!r}")
-            continue
+        # The status cell must name canonical levels and nothing else, so a row
+        # cannot quietly revert to a retired status word or to prose.
+        levels = _CLASSIFICATION_TOKEN_RE.findall(status)
+        if not levels:
+            fail(
+                errors,
+                f"repository audit line {line_number + 1}: status {status!r} names no canonical evidence "
+                f"level; use one of {sorted(legal) or ['(canonical vocabulary unreadable)']}",
+            )
+        for level in levels:
+            if level not in legal:
+                fail(
+                    errors,
+                    f"repository audit line {line_number + 1}: {level!r} is not a canonical evidence level; "
+                    f"use one of {sorted(legal) or ['(canonical vocabulary unreadable)']}",
+                )
         seen_areas[columns[area_column]] = status
 
     missing_areas = REQUIRED_AUDIT_AREAS - set(seen_areas)
@@ -2389,9 +2662,11 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
         fail(errors, f"repository truth audit is missing required areas: {sorted(missing_areas)}")
 
     for area in sorted(OFFLINE_CAPABILITY_AREAS & set(seen_areas)):
-        if seen_areas[area] in {"PLANNED", "BROKEN", "STALE"}:
+        if SUPERSEDED_LEVEL in _CLASSIFICATION_TOKEN_RE.findall(seen_areas[area]):
             fail(
-                errors, f"repository truth audit classifies existing offline capability {area!r} as {seen_areas[area]}"
+                errors,
+                f"repository truth audit classifies existing offline capability {area!r} as "
+                f"{SUPERSEDED_LEVEL}; it exists in the current tree and is not a superseded artifact",
             )
 
 
@@ -2441,6 +2716,8 @@ def main() -> int:
     check_interview_baseline_exporter_split(errors)
     check_capability_rows_are_unique(errors)
     check_evidence_levels_are_defined(errors)
+    check_evidence_vocabulary_is_canonical(errors)
+    check_docs_index_vocabulary(errors)
     check_operational_metric_references(errors)
     check_audit_tracker_lineage(errors)
     check_observability_is_optional(errors)

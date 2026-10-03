@@ -11,6 +11,14 @@ does not introduce new capabilities.
 
 ## Classification vocabulary
 
+This table is the **single canonical evidence taxonomy** for this repository. Every
+current interview-facing or repository-truth document classifies its claims with
+these levels and no others — including the `Status` column of
+[the repository truth audit](repository-truth-audit.md) and the `Evidence level`
+columns of the validation records. A document that needs a state this table does
+not define must extend this table (and the guard that reads it) rather than invent
+a local status word.
+
 | Level | Meaning | Interview-safe framing | Must not say |
 |---|---|---|---|
 | `HISTORICAL_PRODUCTION` | Work actually done in a former employer's production environment. Proprietary corpus, logs, models and dashboards are not in this repository. | "In my previous production system I ..." | "The repository proves this scale" |
@@ -35,6 +43,41 @@ Rules:
    `HISTORICAL` is about this repository's own superseded code/config/design;
    `HISTORICAL_PRODUCTION` is about a former employer's real production system.
    Neither one may be presented as the other, and neither is a current capability.
+6. No document may define a second status vocabulary. A superseded in-repository
+   artifact is `HISTORICAL`, never a local word such as "stale" or "partial"; a
+   capability whose real asset is missing is `PENDING`, never a local word such as
+   "planned" or "blocked". Reconciling to this table never upgrades evidence: it
+   only names the level the evidence already had.
+7. Retiring a superseded artifact records it as `HISTORICAL`; it does not delete
+   the record of it. `HISTORICAL` keeps the lineage visible while withholding the
+   claim, and it must never be promoted to `REPO_VERIFIED` or `HISTORICAL_PRODUCTION`
+   because the code is still readable in the tree.
+
+## Run outcomes that are not evidence levels
+
+Some columns describe **what one execution did**, not **how much evidence exists**.
+Those tokens are recorded here so they are never mistaken for a level, and so that
+reconciling the taxonomy does not have to rewrite an artifact contract's own enum
+(which lives in application code and is out of scope for documentation changes).
+
+| Token | Vocabulary | Meaning |
+|---|---|---|
+| `EXECUTED` | performance/benchmark artifact run status | the declared workload ran to completion |
+| `PARTIAL` | performance/benchmark artifact run status | part of the declared workload ran; unmeasured values stay `null`, never `0` |
+| `BLOCKED` | performance/benchmark artifact run status | the run could not start, and `blocked_reason` says why |
+| `PASS` | validation record stage outcome | the recorded check for that stage succeeded |
+| `NOT RUN` | validation record stage outcome | the stage was not executed, so it carries no evidence |
+
+Rules:
+
+1. A run outcome never appears in an evidence-level column. A doc that wants to
+   report both says the outcome and then classifies the evidence separately, e.g.
+   "`PASS` in the results column, `LOCAL_REAL_VALIDATION` in the evidence column".
+2. `PARTIAL` here means "the workload did not finish". It never means "the evidence
+   is partial" — that is the job of a compound level such as
+   `REPO_VERIFIED` (framework) / `PENDING` (result), which states which half is missing.
+3. `BLOCKED` and `NOT RUN` describe this run. They do not convert a `PENDING`
+   capability into a validated one, and a blocked run produces no publishable number.
 
 ## Capability evidence
 
@@ -45,7 +88,7 @@ Rules:
 | BGE text embedding | `PENDING` (adapter contract `REPO_VERIFIED`) | Adapter + pooling contract in `offline/embeddings.py`; deterministic tests only | Real configured BGE smoke on real weights |
 | CLIP image embedding | `PENDING` (adapter contract `REPO_VERIFIED`) | `offline/embeddings.py`; deterministic embedder tests | Real configured CLIP smoke on real weights |
 | OCR (PaddleOCR) | `PENDING` | `offline/image_processor.py` provider interface; deterministic provider tests | Real PaddleOCR runtime smoke |
-| Qdrant text/image | `REPO_VERIFIED` | `offline/text_ingestion.py`, `offline/qdrant_writer.py`; in-memory `QdrantClient` integration tests only (no real Qdrant service runtime test) | Real Qdrant service validation |
+| Qdrant text/image | `REPO_VERIFIED` (current coverage); historical real-service run in the development lineage — see [Qdrant evidence: two states, kept apart](#qdrant-evidence-two-states-kept-apart) | `offline/text_ingestion.py`, `offline/qdrant_writer.py`; current deterministic regression coverage is the in-memory `QdrantClient` (`QdrantClient(":memory:")`) — that is what a re-run reproduces. PR #6/#7 also records a real local Qdrant service/container integration run performed together with Elasticsearch, and that record is retained as development lineage only | A new current real-service run that commits a reproducible artifact |
 | Elasticsearch (writer + BM25) | `REPO_VERIFIED` | `offline/elasticsearch_writer.py`, `retrieval/bm25_retriever.py`; fake + real ES integration tests | Multi-node/TLS topology is deployment-specific |
 | Elasticsearch security | `LOCAL_REAL_VALIDATION` | `tests/integration/test_es_auth_runtime.py`; local authenticated ES 8.11 (unauth/wrong creds 401) | Multi-node ES/TLS + production credentials |
 | RBAC (uint32 bitmask) | `REPO_VERIFIED` | `common/auth.py`, `retrieval/parallel_recall.py`, `api/routes.py`; `tests/test_bitmask_rbac.py`, `tests/test_retrieval_authorization_contract.py` | Production policy audit is deployment-specific |
@@ -74,6 +117,56 @@ Rules:
 | OpenTelemetry tracing hook | `REPO_VERIFIED` (hook wired) | `core/pipeline.py` → `monitoring/otel_tracer.py`; the tracer runs on the OTel SDK `TracerProvider` and reduces span attributes to an allow-list; `tests/test_monitoring_otel.py` and `tests/monitoring/test_observability.py` cover the collector, the local and OTel span paths, and the export switch | A recorded span from a real request |
 | OTLP exporter | `REPO_VERIFIED` (implementation) | `monitoring/otel_exporter.py`; opt-in via `OTEL_EXPORT_ENABLED` (**disabled by default**), non-fatal on failure, span-attribute allow-list; optional dependency isolated in `requirements-otel.txt`; `.env.example` documents the switch; `tests/monitoring/test_observability.py` | Install the exporter package and enable it against a real collector; the end-to-end runtime evidence is tracked separately and is still `PENDING` |
 | OTLP backend closed loop | `PENDING` | No committed closed-loop runtime evidence artifact exists in this repository. Export state is observable as `rag_otel_exporter_enabled`. `docker-compose.observability.yml` can start a collector and a backend, but starting them is not evidence a span arrived | Application -> exporter -> collector -> backend -> a span actually queried |
+
+## Qdrant evidence: two states, kept apart
+
+Qdrant has two independent evidence states in this repository's record. They are
+both true, and collapsing either into the other is a false statement:
+
+1. **Current, reproducible regression coverage is in-memory.** The deterministic
+   Qdrant coverage in this repository uses the in-process `QdrantClient`
+   (`QdrantClient(":memory:")`) in `tests/test_offline_text_ingestion.py`,
+   `tests/offline/test_offline_end_to_end.py`, `tests/offline/test_snapshot_builder.py`
+   and `tests/offline/test_image_processing.py`. A contributor re-running the suite
+   reproduces exactly this and nothing more.
+2. **The development lineage recorded in PR #6/#7 includes a real local Qdrant
+   service/container integration execution**, performed in the same round as the
+   real local Elasticsearch execution (PR #7 exists because `search_after` sorted
+   on `_id` and failed against a real Elasticsearch 8). That is part of how this
+   codebase was developed. It is a historical record of a past execution.
+
+They do not license each other:
+
+- The historical execution is **not** a current reproducible
+  `LOCAL_REAL_VALIDATION` artifact. No artifact of that run is committed here, so
+  nobody can re-run or verify it from this repository, and the deterministic
+  suite does not depend on a Qdrant service.
+- It establishes **nothing** about production Qdrant HA or cluster topology, cluster
+  performance, retrieval or model quality, QPS or latency. A local development run
+  is not a capacity or quality measurement.
+- The Elasticsearch result recorded alongside it is likewise development lineage;
+  the *current* `LOCAL_REAL_VALIDATION` for Elasticsearch is the separate,
+  re-runnable authenticated-ES round recorded in
+  [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md).
+- Upgrading the current reproducible state requires a **new** real-service run whose
+  artifact is committed. Until then the Qdrant row stays at its current level with
+  "real Qdrant service validation" as its upgrade path.
+
+Interview framing:
+
+> "The Qdrant writers are covered by deterministic tests against the in-process
+> Qdrant client, and during the work that landed in PR #6/#7 I also ran the same
+> writers against a real local Qdrant service alongside a real local Elasticsearch.
+> That earlier run is development history rather than a checked-in artifact, so
+> what this repository reproduces today is the in-memory coverage. Qdrant cluster,
+> HA, throughput and quality are separate work I have not validated here."
+
+Must not say, in either direction:
+
+- "Qdrant has only ever been tested in memory." The historical real-service run
+  happened; denying it is as inaccurate as claiming it is reproducible now.
+- "Qdrant is validated against a real service." No committed artifact supports that
+  today, and local development lineage is not `LOCAL_REAL_VALIDATION`.
 
 ## Business scale — historical production context
 
@@ -156,6 +249,10 @@ a repository benchmark.
 ## Known claim risks to avoid
 
 - Describing `LOCAL_REAL_VALIDATION` as production cluster / HA / SLO.
+- Collapsing the two Qdrant states in either direction: claiming a real Qdrant
+  service is currently verified (no artifact is committed), or claiming a real
+  Qdrant service was never exercised (PR #6/#7 records that run). See
+  [Qdrant evidence: two states, kept apart](#qdrant-evidence-two-states-kept-apart).
 - Describing deterministic fake models as real BGE/CLIP/OCR validation.
 - Presenting `HISTORICAL_PRODUCTION` scale as `REPO_VERIFIED`.
 - Using historical production model-serving experience (RTX A5000 ×2, the

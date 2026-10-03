@@ -15,12 +15,17 @@ evaluation is not a production quality benchmark.
 
 ## Status
 
-| Stage | Result | Evidence |
-|---|---|---|
-| Deterministic guard | PASS | 64 evaluation tests pass without any real RAGAS; schema/count/classification, single-evaluation, pipeline-answer, failure-accounting and provenance tests |
-| Dependency isolation | PARTIAL | isolated venv imports cleanly and `pip check` is clean, but `pip-audit` reports advisories (see below) |
-| Real evaluator smoke (Level 2) | BLOCKED | no `OPENAI_API_KEY` in this environment; no score produced |
-| Real pipeline RAGAS (Level 3) | BLOCKED | no evaluator key and no VLLM/Qdrant/ES/Redis infrastructure to run `OnlineRAGPipeline` |
+`Stage outcome` records what one execution did. `Evidence level` uses the canonical
+vocabulary from
+[Interview evidence map → Classification vocabulary](../interview-evidence-map.md#classification-vocabulary);
+no score was produced here, so no quality level is claimed.
+
+| Stage | Stage outcome | Evidence level | Evidence basis |
+|---|---|---|---|
+| Deterministic guard | `PASS` | `REPO_VERIFIED` (harness) | 64 evaluation tests pass without any real RAGAS; schema/count/classification, single-evaluation, pipeline-answer, failure-accounting and provenance tests |
+| Dependency isolation | `PARTIAL` | `LOCAL_REAL_VALIDATION` (isolated venv) | isolated venv imports cleanly and `pip check` is clean, but `pip-audit` reports advisories (see below) |
+| Real evaluator smoke (Level 2) | `BLOCKED` | `PENDING` | no `OPENAI_API_KEY` in this environment; no score produced |
+| Real pipeline RAGAS (Level 3) | `BLOCKED` | `PENDING` | no evaluator key and no VLLM/Qdrant/ES/Redis infrastructure to run `OnlineRAGPipeline` |
 
 ## Dependency findings (real, not faked)
 
