@@ -1371,6 +1371,91 @@ _SLO_TARGET_BOUNDARY_RE = re.compile(
 )
 
 
+# ── 1d. the legacy Jaeger thrift-agent config must not come back ───────────
+#
+# The canonical export path is OpenTelemetry → OTLP. The Jaeger *backend* in
+# docker-compose.observability.yml is a current, working part of that path: it
+# receives OTLP on 4317/4318. Only the older thrift-*agent* configuration is
+# retired — JAEGER_AGENT_HOST/PORT and config.json's monitoring.jaeger block —
+# and that had no canonical reader at all, so shipping it only invited the
+# question "which exporter does this actually use?".
+#
+# The target here is that agent *configuration*, never the word "jaeger". A guard
+# that matched the bare token would delete the working OTLP backend along with the
+# dead config, so the patterns below are all agent-specific, and the guard also
+# asserts the backend is still there.
+
+#: Agent-specific legacy markers. Deliberately never a bare "jaeger".
+_LEGACY_JAEGER_AGENT_RE = re.compile(
+    r"JAEGER_AGENT_(?:HOST|PORT)|"
+    r"monitoring\s*[.]\s*jaeger|"
+    r"\bagent_(?:host|port)\b|"
+    r"opentelemetry-exporter-jaeger",
+    re.IGNORECASE,
+)
+
+#: Where legacy agent configuration could be reintroduced. The guard's own source
+#: is not in this list, so naming the markers above cannot trip the guard.
+_LEGACY_JAEGER_AGENT_SURFACES = (
+    "config.json",
+    ".env.example",
+    "README.md",
+    "PRD.md",
+    "docs/README.md",
+    "docs/operations-guide.md",
+    "docs/deployment-guide.md",
+    "docs/pre-launch-checklist.md",
+    "docs/slo-runbook.md",
+    "docs/repository-truth-audit.md",
+    "docs/interview-architecture-baseline.md",
+    "docs/interview-evidence-map.md",
+)
+
+
+def legacy_jaeger_agent_errors(name: str, text: str) -> list[str]:
+    """Return errors for a file that reintroduces the retired Jaeger agent config."""
+    errors: list[str] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        match = _LEGACY_JAEGER_AGENT_RE.search(line)
+        if match:
+            errors.append(
+                f"{name}:{line_number}: reintroduces the retired Jaeger thrift-agent "
+                f"configuration ({match.group(0)!r}); the canonical export path is "
+                "OpenTelemetry → OTLP, so drop this instead of documenting it"
+            )
+    return errors
+
+
+def check_legacy_jaeger_agent_config_is_absent(errors: list[str]) -> None:
+    """Retired agent config stays retired, while the OTLP backend stays working."""
+    for name in _LEGACY_JAEGER_AGENT_SURFACES:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        errors.extend(legacy_jaeger_agent_errors(name, path.read_text(encoding="utf-8")))
+
+    # The point of retiring the agent config is not to retire Jaeger. The optional
+    # overlay must keep a backend that receives OTLP, otherwise a future "cleanup"
+    # aimed at the dead config silently removes a working capability.
+    overlay = ROOT / "docker-compose.observability.yml"
+    if not overlay.exists():
+        return
+    text = overlay.read_text(encoding="utf-8")
+    try:
+        import yaml
+
+        services = set(yaml.safe_load(text).get("services", {}))
+    except Exception as exc:  # pragma: no cover - malformed compose is CI's other job
+        fail(errors, f"cannot parse docker-compose.observability.yml for the Jaeger backend check: {exc}")
+        return
+    if "jaeger" not in services:
+        fail(
+            errors,
+            "docker-compose.observability.yml must keep the optional jaeger backend: it receives "
+            "OTLP spans and is not the retired thrift-agent configuration",
+        )
+
+
 def check_observability_is_optional(errors: list[str]) -> None:
     """The canonical deployment must not require the observability stack."""
     base = ROOT / "docker-compose.yml"
@@ -2299,6 +2384,7 @@ def main() -> int:
     check_operational_metric_references(errors)
     check_audit_tracker_lineage(errors)
     check_observability_is_optional(errors)
+    check_legacy_jaeger_agent_config_is_absent(errors)
     check_canonical_runtime_is_not_observability_gated(errors)
 
     contract_dir = ROOT / "tests/contracts"

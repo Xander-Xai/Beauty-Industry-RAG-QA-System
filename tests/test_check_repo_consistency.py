@@ -1828,3 +1828,79 @@ def test_levels_outside_the_capability_level_column_are_not_validated():
 
     text = _evidence_map(_TWO_LEVELS, "| Example | `REPO_VERIFIED` | uses `OTEL_EXPORT_ENABLED` | y |\n")
     assert undefined_evidence_level_errors("docs/x.md", text) == []
+
+
+# ── the retired Jaeger thrift-agent config must not come back ──────────────
+#
+# The guard targets the agent *configuration*, never the word "jaeger". The
+# optional Jaeger backend in docker-compose.observability.yml is a current part of
+# the OTLP path, so a guard that matched the bare token would delete a working
+# capability along with the dead config. Both directions are pinned here.
+
+
+def test_legacy_jaeger_agent_config_is_absent_from_the_current_repo():
+    from scripts.check_repo_consistency import check_legacy_jaeger_agent_config_is_absent
+
+    errors: list[str] = []
+    check_legacy_jaeger_agent_config_is_absent(errors)
+    assert errors == []
+
+
+def test_config_json_no_longer_declares_a_jaeger_block():
+    import json
+
+    config = json.loads((Path("config.json")).read_text(encoding="utf-8"))
+    assert "monitoring" not in config, (
+        "config.json must not keep an empty monitoring object after the jaeger block was removed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        (".env.example", "JAEGER_AGENT_HOST=localhost\nJAEGER_AGENT_PORT=6831\n"),
+        (".env.example", "# 旧的 Jaeger thrift agent 配置\nJAEGER_AGENT_HOST=localhost\n"),
+        ("config.json", '{\n  "monitoring": {\n    "jaeger": {\n      "agent_host": "localhost"\n    }\n  }\n}\n'),
+        ("config.json", '{\n  "monitoring": {\n    "jaeger": {\n      "enabled": false,\n      "agent_port": 6831\n    }\n  }\n}\n'),
+        ("docs/x.md", "The legacy Jaeger thrift agent path was `config.json` -> `monitoring.jaeger`.\n"),
+        ("docs/x.md", "Set `agent_host` and `agent_port` to reach the collector.\n"),
+        ("docs/x.md", "Install `opentelemetry-exporter-jaeger` to enable export.\n"),
+    ],
+)
+def test_legacy_jaeger_agent_config_is_rejected(name, text):
+    from scripts.check_repo_consistency import legacy_jaeger_agent_errors
+
+    errors = legacy_jaeger_agent_errors(name, text)
+    assert errors, f"{name} must be rejected for reintroducing the agent config"
+    assert all(error.startswith(f"{name}:") for error in errors)
+    assert all("Jaeger thrift-agent" in error for error in errors)
+    # One error per offending line, and no line reported twice.
+    reported = [error.split(":")[1] for error in errors]
+    assert len(reported) == len(set(reported))
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        # The working OTLP backend: same product, different transport. Must survive.
+        ("docker-compose.observability.yml", "services:\n  jaeger:\n    image: jaegertracing/all-in-one\n"),
+        ("docker-compose.observability.yml", "    ports:\n      - '4317:4317'\n      - '4318:4318'\n"),
+        (".env.example", "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\n"),
+        (".env.example", "OTEL_EXPORT_ENABLED=false\nOTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"),
+        ("docs/operations-guide.md", "Start the overlay to get the Jaeger UI behind OTLP on 4318.\n"),
+        ("docs/operations-guide.md", "Spans reach the Jaeger backend over OTLP; the closed loop is PENDING.\n"),
+        ("docs/x.md", "Prometheus, Jaeger and Grafana are optional overlay services.\n"),
+    ],
+)
+def test_current_jaeger_otlp_backend_is_not_flagged(name, text):
+    from scripts.check_repo_consistency import legacy_jaeger_agent_errors
+
+    assert legacy_jaeger_agent_errors(name, text) == [], name
+
+
+def test_observability_overlay_keeps_the_jaeger_backend():
+    """A cleanup aimed at the dead config must not remove the working backend."""
+    import yaml
+
+    overlay = yaml.safe_load(Path("docker-compose.observability.yml").read_text(encoding="utf-8"))
+    assert "jaeger" in overlay.get("services", {})

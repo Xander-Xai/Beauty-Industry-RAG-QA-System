@@ -155,7 +155,7 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 所以只能说：**「追踪钩子已接入，OTLP exporter 已实现且默认关闭，运行期闭环是 PENDING」**。
 不能说「OpenTelemetry/Jaeger 导出已闭环」「tracing 已验证」「Jaeger 已上线」——
 本仓库没有任何一个 span 被后端查询到过。旧 PRD / 旧计划里的 Jaeger thrift agent 路径
-（`config.json` → `monitoring.jaeger.*`）是历史配置，当前 exporter 走 OTLP，不走 Jaeger agent。
+已经移除：它从未有过 canonical 消费者，当前 exporter 走 OTLP，不走 Jaeger agent。
 
 ### 两套告警机制不要混淆
 

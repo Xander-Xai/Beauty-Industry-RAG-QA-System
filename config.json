@@ -320,13 +320,6 @@
     "super_admin_mask": 4294967295,
     "public_mask": 0
   },
-  "monitoring": {
-    "jaeger": {
-      "enabled": false,
-      "agent_host": "localhost",
-      "agent_port": 6831
-    }
-  },
   "auth": {
     "dev_mode": false,
     "jwt_secret": "",
