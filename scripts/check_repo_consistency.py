@@ -1141,17 +1141,39 @@ def performance_artifact_exists() -> bool:
 
 
 def otel_runtime_evidence_exists() -> bool:
-    """True when an OTLP closed-loop run has been recorded.
+    """True when an OTLP closed-loop run has been recorded as a readable artifact.
 
     A closed-loop claim requires a recorded trace artifact. This repository keeps
     such evidence under ``monitoring/evidence/`` when a local run has actually
-    happened; the directory does not exist today, which is why the runtime
-    closed loop is PENDING rather than verified.
+    happened; nothing is recorded today, which is why the runtime closed loop is
+    PENDING rather than verified.
+
+    The directory is not itself evidence, and neither is a file inside it. A
+    candidate only counts when it sits directly in the directory, is non-empty,
+    parses as JSON and has a non-empty object at the top level. Discovery is
+    deliberately non-recursive: a hand-made ``monitoring/evidence/tmp/debug/x.json``
+    must not silently promote the top-level state. An unreadable or malformed file
+    is skipped rather than raised, so one bad file can neither crash the checker nor
+    become evidence just by existing.
+
+    This is deliberately a floor, not a provenance schema: it does not yet require
+    trace/span ids, timestamps or backend identifiers, only that a committed
+    artifact-shaped file is actually there.
     """
     evidence = ROOT / "monitoring" / "evidence"
     if not evidence.is_dir():
         return False
-    return any(evidence.glob("*.json"))
+    for candidate in sorted(evidence.glob("*.json")):
+        try:
+            if not candidate.is_file():
+                continue
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            # Not readable evidence. Skip it; keep looking for a real artifact.
+            continue
+        if isinstance(payload, dict) and payload:
+            return True
+    return False
 
 
 def audit_action_events_exist() -> bool:

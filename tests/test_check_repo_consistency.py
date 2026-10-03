@@ -1286,7 +1286,9 @@ def test_artifact_presence_is_derived_from_disk(monkeypatch, tmp_path):
     assert guard.otel_runtime_evidence_exists() is False
     evidence = tmp_path / "monitoring/evidence"
     evidence.mkdir(parents=True)
-    (evidence / "span.json").write_text("{}", encoding="utf-8")
+    # A recorded artifact, not just a file: an empty `{}` is not evidence, which is
+    # asserted separately in test_otel_runtime_evidence_requires_a_readable_non_empty_json_object.
+    (evidence / "span.json").write_text('{"status": "recorded"}', encoding="utf-8")
     assert guard.otel_runtime_evidence_exists() is True
 
 
@@ -1904,3 +1906,69 @@ def test_observability_overlay_keeps_the_jaeger_backend():
 
     overlay = yaml.safe_load(Path("docker-compose.observability.yml").read_text(encoding="utf-8"))
     assert "jaeger" in overlay.get("services", {})
+
+
+# ── an evidence directory is not an evidence artifact ──────────────────────
+#
+# `monitoring/evidence/` is where a real OTLP closed-loop run would be recorded.
+# Its mere presence says nothing: an empty directory, a stray scratch file or a
+# truncated/empty JSON file must not read as "a closed loop was recorded", because
+# that predicate gates whether the repository may claim the runtime closed loop at
+# all. Only a committed, readable, non-empty JSON object directly inside the
+# directory counts. Discovery is deliberately non-recursive: a hand-made
+# monitoring/evidence/tmp/debug/foo.json must not silently change top-level state.
+
+
+def test_otel_runtime_evidence_is_false_without_the_directory(tmp_path, monkeypatch):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    assert not (tmp_path / "monitoring" / "evidence").exists()
+    assert guard.otel_runtime_evidence_exists() is False
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        ([], False),
+        ([("run-1/", None)], False),
+        ([("run.json", "")], False),
+        ([("run.json", "{broken")], False),
+        ([("run.json", "{}")], False),
+        ([("README.md", "notes"), ("note.txt", "notes")], False),
+        ([("otel-run.json", '{"status": "recorded"}')], True),
+        ([("bad.json", "{oops"), ("ok.json", '{"status": "recorded"}')], True),
+    ],
+    ids=[
+        "empty-directory",
+        "only-a-subdirectory",
+        "zero-byte-json",
+        "invalid-json",
+        "empty-json-object",
+        "unrelated-files-only",
+        "valid-non-empty-object",
+        "invalid-plus-valid",
+    ],
+)
+def test_otel_runtime_evidence_requires_a_readable_non_empty_json_object(
+    tmp_path, monkeypatch, entries, expected
+):
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    evidence = tmp_path / "monitoring" / "evidence"
+    evidence.mkdir(parents=True)
+    for name, content in entries:
+        path = evidence / name
+        if content is None:  # a directory, not a file
+            path.mkdir(parents=True, exist_ok=True)
+        else:
+            path.write_text(content, encoding="utf-8")
+    assert guard.otel_runtime_evidence_exists() is expected
+
+
+def test_otel_runtime_evidence_is_false_for_this_repository():
+    """This repository has recorded no closed-loop run, so it must stay PENDING."""
+    from scripts.check_repo_consistency import otel_runtime_evidence_exists
+
+    assert otel_runtime_evidence_exists() is False
