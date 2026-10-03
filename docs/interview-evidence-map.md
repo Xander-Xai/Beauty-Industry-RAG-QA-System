@@ -14,6 +14,7 @@ does not introduce new capabilities.
 | Level | Meaning | Interview-safe framing | Must not say |
 |---|---|---|---|
 | `HISTORICAL_PRODUCTION` | Work actually done in a former employer's production environment. Proprietary corpus, logs, models and dashboards are not in this repository. | "In my previous production system I ..." | "The repository proves this scale" |
+| `HISTORICAL` | A superseded implementation, configuration, design or compatibility artifact **in this repository**, retained only for historical lineage. It is not a current capability, and it is not evidence of former-employer production usage. | "This is a superseded repository path retained for historical/compatibility context" | "This is a current production capability" |
 | `REPO_VERIFIED` | Code/config exists and is covered by collected deterministic tests or CI in this repository. | "This is implemented and test-covered" | "This is production-validated" |
 | `LOCAL_REAL_VALIDATION` | Exercised in this repository against real external dependencies (Redis, nginx, authenticated Elasticsearch, authenticated Prometheus) on a single local host. | "Validated locally against the real dependency" | "Production cluster / HA / SLO verified" |
 | `DESIGN_TARGET` | Recorded target/design in PRD or plans; no implementation or no reproducible benchmark. | "The design target was ..." | "The running system achieves ..." |
@@ -30,6 +31,10 @@ Rules:
 3. Deterministic fake embedders, fake OCR providers and mocked Redis clients are
    not real-model or real-infrastructure validation.
 4. Historical plans under `docs/superpowers/` are not evidence.
+5. `HISTORICAL` and `HISTORICAL_PRODUCTION` are not interchangeable.
+   `HISTORICAL` is about this repository's own superseded code/config/design;
+   `HISTORICAL_PRODUCTION` is about a former employer's real production system.
+   Neither one may be presented as the other, and neither is a current capability.
 
 ## Capability evidence
 
