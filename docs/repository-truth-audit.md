@@ -223,11 +223,15 @@ Consequences recorded honestly:
   `prefix_cache.hit`), not `rag_*` Prometheus series. Do not translate between them
   by eye.
 
-`scripts/check_repo_consistency.py` derives each result's presence from the
+`scripts/check_repo_consistency.py` derives each result's evidence state from the
 working tree (`artifacts/performance/*/metadata.json`,
-`monitoring/evidence/*.json`, the alert file, the dashboard directory), so the
-required wording follows the repository's real state instead of a hardcoded
-expectation.
+`monitoring/evidence/*.json`, the alert file, the dashboard directory). For the
+OTLP runtime-evidence candidate a matching JSON path alone is not enough: the
+file must sit directly in that directory, be a readable non-empty file, and hold
+a non-empty JSON object. That is a minimum artifact-validity floor rather than
+provenance validation — no trace id, span id, timestamp, backend identity or
+queried-span result is checked. The required wording therefore follows the
+repository's observed evidence state instead of a hardcoded expectation.
 
 ## Architecture debt — free-text semantic governance
 
