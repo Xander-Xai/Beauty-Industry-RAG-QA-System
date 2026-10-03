@@ -120,19 +120,60 @@ def _decode_jwt(token: str) -> dict | None:
         return None
 
 
+#: Canonical permission-mask bound: 32-bit unsigned, matching auth.bitmask_rbac.
+_MAX_UINT32 = 0xFFFFFFFF
+
+
+def _validate_permission_mask_claim(value, claim_name: str) -> int:
+    """Validate one permission-mask claim against the canonical uint32 contract.
+
+    JWT authorization-claim validation at identity ingress. A valid signature only
+    proves the token came from the key holder; it says nothing about whether the
+    permission claims inside are well-formed. Previously the raw claim went straight
+    into ``UserIdentity``, whose mask fields are plain ``int``, so Pydantic coerced
+    ``"1"`` to ``1`` and a stringly-typed mask became an authenticated identity.
+
+    Strict by construction:
+
+    * ``type(value) is int`` — not ``isinstance``, because ``isinstance(True, int)``
+      is True and a JSON ``true`` would otherwise become mask 1;
+    * ``0 <= value <= 0xFFFFFFFF``;
+    * no ``int(value)`` coercion, no narrowing, no fallback.
+
+    Raises ``ValueError`` so the caller can fail closed rather than construct an
+    identity from an unvalidated claim.
+    """
+    if type(value) is not int:
+        raise ValueError(f"JWT claim {claim_name!r} must be an integer, got {type(value).__name__}")
+    if not 0 <= value <= _MAX_UINT32:
+        raise ValueError(f"JWT claim {claim_name!r} must be within [0, {_MAX_UINT32}], got {value}")
+    return value
+
+
 def _identity_from_jwt(payload: dict) -> UserIdentity:
-    """Build a UserIdentity from a decoded JWT payload."""
+    """Build a UserIdentity from a decoded JWT payload.
+
+    Permission claims are strictly validated *before* ``UserIdentity`` is built, so
+    no downstream Pydantic coercion can launder a malformed mask. A claim that is
+    present but invalid is an error: it is never treated as absent, and it never
+    falls back to the named-role encoding.
+    """
     cfg = get_config()
     rbac = cfg.rbac
     user_id = payload.get("user_id") or payload.get("sub", "anonymous")
 
-    role_mask = payload.get("role_mask")
-    dept_mask = payload.get("dept_mask")
-
-    # Fallback: encode from named roles / depts
-    if role_mask is None and "roles" in payload:
+    # Present-but-malformed must not be confused with absent. `"role_mask" in payload`
+    # is True for an explicit JSON null, which is a malformed claim, not a missing one.
+    role_mask = None
+    if "role_mask" in payload:
+        role_mask = _validate_permission_mask_claim(payload["role_mask"], "role_mask")
+    elif "roles" in payload:
         role_mask = _encode_from_names(payload["roles"], rbac.roles)
-    if dept_mask is None and "depts" in payload:
+
+    dept_mask = None
+    if "dept_mask" in payload:
+        dept_mask = _validate_permission_mask_claim(payload["dept_mask"], "dept_mask")
+    elif "depts" in payload:
         dept_mask = _encode_from_names(payload["depts"], rbac.departments)
 
     return UserIdentity(
@@ -248,8 +289,18 @@ async def parse_identity(request: Request) -> UserIdentity:
         token = auth_header[7:]
         payload = _decode_jwt(token)
         if payload is not None:
-            return _identity_from_jwt(payload)
-        logger.warning("JWT decode failed, falling back to dev headers")
+            try:
+                return _identity_from_jwt(payload)
+            except (ValueError, TypeError) as exc:
+                # Signature was valid but the authorization claims are malformed, so this
+                # token cannot produce an authenticated identity. Fail closed with the
+                # same semantics as an unusable token rather than surfacing a 500.
+                logger.warning("JWT authorization claims rejected: %s", exc)
+                if not cfg.auth.dev_mode:
+                    return UserIdentity(user_id="anonymous", user_role_mask=0, user_dept_mask=0)
+                logger.warning("Falling back to dev headers after malformed JWT claims")
+        else:
+            logger.warning("JWT decode failed, falling back to dev headers")
 
     # 2. Dev-mode headers — 仅在 dev_mode=True 时信任 Header
     if cfg.auth.dev_mode:

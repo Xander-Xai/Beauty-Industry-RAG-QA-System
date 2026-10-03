@@ -169,3 +169,160 @@ def test_dev_headers_ignored_when_not_dev_mode(monkeypatch, tmp_path):
         headers={"X-User-ID": "dev_user", "X-Role-Mask": "1", "X-Dept-Mask": "2"},
     )
     assert resp.status_code == 401
+
+
+# ── JWT authorization-claim validation ─────────────────────────────────────
+#
+# A cryptographically valid signature proves the token was issued by the key
+# holder. It says nothing about whether the permission claims inside are
+# well-formed. Before this, _identity_from_jwt() passed raw claim values
+# straight into UserIdentity, whose mask fields are plain `int`, so Pydantic
+# coerced "1" -> 1 and a stringly-typed mask became an authenticated identity.
+#
+# This is identity-ingress fail-closed validation against canonical uint32
+# permission claims. Token issuance is a separate concern and is deliberately
+# NOT exercised here: the tokens below are signed directly with the test
+# private key, exactly as a different issuer or an attacker holding the key
+# would produce them. That keeps issuer ownership and receiver validation as
+# two independently testable defences — see tests/test_jwt_auth.py for the
+# issuance-side reserved-claim contract.
+#
+# Only the receiving boundary is verified. Nothing here claims JWT security is
+# solved or that RBAC is fully secure.
+
+
+_INVALID_ROLE_CLAIMS = ["1", 1.0, True, False, -1, 0x100000000, None]
+_INVALID_DEPT_CLAIMS = ["2", 2.0, True, False, -1, 0x100000000, None]
+
+
+def _rs256_token_with_claim(monkeypatch, tmp_path, claim_name, value):
+    """Sign an RS256 access token whose named permission claim is malformed.
+
+    Deliberately does NOT go through ``create_access_token()``. That issuer
+    refuses to let ``extra_claims`` shadow the claims it owns, which is the
+    correct production behaviour but would make this test unable to state its
+    own premise: a *validly signed token carrying malformed claims*.
+
+    Signing directly is exactly how such a token would arrive — from another
+    issuer, a compromised path, or anyone holding the key. It also keeps this
+    receiver-side assertion from silently degrading into a restatement of the
+    issuance-side guard.
+    """
+    import jwt as pyjwt
+
+    from auth.jwt_auth import get_jwt_config
+
+    _set_rs256_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AUTH_DEV_MODE", "false")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    reload_config()
+
+    config = get_jwt_config()
+    with open(config.private_key_path) as handle:
+        private_key = handle.read()
+
+    now = int(time.time())
+    payload = {
+        "sub": "bad_mask_user",
+        "role_mask": 1,
+        "dept_mask": 2,
+        "iat": now,
+        "exp": now + 900,
+        "type": "access",
+    }
+    payload[claim_name] = value
+
+    return pyjwt.encode(payload, private_key, algorithm=config.algorithm)
+
+
+@pytest.mark.parametrize("value", _INVALID_ROLE_CLAIMS, ids=repr)
+def test_malformed_role_mask_claim_is_rejected(monkeypatch, tmp_path, value):
+    token = _rs256_token_with_claim(monkeypatch, tmp_path, "role_mask", value)
+    resp = TestClient(_protected_app()).get("/protected", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401, f"role_mask={value!r} must not authenticate"
+
+
+@pytest.mark.parametrize("value", _INVALID_DEPT_CLAIMS, ids=repr)
+def test_malformed_dept_mask_claim_is_rejected(monkeypatch, tmp_path, value):
+    token = _rs256_token_with_claim(monkeypatch, tmp_path, "dept_mask", value)
+    resp = TestClient(_protected_app()).get("/protected", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401, f"dept_mask={value!r} must not authenticate"
+
+
+def test_explicit_null_claim_is_distinguished_from_absent_claim(monkeypatch, tmp_path):
+    """`role_mask: null` is a malformed claim, not an absent one."""
+    from common.auth import _identity_from_jwt
+
+    with pytest.raises(ValueError):
+        _identity_from_jwt({"sub": "u", "role_mask": None, "dept_mask": 2})
+
+    # Absent on both counts keeps the documented zero-mask default.
+    identity = _identity_from_jwt({"sub": "u"})
+    assert identity.user_role_mask == 0
+    assert identity.user_dept_mask == 0
+
+
+def test_present_but_invalid_claim_does_not_fall_back_to_named_roles():
+    """A malformed explicit claim must not be silently ignored in favour of `roles`."""
+    from common.auth import _identity_from_jwt
+
+    with pytest.raises(ValueError):
+        _identity_from_jwt({"sub": "u", "role_mask": "1", "roles": ["researcher"]})
+
+
+def test_named_role_fallback_still_works_when_claim_absent():
+    """§9/§18: absent claim still encodes from roles/depts."""
+    from common.auth import _identity_from_jwt, encode_dept_mask, encode_role_mask
+
+    identity = _identity_from_jwt({"sub": "u", "roles": ["researcher"], "depts": ["rd"]})
+    assert identity.user_role_mask == encode_role_mask(["researcher"])
+    assert identity.user_dept_mask == encode_dept_mask(["rd"])
+
+
+@pytest.mark.parametrize("value", [0, 1, 0x7FFFFFFF, 0xFFFFFFFF], ids=repr)
+def test_valid_uint32_boundaries_are_accepted(monkeypatch, tmp_path, value):
+    """§15: 0 and 0xFFFFFFFF are valid uint32 identities."""
+    _set_rs256_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AUTH_DEV_MODE", "false")
+    reload_config()
+    token = create_access_token("boundary_user", role_mask=value, dept_mask=value)
+    resp = TestClient(_protected_app()).get("/protected", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, f"uint32 {value!r} must authenticate"
+    assert resp.json()["role_mask"] == value
+
+
+def test_legacy_hs256_malformed_claim_is_rejected(monkeypatch):
+    """§17/§18: the legacy HS256 fallback shares the same identity boundary."""
+    import jwt as pyjwt
+
+    secret = "legacy-compat-secret-key-at-least-32-bytes"
+    monkeypatch.setenv("JWT_SECRET", secret)
+    monkeypatch.setenv("AUTH_DEV_MODE", "false")
+    reload_config()
+
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "sub": "legacy_bad",
+            "user_id": "legacy_bad",
+            "role_mask": "4",
+            "dept_mask": 4,
+            "iat": now,
+            "exp": now + 3600,
+        },
+        secret,
+        algorithm="HS256",
+    )
+    resp = TestClient(_protected_app()).get("/protected", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
+
+
+def test_validator_rejects_coercion_and_out_of_range():
+    """§6: the helper itself must not coerce."""
+    from common.auth import _validate_permission_mask_claim
+
+    assert _validate_permission_mask_claim(0, "role_mask") == 0
+    assert _validate_permission_mask_claim(0xFFFFFFFF, "role_mask") == 0xFFFFFFFF
+    for bad in ("1", 1.0, True, False, -1, 0x100000000, None, [], {}):
+        with pytest.raises(ValueError):
+            _validate_permission_mask_claim(bad, "role_mask")

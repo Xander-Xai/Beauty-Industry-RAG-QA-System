@@ -28,7 +28,7 @@ from common.audit import (
     OUTCOME_SUCCESS,
     audit_event,
 )
-from common.auth import is_admin_role_mask
+from common.auth import _identity_from_jwt, is_admin_role_mask
 from common.config import get_config
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -189,7 +189,18 @@ def _require_admin_payload(authorization: str | None) -> dict:
     if not payload:
         raise HTTPException(status_code=401, detail="Token 无效或已过期")
 
-    if not is_admin_role_mask(payload.get("role_mask", 0)):
+    # Signature verification only proves the token came from the key holder. Before any
+    # privilege decision the permission claims must form a canonical identity, so this
+    # reuses the established strict JWT identity boundary rather than a second,
+    # looser rule here. A malformed claim is an authentication failure and is rejected
+    # before the admin branch below, so it never reaches the authorization audit event.
+    try:
+        identity = _identity_from_jwt(payload)
+    except (ValueError, TypeError) as exc:
+        logger.warning("Admin route rejected malformed JWT claims: %s", exc)
+        raise HTTPException(status_code=401, detail="Token 授权声明无效") from exc
+
+    if not is_admin_role_mask(identity.user_role_mask):
         # A privileged action refused on authorization grounds is exactly the
         # event an auditor looks for, so it is recorded rather than only
         # returned as a 403.
@@ -203,6 +214,8 @@ def _require_admin_payload(authorization: str | None) -> dict:
         )
         raise HTTPException(status_code=403, detail="需要管理员权限")
 
+    # Return type is unchanged: downstream endpoints still read payload["sub"] as the
+    # audit actor.
     return payload
 
 

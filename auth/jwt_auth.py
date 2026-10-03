@@ -92,6 +92,14 @@ def generate_keypair(output_dir: str = "./keys"):
     return private_path, public_path
 
 
+#: Claims owned by the access-token issuer. `extra_claims` exists to carry genuine
+#: extension claims, not to restate what the issuer already decided, so a collision on
+#: any of these is a caller/config error and is rejected rather than silently applied.
+#: Scoped to what this issuer actually sets — claims it does not manage (tenant_id,
+#: session_id, ...) remain freely settable.
+_ACCESS_TOKEN_RESERVED_CLAIMS = frozenset({"sub", "role_mask", "dept_mask", "iat", "exp", "type"})
+
+
 def create_access_token(user_id: str, role_mask: int, dept_mask: int, extra_claims: dict = None) -> str:
     """Create a short-lived access token."""
     if not HAS_JWT:
@@ -111,6 +119,16 @@ def create_access_token(user_id: str, role_mask: int, dept_mask: int, extra_clai
         "type": "access",
     }
     if extra_claims:
+        # Fail closed on a reserved-claim collision. Filtering the colliding keys out
+        # would silently swallow the caller's mistake; re-applying the canonical values
+        # afterwards would let the caller believe it had set them. Neither is safe, so
+        # the conflict is reported instead. Message lists only the colliding claim
+        # names — never the token, key or full payload — and is sorted for determinism.
+        collisions = _ACCESS_TOKEN_RESERVED_CLAIMS.intersection(extra_claims)
+        if collisions:
+            raise ValueError(
+                "extra_claims cannot override reserved access-token claims: " + ", ".join(sorted(collisions))
+            )
         payload.update(extra_claims)
 
     return jwt.encode(payload, private_key, algorithm=config.algorithm)

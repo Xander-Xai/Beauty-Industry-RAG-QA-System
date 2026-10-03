@@ -26,6 +26,8 @@ import time
 from collections import OrderedDict
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cache.redis_cache import RedisCache
 
 # ── Cache Key 计算 ──
@@ -177,7 +179,8 @@ class TestL2Cache:
         cache.set("key1", {"answer": "test"}, role_mask=1, dept_mask=2)
         mock_redis.setex.assert_called_once()
         call_args = mock_redis.setex.call_args
-        assert call_args[0][0] == "rag:l2:key1"  # Redis key with prefix
+        # 物理 key 由 helper 派生，不在测试里重复 hardcode storage format
+        assert call_args[0][0] == RedisCache._build_l2_storage_key("key1", 1, 2)
         assert call_args[0][1] == cache.l2_ttl  # TTL
 
     @patch.object(RedisCache, "_try_connect")
@@ -190,7 +193,7 @@ class TestL2Cache:
         cache.enabled = True
 
         result = cache.get("key1", role_mask=1, dept_mask=2)
-        mock_redis.get.assert_called_once_with("rag:l2:key1")
+        mock_redis.get.assert_called_once_with(RedisCache._build_l2_storage_key("key1", 1, 2))
         assert result == {"answer": "cached"}
 
     @patch.object(RedisCache, "_try_connect")
@@ -399,3 +402,272 @@ class TestRedisCacheHitStats:
         assert result is None
         assert cache._hit_count == 0
         assert cache._miss_count == 1
+
+
+class FakeRedis:
+    """最小有状态 Redis stub：只实现 L2 用到的 setex / get。"""
+
+    def __init__(self):
+        self.data = {}
+
+    def setex(self, key, ttl, value):
+        self.data[key] = value
+
+    def get(self, key):
+        return self.data.get(key)
+
+
+class TestL2PermissionPartitioning:
+    """L2 storage boundary 自身必须按 role/dept 分区。
+
+    `compute_cache_key()` 与 `OnlineRAGPipeline._build_cache_key()` 已经把权限掩码放进
+    *logical* key，但那是调用方纪律。若某个调用方忘了先做 permission-aware 构造，
+    相同 logical key 在不同 role/dept 下会落到同一个物理 Redis 地址——本轮之前正是
+    `rag:l2:{key}`，与 role/dept 无关。
+
+    这是 L2 cache permission partitioning / cache-boundary defense-in-depth：隔离不再
+    只依赖调用方正确构造 key。它不改变 value schema、TTL 或 L1 语义。
+    """
+
+    @staticmethod
+    @patch.object(RedisCache, "_try_connect")
+    def _cache(mock_connect):
+        cache = RedisCache()
+        cache.redis_client = FakeRedis()
+        cache.enabled = True
+        return cache
+
+    def test_same_logical_key_is_not_shared_across_roles(self):
+        """核心 regression：同 logical key、不同 role，不得读到对方分区。"""
+        cache = self._cache()
+        cache.set("same", {"answer": "ROLE_1_SECRET"}, role_mask=1, dept_mask=2)
+        assert cache.get("same", role_mask=4, dept_mask=8) is None
+
+    def test_same_identity_still_hits(self):
+        """安全修复不能把 L2 全部打坏：同身份必须命中。"""
+        cache = self._cache()
+        cache.set("logical", {"answer": "A"}, role_mask=1, dept_mask=2)
+        assert cache.get("logical", role_mask=1, dept_mask=2) == {"answer": "A"}
+
+    def test_different_role_same_dept_misses(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "R1"}, role_mask=1, dept_mask=2)
+        assert cache.get("k", role_mask=4, dept_mask=2) is None
+
+    def test_same_role_different_dept_misses(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "D2"}, role_mask=1, dept_mask=2)
+        assert cache.get("k", role_mask=1, dept_mask=8) is None
+
+    def test_public_partition_is_not_readable_by_restricted(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "PUBLIC"}, role_mask=0, dept_mask=0)
+        assert cache.get("k", role_mask=1, dept_mask=0) is None
+
+    def test_restricted_partition_is_not_readable_as_public(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "RESTRICTED"}, role_mask=1, dept_mask=0)
+        assert cache.get("k", role_mask=0, dept_mask=0) is None
+
+    def test_physical_keys_are_distinct_partitions(self):
+        """FakeRedis 中应出现多个独立物理 partition。"""
+        cache = self._cache()
+        for rm, dm in ((1, 2), (4, 2), (1, 8)):
+            cache.set("shared", {"answer": f"{rm}-{dm}"}, role_mask=rm, dept_mask=dm)
+        assert len(cache.redis_client.data) == 3
+        for rm, dm in ((1, 2), (4, 2), (1, 8)):
+            expected = RedisCache._build_l2_storage_key("shared", rm, dm)
+            assert expected in cache.redis_client.data, (rm, dm, expected)
+
+    def test_no_legacy_unscoped_fallback(self):
+        """禁止读取旧的未分区 key，否则等于重新打开 cross-permission reuse。"""
+        cache = self._cache()
+        cache.redis_client.data["rag:l2:legacy"] = json.dumps({"answer": "OLD"})
+        assert cache.get("legacy", role_mask=1, dept_mask=2) is None
+
+    def test_storage_key_is_deterministic_and_permission_sensitive(self):
+        first = RedisCache._build_l2_storage_key("k", 1, 2)
+        assert first == RedisCache._build_l2_storage_key("k", 1, 2)
+        assert first != RedisCache._build_l2_storage_key("k", 4, 2)
+        assert first != RedisCache._build_l2_storage_key("k", 1, 8)
+        assert first != RedisCache._build_l2_storage_key("other", 1, 2)
+
+    def test_get_and_set_share_one_key_contract(self):
+        """read/write 必须走同一个 helper，避免 key drift。"""
+        cache = self._cache()
+        cache.set("drift", {"answer": "X"}, role_mask=3, dept_mask=5)
+        assert list(cache.redis_client.data) == [RedisCache._build_l2_storage_key("drift", 3, 5)]
+
+
+class TestPermissionScopeValidation:
+    """缓存边界必须在任何 cache IO 之前校验权限 identity。
+
+    Problem 21 已让 L2 物理 key 带上 role/dept 分区，但它把 mask 直接插入 f-string，
+    因此 `"1"` 与 `1` 会落到同一个 Redis 地址；`True`/`False` 也会因为
+    `True == 1` / `False == 0` 与合法掩码别名，L1 的 public-only 判断同样会被绕过。
+
+    精确 contract：`type(mask) is int` 且 `0 <= mask <= 0xFFFFFFFF`。用 `type(...) is int`
+    而非 `isinstance`，因为 `isinstance(True, int)` 为真。非法 identity 直接
+    `ValueError`，不做 `int()` 转换、不 clamp、不取 abs、不 fallback。
+    """
+
+    @staticmethod
+    @patch.object(RedisCache, "_try_connect")
+    def _cache(mock_connect):
+        cache = RedisCache()
+        cache.redis_client = MagicMock()
+        cache.enabled = True
+        return cache
+
+    # ── Regression A: bool 与 public L1 别名 ──
+    def test_bool_public_l1_alias_is_rejected(self):
+        """`role_mask=False` 与 public(0) 别名，旧实现会命中 public L1。"""
+        cache = self._cache()
+        cache.set("public", {"answer": "PUBLIC"}, role_mask=0, dept_mask=0)
+        with pytest.raises(ValueError):
+            cache.get("public", role_mask=False, dept_mask=0)
+
+    def test_bool_public_l1_write_is_rejected_and_leaves_no_entry(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.set("bad", {"x": 1}, role_mask=False, dept_mask=0)
+        assert "bad" not in cache._l1
+
+    # ── Regression B: string/int 物理地址别名 ──
+    def test_string_and_int_masks_cannot_share_a_physical_key(self):
+        """旧实现下两者生成同一 Redis 地址；新 contract 是拒绝字符串。"""
+        assert RedisCache._build_l2_storage_key("same", 1, 2) == "rag:l2:rm:1:dm:2:same"
+        with pytest.raises(ValueError):
+            RedisCache._build_l2_storage_key("same", "1", 2)
+
+    # ── §12 invalid role matrix ──
+    @pytest.mark.parametrize("value", ["1", "0", 1.0, 0.0, True, False, -1, 0x100000000, None, [], {}])
+    def test_invalid_role_mask_is_rejected(self, value):
+        with pytest.raises(ValueError):
+            RedisCache._build_l2_storage_key("k", value, 2)
+
+    # ── §13 invalid dept matrix ──
+    @pytest.mark.parametrize("value", ["1", 1.0, True, False, -1, 0x100000000, None])
+    def test_invalid_dept_mask_is_rejected(self, value):
+        with pytest.raises(ValueError):
+            RedisCache._build_l2_storage_key("k", 1, value)
+
+    # ── §14 valid boundaries ──
+    @pytest.mark.parametrize("value", [0, 1, 0x7FFFFFFF, 0xFFFFFFFF])
+    def test_valid_uint32_boundaries_are_accepted(self, value):
+        assert RedisCache._validate_permission_scope(value, value) == (value, value)
+        assert RedisCache._build_l2_storage_key("k", value, value) == f"rag:l2:rm:{value}:dm:{value}:k"
+
+    # ── §15 invalid get must not touch Redis ──
+    def test_invalid_get_makes_zero_redis_calls(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.get("k", role_mask="1", dept_mask=2)
+        cache.redis_client.get.assert_not_called()
+
+    # ── §16 invalid set must not touch Redis ──
+    def test_invalid_set_makes_zero_redis_calls(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.set("k", {"x": 1}, role_mask=True, dept_mask=2)
+        cache.redis_client.setex.assert_not_called()
+
+    # ── §17 invalid set must not pollute L1 ──
+    def test_invalid_set_does_not_pollute_l1(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.set("nope", {"x": 1}, role_mask=0, dept_mask=False)
+        assert "nope" not in cache._l1
+
+    # ── §22 valid identities keep their existing L1 behaviour ──
+    def test_valid_public_identity_still_hits_l1(self):
+        cache = self._cache()
+        cache.set("pub", {"answer": "P"}, role_mask=0, dept_mask=0)
+        assert cache.get("pub", role_mask=0, dept_mask=0) == {"answer": "P"}
+
+    def test_validator_rejects_bool_and_str_explicitly(self):
+        """Documented reason for type(...) is int over isinstance."""
+        with pytest.raises(ValueError):
+            RedisCache._validate_permission_scope(True, 0)
+        with pytest.raises(ValueError):
+            RedisCache._validate_permission_scope(0, False)
+
+
+class TestPipelineLogicalCacheKey:
+    """调用方纪律层：pipeline 构造的 logical key 必须已按 role/dept 分区。
+
+    `TestL2PermissionPartitioning` proves the L2 *physical* address is partitioned
+    even when handed the same logical key for two identities. That is the storage
+    boundary's own defence. This class covers the separate, weaker layer above it:
+    `OnlineRAGPipeline._build_cache_key()` mixes the permission masks into the
+    logical key it hands to `get`/`set`.
+
+    The two are independent. A physical-key partition still holds if the logical
+    key ignores identity; and a logical-key partition still holds if the physical
+    key ignored identity. Neither substitutes for the other, so the logical layer
+    is asserted on its own terms here rather than inferred from the L2 tests.
+
+    This is cache-key partitioning / defense-in-depth. It is not a claim that a
+    cache hit can never cross a permission boundary.
+    """
+
+    @staticmethod
+    def _pipeline():
+        # _build_cache_key reads no instance state, so the uninitialised instance
+        # keeps this test independent of pipeline construction (model clients,
+        # retrievers, Redis) that is irrelevant to key derivation.
+        from core.pipeline import OnlineRAGPipeline
+
+        return OnlineRAGPipeline.__new__(OnlineRAGPipeline)
+
+    @staticmethod
+    def _ctx(*, query="serum", role_mask=1, dept_mask=2, rewritten=None):
+        from types import SimpleNamespace
+
+        rewrite_result = SimpleNamespace(rewritten_query=rewritten) if rewritten is not None else None
+        return SimpleNamespace(
+            rewrite_result=rewrite_result,
+            user_input=query,
+            user_role_mask=role_mask,
+            user_dept_mask=dept_mask,
+        )
+
+    def test_role_mask_changes_the_logical_key(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(role_mask=1)) != build(self._ctx(role_mask=4))
+
+    def test_dept_mask_changes_the_logical_key(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(dept_mask=2)) != build(self._ctx(dept_mask=8))
+
+    def test_same_identity_is_stable(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx()) == build(self._ctx())
+
+    def test_rewritten_query_is_used_when_present(self):
+        """The key follows the rewritten query, not the raw one."""
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(rewritten="rewritten form")) != build(self._ctx())
+
+    def test_public_and_restricted_partitions_differ(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(role_mask=0, dept_mask=0)) != build(self._ctx(role_mask=1, dept_mask=0))
+
+    def test_session_scope_wraps_a_permission_aware_base(self):
+        """Session scoping must wrap the base key, not replace it.
+
+        If it replaced or ignored the permission-aware base, two identities in
+        the same session could collide. Session scoping is an additional
+        narrowing on top of partitioning, never a substitute for it.
+        """
+        scope = self._pipeline()._scope_cache_key_to_session
+        base_role1 = self._pipeline()._build_cache_key(self._ctx(role_mask=1, dept_mask=2))
+        base_role4 = self._pipeline()._build_cache_key(self._ctx(role_mask=4, dept_mask=2))
+        scoped_role1 = scope(base_role1, "session-1")
+        scoped_role4 = scope(base_role4, "session-1")
+        assert scoped_role1 != scoped_role4
+
+    def test_session_scope_is_a_no_op_without_a_session_id(self):
+        scope = self._pipeline()._scope_cache_key_to_session
+        base = self._pipeline()._build_cache_key(self._ctx())
+        assert scope(base, None) == base

@@ -262,7 +262,7 @@ KV_per_token(layer) = 2 × layers × hidden_size × bytes_per_param × batch_fac
 对于 Qwen3-14B（GQA 结构）：
 ● layers = 40（具体依变体而定）
 ● hidden_size 经 GQA 压缩（KV heads 减少）后每 token 实际开销约为传统 MHA 的 1/4 ~ 1/8
-● 实测 kv_per_token ≈ 0.45 KB/token（即 0.45 MB / 1000 tokens）
+● 模型估算 kv_per_token ≈ 0.45 KB/token（即 0.45 MB / 1000 tokens）；未在本仓库实测，见 §2.2 与性能产物状态 `PENDING`
 关键认知：KV Cache 是随 token 序列 + batch 动态增长的三维张量资源，而非固定 MB/token 常数。其增长遵循 O(seq_len × batch_size)，受 continuous batching 动态影响。
 5.2.3 KV Budget 准入控制模型
 系统采用 Token-Based Concurrency Control，不再使用固定并发数，而是基于实时 KV 预算动态限制在途请求数量。
@@ -466,7 +466,7 @@ L2 Private Cache	query_hash + version + role_mask + dept_mask	存储特定权限
 ● 明文保护：user_query 强制 SHA256 哈希，研发配方类查询日志脱敏为 [REDACTED]。
 12. 可观测性与数据闭环
 ● 【当前实现】全链路追踪钩子接入在线主链路，走 OpenTelemetry SDK TracerProvider；span 导出为可选 OTLP 路径（`monitoring/otel_exporter.py`），默认关闭。
-● 【历史/目标设计】原「OpenTelemetry + Jaeger」表述对应 Jaeger thrift agent 路径（`config.json` → `monitoring.jaeger.*`）。OTel SDK 已不再附带 Jaeger exporter，当前实现走 OTLP；collector/后端/可查询 span 的闭环仍为 `PENDING`，本仓库没有任何 span 被后端查询到。
+● 【历史/目标设计】原「OpenTelemetry + Jaeger」表述对应 Jaeger thrift agent 路径，该配置已从仓库移除且从未有 canonical 消费者。OTel SDK 已不再附带 Jaeger exporter，当前实现走 OTLP；collector/后端/可查询 span 的闭环仍为 `PENDING`，本仓库没有任何 span 被后端查询到。
 ● 关键监控指标：
   ○ L1/L2 命中率（按权限分区统计）
   ○ Rewrite 延迟/成功率

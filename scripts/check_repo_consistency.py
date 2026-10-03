@@ -10,6 +10,15 @@ stale latest-merged-main references), current docs that still present the
 retired dual-4B topology, and an invalid/absent repository truth audit. It does
 not flag historical CHANGELOG text or historical implementation plans.
 
+It also enforces one evidence vocabulary. ``docs/interview-evidence-map.md``
+owns the canonical taxonomy, and every current interview-facing or
+repository-truth document must classify its claims with those levels and no
+others; the docs index inventory must equal that taxonomy exactly. A retired
+status word such as ``VERIFIED`` or ``PARTIAL`` is not a level, and a run
+outcome such as ``BLOCKED`` does not satisfy a classification. The legal levels
+are parsed out of the vocabulary table rather than restated here, so the code can
+never hold a second copy that quietly diverges.
+
 The truth audit is expected to resolve its candidate from ``HEAD`` and to carry
 an ISO ``YYYY-MM-DD`` verification date. The date is validated for shape only;
 the guard never hardcodes a specific date or depends on the current date, a
@@ -25,6 +34,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +49,6 @@ CANONICAL_DOCS = [
     *sorted((ROOT / "docs" / "validation").glob("*.md")),
     ROOT / "artifacts/benchmarks/README.md",
 ]
-STATUSES = {"VERIFIED", "PARTIAL", "PLANNED", "BROKEN", "STALE", "HISTORICAL"}
 
 # Current operator-facing docs that must not regress to "offline ingestion is
 # missing" claims. Historical docs (CHANGELOG, the audit's history section) and
@@ -385,11 +394,27 @@ def benchmark_classification_errors(name: str, text: str) -> list[str]:
     return errors
 
 
+# Markdown emphasis is formatting, not meaning. "is not verified", "is **not**
+# verified", "is not **verified**" and "is **not** **verified**" are one and the same
+# denial, so the negation matchers below must not care which of them a document
+# happens to use. They used a plain `\s+` at the junction between a negation word and
+# its complement; emphasis delimiters sitting in that gap silently broke the match and
+# turned a truthful denial into a reported claim.
+#
+# _EMPHASIS_GAP accepts whitespace and emphasis delimiters in those junctions only.
+# It is delimiters-only by construction: no word, digit or identifier character is
+# ever consumed, so REPO_VERIFIED, LOCAL_REAL_VALIDATION, HISTORICAL_PRODUCTION and
+# the rag_* metric series keep their underscores. It also still requires at least one
+# separator character, so "notvalidated" does not read as "not validated", and it does
+# not relax the leading-context / line-window boundary in forbidden_evidence_claims().
+_EMPHASIS_GAP = r"(?:\s+[*_]*|[*_]+\s*)+"
+
 # A sentence that frames the match as a claim to avoid, not as current truth.
 # These docs are *required* to write the denial, so the frame is a signal to
 # skip rather than a signal to fail.
 _PROHIBITION_FRAME_RE = re.compile(
-    r"\bClaiming\b|\bClaims?\b|\bSays?\b|\bDo\s+not\b|\bDon't\b|\bNever\b|\bMust\s+not\b|"
+    r"\bClaiming\b|\bClaims?\b|\bSays?\b|\bDo" + _EMPHASIS_GAP + r"not\b|\bDon't\b|\bNever\b|"
+    r"\bMust" + _EMPHASIS_GAP + r"not\b|"
     r"不能说|不得|不要(?:说|声称)|不应(?:说|声称)",
     re.IGNORECASE,
 )
@@ -397,15 +422,24 @@ _PROHIBITION_FRAME_RE = re.compile(
 # Absence / not-yet wording in the neighbourhood of the match. Covers both the
 # "no result exists" form and the specific "no exporter configured" form that
 # denies a closed tracing loop.
+#
+# Two junctions here carry no separator at all and must not be routed through the
+# mandatory-gap rule above: the `un` prefix of "unconfigured", and the contraction
+# in "doesn't" / "don't". Both are spelled without a space in ordinary English, so
+# they are spelled out as their own zero-gap alternatives. _EMPHASIS_GAP itself is
+# unchanged, so every other junction still demands a separator and "notvalidated"
+# still does not read as "not validated".
 _NO_EVIDENCE_NEGATION_RE = re.compile(
     r"PENDING|EXTERNAL_MODEL_ASSET_REQUIRED|"
     r"未(?:有|能|执行|验证|产生|配置|运行)|尚未|没有|无可|不(?:会|能|得|是)|"
-    r"not\s+(?:yet\s+)?(?:validated|verified|measured|available|produced|configured|"
+    r"not" + _EMPHASIS_GAP + r"(?:yet" + _EMPHASIS_GAP + r")?"
+    r"(?:validated|verified|measured|available|produced|configured|"
     r"reproduced|reproducible|closed)|"
-    r"no\s+(?:such|exporter|OTLP|closed|real\s+benchmark|artifact)|"
-    r"exporter[^\n]{0,12}(?:not|un)\s*configured|"
-    r"never|cannot|can't|without|must\s+not|do(?:es)?\s+not|do(?:es)?n't|"
-    r"design\s+target|目标|blocked",
+    r"no" + _EMPHASIS_GAP + r"(?:such|exporter|OTLP|closed|real" + _EMPHASIS_GAP + r"benchmark|artifact)|"
+    r"exporter[^\n]{0,12}(?:not" + _EMPHASIS_GAP + r"|un)configured|"
+    r"never|cannot|can't|without|must" + _EMPHASIS_GAP + r"not|"
+    r"do(?:es)?" + _EMPHASIS_GAP + r"not|do(?:es)?" + _EMPHASIS_GAP + r"n't|do(?:es)?n't|"
+    r"design" + _EMPHASIS_GAP + r"target|目标|blocked",
     re.IGNORECASE,
 )
 
@@ -1121,18 +1155,86 @@ def performance_artifact_exists() -> bool:
     return any(ROOT.glob(PERFORMANCE_ARTIFACT_GLOB))
 
 
+#: Fields an OTLP closed-loop artifact must carry, and what each one has to look
+#: like. Deliberately a floor: enough structure to mean "this claims to be a
+#: completed run whose backend answered a query for one trace", and nothing more.
+OTEL_EVIDENCE_SCHEMA_VERSION = 1
+OTEL_EVIDENCE_TYPE = "otel_closed_loop"
+OTEL_EVIDENCE_STATUS_EXECUTED = "EXECUTED"
+
+#: A W3C/OTel trace id: 32 hex characters.
+_OTEL_TRACE_ID_RE = re.compile(r"[0-9a-fA-F]{32}")
+
+
+def _is_plain_int(value: object) -> bool:
+    """True for a real integer. ``bool`` is excluded even though ``True == 1``."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_valid_otel_runtime_evidence(payload: object) -> bool:
+    """True when a decoded artifact satisfies the minimum closed-loop contract.
+
+    A readable non-empty JSON object is not on its own evidence of anything, so a
+    candidate has to state, in a checkable way, that it belongs to this evidence
+    type, that the run actually completed, which backend answered, which trace it
+    concerns, and that the query returned at least one span. Unknown extra fields
+    are allowed so the contract can be tightened later without invalidating
+    artifacts already written.
+
+    This is structural validation only. It cannot show that the file was not
+    hand-written, that the backend was really reached, or that the trace
+    corresponds to any real request — those are provenance questions and are
+    deliberately out of scope.
+    """
+    if not isinstance(payload, dict):
+        return False
+    version = payload.get("schema_version")
+    if not _is_plain_int(version) or version != OTEL_EVIDENCE_SCHEMA_VERSION:
+        return False
+    if payload.get("evidence_type") != OTEL_EVIDENCE_TYPE:
+        return False
+    if payload.get("status") != OTEL_EVIDENCE_STATUS_EXECUTED:
+        return False
+    backend = payload.get("backend")
+    if not isinstance(backend, str) or not backend.strip():
+        return False
+    trace_id = payload.get("trace_id")
+    if not isinstance(trace_id, str) or not _OTEL_TRACE_ID_RE.fullmatch(trace_id):
+        return False
+    span_count = payload.get("queried_span_count")
+    return _is_plain_int(span_count) and span_count > 0
+
+
 def otel_runtime_evidence_exists() -> bool:
-    """True when an OTLP closed-loop run has been recorded.
+    """True when an OTLP closed-loop run has been recorded as a valid artifact.
 
     A closed-loop claim requires a recorded trace artifact. This repository keeps
     such evidence under ``monitoring/evidence/`` when a local run has actually
-    happened; the directory does not exist today, which is why the runtime
-    closed loop is PENDING rather than verified.
+    happened; nothing is recorded today, which is why the runtime closed loop is
+    PENDING rather than verified.
+
+    Discovery is deliberately non-recursive and limited to ``*.json`` directly
+    inside the directory: a hand-made ``monitoring/evidence/tmp/debug/x.json`` or
+    a screenshot must not silently promote the top-level state. An unreadable or
+    malformed file is skipped rather than raised, so one bad file can neither
+    crash the checker nor become evidence just by existing, and it never blocks a
+    valid sibling from being found. Beyond readability and parseability a
+    candidate must satisfy :func:`is_valid_otel_runtime_evidence`.
     """
     evidence = ROOT / "monitoring" / "evidence"
     if not evidence.is_dir():
         return False
-    return any(evidence.glob("*.json"))
+    for candidate in sorted(evidence.glob("*.json")):
+        try:
+            if not candidate.is_file():
+                continue
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            # Not readable evidence. Skip it; keep looking for a real artifact.
+            continue
+        if is_valid_otel_runtime_evidence(payload):
+            return True
+    return False
 
 
 def audit_action_events_exist() -> bool:
@@ -1352,6 +1454,91 @@ _SLO_TARGET_BOUNDARY_RE = re.compile(
 )
 
 
+# ── 1d. the legacy Jaeger thrift-agent config must not come back ───────────
+#
+# The canonical export path is OpenTelemetry → OTLP. The Jaeger *backend* in
+# docker-compose.observability.yml is a current, working part of that path: it
+# receives OTLP on 4317/4318. Only the older thrift-*agent* configuration is
+# retired — JAEGER_AGENT_HOST/PORT and config.json's monitoring.jaeger block —
+# and that had no canonical reader at all, so shipping it only invited the
+# question "which exporter does this actually use?".
+#
+# The target here is that agent *configuration*, never the word "jaeger". A guard
+# that matched the bare token would delete the working OTLP backend along with the
+# dead config, so the patterns below are all agent-specific, and the guard also
+# asserts the backend is still there.
+
+#: Agent-specific legacy markers. Deliberately never a bare "jaeger".
+_LEGACY_JAEGER_AGENT_RE = re.compile(
+    r"JAEGER_AGENT_(?:HOST|PORT)|"
+    r"monitoring\s*[.]\s*jaeger|"
+    r"\bagent_(?:host|port)\b|"
+    r"opentelemetry-exporter-jaeger",
+    re.IGNORECASE,
+)
+
+#: Where legacy agent configuration could be reintroduced. The guard's own source
+#: is not in this list, so naming the markers above cannot trip the guard.
+_LEGACY_JAEGER_AGENT_SURFACES = (
+    "config.json",
+    ".env.example",
+    "README.md",
+    "PRD.md",
+    "docs/README.md",
+    "docs/operations-guide.md",
+    "docs/deployment-guide.md",
+    "docs/pre-launch-checklist.md",
+    "docs/slo-runbook.md",
+    "docs/repository-truth-audit.md",
+    "docs/interview-architecture-baseline.md",
+    "docs/interview-evidence-map.md",
+)
+
+
+def legacy_jaeger_agent_errors(name: str, text: str) -> list[str]:
+    """Return errors for a file that reintroduces the retired Jaeger agent config."""
+    errors: list[str] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        match = _LEGACY_JAEGER_AGENT_RE.search(line)
+        if match:
+            errors.append(
+                f"{name}:{line_number}: reintroduces the retired Jaeger thrift-agent "
+                f"configuration ({match.group(0)!r}); the canonical export path is "
+                "OpenTelemetry → OTLP, so drop this instead of documenting it"
+            )
+    return errors
+
+
+def check_legacy_jaeger_agent_config_is_absent(errors: list[str]) -> None:
+    """Retired agent config stays retired, while the OTLP backend stays working."""
+    for name in _LEGACY_JAEGER_AGENT_SURFACES:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        errors.extend(legacy_jaeger_agent_errors(name, path.read_text(encoding="utf-8")))
+
+    # The point of retiring the agent config is not to retire Jaeger. The optional
+    # overlay must keep a backend that receives OTLP, otherwise a future "cleanup"
+    # aimed at the dead config silently removes a working capability.
+    overlay = ROOT / "docker-compose.observability.yml"
+    if not overlay.exists():
+        return
+    text = overlay.read_text(encoding="utf-8")
+    try:
+        import yaml
+
+        services = set(yaml.safe_load(text).get("services", {}))
+    except Exception as exc:  # pragma: no cover - malformed compose is CI's other job
+        fail(errors, f"cannot parse docker-compose.observability.yml for the Jaeger backend check: {exc}")
+        return
+    if "jaeger" not in services:
+        fail(
+            errors,
+            "docker-compose.observability.yml must keep the optional jaeger backend: it receives "
+            "OTLP spans and is not the retired thrift-agent configuration",
+        )
+
+
 def check_observability_is_optional(errors: list[str]) -> None:
     """The canonical deployment must not require the observability stack."""
     base = ROOT / "docker-compose.yml"
@@ -1476,6 +1663,431 @@ def check_interview_baseline_exporter_split(errors: list[str]) -> None:
             errors,
             "docs/interview-architecture-baseline.md: must record the OTLP runtime closed loop as pending",
         )
+
+
+# ── 1b. one canonical row per capability in the evidence map ────────────────
+#
+# The capability table is the interview contract: every row is one claim with
+# one level. A capability listed twice is worse than a missing row, because the
+# two rows can disagree about the level and an interviewer quoting either one is
+# quoting an arbitrary pick. This guard derives the capability names from the
+# table itself, so it holds for any capability, present or future.
+
+INTERVIEW_EVIDENCE_MAP = "docs/interview-evidence-map.md"
+_VOCABULARY_SECTION = "## Classification vocabulary"
+_CAPABILITY_SECTION = "## Capability evidence"
+
+
+# One small markdown table reader, shared by every guard that inspects a
+# `## section` -> table -> column shape in this document. It is deliberately not a
+# general markdown parser: the tables here are flat pipe tables, and a full parser
+# would be a dependency and a second source of formatting rules.
+def _section_index(lines: list[str], heading: str) -> int | None:
+    """Index of an exact `## heading`, or None when the section is absent."""
+    return next((i for i, line in enumerate(lines) if line.strip() == heading), None)
+
+
+def _row_cells(line: str) -> list[str]:
+    return [part.strip() for part in line.strip("|").split("|")]
+
+
+def _header_row_index(lines: list[str], section_index: int, first_column: str) -> int | None:
+    """Index of the header row of the first table in a section whose first column matches."""
+    prefix = f"| {first_column.lower()} |"
+    return next(
+        (i for i in range(section_index + 1, len(lines)) if lines[i].strip().lower().startswith(prefix)),
+        None,
+    )
+
+
+def _table_cells(lines: list[str], header_index: int) -> Iterator[tuple[int, list[str]]]:
+    """Yield (1-based line number, cells) for the data rows of one contiguous table.
+
+    Reading stops at the first non-blank line that is not a `|` row, so a table
+    further down the same document is prose here, not a continuation of this one.
+    """
+    for offset in range(header_index + 1, len(lines)):
+        line = lines[offset]
+        if not line.startswith("|"):
+            if line.strip():
+                return
+            continue
+        if "---" in line:
+            continue
+        yield offset + 1, _row_cells(line)
+
+
+def _column_index(cells: list[str], name: str) -> int | None:
+    return next((i for i, cell in enumerate(cells) if cell.lower() == name), None)
+
+
+def duplicate_capability_errors(name: str, text: str) -> list[str]:
+    """Return errors for capability names repeated in the main capability table."""
+    lines = text.splitlines()
+    section = _section_index(lines, _CAPABILITY_SECTION)
+    if section is None:
+        return [f"{name}: is missing the {_CAPABILITY_SECTION!r} section"]
+
+    # Only the contiguous run of `|` lines that starts at the capability header is
+    # the main table; tables further down the document are prose, not capability
+    # rows, so parsing stops at the first non-table line after the header.
+    header = _header_row_index(lines, section, "capability")
+    if header is None:
+        return [f"{name}: {_CAPABILITY_SECTION!r} has no '| Capability |' header row"]
+
+    first_seen: dict[str, int] = {}
+    errors: list[str] = []
+    for line_number, cells in _table_cells(lines, header):
+        if not cells or not cells[0]:
+            continue
+        # Case-folded so a `Redis session` / `Redis Session` pair is one capability.
+        key = cells[0].casefold()
+        if key in first_seen:
+            errors.append(
+                f"{name}: capability {cells[0]!r} has more than one row in "
+                f"{_CAPABILITY_SECTION!r} (lines {first_seen[key]} and {line_number}); "
+                "merge them into a single canonical row"
+            )
+            continue
+        first_seen[key] = line_number
+    return errors
+
+
+def check_capability_rows_are_unique(errors: list[str]) -> None:
+    """The interview evidence map must give each capability exactly one row."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return
+    errors.extend(duplicate_capability_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
+
+
+# ── 1c. capability rows may only use levels the vocabulary defines ──────────
+#
+# The classification vocabulary is this document's own source of truth for which
+# evidence levels exist. A capability row naming a level the vocabulary does not
+# define makes the taxonomy contradict itself — the failure that shipped
+# `HISTORICAL` in the Jaeger row before the vocabulary caught up. The legal set is
+# parsed out of the vocabulary table rather than kept as a Python allow-list, so
+# adding a level is a documentation-only edit and a new level can never be silently
+# absent from the code's idea of what is legal.
+#
+# Scope is the main table's Level column only. Prose, code fences and the other
+# tables in this document legitimately mention non-level tokens (`EXECUTED`,
+# `OTEL_EXPORT_ENABLED`, the `rag_*` series), and validating those would be noise.
+
+#: A backticked identifier, which is how both tables spell a level.
+_BACKTICK_TOKEN_RE = re.compile(r"`([A-Za-z][A-Za-z0-9_]*)`")
+
+
+def undefined_evidence_level_errors(name: str, text: str) -> list[str]:
+    """Return errors for capability rows using an evidence level the vocabulary lacks.
+
+    Every backticked token in a main-table Level cell is checked, so a cell such as
+    "`REPO_VERIFIED` (framework) / `PENDING` (result)" validates each level on its own
+    and one defined level cannot excuse an undefined one beside it.
+    """
+    lines = text.splitlines()
+
+    # ── the vocabulary, which defines what a level is
+    vocabulary_section = _section_index(lines, _VOCABULARY_SECTION)
+    if vocabulary_section is None:
+        return [f"{name}: is missing the {_VOCABULARY_SECTION!r} section"]
+    vocabulary_header = _header_row_index(lines, vocabulary_section, "level")
+    if vocabulary_header is None:
+        return [f"{name}: could not parse evidence vocabulary: {_VOCABULARY_SECTION!r} has no '| Level |' header row"]
+    level_column = _column_index(_row_cells(lines[vocabulary_header]), "level")
+    if level_column is None:
+        return [f"{name}: could not parse evidence vocabulary: the vocabulary table has no 'Level' column"]
+    defined: set[str] = set()
+    for _, cells in _table_cells(lines, vocabulary_header):
+        if level_column < len(cells):
+            defined.update(_BACKTICK_TOKEN_RE.findall(cells[level_column]))
+    if not defined:
+        # An empty vocabulary must not read as "everything is allowed" or "nothing to
+        # check" — either would silently disable this guard.
+        return [f"{name}: could not parse evidence vocabulary: the Level column defines no backticked evidence level"]
+
+    # ── the capability table, which may only use them
+    capability_section = _section_index(lines, _CAPABILITY_SECTION)
+    if capability_section is None:
+        return [f"{name}: is missing the {_CAPABILITY_SECTION!r} section"]
+    capability_header = _header_row_index(lines, capability_section, "capability")
+    if capability_header is None:
+        return [f"{name}: {_CAPABILITY_SECTION!r} has no '| Capability |' header row"]
+    capability_level_column = _column_index(_row_cells(lines[capability_header]), "level")
+    if capability_level_column is None:
+        return [f"{name}: {_CAPABILITY_SECTION!r} has no 'Level' column"]
+
+    rows = list(_table_cells(lines, capability_header))
+    if not rows:
+        return [f"{name}: could not parse the {_CAPABILITY_SECTION!r} main table: it has no capability rows"]
+
+    errors: list[str] = []
+    for line_number, cells in rows:
+        if capability_level_column >= len(cells):
+            continue
+        for level in _BACKTICK_TOKEN_RE.findall(cells[capability_level_column]):
+            if level in defined:
+                continue
+            errors.append(
+                f"{name}: undefined evidence level in {_CAPABILITY_SECTION!r}: {level} (line {line_number}); "
+                f"define it in {_VOCABULARY_SECTION!r} or use one of {sorted(defined)}"
+            )
+    return errors
+
+
+def check_evidence_levels_are_defined(errors: list[str]) -> None:
+    """Every Capability evidence level must be defined by the classification vocabulary."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return
+    errors.extend(undefined_evidence_level_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
+
+
+# ── 1d. one canonical taxonomy for every current document ──────────────────
+#
+# The evidence map owns the vocabulary. A second, parallel status vocabulary in
+# another current document is the drift this guard removes: two vocabularies for
+# one kind of claim means two documents can disagree about the same evidence, and
+# a reader cannot tell which one is authoritative. That is exactly how
+# `docs/repository-truth-audit.md` ended up with `VERIFIED`/`PARTIAL`/`STALE`
+# beside the evidence map's own levels.
+#
+# The legal levels are read out of the vocabulary table instead of being restated
+# in Python. A Python copy would be a third place to forget to update, which is how
+# the two vocabularies diverged in the first place.
+
+#: The section of the evidence map that declares run outcomes, i.e. tokens that
+#: describe one execution rather than an evidence level.
+_RUN_OUTCOME_SECTION = "## Run outcomes that are not evidence levels"
+
+#: Column headers that carry an evidence classification. Deliberately narrow: a
+#: `Claim`, `Evidence basis` or prose cell is not a classification, and validating
+#: those would reject honest prose. The Chinese headers are included because this
+#: repository documents its own architecture baseline bilingually, and a
+#: Chinese-labelled status column is where a second vocabulary would reappear.
+EVIDENCE_COLUMN_HEADERS = frozenset(
+    {
+        "level",
+        "status",
+        "classification",
+        "evidence level",
+        "evidence classification",
+        "truth status",
+        "等级",
+        "状态",
+    }
+)
+
+#: A classification token: backticked upper snake case. This is the only shape an
+#: evidence level is written in, so a lowercase identifier or a prose sentence can
+#: never be mistaken for one.
+_CLASSIFICATION_TOKEN_RE = re.compile(r"`([A-Z][A-Z0-9_]+)`")
+
+#: A vocabulary token, which may contain single spaces so that a multi-word run
+#: outcome such as `NOT RUN` is still parsed as one declared token.
+_VOCABULARY_TOKEN_RE = re.compile(r"`([A-Za-z][A-Za-z0-9_]*(?: [A-Za-z][A-Za-z0-9_]*)*)`")
+
+#: A table row separator, e.g. `|---|---|`.
+_ROW_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
+
+#: The canonical level meaning "a superseded artifact in this repository". Named
+#: separately because the guard below asserts a *semantic* rule about it, not a
+#: vocabulary rule.
+SUPERSEDED_LEVEL = "HISTORICAL"
+
+
+def _evidence_vocabulary_tokens(text: str, heading: str, first_column: str) -> set[str]:
+    """Backticked tokens of the first column of the first table under ``heading``."""
+    lines = text.splitlines()
+    section = _section_index(lines, heading)
+    if section is None:
+        return set()
+    header = _header_row_index(lines, section, first_column)
+    if header is None:
+        return set()
+    column = _column_index(_row_cells(lines[header]), first_column)
+    if column is None:
+        return set()
+    tokens: set[str] = set()
+    for _, cells in _table_cells(lines, header):
+        if column < len(cells):
+            tokens.update(_VOCABULARY_TOKEN_RE.findall(cells[column]))
+    return tokens
+
+
+def canonical_evidence_levels() -> set[str]:
+    """The evidence levels this repository defines, parsed from the canonical table."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return set()
+    return _evidence_vocabulary_tokens(path.read_text(encoding="utf-8"), _VOCABULARY_SECTION, "level")
+
+
+def run_outcome_tokens() -> set[str]:
+    """Tokens that describe one execution rather than an evidence level."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return set()
+    return _evidence_vocabulary_tokens(path.read_text(encoding="utf-8"), _RUN_OUTCOME_SECTION, "token")
+
+
+def _pipe_table_blocks(lines: list[str]) -> Iterator[tuple[int, int]]:
+    """Yield (start, end) line indices of each maximal run of consecutive `|` rows."""
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.startswith("|"):
+            if start is None:
+                start = index
+        elif start is not None:
+            yield start, index
+            start = None
+    if start is not None:
+        yield start, len(lines)
+
+
+def evidence_classification_errors(name: str, text: str, legal: set[str]) -> list[str]:
+    """Return errors for classification cells naming something outside ``legal``.
+
+    Every classification column of every table in the document is checked, so a
+    second status vocabulary cannot be introduced by adding a table to a document
+    that already had one, and no document is exempt because its level column
+    happens to be spelled differently.
+    """
+    if not legal:
+        return [
+            f"{name}: cannot validate evidence classifications: the canonical vocabulary in "
+            f"{INTERVIEW_EVIDENCE_MAP} is missing or unparsable"
+        ]
+
+    lines = text.splitlines()
+    errors: list[str] = []
+    classified_tables = 0
+    for start, _ in _pipe_table_blocks(lines):
+        columns = _row_cells(lines[start])
+        if any(_ROW_SEPARATOR_CELL_RE.match(cell) for cell in columns):
+            continue
+        classified = [position for position, cell in enumerate(columns) if cell.lower() in EVIDENCE_COLUMN_HEADERS]
+        if not classified:
+            continue
+        classified_tables += 1
+        for line_number, cells in _table_cells(lines, start):
+            for position in classified:
+                if position >= len(cells):
+                    errors.append(
+                        f"{name}: line {line_number}: malformed row; the evidence classification column is missing"
+                    )
+                    continue
+                cell = cells[position]
+                tokens = _CLASSIFICATION_TOKEN_RE.findall(cell)
+                for token in tokens:
+                    if token in legal:
+                        continue
+                    errors.append(
+                        f"{name}: line {line_number}: {token!r} is not a canonical evidence level; "
+                        f"use one of {sorted(legal)}, or declare {token!r} as a run outcome in "
+                        f"{_RUN_OUTCOME_SECTION!r}"
+                    )
+                # An opaque status written in any language carries no token at all,
+                # which an upper-snake token rule alone would let through.
+                if not tokens:
+                    errors.append(
+                        f"{name}: line {line_number}: the evidence classification cell {cell!r} names no "
+                        f"canonical evidence level; use one of {sorted(legal)}"
+                    )
+
+    # A document that stops classifying evidence loses the guard entirely, so
+    # renaming the column away is itself the drift this catches.
+    if classified_tables == 0:
+        errors.append(
+            f"{name}: has no table with an evidence classification column "
+            f"({'/'.join(sorted(EVIDENCE_COLUMN_HEADERS))}); a document that classifies claims must "
+            "carry the canonical vocabulary"
+        )
+    return errors
+
+
+#: Current, interview-facing and repository-truth documentation. Historical plans
+#: under `docs/superpowers/` are deliberately absent: a superseded plan is not
+#: evidence and is not held to the current taxonomy.
+EVIDENCE_VOCABULARY_DOCS = (
+    "docs/interview-evidence-map.md",
+    "docs/interview-architecture-baseline.md",
+    "docs/repository-truth-audit.md",
+    "docs/open-source-hardcoding-audit.md",
+    "docs/validation/v2.5-runtime-security-validation.md",
+    "docs/validation/real-ragas-evaluation.md",
+)
+
+
+def check_evidence_vocabulary_is_canonical(errors: list[str]) -> None:
+    """No current document may classify evidence with a non-canonical level."""
+    legal = canonical_evidence_levels()
+    for name in EVIDENCE_VOCABULARY_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            fail(errors, f"{name} is missing")
+            continue
+        errors.extend(evidence_classification_errors(name, path.read_text(encoding="utf-8"), legal))
+
+
+#: The docs index section whose bullet list is the repository's vocabulary
+#: inventory. It must enumerate the canonical levels exactly: an inventory that
+#: drifts from the taxonomy is how a reader ends up trusting the wrong one.
+_DOCS_INDEX_VOCABULARY_SECTION = "## Evidence vocabulary"
+
+_BULLET_ITEM_RE = re.compile(r"^\s*[-*]\s")
+
+
+def docs_index_vocabulary_errors(name: str, text: str, levels: set[str]) -> list[str]:
+    """Return errors for an inventory that is not exactly the canonical vocabulary."""
+    if not levels:
+        return [
+            f"{name}: cannot check the vocabulary inventory: the canonical vocabulary in "
+            f"{INTERVIEW_EVIDENCE_MAP} is missing or unparsable"
+        ]
+    lines = text.splitlines()
+    section = _section_index(lines, _DOCS_INDEX_VOCABULARY_SECTION)
+    if section is None:
+        return [f"{name}: is missing the {_DOCS_INDEX_VOCABULARY_SECTION!r} section"]
+
+    # Only the bullet list is the inventory. The prose under it explains where the
+    # vocabulary lives and which tokens are run outcomes, and those tokens are
+    # named on purpose.
+    listed: set[str] = set()
+    for line in lines[section + 1 :]:
+        if line.startswith("#"):
+            break
+        if _BULLET_ITEM_RE.match(line):
+            listed.update(_VOCABULARY_TOKEN_RE.findall(line))
+
+    errors: list[str] = []
+    for token in sorted(levels - listed):
+        errors.append(f"{name}: {_DOCS_INDEX_VOCABULARY_SECTION!r} omits the canonical evidence level {token!r}")
+    for token in sorted(listed - levels):
+        errors.append(
+            f"{name}: {_DOCS_INDEX_VOCABULARY_SECTION!r} lists {token!r}, which is not a canonical "
+            f"evidence level; the inventory must match the vocabulary in {INTERVIEW_EVIDENCE_MAP} exactly"
+        )
+    return errors
+
+
+def check_docs_index_vocabulary(errors: list[str]) -> None:
+    """docs/README.md's vocabulary inventory must equal the canonical vocabulary."""
+    path = ROOT / "docs/README.md"
+    if not path.exists():
+        fail(errors, "docs/README.md is missing")
+        return
+    errors.extend(
+        docs_index_vocabulary_errors("docs/README.md", path.read_text(encoding="utf-8"), canonical_evidence_levels())
+    )
+
+
+#: The canonical classification vocabulary, resolved from the document at import
+#: time. It is empty when the evidence map cannot be read or parsed, and every
+#: guard that uses it treats empty as "cannot validate", so a damaged vocabulary
+#: fails closed instead of silently accepting anything.
+_CLASSIFICATION_TOKENS = frozenset(canonical_evidence_levels())
 
 
 # ── 2. operational `rag_*` references ───────────────────────────────────────
@@ -1805,18 +2417,10 @@ DELIVERED_AUDIT_AREAS = (
     "OTLP export",
 )
 
-#: The canonical classification vocabulary. A delivered row that names none of
-#: these is asserting an unclassified capability.
-_CLASSIFICATION_TOKENS = (
-    "REPO_VERIFIED",
-    "DESIGN_TARGET",
-    "PENDING",
-    "STALE",
-    "HISTORICAL",
-    "LOCAL_REAL_VALIDATION",
-    "PARTIAL",
-    "VERIFIED",
-)
+#: Where the canonical classification vocabulary is defined. Named so the guard can
+#: point an author at the one place a new level must be declared, rather than
+#: holding a second, diverging copy of the vocabulary here.
+_CLASSIFICATION_SOURCE = "docs/interview-evidence-map.md → Classification vocabulary"
 
 #: Long-lived trackers for evidence that only an external environment can produce.
 #: None of this repository's own changes can close them, so the audit must keep
@@ -1824,7 +2428,37 @@ _CLASSIFICATION_TOKENS = (
 #: is deleted from this list in the same commit that closes it.
 OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
 
+#: Reconciliation lineage, anchored on the tracking issue and never on the PR
+#: number. A PR number is narration that ages out: the next PR exists long
+#: before the reconciliation it carries is finished, so "PR #N is the latest /
+#: current one" is not a repository-truth property and must never become an
+#: invariant. The issue is stable, so the audit is checked against these.
+#:
+#: Both move in the same commit that closes the reconciliation issue and updates
+#: ``docs/repository-truth-audit.md``, exactly like
+#: ``OPEN_EXTERNAL_VALIDATION_TRACKERS`` above. A new reconciliation issue
+#: supersedes the previous one; it does not extend it.
+COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22)
+
+#: The single reconciliation issue the audit describes as the current open
+#: scope. At most one is active at a time.
+CURRENT_RECONCILIATION_ISSUE = 24
+
 _BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
+
+#: A reconciliation bullet records completion with one of these. ``closed`` is
+#: accepted because the audit already spells #16's state as ``closed
+#: (`completed`)``.
+_COMPLETED_MARKER_RE = re.compile(r"\b(closed|completed|merged|resolved)\b", re.IGNORECASE)
+
+#: Present-tense "this is the reconciliation happening now" phrasing. Deliberately
+#: about *scope*, never about a PR number.
+_CURRENT_SCOPE_RE = re.compile(r"\bthe\s+current\s+(one|scope|reconciliation|truth\b)", re.IGNORECASE)
+
+
+def _issue_reference(number: int) -> re.Pattern[str]:
+    """Match a Markdown/short reference to an issue or PR number."""
+    return re.compile(r"#[\[({]?" + str(number) + r"\b")
 
 
 def _tracker_section(audit_text: str) -> str | None:
@@ -1833,12 +2467,21 @@ def _tracker_section(audit_text: str) -> str | None:
 
 
 def _tracker_bullets(tracker: str) -> list[str]:
-    """Split the tracker map into bullets, including hard-wrapped continuations."""
+    """Split the tracker map into bullets, including hard-wrapped continuations.
+
+    A bullet is the contiguous run of non-blank lines that starts at a list
+    marker. Trailing prose paragraphs inside the section are *not* part of the
+    last bullet: without the blank-line cut-off a closing note such as
+    "Closing #N likewise records ..." is glued onto whichever bullet happens to
+    precede it, so a guard that looks up #N finds the note instead of the row it
+    meant to check -- and a removed row then satisfies its own guard.
+    """
     starts = [match.start() for match in _BULLET_SPLIT_RE.finditer(tracker)]
     if not starts:
         return [tracker]
     bounds = starts + [len(tracker)]
-    return [tracker[bounds[index] : bounds[index + 1]] for index in range(len(starts))]
+    bullets = [tracker[bounds[index] : bounds[index + 1]] for index in range(len(starts))]
+    return [re.split(r"(?m)^\s*$", bullet, maxsplit=1)[0] for bullet in bullets]
 
 
 def audit_tracker_errors(audit_text: str) -> list[str]:
@@ -1852,7 +2495,7 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
 
     bullets = _tracker_bullets(tracker)
     for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
-        reference = re.compile(r"#[\[({]?" + str(number) + r"\b")
+        reference = _issue_reference(number)
         line = next((bullet for bullet in bullets if reference.search(bullet)), None)
         if line is None:
             errors.append(
@@ -1867,6 +2510,38 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
                 "no change in this repository produces that external evidence"
             )
 
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        bullet = next((item for item in bullets if _issue_reference(number).search(item)), None)
+        if bullet is None:
+            errors.append(
+                f"repository truth audit: completed reconciliation issue #{number} is no longer recorded "
+                "in the tracker map; if its reconciliation reopened, record it as the current scope and "
+                "remove it from COMPLETED_RECONCILIATION_ISSUES in scripts/check_repo_consistency.py"
+            )
+            continue
+        if not _COMPLETED_MARKER_RE.search(bullet):
+            errors.append(f"repository truth audit: reconciliation issue #{number} must stay recorded as completed")
+        if _CURRENT_SCOPE_RE.search(bullet):
+            errors.append(
+                f"repository truth audit: reconciliation issue #{number} is recorded as completed and must "
+                "not also be described as the current reconciliation scope; that is the drift this audit "
+                "exists to prevent"
+            )
+
+    current = next((item for item in bullets if _issue_reference(CURRENT_RECONCILIATION_ISSUE).search(item)), None)
+    if current is None:
+        errors.append(
+            f"repository truth audit: current reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is not "
+            "recorded in the tracker map; record it as the open scope, or move it to "
+            "COMPLETED_RECONCILIATION_ISSUES in the same commit that closes it"
+        )
+    elif _COMPLETED_MARKER_RE.search(current):
+        errors.append(
+            f"repository truth audit: reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is recorded as "
+            "completed but is still the current scope; move it to COMPLETED_RECONCILIATION_ISSUES in the "
+            "same commit that closes it"
+        )
+
     for area in DELIVERED_AUDIT_AREAS:
         row = next(
             (line for line in audit_text.splitlines() if re.match(rf"^\|\s*{re.escape(area)}\s*\|", line)),
@@ -1875,10 +2550,17 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
         if row is None:
             errors.append(f"repository truth audit: no row for delivered area {area!r}")
             continue
+        if not _CLASSIFICATION_TOKENS:
+            errors.append(
+                f"repository truth audit: cannot classify delivered area {area!r}: the canonical vocabulary "
+                f"in {_CLASSIFICATION_SOURCE} is missing or unparsable"
+            )
+            continue
         if not any(token in row for token in _CLASSIFICATION_TOKENS):
             errors.append(
                 f"repository truth audit: delivered area {area!r} carries no explicit classification; "
-                "an unclassified delivered capability reads as a completed result"
+                f"an unclassified delivered capability reads as a completed result. Use one of "
+                f"{sorted(_CLASSIFICATION_TOKENS)}"
             )
     return errors
 
@@ -1889,6 +2571,265 @@ def check_audit_tracker_lineage(errors: list[str]) -> None:
     if not path.exists():
         return
     errors.extend(audit_tracker_errors(path.read_text(encoding="utf-8")))
+
+
+# ── 4. Qdrant evidence reconciliation ───────────────────────────────────────
+#
+# Qdrant carries two independent evidence states, and the repository must be able
+# to say both without contradiction:
+#
+#   * current reproducible coverage is the in-process `QdrantClient`, and
+#   * the PR #6/#7 development record contains a real local Qdrant
+#     service/container execution, which is lineage rather than a current result.
+#
+# Two failure modes follow, and the repository must be able to hold neither:
+#
+#   * "Qdrant has only ever run in memory" — erases a recorded execution; and
+#   * "Qdrant is validated against a real service" — asserts current evidence
+#     that no committed artifact supports.
+#
+# The second is additionally derived from disk rather than hardcoded: while no
+# real-service artifact is committed, any current-verification claim is an
+# overclaim no matter how it is phrased. The two claims are also checked against
+# each other, so the repository cannot deny one while asserting the other.
+
+#: Where a current real-service Qdrant run would have to leave its evidence.
+#: Derived from the working tree, like the benchmark and OTLP evidence probes, so
+#: the required wording follows what is actually committed instead of a fixed
+#: expectation.
+QDRANT_RUNTIME_ARTIFACT_GLOB = "artifacts/qdrant/*/metadata.json"
+
+#: The documents that classify Qdrant evidence. Both must keep recording the
+#: historical execution, so deleting the lineage cannot pass silently.
+QDRANT_EVIDENCE_LINEAGE_DOCS = (
+    "docs/interview-evidence-map.md",
+    "docs/repository-truth-audit.md",
+)
+
+#: "Only in-memory ever happened." Each pattern needs an absolute quantifier over
+#: time, because the honest statement about current coverage — "in-memory
+#: `QdrantClient`; no checked-in test targets a real service" — carries no such
+#: quantifier and must stay allowed.
+_QDRANT_ONLY_EVER_PATTERNS = (
+    r"(?:only|just)[^\n]{0,40}\bever\b",
+    r"\bever\b[^\n]{0,24}(?:only|just)\b",
+    r"Qdrant[^\n]{0,48}(?:has|have|had|was|were|is|are)\s+never\b",
+    r"(?:never|not\s+ever)[^\n]{0,48}(?:real|live|container|daemon)\s+(?:Qdrant\s+)?(?:service|server|instance)",
+    r"(?:从未|从来没有|从来没)[^\n]{0,24}Qdrant",
+    r"Qdrant[^\n]{0,24}(?:从未|从来没)",
+)
+
+#: "Real service is currently verified." An affirmative result claim about a real
+#: Qdrant service, in the present tense.
+_QDRANT_CURRENTLY_VERIFIED_PATTERNS = (
+    r"(?:real|live|local)\s+Qdrant[^\n]{0,40}(?:service|server|container|instance|daemon)"
+    r"[^\n]{0,40}(?:validated|verified|confirmed|passed)",
+    r"Qdrant[^\n]{0,40}(?:currently|now|today)[^\n]{0,24}(?:validated|verified|confirmed|reproducible)",
+    r"Qdrant[^\n]{0,32}LOCAL_REAL_VALIDATION",
+    r"(?:真实|本地)[^\n]{0,16}Qdrant[^\n]{0,24}(?:服务|容器)[^\n]{0,16}(?:已验证|验证通过)",
+    r"Qdrant[^\n]{0,24}(?:当前)?(?:已验证|验证通过)",
+)
+
+#: A statement scoped to current coverage cannot erase history, so it is exempt
+#: from the only-in-memory check: "the suite never connects to a real Qdrant
+#: service" describes today's coverage, not the absence of a past run. The words
+#: ``in-memory``/``in process`` are deliberately *not* markers here — the wrong
+#: claim quotes them, so exempting on them would exempt the claim itself.
+_QDRANT_CURRENT_SCOPE_RE = re.compile(
+    r"current(?:ly)?\b|today\b|checked[-\s]in|committed\b|"
+    r"deterministic|regression|\bsuite\b|\btests?\b|artifact|reproduc|pending",
+    re.IGNORECASE,
+)
+
+#: The claim is historical lineage, not a current claim.
+_QDRANT_LINEAGE_SCOPE_RE = re.compile(
+    r"historical|lineage|PR\s*#6|#6/#7|PR\s*#7|development\s+(?:round|record|phase)|"
+    r"at\s+that\s+time|历史|沿革|开发过程",
+    re.IGNORECASE,
+)
+
+#: The claim says the result is absent, which is the honest current state.
+_QDRANT_NO_RESULT_SCOPE_RE = re.compile(
+    r"no\s+(?:checked[-\s]in\s+|committed\s+|current\s+|reproducible\s+|such\s+)?"
+    r"(?:artifact|test|evidence|result)|not\s+(?:a\s+)?(?:current\s+)?"
+    r"(?:reproducible|committed|verified|validated)|nothing\s+committed|"
+    r"PENDING|pending|NOT\s+RUN|out\s+of\s+scope|would\s+require|"
+    r"requires\s+a\s+new|upgrad\w+\s+[^.\n]{0,40}require|"
+    r"没有.{0,10}产物|无产物|尚未|未执行|不在本轮|需要新的|需要.?新",
+    re.IGNORECASE,
+)
+
+#: "Do not say X", written as a prohibition. A document is required to write the
+#: denial, so the frame is a signal to skip rather than a signal to fail. Matches
+#: gerunds too, because these documents quote the wrong claim inside prose. A bare
+#: ``Never`` is deliberately not a frame: "never validated against a real Qdrant
+#: service" is the erasure this guard exists to catch, not a prohibition.
+_QDRANT_PROHIBITION_FRAME_RE = re.compile(
+    r"\bClaim(?:ing|s)?\b|\bSays?\b|\bDo" + _EMPHASIS_GAP + r"not\b|\bDon't\b|"
+    r"\bMust" + _EMPHASIS_GAP + r"not\b|"
+    r"\bwrong\s+claim\b|\bboth\s+directions?\b|\bcollapse[sd]?\b|\berras\w+\b|"
+    r"不能说|不得|不要(?:说|声称)|不应(?:说|声称)",
+    re.IGNORECASE,
+)
+
+_QDRANT_SENTENCE_SPLIT_RE = re.compile(r"[；;。！!？?\n]+|\.(?=\s|$)")
+
+
+def qdrant_runtime_artifact_exists(root: Path | None = None) -> bool:
+    """True when a committed real-service Qdrant run artifact is on disk."""
+    base = root or ROOT
+    return any(path.is_file() for path in base.glob(QDRANT_RUNTIME_ARTIFACT_GLOB))
+
+
+def _qdrant_claim_patterns(
+    text: str,
+    patterns: tuple[str, ...],
+    extra_exemption: re.Pattern[str] | None = None,
+) -> list[str]:
+    """Return the matched claim fragments for one Qdrant claim family.
+
+    Scoped to sentences that actually name Qdrant, so a generic "never" or
+    "verified" elsewhere in a document cannot trip the guard, and clause markers
+    that scope the sentence to lineage or to an absent result suppress the claim.
+    """
+    claims: list[str] = []
+    for sentence in _QDRANT_SENTENCE_SPLIT_RE.split(text):
+        if "qdrant" not in sentence.casefold():
+            continue
+        if _QDRANT_PROHIBITION_FRAME_RE.search(sentence):
+            continue
+        if _QDRANT_LINEAGE_SCOPE_RE.search(sentence) or _QDRANT_NO_RESULT_SCOPE_RE.search(sentence):
+            continue
+        if extra_exemption is not None and extra_exemption.search(sentence):
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match:
+                claims.append(match.group(0).strip())
+                break
+    return claims
+
+
+def qdrant_only_ever_claims(text: str) -> list[str]:
+    """Return claims that deny any real Qdrant service ever being exercised."""
+    return _qdrant_claim_patterns(text, _QDRANT_ONLY_EVER_PATTERNS, _QDRANT_CURRENT_SCOPE_RE)
+
+
+def qdrant_currently_verified_claims(text: str) -> list[str]:
+    """Return claims that a real Qdrant service is currently validated."""
+    return _qdrant_claim_patterns(text, _QDRANT_CURRENTLY_VERIFIED_PATTERNS)
+
+
+def qdrant_evidence_claim_errors(name: str, text: str, artifact_exists: bool) -> list[str]:
+    """Return the Qdrant evidence-claim errors for one document."""
+    errors: list[str] = []
+    denials = qdrant_only_ever_claims(text)
+    if denials:
+        errors.append(
+            f"{name}: denies that a real Qdrant service was ever exercised, which the PR #6/#7 "
+            f"development record contradicts: {denials}"
+        )
+    verified = qdrant_currently_verified_claims(text)
+    if verified and not artifact_exists:
+        errors.append(
+            f"{name}: claims a real Qdrant service is currently validated with no artifact on disk "
+            f"({QDRANT_RUNTIME_ARTIFACT_GLOB}): {verified}"
+        )
+    return errors
+
+
+def qdrant_doc_claims(docs: Iterable[tuple[str, str]]) -> tuple[list[str], list[str]]:
+    """Return ``(denials, verifications)`` across named documents.
+
+    Denials and verifications are collected together because the contradiction
+    between them is a repository-level property: two documents can disagree
+    without either one disagreeing with itself.
+    """
+    denials: list[str] = []
+    verified: list[str] = []
+    for name, text in docs:
+        denials.extend(f"{name}: {claim}" for claim in qdrant_only_ever_claims(text))
+        verified.extend(f"{name}: {claim}" for claim in qdrant_currently_verified_claims(text))
+    return denials, verified
+
+
+def qdrant_contradiction_errors(denials: list[str], verified: list[str]) -> list[str]:
+    """Reject holding both contradictory Qdrant claims at the same time."""
+    if not (denials and verified):
+        return []
+    return [
+        f"Qdrant evidence is self-contradictory: the repository both denies any real-service "
+        f"execution ({denials}) and claims one is verified ({verified})"
+    ]
+
+
+def qdrant_lineage_errors(name: str, text: str, artifact_exists: bool) -> list[str]:
+    """Require the classifying documents to keep recording both Qdrant states.
+
+    The historical-execution half is permanent: that run happened, so no
+    reconciliation may quietly stop recording it. The "no artifact yet" half is
+    derived from disk, because it stops being true the moment a real-service run
+    commits one.
+    """
+    errors: list[str] = []
+    records_run = re.search(r"#6/#7|PR\s*#6|PR\s*#7", text) and re.search(
+        r"real\s+(?:local\s+)?Qdrant\s+(?:service|container)|"
+        r"Qdrant[^\n]{0,24}(?:service|container)[^\n]{0,24}(?:run|execution)|"
+        r"真实[^\n]{0,12}Qdrant[^\n]{0,12}(?:服务|容器)",
+        text,
+        re.IGNORECASE,
+    )
+    if not records_run:
+        errors.append(
+            f"{name}: must record that the PR #6/#7 development round ran the writers against a real "
+            "local Qdrant service/container, alongside Elasticsearch"
+        )
+    if artifact_exists:
+        return errors
+    if not re.search(
+        r"no\s+(?:checked[-\s]in\s+|committed\s+|current\s+|reproducible\s+)?artifact|"
+        r"not\s+a\s+current\s+reproducible|"
+        r"requires?\s+a\s+new|new\s+real[-\s]service\s+run|"
+        r"没有.{0,10}产物|无产物|需要新的",
+        text,
+        re.IGNORECASE,
+    ):
+        errors.append(
+            f"{name}: must state that no artifact of the historical Qdrant run is committed and that "
+            "upgrading the current evidence requires a new real-service run"
+        )
+    return errors
+
+
+def check_qdrant_evidence_reconciliation(errors: list[str], root: Path | None = None) -> None:
+    """Qdrant must record both evidence states and claim neither away."""
+    base = root or ROOT
+    artifact_exists = qdrant_runtime_artifact_exists(base)
+
+    docs: list[tuple[str, str]] = []
+    for doc in CANONICAL_DOCS:
+        if not doc.exists():
+            continue
+        name = str(doc.relative_to(ROOT)) if doc.is_relative_to(ROOT) else str(doc)
+        text = doc.read_text(encoding="utf-8")
+        docs.append((name, text))
+        errors.extend(qdrant_evidence_claim_errors(name, text, artifact_exists))
+
+    denials, verified = qdrant_doc_claims(docs)
+    errors.extend(qdrant_contradiction_errors(denials, verified))
+
+    for name in QDRANT_EVIDENCE_LINEAGE_DOCS:
+        path = base / name
+        if not path.exists():
+            continue
+        errors.extend(qdrant_lineage_errors(name, path.read_text(encoding="utf-8"), artifact_exists))
+
+    if artifact_exists:
+        fail(
+            errors,
+            f"a Qdrant real-service artifact now exists under {QDRANT_RUNTIME_ARTIFACT_GLOB}; the "
+            "current-evidence wording is now stale and must be re-derived from that artifact",
+        )
 
 
 def check_canonical_runtime_is_not_observability_gated(errors: list[str]) -> None:
@@ -2012,6 +2953,13 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
         return
 
     seen_areas: dict[str, str] = {}
+    legal = canonical_evidence_levels()
+    if not legal:
+        fail(
+            errors,
+            f"repository truth audit cannot be validated: the canonical vocabulary in {INTERVIEW_EVIDENCE_MAP} "
+            "is missing or unparsable",
+        )
     # Only the contiguous run of `|` lines that starts at the audit header is the
     # audit table. Later tables in the same document are prose, not audit rows, so
     # parsing must stop at the first non-table line after the header.
@@ -2028,9 +2976,22 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
             fail(errors, f"repository audit line {line_number + 1}: malformed row")
             continue
         status = columns[status_column]
-        if status not in STATUSES:
-            fail(errors, f"repository audit line {line_number + 1}: invalid status {status!r}")
-            continue
+        # The status cell must name canonical levels and nothing else, so a row
+        # cannot quietly revert to a retired status word or to prose.
+        levels = _CLASSIFICATION_TOKEN_RE.findall(status)
+        if not levels:
+            fail(
+                errors,
+                f"repository audit line {line_number + 1}: status {status!r} names no canonical evidence "
+                f"level; use one of {sorted(legal) or ['(canonical vocabulary unreadable)']}",
+            )
+        for level in levels:
+            if level not in legal:
+                fail(
+                    errors,
+                    f"repository audit line {line_number + 1}: {level!r} is not a canonical evidence level; "
+                    f"use one of {sorted(legal) or ['(canonical vocabulary unreadable)']}",
+                )
         seen_areas[columns[area_column]] = status
 
     missing_areas = REQUIRED_AUDIT_AREAS - set(seen_areas)
@@ -2038,9 +2999,11 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
         fail(errors, f"repository truth audit is missing required areas: {sorted(missing_areas)}")
 
     for area in sorted(OFFLINE_CAPABILITY_AREAS & set(seen_areas)):
-        if seen_areas[area] in {"PLANNED", "BROKEN", "STALE"}:
+        if SUPERSEDED_LEVEL in _CLASSIFICATION_TOKEN_RE.findall(seen_areas[area]):
             fail(
-                errors, f"repository truth audit classifies existing offline capability {area!r} as {seen_areas[area]}"
+                errors,
+                f"repository truth audit classifies existing offline capability {area!r} as "
+                f"{SUPERSEDED_LEVEL}; it exists in the current tree and is not a superseded artifact",
             )
 
 
@@ -2088,9 +3051,15 @@ def main() -> int:
     check_enterprise_readiness_coverage(errors)
     check_exporter_truth_contract(errors)
     check_interview_baseline_exporter_split(errors)
+    check_capability_rows_are_unique(errors)
+    check_evidence_levels_are_defined(errors)
+    check_qdrant_evidence_reconciliation(errors)
+    check_evidence_vocabulary_is_canonical(errors)
+    check_docs_index_vocabulary(errors)
     check_operational_metric_references(errors)
     check_audit_tracker_lineage(errors)
     check_observability_is_optional(errors)
+    check_legacy_jaeger_agent_config_is_absent(errors)
     check_canonical_runtime_is_not_observability_gated(errors)
 
     contract_dir = ROOT / "tests/contracts"

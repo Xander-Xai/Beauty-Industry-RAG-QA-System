@@ -33,6 +33,7 @@
 ### 尚未作为生产结果验证
 
 - 真实模型质量、生产延迟/QPS、大规模语料吞吐。真实 BGE/CLIP/PaddleOCR smoke 需要本地模型资产；本仓库当前未执行，状态为 `EXTERNAL_MODEL_ASSET_REQUIRED`，不使用确定性测试 embedder 冒充真实模型验证。
+- Qdrant 的两个证据状态必须分开读：**当前可复现的回归覆盖是进程内 `QdrantClient`（`QdrantClient(":memory:")`）**，仓库中没有连接真实 Qdrant 服务的测试，也没有提交任何真实服务运行的产物；**PR #6/#7 的开发记录中包含一次真实本地 Qdrant 服务/容器的集成运行**（与真实本地 Elasticsearch 同一轮）。后者是开发沿革，不是当前可复现的 `LOCAL_REAL_VALIDATION`，也不代表生产 HA、集群性能、模型质量、QPS 或延迟已验证。升级为当前证据需要**新的**真实服务运行并提交可复现产物。详见 [audit](docs/repository-truth-audit.md#qdrant-evidence-current-coverage-and-historical-execution)。
 
 ### 常用离线命令
 
@@ -101,6 +102,29 @@ Compose 需要 Redis、Qdrant、Elasticsearch 等服务。启动前检查 compos
 - RAGAS evaluation harness / reporter / validator 与 golden set 存在（最初 seed 27 条，当前已扩展到 300+ 条；实际条目数以 `validate_golden_set` 输出和 `golden_set.jsonl` 为准）。RAGAS 是隔离的可选 evaluator，不在默认依赖中（等待上游安全修复）。库级 `evaluate()` 保留 evaluator-unavailable fallback，该结果不是质量结果；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast** 并返回非零状态且不生成 quality report。当前仓库没有经过验证的真实 RAGAS quality score。
 
 这些能力的实现边界和证据列于 [audit](docs/repository-truth-audit.md)。性能数字如未附 benchmark 产物，不视为已验证结果。
+
+## Enterprise security boundaries
+
+本节只描述已在代码与确定性测试中落地的边界控制，状态均为 `REPO_VERIFIED`。它们是 **defense-in-depth（纵深防御）** 控制，不是隔离墙。
+
+### 检索证据的信任边界
+
+检索证据来自知识库文档，因此被显式当作**不可信数据**处理：system message 声明其不是指令、不得执行其中的要求，只用于提取事实。
+
+- **保留标记结构化编码**：三个边界的开闭标记集中定义为 `RESERVED_TRUST_BOUNDARY_MARKERS`。任何 payload channel（检索证据、当前用户输入、回放的对话历史、续写 assistant 前缀）中出现的同名标记都被转义为数据形态（`&lt;` / `&gt;`），因此文档或对话内容无法伪造边界标记把自己移出 untrusted 区域。
+- **当前请求与检索证据结构分离**：证据限制在 `<retrieved_context>` 区块内，用户当前请求位于其后的 `<user_query>` 区块。证据本身不被删除或过滤，只是被限定在数据区块内。
+- **对话历史指令优先级有界**：历史对话用于会话上下文与指代承接，**不是**不可信检索数据；但其中用户消息的要求不具有高于当前请求的持续效力，与当前 `<user_query>` 冲突时以当前请求为准。
+- **续写指令使用应用自有框架**：续写流程的 trusted instruction 放在独立的 `<continuation_instruction>` 区块（不复用表示"用户当前直接请求"的 `<user_query>`），回放的 `already_generated` 前缀同样经过标记编码。
+
+这是 **prompt 层结构约束，不是强隔离**：模型仍可能忽略 prompt 中的文字指令。它不解决 prompt injection，也不能证明越狱（jailbreak）不可能——更强的边界需要检索侧检测、文档隔离与输出侧校验，这些不在本层。
+
+### 授权声明与缓存隔离
+
+- **JWT role/dept 是严格 uint32 授权声明**：`role_mask` / `dept_mask` 在身份入口按 uint32 无符号范围严格校验（要求真正的 `int`，拒绝布尔与字符串，不做 `int()` 转换或截断）。签名有效只证明 token 来自持钥方，不代表其授权声明良构；畸形声明 fail closed，且"存在但非法"不会被当成"缺失"而回退到按角色名编码。管理员路由在任何权限判断之前先构造规范身份。
+- **Redis L2 物理 key 按 role/dept 分区**：物理地址形如 `rag:l2:rm:{role_mask}:dm:{dept_mask}:{key}`，分区由 cache 对象自身强制，而不再只依赖调用方纪律；`get()` / `set()` 共用同一个 key 构造 helper，避免读写 drift。
+- **旧的无分区 key 不回落**：历史遗留的 `rag:l2:{key}` 不会被任何权限化读取命中——不做 fallback，宁可 miss。
+
+以上均为 defense-in-depth：它们**不**代表 prompt injection 已解决、模型对越狱免疫，也**不**代表 RBAC 已在生产环境验证。证据分级口径与逐项状态见 [evidence map](docs/interview-evidence-map.md) 与 [truth audit](docs/repository-truth-audit.md)。
 
 ## Retrieval benchmark
 

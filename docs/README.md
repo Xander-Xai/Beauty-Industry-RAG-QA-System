@@ -11,6 +11,22 @@ development-phase label**, not a release and not the current runtime version —
 [Version policy](repository-truth-audit.md#version-policy). Files are not renamed to avoid
 breaking existing links.
 
+## Evidence vocabulary
+
+One canonical taxonomy classifies every evidence claim in the current documentation:
+[Classification vocabulary](interview-evidence-map.md#classification-vocabulary). That
+table is the single source; this index does not extend it.
+
+- `HISTORICAL_PRODUCTION` — work actually done in a former employer's production environment.
+- `HISTORICAL` — a superseded in-repository implementation/config/design kept for lineage.
+- `REPO_VERIFIED` — implemented here and covered by collected deterministic tests or CI.
+- `LOCAL_REAL_VALIDATION` — exercised here against a real dependency on one local host.
+- `DESIGN_TARGET` — a recorded PRD/plan target with no implementation or reproducible benchmark.
+- `PENDING` — implemented but the real asset/runtime/credential needed to validate it is missing here.
+
+`PARTIAL`, `EXECUTED`, `BLOCKED`, `PASS` and `NOT RUN` are **run outcomes**, not evidence
+levels; see [Run outcomes that are not evidence levels](interview-evidence-map.md#run-outcomes-that-are-not-evidence-levels).
+
 ## Canonical / Current
 
 - [Project overview and quick start](../README.md)
@@ -19,6 +35,10 @@ breaking existing links.
 - [Operations guide](operations-guide.md)
 - [Data administration guide](data-admin-guide.md)
 - [Repository truth audit](repository-truth-audit.md)
+- [Security regression coverage](security-regression-coverage.md): the fixed threat list
+  (retrieved-chunk injection, poisoned documents, forged boundary markers, cross-role
+  retrieval and L2 cache leakage, malformed JWT claims, deletion/stale chunks), the control
+  and test behind each, and the bounded gaps that remain open.
 - [Open-source configuration and hardcoding audit](open-source-hardcoding-audit.md)
 - [Pre-launch checklist](pre-launch-checklist.md)
 
@@ -64,9 +84,10 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
 
 - [Interview architecture baseline](interview-architecture-baseline.md): the current
   end-to-end retrieval/generation contract an interviewer can hold the code to.
-- [Interview evidence map](interview-evidence-map.md): classification of every claim
-  as `HISTORICAL_PRODUCTION`, `REPO_VERIFIED`, `LOCAL_REAL_VALIDATION`, `DESIGN_TARGET`
-  or `PENDING`.
+- [Interview evidence map](interview-evidence-map.md): the canonical evidence vocabulary
+  and the classification of every claim. This map owns the taxonomy; the truth audit's
+  `Status` column and the validation records' `Evidence level` columns use the same
+  levels.
 
 ## Design
 

@@ -16,12 +16,15 @@ ES Fallback 不算第五路。它是 Qdrant 异常或有效文档不足时使用
 
 ## 事实等级
 
-| 等级 | 含义 | 面试表述 |
+本节的等级就是 [Interview evidence map → Classification vocabulary](interview-evidence-map.md#classification-vocabulary)
+中的 canonical evidence vocabulary，本文件不另立一套状态词。下面只补充每个等级在当前主链路里的面试表述。
+
+| 等级 | 在当前主链路中的含义 | 面试表述 |
 |---|---|---|
-| 当前主链路 | 已接入 `app.py -> api/routes.py -> core/pipeline.py` | 可以说“当前系统采用” |
-| 代码与测试已实现 | 有实现和契约测试，但需要真实基础设施、模型权重进一步验收 | 可以说“系统已实现，生产效果需部署验收” |
-| 可选能力 | 代码或配置存在，但当前默认未开启或未接入主链路 | 只能说“支持”或“预留” |
-| 未闭环 | 缺少有效运行结果或生产数据 | 不能说“已经上线验证” |
+| `REPO_VERIFIED` | 已接入 `app.py -> api/routes.py -> core/pipeline.py`，有实现和契约测试 | 可以说“当前系统采用” |
+| `REPO_VERIFIED`（实现）/ `PENDING`（真实资产） | 有实现和契约测试，但需要真实基础设施、模型权重进一步验收 | 可以说“系统已实现，生产效果需部署验收” |
+| `REPO_VERIFIED`（可选能力，未接入主链路） | 代码或配置存在，但当前默认未开启或未接入主链路 | 只能说“支持”或“预留” |
+| `PENDING` | 缺少有效运行结果或生产数据 | 不能说“已经上线验证” |
 
 ## 当前主链路
 
@@ -102,7 +105,7 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 ## 可观测性与评测边界
 
-面试时最重要的一句区分：**「实现了」不等于「生产验证过」**。下面按证据等级分层，不要跨层表述。
+面试时最重要的一句区分：**「实现了」不等于「生产验证过」**。下面按 canonical 证据等级分层，不要跨层表述。
 
 ### REPO_VERIFIED（本仓库代码 + 确定性测试覆盖）
 
@@ -155,7 +158,7 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 所以只能说：**「追踪钩子已接入，OTLP exporter 已实现且默认关闭，运行期闭环是 PENDING」**。
 不能说「OpenTelemetry/Jaeger 导出已闭环」「tracing 已验证」「Jaeger 已上线」——
 本仓库没有任何一个 span 被后端查询到过。旧 PRD / 旧计划里的 Jaeger thrift agent 路径
-（`config.json` → `monitoring.jaeger.*`）是历史配置，当前 exporter 走 OTLP，不走 Jaeger agent。
+已经移除：它从未有过 canonical 消费者，当前 exporter 走 OTLP，不走 Jaeger agent。
 
 ### 两套告警机制不要混淆
 

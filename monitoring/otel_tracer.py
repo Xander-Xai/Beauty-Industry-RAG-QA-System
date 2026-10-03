@@ -10,9 +10,11 @@ OpenTelemetry 全链路追踪 + 全链路指标收集
   为可选依赖），未设置环境变量时不构造任何 exporter，span 既不导出也不保留。
 - **闭环证据**：`PENDING`。应用 → exporter → collector → 后端 → 实际查到 span
   这一整条链路在本仓库没有留下任何运行期证据，因此**不得**表述为
-  "OTel/Jaeger 导出已闭环" 或 "tracing validated"。Jaeger 也不是默认 exporter：
-  `config.json` → `monitoring.jaeger.*` 是历史 thrift agent 路径，OTel SDK 已不再
-  附带 jaeger exporter，当前 OTLP 路径由 `monitoring/otel_exporter.py` 负责。
+  "OTel/Jaeger 导出已闭环" 或 "tracing validated"。
+  旧的 Jaeger thrift-agent/exporter 配置已从当前仓库移除，不再是可配置导出路径，
+  OTel SDK 也不附带 jaeger exporter。当前应用侧导出由 `monitoring/otel_exporter.py`
+  的 OTLP exporter 负责；`docker-compose.observability.yml` 中的可选 Jaeger 服务
+  仍作为 OTLP receiver（4317/4318）接收 span，但它不是导出路径，本身也不构成闭环证据。
 
 实现层级：
 - OpenTelemetryTracer: span 追踪（OTel SDK provider，或 SDK 缺失/初始化失败时的本地内存模式）
