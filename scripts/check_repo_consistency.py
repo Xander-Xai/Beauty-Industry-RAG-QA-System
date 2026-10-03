@@ -25,6 +25,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1505,49 +1506,82 @@ def check_interview_baseline_exporter_split(errors: list[str]) -> None:
 # table itself, so it holds for any capability, present or future.
 
 INTERVIEW_EVIDENCE_MAP = "docs/interview-evidence-map.md"
+_VOCABULARY_SECTION = "## Classification vocabulary"
 _CAPABILITY_SECTION = "## Capability evidence"
+
+
+# One small markdown table reader, shared by every guard that inspects a
+# `## section` -> table -> column shape in this document. It is deliberately not a
+# general markdown parser: the tables here are flat pipe tables, and a full parser
+# would be a dependency and a second source of formatting rules.
+def _section_index(lines: list[str], heading: str) -> int | None:
+    """Index of an exact `## heading`, or None when the section is absent."""
+    return next((i for i, line in enumerate(lines) if line.strip() == heading), None)
+
+
+def _row_cells(line: str) -> list[str]:
+    return [part.strip() for part in line.strip("|").split("|")]
+
+
+def _header_row_index(lines: list[str], section_index: int, first_column: str) -> int | None:
+    """Index of the header row of the first table in a section whose first column matches."""
+    prefix = f"| {first_column.lower()} |"
+    return next(
+        (i for i in range(section_index + 1, len(lines)) if lines[i].strip().lower().startswith(prefix)),
+        None,
+    )
+
+
+def _table_cells(lines: list[str], header_index: int) -> Iterator[tuple[int, list[str]]]:
+    """Yield (1-based line number, cells) for the data rows of one contiguous table.
+
+    Reading stops at the first non-blank line that is not a `|` row, so a table
+    further down the same document is prose here, not a continuation of this one.
+    """
+    for offset in range(header_index + 1, len(lines)):
+        line = lines[offset]
+        if not line.startswith("|"):
+            if line.strip():
+                return
+            continue
+        if "---" in line:
+            continue
+        yield offset + 1, _row_cells(line)
+
+
+def _column_index(cells: list[str], name: str) -> int | None:
+    return next((i for i, cell in enumerate(cells) if cell.lower() == name), None)
 
 
 def duplicate_capability_errors(name: str, text: str) -> list[str]:
     """Return errors for capability names repeated in the main capability table."""
     lines = text.splitlines()
-    section = next((i for i, line in enumerate(lines) if line.strip() == _CAPABILITY_SECTION), None)
+    section = _section_index(lines, _CAPABILITY_SECTION)
     if section is None:
         return [f"{name}: is missing the {_CAPABILITY_SECTION!r} section"]
 
     # Only the contiguous run of `|` lines that starts at the capability header is
     # the main table; tables further down the document are prose, not capability
     # rows, so parsing stops at the first non-table line after the header.
-    header = next(
-        (i for i in range(section + 1, len(lines)) if lines[i].strip().lower().startswith("| capability |")),
-        None,
-    )
+    header = _header_row_index(lines, section, "capability")
     if header is None:
         return [f"{name}: {_CAPABILITY_SECTION!r} has no '| Capability |' header row"]
 
     first_seen: dict[str, int] = {}
     errors: list[str] = []
-    for offset in range(header + 1, len(lines)):
-        line = lines[offset]
-        if not line.startswith("|"):
-            if line.strip():
-                break
-            continue
-        if "---" in line:
-            continue
-        capability = line.strip("|").split("|")[0].strip()
-        if not capability:
+    for line_number, cells in _table_cells(lines, header):
+        if not cells or not cells[0]:
             continue
         # Case-folded so a `Redis session` / `Redis Session` pair is one capability.
-        key = capability.casefold()
+        key = cells[0].casefold()
         if key in first_seen:
             errors.append(
-                f"{name}: capability {capability!r} has more than one row in "
-                f"{_CAPABILITY_SECTION!r} (lines {first_seen[key]} and {offset + 1}); "
+                f"{name}: capability {cells[0]!r} has more than one row in "
+                f"{_CAPABILITY_SECTION!r} (lines {first_seen[key]} and {line_number}); "
                 "merge them into a single canonical row"
             )
             continue
-        first_seen[key] = offset + 1
+        first_seen[key] = line_number
     return errors
 
 
@@ -1557,6 +1591,97 @@ def check_capability_rows_are_unique(errors: list[str]) -> None:
     if not path.exists():
         return
     errors.extend(duplicate_capability_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
+
+
+# ── 1c. capability rows may only use levels the vocabulary defines ──────────
+#
+# The classification vocabulary is this document's own source of truth for which
+# evidence levels exist. A capability row naming a level the vocabulary does not
+# define makes the taxonomy contradict itself — the failure that shipped
+# `HISTORICAL` in the Jaeger row before the vocabulary caught up. The legal set is
+# parsed out of the vocabulary table rather than kept as a Python allow-list, so
+# adding a level is a documentation-only edit and a new level can never be silently
+# absent from the code's idea of what is legal.
+#
+# Scope is the main table's Level column only. Prose, code fences and the other
+# tables in this document legitimately mention non-level tokens (`EXECUTED`,
+# `OTEL_EXPORT_ENABLED`, the `rag_*` series), and validating those would be noise.
+
+#: A backticked identifier, which is how both tables spell a level.
+_BACKTICK_TOKEN_RE = re.compile(r"`([A-Za-z][A-Za-z0-9_]*)`")
+
+
+def undefined_evidence_level_errors(name: str, text: str) -> list[str]:
+    """Return errors for capability rows using an evidence level the vocabulary lacks.
+
+    Every backticked token in a main-table Level cell is checked, so a cell such as
+    "`REPO_VERIFIED` (framework) / `PENDING` (result)" validates each level on its own
+    and one defined level cannot excuse an undefined one beside it.
+    """
+    lines = text.splitlines()
+
+    # ── the vocabulary, which defines what a level is
+    vocabulary_section = _section_index(lines, _VOCABULARY_SECTION)
+    if vocabulary_section is None:
+        return [f"{name}: is missing the {_VOCABULARY_SECTION!r} section"]
+    vocabulary_header = _header_row_index(lines, vocabulary_section, "level")
+    if vocabulary_header is None:
+        return [
+            f"{name}: could not parse evidence vocabulary: "
+            f"{_VOCABULARY_SECTION!r} has no '| Level |' header row"
+        ]
+    level_column = _column_index(_row_cells(lines[vocabulary_header]), "level")
+    if level_column is None:
+        return [f"{name}: could not parse evidence vocabulary: the vocabulary table has no 'Level' column"]
+    defined: set[str] = set()
+    for _, cells in _table_cells(lines, vocabulary_header):
+        if level_column < len(cells):
+            defined.update(_BACKTICK_TOKEN_RE.findall(cells[level_column]))
+    if not defined:
+        # An empty vocabulary must not read as "everything is allowed" or "nothing to
+        # check" — either would silently disable this guard.
+        return [
+            f"{name}: could not parse evidence vocabulary: "
+            "the Level column defines no backticked evidence level"
+        ]
+
+    # ── the capability table, which may only use them
+    capability_section = _section_index(lines, _CAPABILITY_SECTION)
+    if capability_section is None:
+        return [f"{name}: is missing the {_CAPABILITY_SECTION!r} section"]
+    capability_header = _header_row_index(lines, capability_section, "capability")
+    if capability_header is None:
+        return [f"{name}: {_CAPABILITY_SECTION!r} has no '| Capability |' header row"]
+    capability_level_column = _column_index(_row_cells(lines[capability_header]), "level")
+    if capability_level_column is None:
+        return [f"{name}: {_CAPABILITY_SECTION!r} has no 'Level' column"]
+
+    rows = list(_table_cells(lines, capability_header))
+    if not rows:
+        return [
+            f"{name}: could not parse the {_CAPABILITY_SECTION!r} main table: it has no capability rows"
+        ]
+
+    errors: list[str] = []
+    for line_number, cells in rows:
+        if capability_level_column >= len(cells):
+            continue
+        for level in _BACKTICK_TOKEN_RE.findall(cells[capability_level_column]):
+            if level in defined:
+                continue
+            errors.append(
+                f"{name}: undefined evidence level in {_CAPABILITY_SECTION!r}: {level} (line {line_number}); "
+                f"define it in {_VOCABULARY_SECTION!r} or use one of {sorted(defined)}"
+            )
+    return errors
+
+
+def check_evidence_levels_are_defined(errors: list[str]) -> None:
+    """Every Capability evidence level must be defined by the classification vocabulary."""
+    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    if not path.exists():
+        return
+    errors.extend(undefined_evidence_level_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
 
 
 # ── 2. operational `rag_*` references ───────────────────────────────────────
@@ -2170,6 +2295,7 @@ def main() -> int:
     check_exporter_truth_contract(errors)
     check_interview_baseline_exporter_split(errors)
     check_capability_rows_are_unique(errors)
+    check_evidence_levels_are_defined(errors)
     check_operational_metric_references(errors)
     check_audit_tracker_lineage(errors)
     check_observability_is_optional(errors)

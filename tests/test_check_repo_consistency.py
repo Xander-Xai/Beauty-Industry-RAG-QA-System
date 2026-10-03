@@ -1706,3 +1706,125 @@ def test_denial_on_another_line_does_not_excuse_a_claim_on_this_line():
         "The OTLP runtime closed loop is verified.\n"
     )
     assert forbidden_evidence_claims(text) == ["OTLP runtime closed loop"]
+
+
+# ── Capability rows may only use evidence levels the vocabulary defines ──────
+#
+# The classification vocabulary is the source of truth for which evidence levels
+# exist. A capability row that invents a level, or drops a level the vocabulary has
+# not caught up with, makes the document's own taxonomy contradict itself — the
+# exact failure that let `HISTORICAL` ship undocumented in the Jaeger row. The set
+# of legal levels is parsed out of the vocabulary table so adding a level is a
+# documentation-only change, never a code change.
+
+
+def _evidence_map(vocabulary_rows: str, capability_rows: str) -> str:
+    """Build a minimal evidence map with a vocabulary and a capability table."""
+    return (
+        "# Interview Evidence Map\n\n"
+        "## Classification vocabulary\n\n"
+        "| Level | Meaning | Interview-safe framing | Must not say |\n"
+        "|---|---|---|---|\n"
+        f"{vocabulary_rows}"
+        "\n"
+        "## Capability evidence\n\n"
+        "| Capability | Level | Repository evidence | Upgrade path |\n"
+        "|---|---|---|---|\n"
+        f"{capability_rows}"
+        "\n"
+        "## Known claim risks to avoid\n\n"
+        "MAGIC_VERIFIED and `MAGIC_VERIFIED` appear in prose and in a later table, "
+        "and neither is a capability row.\n"
+        "\n"
+        "| Metric | Value | Level | Boundary |\n"
+        "|---|---|---|---|\n"
+        "| Documents | 3000+ | `MAGIC_VERIFIED` | historical business context |\n"
+    )
+
+
+_TWO_LEVELS = "| `REPO_VERIFIED` | implemented | yes | no |\n| `PENDING` | pending | yes | no |\n"
+
+
+def test_evidence_levels_are_defined_in_the_current_map():
+    from scripts.check_repo_consistency import check_evidence_levels_are_defined
+
+    errors: list[str] = []
+    check_evidence_levels_are_defined(errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("capability_rows", "label"),
+    [
+        ("| Example | `REPO_VERIFIED` | x | y |\n", "single defined level"),
+        ("| Example | `REPO_VERIFIED` (framework) / `PENDING` (result) | x | y |\n", "two defined levels"),
+        ("| Example | `PENDING` (adapter contract `REPO_VERIFIED`) | x | y |\n", "level inside a qualifier"),
+    ],
+)
+def test_capability_levels_drawn_from_the_vocabulary_pass(capability_rows, label):
+    from scripts.check_repo_consistency import undefined_evidence_level_errors
+
+    text = _evidence_map(_TWO_LEVELS, capability_rows)
+    assert undefined_evidence_level_errors("docs/x.md", text) == [], label
+
+
+def test_a_level_added_only_to_the_vocabulary_is_accepted():
+    """A new level is a documentation change; the guard must not hardcode the list."""
+    from scripts.check_repo_consistency import undefined_evidence_level_errors
+
+    vocabulary = _TWO_LEVELS + "| `SOME_FUTURE_LEVEL` | defined later | yes | no |\n"
+    text = _evidence_map(vocabulary, "| Example | `SOME_FUTURE_LEVEL` | x | y |\n")
+    assert undefined_evidence_level_errors("docs/x.md", text) == []
+
+
+def test_capability_row_using_an_undefined_level_is_flagged():
+    from scripts.check_repo_consistency import undefined_evidence_level_errors
+
+    text = _evidence_map(_TWO_LEVELS, "| Example | `MAGIC_VERIFIED` | x | y |\n")
+    errors = undefined_evidence_level_errors("docs/x.md", text)
+    assert len(errors) == 1
+    # The message must name the level, the document and the table it came from.
+    assert "MAGIC_VERIFIED" in errors[0]
+    assert "docs/x.md" in errors[0]
+    assert "Capability evidence" in errors[0]
+
+
+def test_one_defined_level_does_not_excuse_an_undefined_one_in_the_same_cell():
+    from scripts.check_repo_consistency import undefined_evidence_level_errors
+
+    text = _evidence_map(_TWO_LEVELS, "| Example | `REPO_VERIFIED` / `MAGIC_VERIFIED` | x | y |\n")
+    errors = undefined_evidence_level_errors("docs/x.md", text)
+    # Exactly one error, so the defined level in the same cell was not flagged too.
+    assert len(errors) == 1
+    assert "MAGIC_VERIFIED" in errors[0]
+
+
+def test_unparsable_vocabulary_fails_instead_of_skipping_validation():
+    """Deleting the vocabulary table must not silently disable the guard."""
+    from scripts.check_repo_consistency import undefined_evidence_level_errors
+
+    text = "## Classification vocabulary\n\nNo table here.\n\n## Capability evidence\n\n" + (
+        "| Capability | Level | Repository evidence | Upgrade path |\n"
+        "|---|---|---|---|\n"
+        "| Example | `MAGIC_VERIFIED` | x | y |\n"
+    )
+    errors = undefined_evidence_level_errors("docs/x.md", text)
+    assert len(errors) == 1
+    assert "vocabulary" in errors[0].lower()
+
+
+def test_unparsable_capability_table_fails_instead_of_skipping_validation():
+    from scripts.check_repo_consistency import undefined_evidence_level_errors
+
+    text = _evidence_map(_TWO_LEVELS, "") + "\n"
+    errors = undefined_evidence_level_errors("docs/x.md", text)
+    assert len(errors) == 1
+    assert "Capability evidence" in errors[0]
+
+
+def test_levels_outside_the_capability_level_column_are_not_validated():
+    """Prose and other tables are out of scope: only the main table's Level cell is."""
+    from scripts.check_repo_consistency import undefined_evidence_level_errors
+
+    text = _evidence_map(_TWO_LEVELS, "| Example | `REPO_VERIFIED` | uses `OTEL_EXPORT_ENABLED` | y |\n")
+    assert undefined_evidence_level_errors("docs/x.md", text) == []
