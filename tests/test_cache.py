@@ -177,7 +177,8 @@ class TestL2Cache:
         cache.set("key1", {"answer": "test"}, role_mask=1, dept_mask=2)
         mock_redis.setex.assert_called_once()
         call_args = mock_redis.setex.call_args
-        assert call_args[0][0] == "rag:l2:key1"  # Redis key with prefix
+        # 物理 key 由 helper 派生，不在测试里重复 hardcode storage format
+        assert call_args[0][0] == RedisCache._build_l2_storage_key("key1", 1, 2)
         assert call_args[0][1] == cache.l2_ttl  # TTL
 
     @patch.object(RedisCache, "_try_connect")
@@ -190,7 +191,7 @@ class TestL2Cache:
         cache.enabled = True
 
         result = cache.get("key1", role_mask=1, dept_mask=2)
-        mock_redis.get.assert_called_once_with("rag:l2:key1")
+        mock_redis.get.assert_called_once_with(RedisCache._build_l2_storage_key("key1", 1, 2))
         assert result == {"answer": "cached"}
 
     @patch.object(RedisCache, "_try_connect")
@@ -399,3 +400,100 @@ class TestRedisCacheHitStats:
         assert result is None
         assert cache._hit_count == 0
         assert cache._miss_count == 1
+
+
+class FakeRedis:
+    """最小有状态 Redis stub：只实现 L2 用到的 setex / get。"""
+
+    def __init__(self):
+        self.data = {}
+
+    def setex(self, key, ttl, value):
+        self.data[key] = value
+
+    def get(self, key):
+        return self.data.get(key)
+
+
+class TestL2PermissionPartitioning:
+    """L2 storage boundary 自身必须按 role/dept 分区。
+
+    `compute_cache_key()` 与 `OnlineRAGPipeline._build_cache_key()` 已经把权限掩码放进
+    *logical* key，但那是调用方纪律。若某个调用方忘了先做 permission-aware 构造，
+    相同 logical key 在不同 role/dept 下会落到同一个物理 Redis 地址——本轮之前正是
+    `rag:l2:{key}`，与 role/dept 无关。
+
+    这是 L2 cache permission partitioning / cache-boundary defense-in-depth：隔离不再
+    只依赖调用方正确构造 key。它不改变 value schema、TTL 或 L1 语义。
+    """
+
+    @staticmethod
+    @patch.object(RedisCache, "_try_connect")
+    def _cache(mock_connect):
+        cache = RedisCache()
+        cache.redis_client = FakeRedis()
+        cache.enabled = True
+        return cache
+
+    def test_same_logical_key_is_not_shared_across_roles(self):
+        """核心 regression：同 logical key、不同 role，不得读到对方分区。"""
+        cache = self._cache()
+        cache.set("same", {"answer": "ROLE_1_SECRET"}, role_mask=1, dept_mask=2)
+        assert cache.get("same", role_mask=4, dept_mask=8) is None
+
+    def test_same_identity_still_hits(self):
+        """安全修复不能把 L2 全部打坏：同身份必须命中。"""
+        cache = self._cache()
+        cache.set("logical", {"answer": "A"}, role_mask=1, dept_mask=2)
+        assert cache.get("logical", role_mask=1, dept_mask=2) == {"answer": "A"}
+
+    def test_different_role_same_dept_misses(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "R1"}, role_mask=1, dept_mask=2)
+        assert cache.get("k", role_mask=4, dept_mask=2) is None
+
+    def test_same_role_different_dept_misses(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "D2"}, role_mask=1, dept_mask=2)
+        assert cache.get("k", role_mask=1, dept_mask=8) is None
+
+    def test_public_partition_is_not_readable_by_restricted(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "PUBLIC"}, role_mask=0, dept_mask=0)
+        assert cache.get("k", role_mask=1, dept_mask=0) is None
+
+    def test_restricted_partition_is_not_readable_as_public(self):
+        cache = self._cache()
+        cache.set("k", {"answer": "RESTRICTED"}, role_mask=1, dept_mask=0)
+        assert cache.get("k", role_mask=0, dept_mask=0) is None
+
+    def test_physical_keys_are_distinct_partitions(self):
+        """FakeRedis 中应出现多个独立物理 partition。"""
+        cache = self._cache()
+        for rm, dm in ((1, 2), (4, 2), (1, 8)):
+            cache.set("shared", {"answer": f"{rm}-{dm}"}, role_mask=rm, dept_mask=dm)
+        assert len(cache.redis_client.data) == 3
+        for rm, dm in ((1, 2), (4, 2), (1, 8)):
+            expected = RedisCache._build_l2_storage_key("shared", rm, dm)
+            assert expected in cache.redis_client.data, (rm, dm, expected)
+
+    def test_no_legacy_unscoped_fallback(self):
+        """禁止读取旧的未分区 key，否则等于重新打开 cross-permission reuse。"""
+        cache = self._cache()
+        cache.redis_client.data["rag:l2:legacy"] = json.dumps({"answer": "OLD"})
+        assert cache.get("legacy", role_mask=1, dept_mask=2) is None
+
+    def test_storage_key_is_deterministic_and_permission_sensitive(self):
+        first = RedisCache._build_l2_storage_key("k", 1, 2)
+        assert first == RedisCache._build_l2_storage_key("k", 1, 2)
+        assert first != RedisCache._build_l2_storage_key("k", 4, 2)
+        assert first != RedisCache._build_l2_storage_key("k", 1, 8)
+        assert first != RedisCache._build_l2_storage_key("other", 1, 2)
+
+    def test_get_and_set_share_one_key_contract(self):
+        """read/write 必须走同一个 helper，避免 key drift。"""
+        cache = self._cache()
+        cache.set("drift", {"answer": "X"}, role_mask=3, dept_mask=5)
+        assert list(cache.redis_client.data) == [
+            RedisCache._build_l2_storage_key("drift", 3, 5)
+        ]

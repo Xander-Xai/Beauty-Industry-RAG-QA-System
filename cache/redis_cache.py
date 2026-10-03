@@ -126,6 +126,22 @@ class RedisCache:
         }
         return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
+    @staticmethod
+    def _build_l2_storage_key(key: str, role_mask: int, dept_mask: int) -> str:
+        """构造 L2 物理 Redis key：logical key + 权限分区。
+
+        L1/L2 双层缓存的第二层防线。``compute_cache_key()`` 与 pipeline 的
+        ``_build_cache_key()`` 已经把 role_mask/dept_mask 放进 *logical* key，但那是调用方
+        纪律：一旦某个调用方忘了先做 permission-aware 构造，相同 logical key 在不同
+        权限下会落到同一个物理地址。旧实现正是 ``rag:l2:{key}``，与权限完全无关。
+
+        这里由 cache 对象自身强制分区，使权限隔离不再只依赖调用方。mask 是授权位掩码，
+        直接放进 key 便于调试，不再额外做一次哈希。
+
+        唯一来源：``get()`` 与 ``set()`` 必须共用本 helper，避免读写 key drift。
+        """
+        return f"rag:l2:rm:{role_mask}:dm:{dept_mask}:{key}"
+
     def _ensure_counters(self):
         """确保 hit/miss 计数器存在（兼容部分初始化场景）。"""
         if not hasattr(self, "_hit_count"):
@@ -153,10 +169,11 @@ class RedisCache:
                     else:
                         del self._l1[key]
 
-        # L2 查询（Redis）
+        # L2 查询（Redis）— 物理 key 由 role/dept 分区，cache 对象自身强制
         if self.enabled and self.redis_client:
             try:
-                raw = self.redis_client.get(f"rag:l2:{key}")
+                storage_key = self._build_l2_storage_key(key, role_mask, dept_mask)
+                raw = self.redis_client.get(storage_key)
                 if raw:
                     self._hit_count += 1
                     return json.loads(raw)
@@ -184,12 +201,12 @@ class RedisCache:
                 self._l1[key] = (val, time.time() + self._l1_ttl)
                 self._l1.move_to_end(key)  # 标记为最近使用
 
-        # L2 写入（Redis）
+        # L2 写入（Redis）— 与读取共用同一个 storage key helper
         if self.enabled and self.redis_client:
             try:
                 l2_ttl = ttl or self.l2_ttl
                 self.redis_client.setex(
-                    f"rag:l2:{key}",
+                    self._build_l2_storage_key(key, role_mask, dept_mask),
                     l2_ttl,
                     json.dumps(val, ensure_ascii=False),
                 )
