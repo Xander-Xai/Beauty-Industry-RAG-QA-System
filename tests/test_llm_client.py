@@ -670,3 +670,86 @@ class TestUserQueryFramingCollision:
 
         text = "比较 <b> 与 </b>、<user_query_x>、<userquery>"
         assert escape(text) == text
+
+
+class TestSecurityPolicyTagCoupling:
+    """policy 中的 structural tag 必须与真实 framing 共用同一组 constants。
+
+    `_build_messages()` 用 constants 插值生成 framing，而 policy 文本曾手写
+    `<retrieved_context>` / `<user_query>`。若将来 boundary constant 改名，真实 message
+    structure 会更新、policy 却停留在旧 tag，形成 silent security drift。
+
+    这里证明**行为耦合**：monkeypatch constant → 生成的 policy 随之改变。不用
+    source-code regex 作为主要证据。
+    """
+
+    def test_policy_uses_production_boundary_constants(self):
+        import models.llm_client as llm_client
+
+        policy = llm_client._build_retrieval_security_policy()
+        assert llm_client.RETRIEVED_CONTEXT_OPEN in policy
+        assert llm_client.USER_QUERY_OPEN in policy
+
+    def test_policy_follows_a_renamed_retrieval_marker(self, monkeypatch):
+        import models.llm_client as llm_client
+
+        monkeypatch.setattr(llm_client, "RETRIEVED_CONTEXT_OPEN", "<kb_context>")
+        policy = llm_client._build_retrieval_security_policy()
+        assert "<kb_context>" in policy
+        # 旧 literal 不得再作为该区块的 structural reference 出现。
+        assert "<retrieved_context>" not in policy
+
+    def test_policy_follows_a_renamed_query_marker(self, monkeypatch):
+        import models.llm_client as llm_client
+
+        monkeypatch.setattr(llm_client, "USER_QUERY_OPEN", "<current_query>")
+        policy = llm_client._build_retrieval_security_policy()
+        assert "<current_query>" in policy
+        assert "<user_query>" not in policy
+
+    def test_policy_follows_both_renamed_markers_together(self, monkeypatch):
+        import models.llm_client as llm_client
+
+        monkeypatch.setattr(llm_client, "RETRIEVED_CONTEXT_OPEN", "<kb_context>")
+        monkeypatch.setattr(llm_client, "USER_QUERY_OPEN", "<current_query>")
+        policy = llm_client._build_retrieval_security_policy()
+        assert "<kb_context>" in policy
+        assert "<current_query>" in policy
+        assert "<retrieved_context>" not in policy
+        assert "<user_query>" not in policy
+
+    def test_append_helper_is_idempotent(self):
+        import models.llm_client as llm_client
+
+        once = llm_client._with_retrieval_security_policy("BASE")
+        twice = llm_client._with_retrieval_security_policy(once)
+        assert once == twice
+        assert once.count("【检索安全边界】") == 1
+
+    def test_append_helper_appends_the_current_policy(self, monkeypatch):
+        """append 的必须是"当前"policy，而不是模块加载时展开的静态副本。"""
+        import models.llm_client as llm_client
+
+        monkeypatch.setattr(llm_client, "RETRIEVED_CONTEXT_OPEN", "<kb_context>")
+        appended = llm_client._with_retrieval_security_policy("BASE")
+        assert "<kb_context>" in appended
+
+    def test_policy_semantics_are_preserved(self):
+        """改名不得改变安全策略语义，只改 literal → constant。"""
+        import models.llm_client as llm_client
+
+        policy = llm_client._build_retrieval_security_policy()
+        for required in (
+            "不可信数据",
+            "而不是系统、开发者或用户指令",
+            "指令",
+            "角色要求",
+            "身份切换",
+            "提示词",
+            "工具调用请求",
+            "越权请求",
+            "忽略既有规则",
+            "提取事实",
+            "可信指令来源",
+        ):
+            assert required in policy, required
