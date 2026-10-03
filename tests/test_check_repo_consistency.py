@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scripts.check_repo_consistency import (
     REQUIRED_AUDIT_AREAS,
     benchmark_artifact_exists,
@@ -1656,3 +1658,51 @@ def test_missing_capability_section_is_flagged(tmp_path, monkeypatch):
     errors: list[str] = []
     guard.check_capability_rows_are_unique(errors)
     assert any("Capability evidence" in error for error in errors)
+
+
+# ── Markdown emphasis must not change what a negation means ─────────────────
+#
+# "The OTLP runtime closed loop is not verified." and "is **not** verified" are the
+# same denial. The negation matcher required plain whitespace between the negation
+# and its verb, so the emphasis delimiters broke the match and a truthful bolded
+# denial was reported as an unevidenced closed loop. Emphasis is formatting, not
+# meaning, and it must not become a way to phrase either a denial or a claim.
+
+
+@pytest.mark.parametrize(
+    "denial",
+    [
+        "The OTLP runtime closed loop is not verified.",
+        "The OTLP runtime closed loop is **not** verified.",
+        "The OTLP runtime closed loop is not **verified**.",
+        "The OTLP runtime closed loop is **not** **verified**.",
+        "The OTLP runtime closed loop is _not_ validated.",
+        "The OTLP runtime closed loop is __not__ __validated__.",
+    ],
+)
+def test_markdown_emphasis_does_not_hide_an_evidence_denial(denial):
+    assert forbidden_evidence_claims(denial) == []
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "The OTLP runtime closed loop is verified.",
+        "The OTLP runtime closed loop is **verified**.",
+        "The OTLP runtime closed loop is _verified_.",
+        "The OTLP runtime closed loop is validated.",
+        "Notably, the OTLP runtime closed loop is verified.",
+    ],
+)
+def test_markdown_emphasis_cannot_launder_an_affirmative_claim(claim):
+    """Emphasis is not an exemption: the affirmative claim is still a violation."""
+    assert forbidden_evidence_claims(claim)
+
+
+def test_denial_on_another_line_does_not_excuse_a_claim_on_this_line():
+    """The negation window is per line; tolerating emphasis must not widen it."""
+    text = (
+        "No exporter is configured by default.\n"
+        "The OTLP runtime closed loop is verified.\n"
+    )
+    assert forbidden_evidence_claims(text) == ["OTLP runtime closed loop"]

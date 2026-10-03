@@ -385,11 +385,27 @@ def benchmark_classification_errors(name: str, text: str) -> list[str]:
     return errors
 
 
+# Markdown emphasis is formatting, not meaning. "is not verified", "is **not**
+# verified", "is not **verified**" and "is **not** **verified**" are one and the same
+# denial, so the negation matchers below must not care which of them a document
+# happens to use. They used a plain `\s+` at the junction between a negation word and
+# its complement; emphasis delimiters sitting in that gap silently broke the match and
+# turned a truthful denial into a reported claim.
+#
+# _EMPHASIS_GAP accepts whitespace and emphasis delimiters in those junctions only.
+# It is delimiters-only by construction: no word, digit or identifier character is
+# ever consumed, so REPO_VERIFIED, LOCAL_REAL_VALIDATION, HISTORICAL_PRODUCTION and
+# the rag_* metric series keep their underscores. It also still requires at least one
+# separator character, so "notvalidated" does not read as "not validated", and it does
+# not relax the leading-context / line-window boundary in forbidden_evidence_claims().
+_EMPHASIS_GAP = r"(?:\s+[*_]*|[*_]+\s*)+"
+
 # A sentence that frames the match as a claim to avoid, not as current truth.
 # These docs are *required* to write the denial, so the frame is a signal to
 # skip rather than a signal to fail.
 _PROHIBITION_FRAME_RE = re.compile(
-    r"\bClaiming\b|\bClaims?\b|\bSays?\b|\bDo\s+not\b|\bDon't\b|\bNever\b|\bMust\s+not\b|"
+    r"\bClaiming\b|\bClaims?\b|\bSays?\b|\bDo" + _EMPHASIS_GAP + r"not\b|\bDon't\b|\bNever\b|"
+    r"\bMust" + _EMPHASIS_GAP + r"not\b|"
     r"不能说|不得|不要(?:说|声称)|不应(?:说|声称)",
     re.IGNORECASE,
 )
@@ -400,12 +416,14 @@ _PROHIBITION_FRAME_RE = re.compile(
 _NO_EVIDENCE_NEGATION_RE = re.compile(
     r"PENDING|EXTERNAL_MODEL_ASSET_REQUIRED|"
     r"未(?:有|能|执行|验证|产生|配置|运行)|尚未|没有|无可|不(?:会|能|得|是)|"
-    r"not\s+(?:yet\s+)?(?:validated|verified|measured|available|produced|configured|"
+    r"not" + _EMPHASIS_GAP + r"(?:yet" + _EMPHASIS_GAP + r")?"
+    r"(?:validated|verified|measured|available|produced|configured|"
     r"reproduced|reproducible|closed)|"
-    r"no\s+(?:such|exporter|OTLP|closed|real\s+benchmark|artifact)|"
-    r"exporter[^\n]{0,12}(?:not|un)\s*configured|"
-    r"never|cannot|can't|without|must\s+not|do(?:es)?\s+not|do(?:es)?n't|"
-    r"design\s+target|目标|blocked",
+    r"no" + _EMPHASIS_GAP + r"(?:such|exporter|OTLP|closed|real" + _EMPHASIS_GAP + r"benchmark|artifact)|"
+    r"exporter[^\n]{0,12}(?:not|un)" + _EMPHASIS_GAP + r"configured|"
+    r"never|cannot|can't|without|must" + _EMPHASIS_GAP + r"not|"
+    r"do(?:es)?" + _EMPHASIS_GAP + r"not|do(?:es)?" + _EMPHASIS_GAP + r"n't|"
+    r"design" + _EMPHASIS_GAP + r"target|目标|blocked",
     re.IGNORECASE,
 )
 
