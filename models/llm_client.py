@@ -312,10 +312,15 @@ class LLMClient:
 
         # 重建 messages，追加约束前缀
         messages = self._build_messages(ctx)
+        # already_generated 是模型第一次的输出，为续写而作为 assistant prefix replay 回
+        # prompt。它既不是 retrieval evidence 也不是当前用户指令，这里也不假设模型输出
+        # 是恶意的；只做 continuation-prefix delimiter encoding——保证 replayed assistant
+        # payload 无法实例化 application-owned framing syntax。返回给用户的第一次回答
+        # 不受影响，编码只发生在把这段文本再次放进下一次请求时。
         messages.append(
             {
                 "role": "assistant",
-                "content": already_generated,
+                "content": _escape_reserved_trust_boundary_markers(already_generated),
             }
         )
         messages.append(
