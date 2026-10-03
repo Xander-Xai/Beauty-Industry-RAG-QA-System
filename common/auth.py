@@ -144,9 +144,7 @@ def _validate_permission_mask_claim(value, claim_name: str) -> int:
     identity from an unvalidated claim.
     """
     if type(value) is not int:
-        raise ValueError(
-            f"JWT claim {claim_name!r} must be an integer, got {type(value).__name__}"
-        )
+        raise ValueError(f"JWT claim {claim_name!r} must be an integer, got {type(value).__name__}")
     if not 0 <= value <= _MAX_UINT32:
         raise ValueError(f"JWT claim {claim_name!r} must be within [0, {_MAX_UINT32}], got {value}")
     return value

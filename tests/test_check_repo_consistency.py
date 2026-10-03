@@ -1716,10 +1716,7 @@ def test_markdown_emphasis_cannot_launder_an_affirmative_claim(claim):
 
 def test_denial_on_another_line_does_not_excuse_a_claim_on_this_line():
     """The negation window is per line; tolerating emphasis must not widen it."""
-    text = (
-        "No exporter is configured by default.\n"
-        "The OTLP runtime closed loop is verified.\n"
-    )
+    text = "No exporter is configured by default.\nThe OTLP runtime closed loop is verified.\n"
     assert forbidden_evidence_claims(text) == ["OTLP runtime closed loop"]
 
 
@@ -1876,7 +1873,10 @@ def test_config_json_no_longer_declares_a_jaeger_block():
         (".env.example", "JAEGER_AGENT_HOST=localhost\nJAEGER_AGENT_PORT=6831\n"),
         (".env.example", "# 旧的 Jaeger thrift agent 配置\nJAEGER_AGENT_HOST=localhost\n"),
         ("config.json", '{\n  "monitoring": {\n    "jaeger": {\n      "agent_host": "localhost"\n    }\n  }\n}\n'),
-        ("config.json", '{\n  "monitoring": {\n    "jaeger": {\n      "enabled": false,\n      "agent_port": 6831\n    }\n  }\n}\n'),
+        (
+            "config.json",
+            '{\n  "monitoring": {\n    "jaeger": {\n      "enabled": false,\n      "agent_port": 6831\n    }\n  }\n}\n',
+        ),
         ("docs/x.md", "The legacy Jaeger thrift agent path was `config.json` -> `monitoring.jaeger`.\n"),
         ("docs/x.md", "Set `agent_host` and `agent_port` to reach the collector.\n"),
         ("docs/x.md", "Install `opentelemetry-exporter-jaeger` to enable export.\n"),
@@ -1976,9 +1976,7 @@ _CONTRACT_JSON = json.dumps(
         "invalid-plus-valid",
     ],
 )
-def test_otel_runtime_evidence_requires_a_readable_non_empty_json_object(
-    tmp_path, monkeypatch, entries, expected
-):
+def test_otel_runtime_evidence_requires_a_readable_non_empty_json_object(tmp_path, monkeypatch, entries, expected):
     import scripts.check_repo_consistency as guard
 
     monkeypatch.setattr(guard, "ROOT", tmp_path)
@@ -2101,6 +2099,7 @@ def test_evidence_type_must_be_exact(value):
     from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
 
     assert valid(_otel_payload(evidence_type=value)) is False
+
 
 @pytest.mark.parametrize("value", ["PENDING", "PARTIAL", "BLOCKED", "FAILED", "executed", "", None])
 def test_status_must_be_executed(value):

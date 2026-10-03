@@ -1779,10 +1779,7 @@ def undefined_evidence_level_errors(name: str, text: str) -> list[str]:
         return [f"{name}: is missing the {_VOCABULARY_SECTION!r} section"]
     vocabulary_header = _header_row_index(lines, vocabulary_section, "level")
     if vocabulary_header is None:
-        return [
-            f"{name}: could not parse evidence vocabulary: "
-            f"{_VOCABULARY_SECTION!r} has no '| Level |' header row"
-        ]
+        return [f"{name}: could not parse evidence vocabulary: {_VOCABULARY_SECTION!r} has no '| Level |' header row"]
     level_column = _column_index(_row_cells(lines[vocabulary_header]), "level")
     if level_column is None:
         return [f"{name}: could not parse evidence vocabulary: the vocabulary table has no 'Level' column"]
@@ -1793,10 +1790,7 @@ def undefined_evidence_level_errors(name: str, text: str) -> list[str]:
     if not defined:
         # An empty vocabulary must not read as "everything is allowed" or "nothing to
         # check" — either would silently disable this guard.
-        return [
-            f"{name}: could not parse evidence vocabulary: "
-            "the Level column defines no backticked evidence level"
-        ]
+        return [f"{name}: could not parse evidence vocabulary: the Level column defines no backticked evidence level"]
 
     # ── the capability table, which may only use them
     capability_section = _section_index(lines, _CAPABILITY_SECTION)
@@ -1811,9 +1805,7 @@ def undefined_evidence_level_errors(name: str, text: str) -> list[str]:
 
     rows = list(_table_cells(lines, capability_header))
     if not rows:
-        return [
-            f"{name}: could not parse the {_CAPABILITY_SECTION!r} main table: it has no capability rows"
-        ]
+        return [f"{name}: could not parse the {_CAPABILITY_SECTION!r} main table: it has no capability rows"]
 
     errors: list[str] = []
     for line_number, cells in rows:

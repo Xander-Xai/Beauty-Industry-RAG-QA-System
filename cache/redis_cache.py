@@ -153,13 +153,9 @@ class RedisCache:
         """
         for name, value in (("role_mask", role_mask), ("dept_mask", dept_mask)):
             if type(value) is not int:
-                raise ValueError(
-                    f"{name} must be an int, got {type(value).__name__}"
-                )
+                raise ValueError(f"{name} must be an int, got {type(value).__name__}")
             if not 0 <= value <= _MAX_UINT32:
-                raise ValueError(
-                    f"{name} must be within [0, {_MAX_UINT32}], got {value}"
-                )
+                raise ValueError(f"{name} must be within [0, {_MAX_UINT32}], got {value}")
         return role_mask, dept_mask
 
     @staticmethod

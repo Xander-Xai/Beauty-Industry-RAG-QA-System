@@ -496,9 +496,7 @@ class TestL2PermissionPartitioning:
         """read/write 必须走同一个 helper，避免 key drift。"""
         cache = self._cache()
         cache.set("drift", {"answer": "X"}, role_mask=3, dept_mask=5)
-        assert list(cache.redis_client.data) == [
-            RedisCache._build_l2_storage_key("drift", 3, 5)
-        ]
+        assert list(cache.redis_client.data) == [RedisCache._build_l2_storage_key("drift", 3, 5)]
 
 
 class TestPermissionScopeValidation:

@@ -425,9 +425,13 @@ class TestReservedMarkerEscape:
         )
         ctx.rerank_results = [RerankResult(doc_id="d1", content=evidence_text, final_score=0.95)]
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_score=0.9,
-            decision="pass", top_docs=ctx.rerank_results,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_score=0.9,
+            decision="pass",
+            top_docs=ctx.rerank_results,
         )
         ctx.user_role_mask = 0
         ctx.user_dept_mask = 0
@@ -580,9 +584,13 @@ class TestUserQueryFramingCollision:
         )
         ctx.rerank_results = [RerankResult(doc_id="d1", content=evidence_text, final_score=0.95)]
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_code=0.9,
-            decision="pass", top_docs=ctx.rerank_results,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_code=0.9,
+            decision="pass",
+            top_docs=ctx.rerank_results,
         )
         ctx.user_role_mask = 0
         ctx.user_dept_mask = 0
@@ -792,9 +800,13 @@ class TestHistoryInstructionPrecedence:
         )
         ctx.rerank_results = [RerankResult(doc_id="d1", content="普通法规正文。", final_score=0.95)]
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_score=0.9,
-            decision="pass", top_docs=ctx.rerank_results,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_score=0.9,
+            decision="pass",
+            top_docs=ctx.rerank_results,
         )
         ctx.user_role_mask = 0
         ctx.user_dept_mask = 0
@@ -925,9 +937,13 @@ class TestHistoryMarkerEncoding:
         )
         ctx.rerank_results = [RerankResult(doc_id="d1", content="普通法规正文。", final_score=0.95)]
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_score=0.9,
-            decision="pass", top_docs=ctx.rerank_results,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_score=0.9,
+            decision="pass",
+            top_docs=ctx.rerank_results,
         )
         ctx.user_role_mask = 0
         ctx.user_dept_mask = 0
@@ -1128,9 +1144,13 @@ class TestContinuationPrefixEncoding:
         )
         ctx.rerank_results = [RerankResult(doc_id="d1", content="普通法规正文。", final_score=0.95)]
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_score=0.9,
-            decision="pass", top_docs=ctx.rerank_results,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_score=0.9,
+            decision="pass",
+            top_docs=ctx.rerank_results,
         )
         ctx.user_role_mask = 0
         ctx.user_dept_mask = 0
@@ -1241,9 +1261,7 @@ class TestContinuationPrefixEncoding:
         client._check_truncation = MagicMock(return_value=False)
         from core.pipeline_context import SessionState
 
-        result = client.generate_continuation(
-            self._ctx(), SessionState.get_or_create("cont_out"), CONTINUATION_NORMAL
-        )
+        result = client.generate_continuation(self._ctx(), SessionState.get_or_create("cont_out"), CONTINUATION_NORMAL)
         assert result.answer == raw
 
 
@@ -1293,9 +1311,13 @@ class TestContinuationInstructionBoundary:
         )
         ctx.rerank_results = [RerankResult(doc_id="d1", content="普通法规正文。", final_score=0.95)]
         ctx.evidence_result = EvidenceGateResult(
-            evidence_score=0.85, ce_top1_score=0.9, ce_top3_mean_score=0.85,
-            retrieval_agreement_score=0.8, doc_consistency_score=0.9,
-            decision="pass", top_docs=ctx.rerank_results,
+            evidence_score=0.85,
+            ce_top1_score=0.9,
+            ce_top3_mean_score=0.85,
+            retrieval_agreement_score=0.8,
+            doc_consistency_score=0.9,
+            decision="pass",
+            top_docs=ctx.rerank_results,
         )
         ctx.user_role_mask = 0
         ctx.user_dept_mask = 0
