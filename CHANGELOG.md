@@ -148,6 +148,42 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Security
 
+- Security regression coverage audit against a fixed threat list, recorded in
+  `docs/security-regression-coverage.md`. Each control is stated as a
+  defense-in-depth layer with its production path, its regression test, its
+  evidence level, and the gap that remains open. No guardrail framework and no
+  LLM-based security model was introduced, and no unrelated architecture changed.
+- Retrieval trust boundary in prompt construction: untrusted retrieved evidence is confined
+  between reserved delimiters with the user instruction outside and after it, every reserved
+  trust-boundary marker is encoded out of untrusted channels (current query, evidence,
+  replayed history, continuation prefix), and a system-message policy names the evidence block
+  as data rather than instructions. This is a message-structure guard and defense-in-depth
+  layer; it does not resolve prompt injection and does not make jailbreaking impossible, as
+  recorded in `models/llm_client.py`.
+- L2 Redis cache keys are partitioned by role and dept inside the cache object
+  (`rag:l2:rm:<role>:dm:<dept>:<key>`), and the permission scope is validated before any cache
+  I/O, so cross-role cache reuse no longer depends on caller key discipline.
+- Malformed JWT permission claims fail closed at identity ingress: a non-`int` or out-of-range
+  `role_mask`/`dept_mask` is rejected before `UserIdentity` construction, so Pydantic coercion
+  cannot launder a stringly-typed mask into an authenticated identity. A present-but-null claim
+  is treated as malformed rather than absent.
+- Access-token issuance refuses to let `extra_claims` shadow the claims the issuer owns
+  (`sub`, `role_mask`, `dept_mask`, `iat`, `exp`, `type`), so issuer input and the signed token
+  can no longer disagree. Genuine extension claims such as `tenant_id` remain settable.
+- Repaired regression coverage that was silently inert: the RS256 malformed-claim matrix in
+  `tests/test_auth_identity_resolution.py` minted its tokens through `create_access_token(
+  extra_claims=...)`, so the issuer-side guard rejected them first and all 14 cases errored
+  before ever reaching the receiver. The helper now signs directly with the test private key,
+  which is how a validly-signed token carrying malformed claims would actually arrive. The
+  receiver-side guard is therefore independently testable again. Verified by disabling
+  `common/auth.py`'s mask validator: 18 tests fail.
+- Added deterministic coverage for two implemented-but-untested invariants:
+  - stale-chunk removal when a document shrinks within an epoch (Qdrant text writer), which
+    previously had only the image-side counterpart covered;
+  - role/dept partitioning of the pipeline's logical cache key
+    (`OnlineRAGPipeline._build_cache_key`), a layer distinct from the L2 physical-key
+    partition. Both verified by disabling the production control: 2 and 4 tests fail
+    respectively.
 - Elasticsearch in Docker Compose enables `xpack.security.enabled=true`; the app receives
   `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD` and the BM25/offline clients prefer the
   environment credentials over `config.json`.
@@ -192,6 +228,52 @@ Changes present on `main` after the 2.3.0 release entry:
   - `tests/monitoring/test_alerting_reachability.py` pins the reachability finding: it fails if
     the in-process engine is ever wired into the canonical path, which is the moment a second
     alert contract would become real.
+- **Retrieval trust boundary and permission-mask hardening (PR #25).** Every item in this
+  group is a deterministic, offline-testable control. They are defense-in-depth only: they
+  collectively do **not** establish prompt-injection immunity, do not make the model
+  jailbreak-proof, and are **not** a production security certification. A prompt-level text
+  instruction can still be ignored by the model; stronger guarantees need retrieval-side
+  detection, document isolation and output-side validation, none of which exist in this layer.
+  - Retrieved evidence is framed as explicitly untrusted data: a `<retrieved_context>` block
+    carrying an inline fact-only preamble precedes the `<user_query>` block. Evidence text is
+    not deleted or filtered — it stays as data. The policy is appended on all three
+    system-prompt paths (default, `config.json` custom, business-type override) through one
+    shared helper, so no path can opt out.
+  - Reserved-boundary marker encoding: the six structural markers are declared once and
+    encoded as data wherever they occur in a payload channel — retrieved evidence, current user
+    input, replayed conversation history, and the replayed continuation assistant prefix.
+    Retrieval content can no longer close the evidence block early or forge a second trusted
+    block. Encoding is idempotent and touches only the reserved markers: no HTML escaping,
+    filtering, stripping or normalization. Treating the current user query as a trusted
+    instruction is unaffected; it is encoded so it cannot rewrite its own container framing.
+  - Instruction precedence is stated explicitly: replayed history is session context for
+    coreference and preference continuity — not untrusted retrieval data — and a stale
+    historical request does not outrank the current query when the two conflict.
+  - The continuation instruction receives its own application-owned
+    `<continuation_instruction>` boundary instead of reusing the user-query tags, because it
+    is neither retrieval evidence nor a direct user request. Answers returned to callers are
+    unchanged; encoding applies only when text is replayed into a later request.
+  - The policy's structural tags are derived from the same constants the real framing uses, so
+    renaming a boundary moves policy and framing together instead of drifting apart.
+- **Role/dept-partitioned Redis L2 storage** (`cache/redis_cache.py`). The physical L2 key is
+  `rag:l2:rm:{role_mask}:dm:{dept_mask}:{key}`. Partitioning is enforced by the cache object
+  itself rather than left to caller discipline in the logical key, and `get()`/`set()` share one
+  key builder so read and write keys cannot drift. Legacy unscoped `rag:l2:*` keys are no longer
+  read, so they fail closed instead of being served across permissions.
+- **Strict `uint32` authorization-mask validation** at both permission boundaries, as two
+  independent fail-closed defenses:
+  - `common/auth.py` validates `role_mask`/`dept_mask` at identity ingress, before
+    `UserIdentity` is constructed, so no downstream Pydantic coercion can launder a mask.
+  - `cache/redis_cache.py` validates the same contract before any cache I/O, so an invalid
+    identity cannot read L1 or touch Redis. The cache boundary does not import auth internals;
+    the two stay separate.
+  - `api/routes_auth.py` admin authorization now resolves a strict identity *before* the role
+    check instead of applying a second, looser rule, so a malformed claim is a 401 that never
+    reaches the authorization audit event. The returned payload shape is unchanged.
+  - Validation is `type(value) is int` plus `0 <= value <= 0xFFFFFFFF`, with no `int()`
+    coercion, narrowing or fallback. `isinstance` is deliberately avoided:
+    `isinstance(True, int)` is `True`, so a JSON `true` would otherwise become mask 1 and alias
+    a legitimate mask.
 
 ### Fixed
 
@@ -240,6 +322,22 @@ Changes present on `main` after the 2.3.0 release entry:
 - RAGAS `--pipeline` reports now use the real pipeline answer and retrieved contexts instead
   of the dataset's reference answer; failed pipeline samples are recorded and excluded from
   the aggregate, and an all-failed run exits non-zero.
+- **Cross-permission L2 cache aliasing risk (PR #25).** The physical Redis key was
+  `rag:l2:{key}`, independent of `role_mask`/`dept_mask`. Permission isolation existed only as
+  caller discipline in the *logical* key, so any caller that skipped permission-aware key
+  construction made the same logical key resolve to one shared address across permissions.
+  Because the masks were interpolated into an f-string without validation, `"1"` and `1` also
+  collapsed onto the same key. L2 is now physically partitioned by role and dept, enforced
+  inside the cache object rather than at the call sites.
+- **Malformed permission-claim coercion risk (PR #25).** Raw JWT `role_mask`/`dept_mask` claims
+  were passed straight into `UserIdentity`, whose mask fields are plain `int`, so Pydantic
+  coerced `"1"` to `1` (and JSON `true`/`false` to `1`/`0`) and a stringly-typed or boolean
+  mask became a fully authenticated identity. Claims are now validated before the identity is
+  built. A present-but-malformed claim is also no longer conflated with an absent one: an
+  explicit JSON `null` is rejected instead of falling through to the named-role encoding, so a
+  malformed claim cannot be silently downgraded to a different mask source. Valid uint32
+  boundaries (`0`, `0xFFFFFFFF`) remain accepted, and the absent-claim named-role fallback is
+  unchanged.
 
 ### Correction — historical offline capability claim (superseded)
 

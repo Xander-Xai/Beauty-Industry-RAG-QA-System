@@ -180,8 +180,12 @@ def test_dev_headers_ignored_when_not_dev_mode(monkeypatch, tmp_path):
 # coerced "1" -> 1 and a stringly-typed mask became an authenticated identity.
 #
 # This is identity-ingress fail-closed validation against canonical uint32
-# permission claims. Token issuance is a separate concern and is not touched:
-# the tokens below are signed by the real keypair via extra_claims.
+# permission claims. Token issuance is a separate concern and is deliberately
+# NOT exercised here: the tokens below are signed directly with the test
+# private key, exactly as a different issuer or an attacker holding the key
+# would produce them. That keeps issuer ownership and receiver validation as
+# two independently testable defences — see tests/test_jwt_auth.py for the
+# issuance-side reserved-claim contract.
 #
 # Only the receiving boundary is verified. Nothing here claims JWT security is
 # solved or that RBAC is fully secure.
@@ -192,17 +196,43 @@ _INVALID_DEPT_CLAIMS = ["2", 2.0, True, False, -1, 0x100000000, None]
 
 
 def _rs256_token_with_claim(monkeypatch, tmp_path, claim_name, value):
-    """Mint a validly-signed RS256 access token whose permission claim is malformed."""
+    """Sign an RS256 access token whose named permission claim is malformed.
+
+    Deliberately does NOT go through ``create_access_token()``. That issuer
+    refuses to let ``extra_claims`` shadow the claims it owns, which is the
+    correct production behaviour but would make this test unable to state its
+    own premise: a *validly signed token carrying malformed claims*.
+
+    Signing directly is exactly how such a token would arrive — from another
+    issuer, a compromised path, or anyone holding the key. It also keeps this
+    receiver-side assertion from silently degrading into a restatement of the
+    issuance-side guard.
+    """
+    import jwt as pyjwt
+
+    from auth.jwt_auth import get_jwt_config
+
     _set_rs256_env(monkeypatch, tmp_path)
     monkeypatch.setenv("AUTH_DEV_MODE", "false")
     monkeypatch.delenv("JWT_SECRET", raising=False)
     reload_config()
-    return create_access_token(
-        "bad_mask_user",
-        role_mask=1,
-        dept_mask=2,
-        extra_claims={claim_name: value},
-    )
+
+    config = get_jwt_config()
+    with open(config.private_key_path) as handle:
+        private_key = handle.read()
+
+    now = int(time.time())
+    payload = {
+        "sub": "bad_mask_user",
+        "role_mask": 1,
+        "dept_mask": 2,
+        "iat": now,
+        "exp": now + 900,
+        "type": "access",
+    }
+    payload[claim_name] = value
+
+    return pyjwt.encode(payload, private_key, algorithm=config.algorithm)
 
 
 @pytest.mark.parametrize("value", _INVALID_ROLE_CLAIMS, ids=repr)

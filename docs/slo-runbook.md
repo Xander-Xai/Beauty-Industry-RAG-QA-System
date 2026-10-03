@@ -51,8 +51,9 @@ to set yet.
 
 SLO-3's 2000 ms target is inherited from the PRD. It is **not** a measurement, and
 this repository holds no latency artifact. Producing the first real number is
-tracked in Issue #20's follow-up and depends on a real LLM endpoint, which this
-repository does not run.
+external validation only, tracked in the
+[Repository Truth Audit → External validation tracker map](repository-truth-audit.md#external-validation-tracker-map);
+it depends on a real LLM endpoint, which this repository does not run.
 
 ### Why 99.5% and not 99.99%
 

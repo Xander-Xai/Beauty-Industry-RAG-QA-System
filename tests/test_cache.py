@@ -591,3 +591,83 @@ class TestPermissionScopeValidation:
             RedisCache._validate_permission_scope(True, 0)
         with pytest.raises(ValueError):
             RedisCache._validate_permission_scope(0, False)
+
+
+class TestPipelineLogicalCacheKey:
+    """调用方纪律层：pipeline 构造的 logical key 必须已按 role/dept 分区。
+
+    `TestL2PermissionPartitioning` proves the L2 *physical* address is partitioned
+    even when handed the same logical key for two identities. That is the storage
+    boundary's own defence. This class covers the separate, weaker layer above it:
+    `OnlineRAGPipeline._build_cache_key()` mixes the permission masks into the
+    logical key it hands to `get`/`set`.
+
+    The two are independent. A physical-key partition still holds if the logical
+    key ignores identity; and a logical-key partition still holds if the physical
+    key ignored identity. Neither substitutes for the other, so the logical layer
+    is asserted on its own terms here rather than inferred from the L2 tests.
+
+    This is cache-key partitioning / defense-in-depth. It is not a claim that a
+    cache hit can never cross a permission boundary.
+    """
+
+    @staticmethod
+    def _pipeline():
+        # _build_cache_key reads no instance state, so the uninitialised instance
+        # keeps this test independent of pipeline construction (model clients,
+        # retrievers, Redis) that is irrelevant to key derivation.
+        from core.pipeline import OnlineRAGPipeline
+
+        return OnlineRAGPipeline.__new__(OnlineRAGPipeline)
+
+    @staticmethod
+    def _ctx(*, query="serum", role_mask=1, dept_mask=2, rewritten=None):
+        from types import SimpleNamespace
+
+        rewrite_result = SimpleNamespace(rewritten_query=rewritten) if rewritten is not None else None
+        return SimpleNamespace(
+            rewrite_result=rewrite_result,
+            user_input=query,
+            user_role_mask=role_mask,
+            user_dept_mask=dept_mask,
+        )
+
+    def test_role_mask_changes_the_logical_key(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(role_mask=1)) != build(self._ctx(role_mask=4))
+
+    def test_dept_mask_changes_the_logical_key(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(dept_mask=2)) != build(self._ctx(dept_mask=8))
+
+    def test_same_identity_is_stable(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx()) == build(self._ctx())
+
+    def test_rewritten_query_is_used_when_present(self):
+        """The key follows the rewritten query, not the raw one."""
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(rewritten="rewritten form")) != build(self._ctx())
+
+    def test_public_and_restricted_partitions_differ(self):
+        build = self._pipeline()._build_cache_key
+        assert build(self._ctx(role_mask=0, dept_mask=0)) != build(self._ctx(role_mask=1, dept_mask=0))
+
+    def test_session_scope_wraps_a_permission_aware_base(self):
+        """Session scoping must wrap the base key, not replace it.
+
+        If it replaced or ignored the permission-aware base, two identities in
+        the same session could collide. Session scoping is an additional
+        narrowing on top of partitioning, never a substitute for it.
+        """
+        scope = self._pipeline()._scope_cache_key_to_session
+        base_role1 = self._pipeline()._build_cache_key(self._ctx(role_mask=1, dept_mask=2))
+        base_role4 = self._pipeline()._build_cache_key(self._ctx(role_mask=4, dept_mask=2))
+        scoped_role1 = scope(base_role1, "session-1")
+        scoped_role4 = scope(base_role4, "session-1")
+        assert scoped_role1 != scoped_role4
+
+    def test_session_scope_is_a_no_op_without_a_session_id(self):
+        scope = self._pipeline()._scope_cache_key_to_session
+        base = self._pipeline()._build_cache_key(self._ctx())
+        assert scope(base, None) == base

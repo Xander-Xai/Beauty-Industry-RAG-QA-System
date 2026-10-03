@@ -39,6 +39,7 @@ def _builder(tmp_path):
             es_writer=es_writer,
         ),
         client,
+        es_writer,
     )
 
 
@@ -67,6 +68,19 @@ def _active_image_points(client, collection, epoch, doc_id):
     ]
 
 
+def _text_points(client, collection, epoch, doc_id):
+    if not client.collection_exists(collection):
+        return []
+    records, _ = client.scroll(collection, limit=1000, with_payload=True)
+    return [
+        record
+        for record in records
+        if (record.payload or {}).get("doc_type") == "text"
+        and record.payload.get("doc_id") == doc_id
+        and record.payload.get("doc_version_epoch") == epoch
+    ]
+
+
 def _write_scanned_pdf(path):
     import pymupdf
     from PIL import Image
@@ -92,7 +106,7 @@ def _write_text_pdf(path):
 
 
 def test_failed_build_does_not_commit_source_state(tmp_path):
-    builder, _ = _builder(tmp_path)
+    builder, _, _ = _builder(tmp_path)
     good = tmp_path / "good.txt"
     good.write_text("good content", encoding="utf-8")
     sources = [_source(good, "good.txt"), _source(tmp_path / "missing.txt", "missing.txt")]
@@ -104,7 +118,7 @@ def test_failed_build_does_not_commit_source_state(tmp_path):
 
 
 def test_reingest_without_images_clears_stale_image_points(tmp_path):
-    builder, client = _builder(tmp_path)
+    builder, client, _ = _builder(tmp_path)
     path = tmp_path / "doc.pdf"
     _write_scanned_pdf(path)
     source = _source(path, "doc.pdf")
@@ -118,10 +132,80 @@ def test_reingest_without_images_clears_stale_image_points(tmp_path):
     assert _active_image_points(client, "image_col", "epoch_1", doc_id) == []
 
 
+def test_reingest_shrunk_document_clears_stale_text_chunks(tmp_path):
+    """A document that shrinks must not leave superseded chunks retrievable.
+
+    Re-ingesting into the same epoch supersedes the previous chunk set. The
+    image equivalent is covered above; this is the text-writer half of the same
+    invariant, which had no deterministic coverage.
+
+    The invariant asserted is stronger than "the new content is present": the
+    superseded chunk points must be *absent from the store*, not merely marked
+    non-active. Archiving alone would still satisfy a status-only reading while
+    leaving the rows resident, so this asserts on removal.
+    """
+    builder, client, es_writer = _builder(tmp_path)
+    path = tmp_path / "shrink.txt"
+    path.write_text("regulatory ingredient notice " * 12, encoding="utf-8")
+    source = _source(path, "shrink.txt")
+    doc_id = builder._doc_id(source)
+
+    long_chunks, _ = builder.ingest_source(source, "epoch_1")
+    assert long_chunks > 1, "precondition: the long form must produce several chunks"
+    long_points = _text_points(client, "text_col", "epoch_1", doc_id)
+    assert len(long_points) == long_chunks
+    long_chunk_ids = {point.payload["chunk_id"] for point in long_points}
+    assert es_writer.count_documents("epoch_1") == long_chunks
+
+    path.write_text("short notice", encoding="utf-8")
+    short_chunks, _ = builder.ingest_source(source, "epoch_1")
+    assert short_chunks == 1
+
+    short_points = _text_points(client, "text_col", "epoch_1", doc_id)
+    # The load-bearing assertion: only the single new chunk is still resident.
+    # Before the rewrite this document had `long_chunks` points, so the drop to
+    # one is the removal of every superseded chunk from the store.
+    assert len(short_points) == short_chunks
+    assert long_chunks > short_chunks, "precondition: the long form must have had more chunks to supersede"
+    resident_ids = {point.payload["chunk_id"] for point in short_points}
+    # The survivor carries the new content, and it is not one of the superseded
+    # chunk identities that are no longer stored.
+    assert "short notice" in short_points[0].payload["content"]
+    assert not resident_ids & (long_chunk_ids - resident_ids)
+    # Nothing non-active is left resident for this document either.
+    assert all(point.payload.get("status") == "active" for point in short_points)
+    # The BM25 store is held to the same invariant (see
+    # tests/offline/test_elasticsearch_writer.py for its direct coverage).
+    assert es_writer.count_documents("epoch_1") == short_chunks
+
+
+def test_reingest_grown_document_adds_new_chunks_without_duplicates(tmp_path):
+    """The converse direction: growth must add chunks, never duplicate them."""
+    builder, client, _ = _builder(tmp_path)
+    path = tmp_path / "grow.txt"
+    path.write_text("short notice", encoding="utf-8")
+    source = _source(path, "grow.txt")
+    doc_id = builder._doc_id(source)
+
+    small_chunks, _ = builder.ingest_source(source, "epoch_1")
+    assert small_chunks == 1
+
+    path.write_text("regulatory ingredient notice " * 12, encoding="utf-8")
+    grown_chunks, _ = builder.ingest_source(source, "epoch_1")
+    assert grown_chunks > small_chunks
+
+    points = _text_points(client, "text_col", "epoch_1", doc_id)
+    assert len(points) == grown_chunks
+    chunk_ids = [point.payload["chunk_id"] for point in points]
+    assert len(chunk_ids) == len(set(chunk_ids)), "chunk ids must stay unique after re-ingest"
+    # One epoch's worth of chunk indices, no gaps and no repeats.
+    assert sorted(point.payload["chunk_index"] for point in points) == list(range(grown_chunks))
+
+
 def test_validator_rejects_unexpected_documents(tmp_path):
     from qdrant_client.http.models import PointStruct
 
-    builder, client = _builder(tmp_path)
+    builder, client, _ = _builder(tmp_path)
     path = tmp_path / "a.txt"
     path.write_text("content", encoding="utf-8")
     source = _source(path, "a.txt")
@@ -154,7 +238,7 @@ def test_validator_rejects_unexpected_documents(tmp_path):
 
 
 def test_permission_change_forces_reprocessing(tmp_path):
-    builder, client = _builder(tmp_path)
+    builder, client, _ = _builder(tmp_path)
     path = tmp_path / "policy.txt"
     path.write_text("policy content", encoding="utf-8")
     builder.build_full([_source(path, "policy.txt", role=0, dept=0)], "epoch_1")

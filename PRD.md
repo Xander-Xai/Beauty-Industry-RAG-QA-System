@@ -262,7 +262,7 @@ KV_per_token(layer) = 2 × layers × hidden_size × bytes_per_param × batch_fac
 对于 Qwen3-14B（GQA 结构）：
 ● layers = 40（具体依变体而定）
 ● hidden_size 经 GQA 压缩（KV heads 减少）后每 token 实际开销约为传统 MHA 的 1/4 ~ 1/8
-● 实测 kv_per_token ≈ 0.45 KB/token（即 0.45 MB / 1000 tokens）
+● 模型估算 kv_per_token ≈ 0.45 KB/token（即 0.45 MB / 1000 tokens）；未在本仓库实测，见 §2.2 与性能产物状态 `PENDING`
 关键认知：KV Cache 是随 token 序列 + batch 动态增长的三维张量资源，而非固定 MB/token 常数。其增长遵循 O(seq_len × batch_size)，受 continuous batching 动态影响。
 5.2.3 KV Budget 准入控制模型
 系统采用 Token-Based Concurrency Control，不再使用固定并发数，而是基于实时 KV 预算动态限制在途请求数量。

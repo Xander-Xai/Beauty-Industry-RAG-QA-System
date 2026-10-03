@@ -35,6 +35,10 @@ levels; see [Run outcomes that are not evidence levels](interview-evidence-map.m
 - [Operations guide](operations-guide.md)
 - [Data administration guide](data-admin-guide.md)
 - [Repository truth audit](repository-truth-audit.md)
+- [Security regression coverage](security-regression-coverage.md): the fixed threat list
+  (retrieved-chunk injection, poisoned documents, forged boundary markers, cross-role
+  retrieval and L2 cache leakage, malformed JWT claims, deletion/stale chunks), the control
+  and test behind each, and the bounded gaps that remain open.
 - [Open-source configuration and hardcoding audit](open-source-hardcoding-audit.md)
 - [Pre-launch checklist](pre-launch-checklist.md)
 

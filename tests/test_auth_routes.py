@@ -641,15 +641,39 @@ def _admin_mask() -> int:
 
 
 def _signed_token_with_claim(claim_name: str, value, role_mask: int, dept_mask: int = 0) -> str:
-    """Mint a validly-signed RS256 token whose named claim is overridden."""
-    from auth.jwt_auth import create_access_token
+    """Sign an RS256 access token whose named claim is malformed.
 
-    return create_access_token(
-        "malformed-admin",
-        role_mask=role_mask,
-        dept_mask=dept_mask,
-        extra_claims={claim_name: value},
-    )
+    Deliberately does NOT go through ``create_access_token()``. That issuer now
+    refuses to let ``extra_claims`` shadow reserved claims, which is correct for
+    production but would make this test unable to express its own premise.
+
+    The scenario under test is a *validly signed token carrying malformed claims* —
+    something an attacker or a different issuer can produce. So the token is signed
+    directly with the test private key, exactly as such an attacker would. The
+    production issuer plays no part, which keeps the receiver-side guard
+    independently testable: issuer ownership and receiver validation stay two
+    separate defences.
+    """
+    import jwt as pyjwt
+
+    from auth.jwt_auth import get_jwt_config
+
+    config = get_jwt_config()
+    with open(config.private_key_path) as handle:
+        private_key = handle.read()
+
+    now = int(time.time())
+    payload = {
+        "sub": "malformed-admin",
+        "role_mask": role_mask,
+        "dept_mask": dept_mask,
+        "iat": now,
+        "exp": now + 900,
+        "type": "access",
+    }
+    payload[claim_name] = value
+
+    return pyjwt.encode(payload, private_key, algorithm=config.algorithm)
 
 
 def test_float_admin_mask_does_not_escalate(client):
