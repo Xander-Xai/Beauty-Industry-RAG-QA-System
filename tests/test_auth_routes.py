@@ -615,3 +615,111 @@ class TestLoginRateLimit:
         with pytest.raises(Exception) as exc_info:
             auth_module._check_login_rate_limit(ip)
         assert exc_info.value.status_code == 429
+
+
+# ── admin routes must reuse the strict JWT identity boundary ───────────────
+#
+# `_require_admin_payload()` used to feed the raw `payload.get("role_mask", 0)`
+# straight into `is_admin_role_mask()`. That predicate is an internal RBAC check
+# that legitimately expects a canonical identity; handing it an unvalidated JWT
+# claim is what made a float equal to the admin mask pass:
+# `2147483647.0 in {2147483647, ...}` is True because hash and equality agree
+# across int/float.
+#
+# These tests pin the route's use of the Problem 23 identity boundary, not a
+# second validator. The full invalid matrix belongs to Problem 23; here we only
+# need the privilege-escalation shape plus the 200/401/403 trichotomy.
+#
+# 200 = valid admin, 401 = token cannot form a valid identity, 403 = valid
+# identity without sufficient authorization. Those must stay distinguishable.
+
+
+def _admin_mask() -> int:
+    from common.config import get_config
+
+    return get_config().rbac.roles["admin"]
+
+
+def _signed_token_with_claim(claim_name: str, value, role_mask: int, dept_mask: int = 0) -> str:
+    """Mint a validly-signed RS256 token whose named claim is overridden."""
+    from auth.jwt_auth import create_access_token
+
+    return create_access_token(
+        "malformed-admin",
+        role_mask=role_mask,
+        dept_mask=dept_mask,
+        extra_claims={claim_name: value},
+    )
+
+
+def test_float_admin_mask_does_not_escalate(client):
+    """§11: the core escalation regression.
+
+    Preconditions are asserted explicitly so the test cannot silently stop
+    exercising the escalation if the admin mask ever changes.
+    """
+    admin_mask = _admin_mask()
+    float_admin = float(admin_mask)
+    assert float_admin == admin_mask
+    assert type(float_admin) is float
+    assert type(admin_mask) is int
+
+    token = _signed_token_with_claim("role_mask", float_admin, admin_mask)
+    resp = client.get("/api/auth/users", headers=_auth_header(token))
+
+    assert resp.status_code == 401, resp.text
+
+
+def test_malformed_dept_claim_is_rejected_on_admin_route(client):
+    """§14: the whole identity contract is reused, not just the role claim.
+
+    role_mask here is the genuine admin integer; only dept_mask is malformed.
+    A route that validated role alone would let this through.
+    """
+    admin_mask = _admin_mask()
+    token = _signed_token_with_claim("dept_mask", "0", admin_mask, dept_mask=0)
+
+    resp = client.get("/api/auth/users", headers=_auth_header(token))
+
+    assert resp.status_code == 401, resp.text
+
+
+def test_valid_admin_still_authorized(client):
+    """§12: valid admin must not regress to 401."""
+    admin_mask = _admin_mask()
+    token = _signed_token_with_claim("role_mask", admin_mask, admin_mask)
+
+    resp = client.get("/api/auth/users", headers=_auth_header(token))
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_valid_non_admin_is_forbidden_not_unauthorized(client):
+    """§13: a valid non-admin identity is 403, never 401."""
+    from common.config import get_config
+
+    non_admin = get_config().rbac.roles["rd"]
+    token = _signed_token_with_claim("role_mask", non_admin, non_admin)
+
+    resp = client.get("/api/auth/users", headers=_auth_header(token))
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_admin_authorization_uses_validated_identity(monkeypatch, client):
+    """§7: the predicate must receive the canonical identity mask, not the raw claim."""
+    import api.routes_auth as auth_module
+
+    seen: list[int] = []
+    real = auth_module.is_admin_role_mask
+
+    def spy(mask):
+        seen.append(mask)
+        return real(mask)
+
+    monkeypatch.setattr(auth_module, "is_admin_role_mask", spy)
+    admin_mask = _admin_mask()
+    token = _signed_token_with_claim("role_mask", admin_mask, admin_mask)
+    client.get("/api/auth/users", headers=_auth_header(token))
+
+    assert seen == [admin_mask], "predicate must see exactly the canonical int mask"
