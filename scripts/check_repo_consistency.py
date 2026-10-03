@@ -3007,6 +3007,92 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
             )
 
 
+# ── 12. a section may not restate a hardcoded count of its own list ─────────
+#
+# README's Interviewer Guide preface said "六个问题" above a Q1..Q7 list. Nothing
+# failed: every other guard here checks evidence vocabulary or whether a claim
+# outruns its evidence, and none of them cross-check a section's prose against
+# the section's own contents. Deleting the number fixed that instance; these two
+# invariants make the class unrepresentable rather than merely fixed once.
+#
+# Both are derived from the text itself, so neither needs a hardcoded count, a
+# heading name or a document list. A section that enumerates nothing is skipped,
+# which is why applying this to every canonical document costs nothing: prose
+# that merely mentions "12 个问题" carries no enumerator and is never inspected.
+
+#: An enumeration item, e.g. ``**Q1 · 这个系统解决什么业务问题？**``. The bold
+#: marker is required so an inline reference such as ``Q12`` in prose or a
+#: heading like ``## Q12 标准回答`` is not read as a list item.
+_ENUMERATED_ITEM_RE = re.compile(r"\*\*Q(\d+)\b")
+
+#: Prose that restates how many items the list has, in the two languages this
+#: repository documents in. Spacing is optional because both "六个问题" and
+#: "7 个问题" occur in practice.
+_RESTATED_COUNT_RE = re.compile(
+    r"(?:[一二两三四五六七八九十]|\d+)\s*个\s*问题"
+    r"|\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+questions\b",
+    re.IGNORECASE,
+)
+
+
+def _markdown_sections(text: str) -> list[tuple[str, str]]:
+    """Split ``text`` into ``(heading, body)`` pairs on level-2 headings.
+
+    Content above the first ``## `` heading is returned under an empty heading so
+    a stray list in the document preamble is still inspected rather than dropped.
+    """
+    sections: list[tuple[str, str]] = []
+    heading = ""
+    body: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            sections.append((heading, "\n".join(body)))
+            heading = line[3:].strip()
+            body = []
+        else:
+            body.append(line)
+    sections.append((heading, "\n".join(body)))
+    return sections
+
+
+def enumerated_count_errors(name: str, text: str) -> list[str]:
+    """Return errors for a section whose prose contradicts its own enumeration.
+
+    Two failure modes, both silent before this guard existed:
+
+    1. the enumeration is not ``1..N`` — a duplicated, skipped or reordered
+       marker, so the list reads as complete but is not;
+    2. the prose hardcodes how many items there are, which goes stale the moment
+       an item is added or removed and is what produced "六个问题" over Q1..Q7.
+    """
+    errors: list[str] = []
+    for heading, body in _markdown_sections(text):
+        numbers = [int(match) for match in _ENUMERATED_ITEM_RE.findall(body)]
+        if not numbers:
+            continue
+        expected = list(range(1, len(numbers) + 1))
+        if numbers != expected:
+            errors.append(
+                f"{name}: section {heading!r} enumerates {numbers} instead of a contiguous 1..{len(numbers)} sequence"
+            )
+        restated = _RESTATED_COUNT_RE.findall(body)
+        if restated:
+            errors.append(
+                f"{name}: section {heading!r} restates a hardcoded count of its own "
+                f"enumeration ({sorted(set(restated))}) while listing {len(numbers)} items; "
+                "delete the number so the prose cannot drift out of sync"
+            )
+    return errors
+
+
+def check_enumerated_section_counts(errors: list[str]) -> None:
+    """No canonical document may miscount its own enumerated section."""
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        errors.extend(enumerated_count_errors(_display(path), path.read_text(encoding="utf-8")))
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -3061,6 +3147,7 @@ def main() -> int:
     check_observability_is_optional(errors)
     check_legacy_jaeger_agent_config_is_absent(errors)
     check_canonical_runtime_is_not_observability_gated(errors)
+    check_enumerated_section_counts(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
