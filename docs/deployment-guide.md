@@ -92,6 +92,8 @@ Compose 需要 `REDIS_PASSWORD`、`ELASTICSEARCH_PASSWORD`、`MINIO_*`、`SERVIC
 
 在线会话（`SessionState`）与登录限流在配置了 Redis 时跨 worker 共享，Redis 不可用时降级为进程内内存（此时不跨 worker）。
 
+L2 答案缓存按 role/dept 分区存储，物理 key 形如 `rag:l2:rm:<role_mask>:dm:<dept_mask>:<hash>`。旧的未分区 key 不再被读取、也没有回落或迁移路径，只按既有 TTL 过期。**部署后出现一次性缓存 miss 属预期**，不要为此编写 key 迁移脚本，也不要批量清理 `rag:l2:*`。
+
 ## 4. 离线知识库部署要求
 
 离线管线代码位于 `offline/`，入口为 `run_offline.py`。部署时需要区分：
@@ -137,4 +139,6 @@ Compose 需要 `REDIS_PASSWORD`、`ELASTICSEARCH_PASSWORD`、`MINIO_*`、`SERVIC
 - 构建前端并确认 `frontend/dist` 已生成
 - 使用管理员账号验证用户创建、角色更新、证据文件访问
 - 确认 `Dockerfile` 健康检查访问的是 `/api/health`
+- 确认 Redis L2 缓存 key 带权限分区，且发布后一次性缓存 miss 已被登记为预期（不要加未分区 key 的回落或迁移）
+- 确认 `docs/pre-launch-checklist.md` 中的「缓存边界与提示词边界验证」一组已逐项确认
 - 审核 `docs/pre-launch-checklist.md` 中的 P0 阻塞项
