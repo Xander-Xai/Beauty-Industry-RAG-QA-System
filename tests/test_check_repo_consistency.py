@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -1288,7 +1289,19 @@ def test_artifact_presence_is_derived_from_disk(monkeypatch, tmp_path):
     evidence.mkdir(parents=True)
     # A recorded artifact, not just a file: an empty `{}` is not evidence, which is
     # asserted separately in test_otel_runtime_evidence_requires_a_readable_non_empty_json_object.
-    (evidence / "span.json").write_text('{"status": "recorded"}', encoding="utf-8")
+    (evidence / "span.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "evidence_type": "otel_closed_loop",
+                "status": "EXECUTED",
+                "backend": "jaeger",
+                "trace_id": "0123456789abcdef0123456789abcdef",
+                "queried_span_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
     assert guard.otel_runtime_evidence_exists() is True
 
 
@@ -1927,6 +1940,19 @@ def test_otel_runtime_evidence_is_false_without_the_directory(tmp_path, monkeypa
     assert guard.otel_runtime_evidence_exists() is False
 
 
+#: A complete, contract-shaped artifact reused by the discovery tests below.
+_CONTRACT_JSON = json.dumps(
+    {
+        "schema_version": 1,
+        "evidence_type": "otel_closed_loop",
+        "status": "EXECUTED",
+        "backend": "jaeger",
+        "trace_id": "0123456789abcdef0123456789abcdef",
+        "queried_span_count": 1,
+    }
+)
+
+
 @pytest.mark.parametrize(
     ("entries", "expected"),
     [
@@ -1936,8 +1962,8 @@ def test_otel_runtime_evidence_is_false_without_the_directory(tmp_path, monkeypa
         ([("run.json", "{broken")], False),
         ([("run.json", "{}")], False),
         ([("README.md", "notes"), ("note.txt", "notes")], False),
-        ([("otel-run.json", '{"status": "recorded"}')], True),
-        ([("bad.json", "{oops"), ("ok.json", '{"status": "recorded"}')], True),
+        ([("otel-run.json", _CONTRACT_JSON)], True),
+        ([("bad.json", "{oops"), ("ok.json", _CONTRACT_JSON)], True),
     ],
     ids=[
         "empty-directory",
@@ -1972,3 +1998,194 @@ def test_otel_runtime_evidence_is_false_for_this_repository():
     from scripts.check_repo_consistency import otel_runtime_evidence_exists
 
     assert otel_runtime_evidence_exists() is False
+
+
+# ── minimum structural contract for an OTLP queried-span artifact ───────────
+#
+# A readable non-empty JSON object is still not evidence of anything: {"x": 1}
+# satisfies that bar and used to be accepted as a recorded closed loop. The
+# candidate must additionally claim, in a machine-checkable way, that it is an
+# OTLP closed-loop artifact, that the run completed, which backend answered,
+# which trace it belongs to, and that the query returned at least one span.
+#
+# This is a structural floor, not provenance. It cannot show the file was not
+# hand-written, that the backend was really reached, or that the trace
+# corresponds to a real request; it only stops arbitrary JSON from promoting the
+# closed loop. Extra fields are allowed so the contract can grow without
+# invalidating artifacts written today.
+
+_OTEL_EVIDENCE_CONTRACT = {
+    "schema_version": 1,
+    "evidence_type": "otel_closed_loop",
+    "status": "EXECUTED",
+    "backend": "jaeger",
+    "trace_id": "0123456789abcdef0123456789abcdef",
+    "queried_span_count": 1,
+}
+
+_TRACE_ID = "0123456789abcdef0123456789abcdef"
+
+
+def _otel_payload(**overrides) -> dict:
+    payload = dict(_OTEL_EVIDENCE_CONTRACT)
+    payload.update(overrides)
+    return {k: v for k, v in payload.items() if v is not _OMIT}
+
+
+class _Omit:
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<omit>"
+
+
+_OMIT = _Omit()
+
+
+def _write_evidence(tmp_path, monkeypatch, payloads):
+    """Point the guard at a temp ROOT holding the given artifacts."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    evidence = tmp_path / "monitoring" / "evidence"
+    evidence.mkdir(parents=True, exist_ok=True)
+    for name, payload in payloads.items():
+        (evidence / name).write_text(
+            payload if isinstance(payload, str) else __import__("json").dumps(payload),
+            encoding="utf-8",
+        )
+    return guard
+
+
+def test_arbitrary_json_object_is_not_otel_evidence(tmp_path, monkeypatch):
+    """The core regression: any non-empty object used to count as evidence."""
+    guard = _write_evidence(tmp_path, monkeypatch, {"a.json": {"x": 1}})
+    assert guard.otel_runtime_evidence_exists() is False
+
+
+def test_minimal_valid_contract_is_accepted(tmp_path, monkeypatch):
+    guard = _write_evidence(tmp_path, monkeypatch, {"run.json": dict(_OTEL_EVIDENCE_CONTRACT)})
+    assert guard.otel_runtime_evidence_exists() is True
+
+
+def test_structural_contract_predicate_directly():
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_OTEL_EVIDENCE_CONTRACT) is True
+    assert valid({"x": 1}) is False
+    assert valid({}) is False
+    assert valid(None) is False
+    assert valid("string") is False
+    assert valid([_OTEL_EVIDENCE_CONTRACT]) is False
+
+
+@pytest.mark.parametrize("field", sorted(_OTEL_EVIDENCE_CONTRACT))
+def test_every_required_field_is_required(field):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    payload = dict(_OTEL_EVIDENCE_CONTRACT)
+    del payload[field]
+    assert valid(payload) is False, f"missing {field} must not validate"
+
+
+@pytest.mark.parametrize("value", [0, 2, True, "1", 1.0, None])
+def test_schema_version_must_be_integer_one(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(schema_version=value)) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["otel", "tracing", "performance", "benchmark", "otel_closed_loop ", "OTEL_CLOSED_LOOP", ""],
+)
+def test_evidence_type_must_be_exact(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(evidence_type=value)) is False
+
+@pytest.mark.parametrize("value", ["PENDING", "PARTIAL", "BLOCKED", "FAILED", "executed", "", None])
+def test_status_must_be_executed(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(status=value)) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["jaeger", "tempo", "other-otel-backend", "OTLP-compatible/1.0", "x"],
+)
+def test_backend_accepts_any_non_empty_string(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(backend=value)) is True
+
+
+@pytest.mark.parametrize("value", ["", "   ", "\t", None, 1, [], {}])
+def test_backend_rejects_blank_and_non_string(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(backend=value)) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "abc",
+        "0123456789abcdef0123456789abcde",  # 31 hex
+        "0123456789abcdef0123456789abcdef0",  # 33 hex
+        "0123456789abcdef0123456789abcdeg",  # 32 chars, non-hex
+        "",
+        " 0123456789abcdef0123456789abcdef",
+        None,
+        1,
+        "0123456789ABCDEF0123456789ABCDEF".replace("ABCDEF", "ABCDEG"),
+    ],
+)
+def test_invalid_trace_id_is_rejected(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(trace_id=value)) is False
+
+
+def test_uppercase_hex_trace_id_is_accepted():
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(trace_id="0123456789ABCDEF0123456789ABCDEF")) is True
+
+
+@pytest.mark.parametrize("value", [0, -1, True, False, 1.5, "1", None, [1]])
+def test_queried_span_count_must_be_a_positive_int(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(queried_span_count=value)) is False
+
+
+@pytest.mark.parametrize("value", [1, 2, 999])
+def test_queried_span_count_accepts_positive_ints(value):
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    assert valid(_otel_payload(queried_span_count=value)) is True
+
+
+def test_extra_fields_are_allowed():
+    from scripts.check_repo_consistency import is_valid_otel_runtime_evidence as valid
+
+    payload = dict(_OTEL_EVIDENCE_CONTRACT, request_id="abc", notes="local validation", extra=[1, 2])
+    assert valid(payload) is True
+
+
+def test_invalid_artifact_does_not_block_a_valid_one(tmp_path, monkeypatch):
+    guard = _write_evidence(
+        tmp_path,
+        monkeypatch,
+        {"bad.json": {"x": 1}, "good.json": dict(_OTEL_EVIDENCE_CONTRACT)},
+    )
+    assert guard.otel_runtime_evidence_exists() is True
+
+
+def test_all_invalid_artifacts_stay_false(tmp_path, monkeypatch):
+    guard = _write_evidence(
+        tmp_path,
+        monkeypatch,
+        {"a.json": {"x": 1}, "b.json": _otel_payload(status="BLOCKED"), "c.json": "not json at all"},
+    )
+    assert guard.otel_runtime_evidence_exists() is False

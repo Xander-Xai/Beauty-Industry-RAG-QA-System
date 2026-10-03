@@ -1140,25 +1140,71 @@ def performance_artifact_exists() -> bool:
     return any(ROOT.glob(PERFORMANCE_ARTIFACT_GLOB))
 
 
+#: Fields an OTLP closed-loop artifact must carry, and what each one has to look
+#: like. Deliberately a floor: enough structure to mean "this claims to be a
+#: completed run whose backend answered a query for one trace", and nothing more.
+OTEL_EVIDENCE_SCHEMA_VERSION = 1
+OTEL_EVIDENCE_TYPE = "otel_closed_loop"
+OTEL_EVIDENCE_STATUS_EXECUTED = "EXECUTED"
+
+#: A W3C/OTel trace id: 32 hex characters.
+_OTEL_TRACE_ID_RE = re.compile(r"[0-9a-fA-F]{32}")
+
+
+def _is_plain_int(value: object) -> bool:
+    """True for a real integer. ``bool`` is excluded even though ``True == 1``."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_valid_otel_runtime_evidence(payload: object) -> bool:
+    """True when a decoded artifact satisfies the minimum closed-loop contract.
+
+    A readable non-empty JSON object is not on its own evidence of anything, so a
+    candidate has to state, in a checkable way, that it belongs to this evidence
+    type, that the run actually completed, which backend answered, which trace it
+    concerns, and that the query returned at least one span. Unknown extra fields
+    are allowed so the contract can be tightened later without invalidating
+    artifacts already written.
+
+    This is structural validation only. It cannot show that the file was not
+    hand-written, that the backend was really reached, or that the trace
+    corresponds to any real request — those are provenance questions and are
+    deliberately out of scope.
+    """
+    if not isinstance(payload, dict):
+        return False
+    version = payload.get("schema_version")
+    if not _is_plain_int(version) or version != OTEL_EVIDENCE_SCHEMA_VERSION:
+        return False
+    if payload.get("evidence_type") != OTEL_EVIDENCE_TYPE:
+        return False
+    if payload.get("status") != OTEL_EVIDENCE_STATUS_EXECUTED:
+        return False
+    backend = payload.get("backend")
+    if not isinstance(backend, str) or not backend.strip():
+        return False
+    trace_id = payload.get("trace_id")
+    if not isinstance(trace_id, str) or not _OTEL_TRACE_ID_RE.fullmatch(trace_id):
+        return False
+    span_count = payload.get("queried_span_count")
+    return _is_plain_int(span_count) and span_count > 0
+
+
 def otel_runtime_evidence_exists() -> bool:
-    """True when an OTLP closed-loop run has been recorded as a readable artifact.
+    """True when an OTLP closed-loop run has been recorded as a valid artifact.
 
     A closed-loop claim requires a recorded trace artifact. This repository keeps
     such evidence under ``monitoring/evidence/`` when a local run has actually
     happened; nothing is recorded today, which is why the runtime closed loop is
     PENDING rather than verified.
 
-    The directory is not itself evidence, and neither is a file inside it. A
-    candidate only counts when it sits directly in the directory, is non-empty,
-    parses as JSON and has a non-empty object at the top level. Discovery is
-    deliberately non-recursive: a hand-made ``monitoring/evidence/tmp/debug/x.json``
-    must not silently promote the top-level state. An unreadable or malformed file
-    is skipped rather than raised, so one bad file can neither crash the checker nor
-    become evidence just by existing.
-
-    This is deliberately a floor, not a provenance schema: it does not yet require
-    trace/span ids, timestamps or backend identifiers, only that a committed
-    artifact-shaped file is actually there.
+    Discovery is deliberately non-recursive and limited to ``*.json`` directly
+    inside the directory: a hand-made ``monitoring/evidence/tmp/debug/x.json`` or
+    a screenshot must not silently promote the top-level state. An unreadable or
+    malformed file is skipped rather than raised, so one bad file can neither
+    crash the checker nor become evidence just by existing, and it never blocks a
+    valid sibling from being found. Beyond readability and parseability a
+    candidate must satisfy :func:`is_valid_otel_runtime_evidence`.
     """
     evidence = ROOT / "monitoring" / "evidence"
     if not evidence.is_dir():
@@ -1171,7 +1217,7 @@ def otel_runtime_evidence_exists() -> bool:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             # Not readable evidence. Skip it; keep looking for a real artifact.
             continue
-        if isinstance(payload, dict) and payload:
+        if is_valid_otel_runtime_evidence(payload):
             return True
     return False
 
