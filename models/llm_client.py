@@ -379,14 +379,29 @@ class LLMClient:
         messages.append({"role": "system", "content": system_prompt})
 
         # ② 对话历史
+        # 历史 payload 同样经过 reserved-marker 编码：assistant 回显用户输入、演示 tag
+        # 示例，都会把 application framing token 带进 messages。这里复用的是同一个
+        # structural primitive——历史仍然是会话上下文（role=user / role=assistant），
+        # 不是不可信检索数据，也不做过滤；只是不允许 replayed payload 生成
+        # application-owned framing syntax。
         if ctx.session_id:
             session = SessionState.get_or_create(ctx.session_id)
             history = session.dialog_rounds[-self.max_conversation_rounds :]
             for round in history:
                 if "user_input" in round:
-                    messages.append({"role": "user", "content": round["user_input"]})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": _escape_reserved_trust_boundary_markers(round["user_input"]),
+                        }
+                    )
                 if "response" in round:
-                    messages.append({"role": "assistant", "content": round["response"]})
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": _escape_reserved_trust_boundary_markers(round["response"]),
+                        }
+                    )
 
         # ③ Evidence Gate 增强提示 + 检索证据
         evidence_text = self._format_evidence(ctx)
