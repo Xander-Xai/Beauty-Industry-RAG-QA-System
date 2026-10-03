@@ -2467,12 +2467,21 @@ def _tracker_section(audit_text: str) -> str | None:
 
 
 def _tracker_bullets(tracker: str) -> list[str]:
-    """Split the tracker map into bullets, including hard-wrapped continuations."""
+    """Split the tracker map into bullets, including hard-wrapped continuations.
+
+    A bullet is the contiguous run of non-blank lines that starts at a list
+    marker. Trailing prose paragraphs inside the section are *not* part of the
+    last bullet: without the blank-line cut-off a closing note such as
+    "Closing #N likewise records ..." is glued onto whichever bullet happens to
+    precede it, so a guard that looks up #N finds the note instead of the row it
+    meant to check -- and a removed row then satisfies its own guard.
+    """
     starts = [match.start() for match in _BULLET_SPLIT_RE.finditer(tracker)]
     if not starts:
         return [tracker]
     bounds = starts + [len(tracker)]
-    return [tracker[bounds[index] : bounds[index + 1]] for index in range(len(starts))]
+    bullets = [tracker[bounds[index] : bounds[index + 1]] for index in range(len(starts))]
+    return [re.split(r"(?m)^\s*$", bullet, maxsplit=1)[0] for bullet in bullets]
 
 
 def audit_tracker_errors(audit_text: str) -> list[str]:
