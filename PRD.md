@@ -30,7 +30,7 @@ All performance figures below are **design targets or model estimates**, not ver
 
 > **注意**：本文档为系统设计阶段的 PRD，描述的是**双卡目标架构**（双 GPU + 微服务）。当前仓库已验证的主线为 **FastAPI 单体后端**（`app.py`），微服务目录保留但尚未完成全链路契约对齐。具体实现以 [`README.md`](README.md) 中的「当前已验证主线」为准。
 
-> **版本语义**：本 PRD 与仓库内部分文档使用 “v2.5” 标签。该标签是 **历史 working milestone / development-phase 标签**，**不是**正式发布版本，也不是当前 canonical runtime version。canonical runtime version 为 `config.json` → `system.version` = `2.3.0`，`CHANGELOG.md` 中最新正式 release 亦为 `2.3.0`，其后的变更归入 `[Unreleased]`。
+> **版本语义**：本 PRD 与仓库内部分文档使用 “v2.5” 标签。该标签是 **历史 working milestone / development-phase 标签**，**不是**正式发布版本，也不是当前 canonical runtime version。canonical runtime version 为 `config.json` → `system.version` = `2.3.0`；`CHANGELOG.md` 中存在 `2.3.0` release entry，其后的变更归入 `[Unreleased]`。当前 GitHub Release / tag 状态以仓库实际状态为准，详见[版本策略](docs/repository-truth-audit.md#version-policy)。
 
 > **Runtime reconciliation（v2.5 working milestone）**：以下 PRD 设计与当前实现不一致；正文保留设计意图，但**不得作为当前实现证据**。
 >
