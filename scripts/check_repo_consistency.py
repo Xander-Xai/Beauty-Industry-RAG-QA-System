@@ -2421,7 +2421,37 @@ _CLASSIFICATION_SOURCE = "docs/interview-evidence-map.md → Classification voca
 #: is deleted from this list in the same commit that closes it.
 OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
 
+#: Reconciliation lineage, anchored on the tracking issue and never on the PR
+#: number. A PR number is narration that ages out: the next PR exists long
+#: before the reconciliation it carries is finished, so "PR #N is the latest /
+#: current one" is not a repository-truth property and must never become an
+#: invariant. The issue is stable, so the audit is checked against these.
+#:
+#: Both move in the same commit that closes the reconciliation issue and updates
+#: ``docs/repository-truth-audit.md``, exactly like
+#: ``OPEN_EXTERNAL_VALIDATION_TRACKERS`` above. A new reconciliation issue
+#: supersedes the previous one; it does not extend it.
+COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22)
+
+#: The single reconciliation issue the audit describes as the current open
+#: scope. At most one is active at a time.
+CURRENT_RECONCILIATION_ISSUE = 24
+
 _BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
+
+#: A reconciliation bullet records completion with one of these. ``closed`` is
+#: accepted because the audit already spells #16's state as ``closed
+#: (`completed`)``.
+_COMPLETED_MARKER_RE = re.compile(r"\b(closed|completed|merged|resolved)\b", re.IGNORECASE)
+
+#: Present-tense "this is the reconciliation happening now" phrasing. Deliberately
+#: about *scope*, never about a PR number.
+_CURRENT_SCOPE_RE = re.compile(r"\bthe\s+current\s+(one|scope|reconciliation|truth\b)", re.IGNORECASE)
+
+
+def _issue_reference(number: int) -> re.Pattern[str]:
+    """Match a Markdown/short reference to an issue or PR number."""
+    return re.compile(r"#[\[({]?" + str(number) + r"\b")
 
 
 def _tracker_section(audit_text: str) -> str | None:
@@ -2449,7 +2479,7 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
 
     bullets = _tracker_bullets(tracker)
     for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
-        reference = re.compile(r"#[\[({]?" + str(number) + r"\b")
+        reference = _issue_reference(number)
         line = next((bullet for bullet in bullets if reference.search(bullet)), None)
         if line is None:
             errors.append(
@@ -2463,6 +2493,38 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
                 f"repository truth audit: tracker #{number} must stay recorded as open; "
                 "no change in this repository produces that external evidence"
             )
+
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        bullet = next((item for item in bullets if _issue_reference(number).search(item)), None)
+        if bullet is None:
+            errors.append(
+                f"repository truth audit: completed reconciliation issue #{number} is no longer recorded "
+                "in the tracker map; if its reconciliation reopened, record it as the current scope and "
+                "remove it from COMPLETED_RECONCILIATION_ISSUES in scripts/check_repo_consistency.py"
+            )
+            continue
+        if not _COMPLETED_MARKER_RE.search(bullet):
+            errors.append(f"repository truth audit: reconciliation issue #{number} must stay recorded as completed")
+        if _CURRENT_SCOPE_RE.search(bullet):
+            errors.append(
+                f"repository truth audit: reconciliation issue #{number} is recorded as completed and must "
+                "not also be described as the current reconciliation scope; that is the drift this audit "
+                "exists to prevent"
+            )
+
+    current = next((item for item in bullets if _issue_reference(CURRENT_RECONCILIATION_ISSUE).search(item)), None)
+    if current is None:
+        errors.append(
+            f"repository truth audit: current reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is not "
+            "recorded in the tracker map; record it as the open scope, or move it to "
+            "COMPLETED_RECONCILIATION_ISSUES in the same commit that closes it"
+        )
+    elif _COMPLETED_MARKER_RE.search(current):
+        errors.append(
+            f"repository truth audit: reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is recorded as "
+            "completed but is still the current scope; move it to COMPLETED_RECONCILIATION_ISSUES in the "
+            "same commit that closes it"
+        )
 
     for area in DELIVERED_AUDIT_AREAS:
         row = next(
