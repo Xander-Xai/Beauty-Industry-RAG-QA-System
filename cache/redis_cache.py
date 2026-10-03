@@ -33,6 +33,10 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+#: Canonical permission-mask bound: 32-bit unsigned. Mirrors auth.bitmask_rbac and
+#: common.auth; defined locally so the cache boundary does not import auth internals.
+_MAX_UINT32 = 0xFFFFFFFF
+
 
 class RedisCache:
     """
@@ -127,6 +131,38 @@ class RedisCache:
         return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
     @staticmethod
+    def _validate_permission_scope(role_mask: int, dept_mask: int) -> tuple[int, int]:
+        """Validate a permission identity against the canonical uint32 contract.
+
+        缓存边界的 fail-closed 校验。L2 物理 key 把 mask 直接插入 f-string，因此没有这一步
+        时 ``"1"`` 与 ``1`` 会落到同一个 Redis 地址；而 ``True == 1`` / ``False == 0``
+        又让布尔值与合法掩码别名，甚至能绕过 L1 的 public-only 判断。
+
+        规则：
+
+        * ``type(value) is int`` —— 不用 ``isinstance``，因为 ``isinstance(True, int)``
+          为真，布尔值会被当成 0/1 掩码；
+        * ``0 <= value <= 0xFFFFFFFF``。
+
+        不做 ``int(value)`` 转换、不 clamp、不取 abs、不 fallback：非法 identity 直接
+        ``ValueError``，由调用方在任何 cache IO 之前失败。
+
+        唯一实现：``get()`` / ``set()`` / ``_build_l2_storage_key()`` 共用本方法。
+        与 ``common.auth`` 的 JWT claim 校验是两个独立的 defense-in-depth 边界，
+        cache 层不 import auth 内部实现。
+        """
+        for name, value in (("role_mask", role_mask), ("dept_mask", dept_mask)):
+            if type(value) is not int:
+                raise ValueError(
+                    f"{name} must be an int, got {type(value).__name__}"
+                )
+            if not 0 <= value <= _MAX_UINT32:
+                raise ValueError(
+                    f"{name} must be within [0, {_MAX_UINT32}], got {value}"
+                )
+        return role_mask, dept_mask
+
+    @staticmethod
     def _build_l2_storage_key(key: str, role_mask: int, dept_mask: int) -> str:
         """构造 L2 物理 Redis key：logical key + 权限分区。
 
@@ -138,8 +174,12 @@ class RedisCache:
         这里由 cache 对象自身强制分区，使权限隔离不再只依赖调用方。mask 是授权位掩码，
         直接放进 key 便于调试，不再额外做一次哈希。
 
+        本方法自身也 fail closed：非法 identity 在此抛 ``ValueError``，不依赖 get/set
+        先校验——否则直接调用本方法仍可生成别名地址。
+
         唯一来源：``get()`` 与 ``set()`` 必须共用本 helper，避免读写 key drift。
         """
+        role_mask, dept_mask = RedisCache._validate_permission_scope(role_mask, dept_mask)
         return f"rag:l2:rm:{role_mask}:dm:{dept_mask}:{key}"
 
     def _ensure_counters(self):
@@ -157,6 +197,8 @@ class RedisCache:
         L2: 所有权限组合
         """
         self._ensure_counters()
+        # 先校验 identity，再做任何 cache IO：非法掩码不得读取 L1，也不得触碰 Redis。
+        role_mask, dept_mask = self._validate_permission_scope(role_mask, dept_mask)
         # L1 查询（公开文档）— LRU 淘汰
         if role_mask == 0 and dept_mask == 0:
             with self._l1_lock:
@@ -191,6 +233,8 @@ class RedisCache:
         L1: 公开文档写入内存（TTL = l1_ttl_seconds），线程安全
         L2: 所有文档写入 Redis（TTL = l2_ttl_seconds）
         """
+        # 先校验 identity：非法掩码不得写入 L1，也不得调用 Redis.setex。
+        role_mask, dept_mask = self._validate_permission_scope(role_mask, dept_mask)
         # L1 写入（公开文档）— LRU 淘汰
         if role_mask == 0 and dept_mask == 0:
             with self._l1_lock:

@@ -26,6 +26,8 @@ import time
 from collections import OrderedDict
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cache.redis_cache import RedisCache
 
 # ── Cache Key 计算 ──
@@ -497,3 +499,97 @@ class TestL2PermissionPartitioning:
         assert list(cache.redis_client.data) == [
             RedisCache._build_l2_storage_key("drift", 3, 5)
         ]
+
+
+class TestPermissionScopeValidation:
+    """缓存边界必须在任何 cache IO 之前校验权限 identity。
+
+    Problem 21 已让 L2 物理 key 带上 role/dept 分区，但它把 mask 直接插入 f-string，
+    因此 `"1"` 与 `1` 会落到同一个 Redis 地址；`True`/`False` 也会因为
+    `True == 1` / `False == 0` 与合法掩码别名，L1 的 public-only 判断同样会被绕过。
+
+    精确 contract：`type(mask) is int` 且 `0 <= mask <= 0xFFFFFFFF`。用 `type(...) is int`
+    而非 `isinstance`，因为 `isinstance(True, int)` 为真。非法 identity 直接
+    `ValueError`，不做 `int()` 转换、不 clamp、不取 abs、不 fallback。
+    """
+
+    @staticmethod
+    @patch.object(RedisCache, "_try_connect")
+    def _cache(mock_connect):
+        cache = RedisCache()
+        cache.redis_client = MagicMock()
+        cache.enabled = True
+        return cache
+
+    # ── Regression A: bool 与 public L1 别名 ──
+    def test_bool_public_l1_alias_is_rejected(self):
+        """`role_mask=False` 与 public(0) 别名，旧实现会命中 public L1。"""
+        cache = self._cache()
+        cache.set("public", {"answer": "PUBLIC"}, role_mask=0, dept_mask=0)
+        with pytest.raises(ValueError):
+            cache.get("public", role_mask=False, dept_mask=0)
+
+    def test_bool_public_l1_write_is_rejected_and_leaves_no_entry(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.set("bad", {"x": 1}, role_mask=False, dept_mask=0)
+        assert "bad" not in cache._l1
+
+    # ── Regression B: string/int 物理地址别名 ──
+    def test_string_and_int_masks_cannot_share_a_physical_key(self):
+        """旧实现下两者生成同一 Redis 地址；新 contract 是拒绝字符串。"""
+        assert RedisCache._build_l2_storage_key("same", 1, 2) == "rag:l2:rm:1:dm:2:same"
+        with pytest.raises(ValueError):
+            RedisCache._build_l2_storage_key("same", "1", 2)
+
+    # ── §12 invalid role matrix ──
+    @pytest.mark.parametrize("value", ["1", "0", 1.0, 0.0, True, False, -1, 0x100000000, None, [], {}])
+    def test_invalid_role_mask_is_rejected(self, value):
+        with pytest.raises(ValueError):
+            RedisCache._build_l2_storage_key("k", value, 2)
+
+    # ── §13 invalid dept matrix ──
+    @pytest.mark.parametrize("value", ["1", 1.0, True, False, -1, 0x100000000, None])
+    def test_invalid_dept_mask_is_rejected(self, value):
+        with pytest.raises(ValueError):
+            RedisCache._build_l2_storage_key("k", 1, value)
+
+    # ── §14 valid boundaries ──
+    @pytest.mark.parametrize("value", [0, 1, 0x7FFFFFFF, 0xFFFFFFFF])
+    def test_valid_uint32_boundaries_are_accepted(self, value):
+        assert RedisCache._validate_permission_scope(value, value) == (value, value)
+        assert RedisCache._build_l2_storage_key("k", value, value) == f"rag:l2:rm:{value}:dm:{value}:k"
+
+    # ── §15 invalid get must not touch Redis ──
+    def test_invalid_get_makes_zero_redis_calls(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.get("k", role_mask="1", dept_mask=2)
+        cache.redis_client.get.assert_not_called()
+
+    # ── §16 invalid set must not touch Redis ──
+    def test_invalid_set_makes_zero_redis_calls(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.set("k", {"x": 1}, role_mask=True, dept_mask=2)
+        cache.redis_client.setex.assert_not_called()
+
+    # ── §17 invalid set must not pollute L1 ──
+    def test_invalid_set_does_not_pollute_l1(self):
+        cache = self._cache()
+        with pytest.raises(ValueError):
+            cache.set("nope", {"x": 1}, role_mask=0, dept_mask=False)
+        assert "nope" not in cache._l1
+
+    # ── §22 valid identities keep their existing L1 behaviour ──
+    def test_valid_public_identity_still_hits_l1(self):
+        cache = self._cache()
+        cache.set("pub", {"answer": "P"}, role_mask=0, dept_mask=0)
+        assert cache.get("pub", role_mask=0, dept_mask=0) == {"answer": "P"}
+
+    def test_validator_rejects_bool_and_str_explicitly(self):
+        """Documented reason for type(...) is int over isinstance."""
+        with pytest.raises(ValueError):
+            RedisCache._validate_permission_scope(True, 0)
+        with pytest.raises(ValueError):
+            RedisCache._validate_permission_scope(0, False)
