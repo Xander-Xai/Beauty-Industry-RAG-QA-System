@@ -1555,49 +1555,190 @@ def test_interview_baseline_must_split_exporter_implementation_from_closed_loop(
 
 
 def test_audit_tracker_requires_open_external_validation():
-    from scripts.check_repo_consistency import audit_tracker_errors
+    from scripts.check_repo_consistency import (
+        OPEN_EXTERNAL_VALIDATION_TRACKERS,
+        _issue_reference,
+        _tracker_bullets,
+        _tracker_section,
+        audit_tracker_errors,
+    )
 
     audit = (Path("docs/repository-truth-audit.md")).read_text(encoding="utf-8")
     assert audit_tracker_errors(audit) == []
 
-    closed = audit.replace(
-        "[#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval\n"
-        "  benchmark execution: open.",
-        "[#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval\n"
-        "  benchmark execution: closed.",
-    )
-    assert closed != audit, "fixture must actually change the tracker state"
-    assert audit_tracker_errors(closed)
+    # Derived from the parsed tracker rows rather than hardcoded prose, so adding a
+    # tracker or rewording a row cannot silently turn this into a no-op fixture. Every
+    # standalone 'open' in the row is flipped, because a row that still says 'open'
+    # anywhere has not stopped recording the tracker as open.
+    tracker = _tracker_section(audit)
+    assert tracker is not None
+    bullets = _tracker_bullets(tracker)
+    for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
+        bullet = next(item for item in bullets if _issue_reference(number).search(item))
+        assert re.search(r"\bopen\b", bullet, re.IGNORECASE), f"#{number} must be recorded as open"
+
+        closed = audit.replace(bullet, re.sub(r"\bopen\b", "closed", bullet))
+        assert closed != audit, f"fixture must actually change the state of tracker #{number}"
+        assert any(f"#{number}" in error for error in audit_tracker_errors(closed)), (
+            f"recording open tracker #{number} as closed must fail the guard"
+        )
 
 
 def test_audit_tracker_keeps_completed_reconciliation_off_the_current_scope():
-    """#22 completed while a doc still called it "the current one" is the drift to prevent."""
-    from scripts.check_repo_consistency import audit_tracker_errors
+    """A completed issue described as "the current one" is the drift to prevent."""
+    from scripts.check_repo_consistency import (
+        COMPLETED_RECONCILIATION_ISSUES,
+        _issue_reference,
+        _tracker_bullets,
+        _tracker_section,
+        audit_tracker_errors,
+    )
 
     audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
     assert audit_tracker_errors(audit) == []
 
-    stale = audit.replace(
-        "reconciliation: completed, delivered by PR #23.",
-        "reconciliation: the current one.",
-    )
-    assert stale != audit, "fixture must actually re-open the completed scope"
-    assert any("#22" in error for error in audit_tracker_errors(stale))
+    tracker = _tracker_section(audit)
+    assert tracker is not None
+    bullets = _tracker_bullets(tracker)
+
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        bullet = next(item for item in bullets if _issue_reference(number).search(item))
+        for phrasing in (
+            " This is the current one.",
+            " This is the current open scope.",
+            " This is the current reconciliation scope.",
+        ):
+            stale = audit.replace(bullet, bullet + phrasing)
+            assert stale != audit, f"fixture must actually re-open the completed scope of #{number}"
+            assert any(f"#{number}" in error for error in audit_tracker_errors(stale)), (
+                f"#{number} is completed and must not also be described as the current scope ({phrasing!r})"
+            )
 
 
-def test_audit_tracker_requires_the_current_reconciliation_issue_to_be_recorded():
+def test_current_scope_matcher_does_not_flag_ordinary_current_wording():
+    """The broadened matcher must not swallow 'the current PR' or 'the current implementation'."""
+    from scripts.check_repo_consistency import _CURRENT_SCOPE_RE
+
+    assert _CURRENT_SCOPE_RE.search("awaiting the current PR.") is None
+    assert _CURRENT_SCOPE_RE.search("the current implementation is fine.") is None
+    assert _CURRENT_SCOPE_RE.search("the current evidence map.") is None
+    # The adjective between "current" and the scope noun is what the old, stricter
+    # pattern missed, so this case is the regression that matters.
+    assert _CURRENT_SCOPE_RE.search("described as the current open scope.") is not None
+    assert _CURRENT_SCOPE_RE.search("described as the current one.") is not None
+
+
+def test_no_current_reconciliation_issue_is_a_legal_state():
+    """Between reconciliations there is no open scope, and that needs no invented issue."""
     from scripts.check_repo_consistency import CURRENT_RECONCILIATION_ISSUE, audit_tracker_errors
 
     audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
-    reference = f"issues/{CURRENT_RECONCILIATION_ISSUE}) — final"
+    assert CURRENT_RECONCILIATION_ISSUE is None, (
+        "the reconciliation model must be able to express 'no open reconciliation issue'"
+    )
+    assert audit_tracker_errors(audit) == [], (
+        "an audit that states no current reconciliation issue must pass without an issue number"
+    )
 
-    missing = audit.replace(f"[#{CURRENT_RECONCILIATION_ISSUE}]", "[#9999]").replace(reference, "issues/9999) — final")
-    assert missing != audit, "fixture must actually drop the current scope row"
-    assert any(str(CURRENT_RECONCILIATION_ISSUE) in error for error in audit_tracker_errors(missing))
 
-    closed = audit.replace("reconciliation: the current open scope", "reconciliation: completed")
-    assert closed != audit, "fixture must actually close the current scope"
-    assert any(str(CURRENT_RECONCILIATION_ISSUE) in error for error in audit_tracker_errors(closed))
+def test_audit_must_state_the_absent_reconciliation_scope_explicitly():
+    """Silence is not a legal way to say 'none': the declaration has to be findable."""
+    from scripts.check_repo_consistency import (
+        _NO_CURRENT_RECONCILIATION_RE,
+        CURRENT_RECONCILIATION_ISSUE,
+        _tracker_bullets,
+        _tracker_section,
+        audit_tracker_errors,
+    )
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert CURRENT_RECONCILIATION_ISSUE is None
+
+    tracker = _tracker_section(audit)
+    assert tracker is not None
+    declaration = next(item for item in _tracker_bullets(tracker) if _NO_CURRENT_RECONCILIATION_RE.search(item))
+
+    without = audit.replace(declaration, "", 1)
+    assert without != audit, "fixture must actually drop the 'none' declaration"
+    assert not _NO_CURRENT_RECONCILIATION_RE.search(_tracker_section(without) or "")
+    assert any("no current reconciliation scope" in error for error in audit_tracker_errors(without)), (
+        "an audit with no reconciliation scope must say so, not omit the topic"
+    )
+
+
+def test_audit_cannot_declare_none_while_another_row_claims_the_current_scope():
+    from scripts.check_repo_consistency import CURRENT_RECONCILIATION_ISSUE, audit_tracker_errors
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert CURRENT_RECONCILIATION_ISSUE is None
+
+    contradictory = audit.replace(
+        "\n## Reconciliation lineage invariants",
+        "\n- PR #26 — a later reconciliation: this is the current one.\n\n## Reconciliation lineage invariants",
+        1,
+    )
+    assert contradictory != audit, "fixture must actually add a contradictory current-scope row"
+    assert any("declares no current reconciliation scope" in error for error in audit_tracker_errors(contradictory))
+
+
+def _real_audit_text() -> str:
+    return Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+
+
+def test_reconciliation_model_rejects_a_completed_issue_as_the_current_scope(monkeypatch):
+    """The invariant must not be maintained by reviving a closed issue."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "CURRENT_RECONCILIATION_ISSUE", 24)
+    monkeypatch.setattr(guard, "COMPLETED_RECONCILIATION_ISSUES", (16, 20, 22, 24))
+
+    errors = guard.reconciliation_model_errors()
+    model_errors = [error for error in errors if error.startswith("CURRENT_RECONCILIATION_ISSUE")]
+    assert model_errors, "pointing the current scope at a completed issue must be rejected outright"
+    assert any("24" in error for error in model_errors), f"the offending issue number must be named: {model_errors}"
+    assert any("None" in error for error in model_errors), "the error must point at the legal alternative"
+    assert any("#24" in error for error in guard.audit_tracker_errors(_real_audit_text()))
+
+
+def test_reconciliation_model_keeps_the_two_lineages_disjoint():
+    import scripts.check_repo_consistency as guard
+
+    assert guard.reconciliation_model_errors() == [], "the recorded model must be internally consistent"
+
+    completed = set(guard.COMPLETED_RECONCILIATION_ISSUES)
+    trackers = set(guard.OPEN_EXTERNAL_VALIDATION_TRACKERS)
+    assert not completed & trackers, "an issue cannot be a completed reconciliation and an open tracker"
+    assert guard.CURRENT_RECONCILIATION_ISSUE not in completed
+
+
+def test_recorded_reconciliation_state_matches_the_audit_snapshot():
+    """The recorded numbers are the ones the audit actually states."""
+    from scripts.check_repo_consistency import (
+        COMPLETED_RECONCILIATION_ISSUES,
+        OPEN_EXTERNAL_VALIDATION_TRACKERS,
+    )
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        assert f"issues/{number})" in audit, f"completed issue #{number} must stay recorded in the tracker map"
+    for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
+        assert f"issues/{number})" in audit, f"open tracker #{number} must stay recorded in the tracker map"
+
+
+def test_audit_tracker_requires_the_current_reconciliation_issue_to_be_recorded(monkeypatch):
+    """While an issue really is open, the audit must record it as the current scope."""
+    import scripts.check_repo_consistency as guard
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert guard.CURRENT_RECONCILIATION_ISSUE is None
+
+    monkeypatch.setattr(guard, "CURRENT_RECONCILIATION_ISSUE", 34)
+    monkeypatch.setattr(guard, "COMPLETED_RECONCILIATION_ISSUES", (16, 20, 22, 24))
+
+    errors = guard.audit_tracker_errors(audit)
+    assert any("#34" in error for error in errors), "an unrecorded current scope must fail the guard"
+    # ...and the audit's 'none' declaration must then contradict it, not be ignored.
+    assert any("declares no current reconciliation scope" in error for error in errors)
 
 
 def test_reconciliation_lineage_is_not_pinned_to_a_pr_number():

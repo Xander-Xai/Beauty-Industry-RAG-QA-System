@@ -23,6 +23,17 @@ The truth audit is expected to resolve its candidate from ``HEAD`` and to carry
 an ISO ``YYYY-MM-DD`` verification date. The date is validated for shape only;
 the guard never hardcodes a specific date or depends on the current date, a
 GitHub API, or wall-clock state, so runs stay deterministic.
+
+The recorded reconciliation lineage (completed issues, the current open scope,
+and the external validation trackers) is a **snapshot of GitHub state written
+down by a human after re-querying the GitHub API**, not a live observation. The
+guard reads only the working tree, so it can prove the document and the guard
+agree with each other; it cannot and does not claim to know whether an issue is
+open on GitHub right now. What it does enforce is that a transition nobody
+recorded — closing the current issue, dropping a tracker, describing a completed
+issue as the work happening now — cannot pass silently. It also treats "no open
+reconciliation issue" as a legitimate state that must be stated outright rather
+than a gap to be filled by reviving a closed issue.
 """
 
 from __future__ import annotations
@@ -2405,6 +2416,16 @@ def check_operational_metric_references(errors: list[str]) -> None:
 # The tracker map is a human-facing snapshot, so it must keep completed
 # implementation work and still-open external validation distinguishable without
 # being pinned to a GitHub query at CI time.
+#
+# Read this before trusting a number below. Everything in this section is a
+# *recorded snapshot of GitHub state*, re-verified by a human against the GitHub
+# API and written down in ``docs/repository-truth-audit.md``. It is governance
+# audit, not an observation: this guard runs offline, reads only the working
+# tree, and has no way to know whether an issue is open on GitHub right now. It
+# can therefore prove only that the document and this file agree with each other,
+# never that either matches live GitHub. Re-query GitHub before relying on a row;
+# the deterministic check below exists to make an *unrecorded* transition fail
+# loudly, not to detect one automatically.
 
 #: Areas whose implementation is delivered. Each row must carry an explicit
 #: classification so "implemented" can never be read as "result achieved".
@@ -2426,7 +2447,7 @@ _CLASSIFICATION_SOURCE = "docs/interview-evidence-map.md → Classification voca
 #: None of this repository's own changes can close them, so the audit must keep
 #: recording them as open. The numbers are stable by construction: a closed tracker
 #: is deleted from this list in the same commit that closes it.
-OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
+OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18, 32)
 
 #: Reconciliation lineage, anchored on the tracking issue and never on the PR
 #: number. A PR number is narration that ages out: the next PR exists long
@@ -2438,11 +2459,20 @@ OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
 #: ``docs/repository-truth-audit.md``, exactly like
 #: ``OPEN_EXTERNAL_VALIDATION_TRACKERS`` above. A new reconciliation issue
 #: supersedes the previous one; it does not extend it.
-COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22)
+COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22, 24)
 
-#: The single reconciliation issue the audit describes as the current open
-#: scope. At most one is active at a time.
-CURRENT_RECONCILIATION_ISSUE = 24
+#: The single reconciliation issue the audit describes as the current open scope,
+#: or ``None`` when no reconciliation issue is open.
+#:
+#: ``None`` is a real, legitimate state and not a gap to be papered over. A
+#: repository between reconciliations has no open scope, and forcing one of the
+#: closed issues above back into this slot to satisfy an "exactly one current
+#: issue" invariant would reintroduce the exact drift the invariant exists to
+#: catch: a completed reconciliation presented as the work happening now. So the
+#: model allows the empty case, the audit must then say so explicitly, and
+#: :func:`reconciliation_model_errors` rejects pointing this at an issue that is
+#: also listed as completed.
+CURRENT_RECONCILIATION_ISSUE: int | None = None
 
 _BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
 
@@ -2452,8 +2482,63 @@ _BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
 _COMPLETED_MARKER_RE = re.compile(r"\b(closed|completed|merged|resolved)\b", re.IGNORECASE)
 
 #: Present-tense "this is the reconciliation happening now" phrasing. Deliberately
-#: about *scope*, never about a PR number.
-_CURRENT_SCOPE_RE = re.compile(r"\bthe\s+current\s+(one|scope|reconciliation|truth\b)", re.IGNORECASE)
+#: about *scope*, never about a PR number. Up to three intervening words are allowed
+#: so the ordinary shapes are covered too: a bare ``the current one`` is not the only
+#: way to drift, and "the current open scope" slipped through a stricter matcher that
+#: demanded the noun immediately after "current".
+_CURRENT_SCOPE_RE = re.compile(
+    r"\bthe\s+current\s+(?:\w+[\s-]+){0,3}?(?:one|scope|reconciliation|truth|issue|pass|step|work)\b",
+    re.IGNORECASE,
+)
+
+#: The audit's explicit declaration that there is *no* open reconciliation issue.
+#: This is what makes the empty case reviewable rather than silent: a reader has to
+#: find the sentence, and the guard refuses an audit that simply omits the topic.
+#: It is deliberately worded so a row cannot satisfy it by accident, and the
+#: declaration must name no issue number — otherwise the per-issue lookups below
+#: would bind to this sentence instead of to the row they mean to check.
+#:
+#: The free-standing alternative is clause-final on purpose. Without that anchor,
+#: ordinary prose such as "no new reconciliation issue has been opened" — which
+#: *describes* the absence inside a sentence rather than declaring it — would
+#: satisfy the guard and let the real declaration be deleted undetected.
+_NO_CURRENT_RECONCILIATION_RE = re.compile(
+    r"current\s+reconciliation\s+scope\s*(?:\:|：)?\s*[*_`]*\s*"
+    r"(?:none|no\b|none\s+open|none\s+active|not\s+open)|"
+    r"no\s+(?:open|new|current)\s+reconciliation\s+(?:issue|scope)\s*"
+    r"(?:[.;。；!?！？]|[*_`]*\s*$)|"
+    r"当前(?:没有|无)(?:进行中|开放)(?:的)?(?:对账|核对|治理)?(?:议题|范围)",
+    re.IGNORECASE,
+)
+
+
+def reconciliation_model_errors() -> list[str]:
+    """Return self-consistency errors in the recorded reconciliation model itself.
+
+    These are checks on this module's own constants, independent of any document,
+    so a bad model fails even when no audit file is present to contradict it.
+    """
+    errors: list[str] = []
+    if CURRENT_RECONCILIATION_ISSUE is None:
+        return errors
+    if CURRENT_RECONCILIATION_ISSUE in COMPLETED_RECONCILIATION_ISSUES:
+        errors.append(
+            f"CURRENT_RECONCILIATION_ISSUE = {CURRENT_RECONCILIATION_ISSUE} is also listed in "
+            "COMPLETED_RECONCILIATION_ISSUES; an issue cannot be both completed and the current open "
+            "scope. Use CURRENT_RECONCILIATION_ISSUE = None to record that no reconciliation issue is open"
+        )
+    if CURRENT_RECONCILIATION_ISSUE in OPEN_EXTERNAL_VALIDATION_TRACKERS:
+        errors.append(
+            f"CURRENT_RECONCILIATION_ISSUE = {CURRENT_RECONCILIATION_ISSUE} is also listed in "
+            "OPEN_EXTERNAL_VALIDATION_TRACKERS; an external validation tracker is not a reconciliation scope"
+        )
+    overlap = sorted(set(COMPLETED_RECONCILIATION_ISSUES) & set(OPEN_EXTERNAL_VALIDATION_TRACKERS))
+    if overlap:
+        errors.append(
+            f"issues {overlap} are recorded as both completed reconciliations and open external validation "
+            "trackers; the two lineages are independent and an issue belongs to exactly one of them"
+        )
+    return errors
 
 
 def _issue_reference(number: int) -> re.Pattern[str]:
@@ -2486,7 +2571,7 @@ def _tracker_bullets(tracker: str) -> list[str]:
 
 def audit_tracker_errors(audit_text: str) -> list[str]:
     """Require the audit to separate delivered scope from open external validation."""
-    errors: list[str] = []
+    errors: list[str] = reconciliation_model_errors()
 
     tracker = _tracker_section(audit_text)
     if tracker is None:
@@ -2528,8 +2613,35 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
                 "exists to prevent"
             )
 
-    current = next((item for item in bullets if _issue_reference(CURRENT_RECONCILIATION_ISSUE).search(item)), None)
-    if current is None:
+    current = None
+    if CURRENT_RECONCILIATION_ISSUE is not None:
+        current = next(
+            (item for item in bullets if _issue_reference(CURRENT_RECONCILIATION_ISSUE).search(item)),
+            None,
+        )
+    none_bullet = next((item for item in bullets if _NO_CURRENT_RECONCILIATION_RE.search(item)), None)
+
+    if CURRENT_RECONCILIATION_ISSUE is None:
+        # No open reconciliation issue is a legal state, but it has to be stated.
+        # Silence would leave a reader unable to tell "no scope" from "scope not
+        # recorded", which is the ambiguity this whole section exists to remove.
+        if none_bullet is None:
+            errors.append(
+                "repository truth audit: CURRENT_RECONCILIATION_ISSUE is None, so the tracker map must state "
+                "explicitly that there is no current reconciliation scope; set "
+                "CURRENT_RECONCILIATION_ISSUE in scripts/check_repo_consistency.py if one is actually open"
+            )
+        # ...and it must be the whole story. A single surviving 'the current one'
+        # row beside a 'none' declaration is the same drift as the reverse.
+        for bullet in bullets:
+            if bullet is none_bullet:
+                continue
+            if _CURRENT_SCOPE_RE.search(bullet):
+                errors.append(
+                    "repository truth audit: the tracker map declares no current reconciliation scope, but "
+                    f"another row still claims to be it: {bullet.strip()!r}"
+                )
+    elif current is None:
         errors.append(
             f"repository truth audit: current reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is not "
             "recorded in the tracker map; record it as the open scope, or move it to "
@@ -2540,6 +2652,15 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
             f"repository truth audit: reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is recorded as "
             "completed but is still the current scope; move it to COMPLETED_RECONCILIATION_ISSUES in the "
             "same commit that closes it"
+        )
+
+    # Checked outside the branches above: a model pointing at an issue number and an
+    # audit declaring 'none' contradict each other whichever one is wrong, so the
+    # contradiction must be reported even when the pointed-at row is itself missing.
+    if CURRENT_RECONCILIATION_ISSUE is not None and none_bullet is not None:
+        errors.append(
+            f"repository truth audit: the tracker map declares no current reconciliation scope, but "
+            f"#{CURRENT_RECONCILIATION_ISSUE} is recorded as the current scope; record exactly one of the two"
         )
 
     for area in DELIVERED_AUDIT_AREAS:

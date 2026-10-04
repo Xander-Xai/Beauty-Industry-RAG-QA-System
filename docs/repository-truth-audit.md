@@ -25,15 +25,16 @@
   delivered by PR #23 (merged). It corrected documentation, one internal metric naming defect and
   one unconsumed config block; it introduced no new capability and produced no new external
   validation evidence.
-- [#24](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/24) is the current
-  final interview-readiness truth reconciliation; PR #25 carries its draft implementation. The
-  issue is the lineage anchor, never the PR — see
+- [#24](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/24) is the final
+  interview-readiness truth reconciliation and is **completed** (closed 2026-10-03); PR #25
+  delivered it and is **merged**. It is therefore no longer the current open scope, and no new
+  reconciliation issue has replaced it — see
   [Reconciliation lineage invariants](#reconciliation-lineage-invariants).
 - Runtime validation: see [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
 a commit cannot embed its own SHA without making the value stale).
-Post-reconciliation verification date: 2026-10-02.
+Post-reconciliation verification date: 2026-10-03.
 - Runtime version: `config.json` → `system.version` (`2.3.0`); release history is recorded in
   `CHANGELOG.md`. The repository has no GitHub Release and no tag at audit time.
 - Version labelling: the string `v2.5` appears in current docs and in the filename
@@ -123,58 +124,93 @@ or credential is unavailable here, so the capability is not validated.
 
 ## External validation tracker map
 
-Repository-side GitHub state is governance audit, not an offline consistency invariant, so it is
-recorded here for human readers and is deliberately **not** enforced by `scripts/check_repo_consistency.py`.
-Re-query GitHub before relying on any row; the states below are a snapshot at the verification date
-recorded in [Audit lineage](#audit-lineage).
+Repository-side GitHub state is governance audit, not an offline observation, so it is recorded
+here for human readers and is deliberately **not** something
+`scripts/check_repo_consistency.py` can verify on its own. The states below are a **snapshot**
+taken by re-querying the GitHub API at the verification date recorded in
+[Audit lineage](#audit-lineage); re-query GitHub before relying on any row. The guard reads only
+the working tree, so it never claims to know whether an issue is open right now — what it
+enforces is that a transition nobody recorded cannot pass silently.
 
 - PR #15 — interview truth and validation-evidence reconciliation: merged.
 - PR #17 — deterministic retrieval benchmark **framework**: merged.
 - [#16](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/16) — benchmark framework
   implementation scope: closed (`completed`), delivered by PR #17.
 - [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval
-  benchmark execution: open.
+  benchmark execution: open. Two structural blockers keep it open: no real retrieval executor is
+  wired for CLI runs, and no independent corpus covers the golden-set relevance truth.
 - [#20](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/20) — enterprise-readiness
   evidence loop: completed, delivered by PR #21.
 - [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) — post-merge truth
   reconciliation: completed, delivered by PR #23.
 - [#24](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/24) — final
-  interview-readiness truth reconciliation: the current open scope, implemented in draft by
-  PR #25.
+  interview-readiness truth reconciliation: completed (closed 2026-10-03), delivered by
+  PR #25 (merged 2026-10-03). It closed the enterprise RAG security gap and reconciled the
+  OTLP/Jaeger config surface and the Qdrant evidence wording; see
+  [Reconciliation lineage invariants](#reconciliation-lineage-invariants) for why the lineage
+  anchor is the issue and never the PR.
+- Current reconciliation scope: **none**. Every reconciliation issue listed above is closed
+  and no new reconciliation issue has been opened, so there is no open reconciliation scope
+  at this audit point. No issue number is invented to fill this slot — a repository between
+  reconciliations legitimately has none.
 - [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) — umbrella external
   validation (real BGE / CLIP / PaddleOCR / Airflow / benchmark artifact): open.
 - [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) — runtime / security
   external validation (real RAGAS, 4B/14B vLLM GPU topology): open.
+- [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32) — deferred real
+  performance artifact and observability closed-loop evidence (live performance artifact, OTLP
+  exporter → collector → queried span, live Grafana panels, a controlled Prometheus alert
+  firing/resolution path): open. It is validation-only and explicitly does not block
+  repository or document governance work.
 
 Issue #20 being completed records that the *implementation scope* shipped. It does **not**
 record that any of its results were observed: no performance artifact, no production alert
-firing, no traced span. Those stay `PENDING` and keep #8, #12 and #18 open.
+firing, no traced span. Those stay `PENDING` and keep #8, #12, #18 and #32 open.
 
 Closing #16 records that the framework scope is delivered. It does **not** record a benchmark result:
 no artifact exists, so `benchmark result` stays `PENDING` and both execution blockers (no real
 retrieval executor, no independent corpus) stay open in #18.
 
 Closing #22 likewise records only that the post-merge truth reconciliation was delivered. It does
-**not** record external validation evidence, so #8, #12 and #18 stay open. #24 is a further
-reconciliation over the same surface; it is documentation and guard work, so completing it will not
-close those trackers either.
+**not** record external validation evidence, so #8, #12, #18 and #32 stay open.
+
+Closing #24 is the same kind of record: documentation, guard and bounded security-test work.
+Completing it did not close #8, #12, #18 or #32, and it did not produce a benchmark result, a
+performance artifact, a traced span or a fired production alert. Every one of those rows stays
+`PENDING`. #32 was opened afterwards to consolidate the deferred performance and observability
+runtime evidence; it is a validation tracker, not a reconciliation scope, so opening it did not
+create a current reconciliation issue.
 
 ## Reconciliation lineage invariants
 
 Reconciliation lineage is anchored on the **tracking issue**, never on the PR number.
 
-- The audit must record each completed reconciliation issue as completed, and the one open
-  reconciliation issue as the current scope. `COMPLETED_RECONCILIATION_ISSUES` and
+- The audit must record each completed reconciliation issue as completed, and — only while one
+  is actually open — name that one as the current scope. `COMPLETED_RECONCILIATION_ISSUES` and
   `CURRENT_RECONCILIATION_ISSUE` in `scripts/check_repo_consistency.py` hold those numbers.
+- **No open reconciliation issue is a legal state.** `CURRENT_RECONCILIATION_ISSUE` is then
+  `None` and the tracker map says so explicitly (see
+  [External validation tracker map](#external-validation-tracker-map)). The guard refuses an
+  audit that omits the declaration, and it refuses a model that points
+  `CURRENT_RECONCILIATION_ISSUE` at an issue also listed in `COMPLETED_RECONCILIATION_ISSUES`.
+  Reviving a closed issue to satisfy an "exactly one current issue" invariant would reintroduce
+  the very drift below, so the invariant is not maintained that way.
 - Those numbers move in the same commit that closes the issue and updates this document, exactly
   like `OPEN_EXTERNAL_VALIDATION_TRACKERS` above. A new reconciliation issue supersedes the
   previous one; it does not extend it.
 - PR numbers stay historical narration in this document. No invariant may claim that a named PR is
   the latest or the current one: that is false as soon as the next PR exists, and the next PR is
   not a repository-truth event. Adding PR #26 does not invalidate anything recorded here; closing
-  #24 does, and it fails the check loudly instead of going stale.
+  #24 did, and the model was updated in the same commit that recorded the closure rather than
+  left to go stale.
 - Completed-versus-current is the distinction that carries truth. A reconciliation can be merged
-  while every external-validation row stays `PENDING`, so the two are never derived from each other.
+  while every external-validation row stays `PENDING`, so the two are never derived from each
+  other.
+- These recorded states are a **governance snapshot**, taken by re-querying the GitHub API at the
+  verification date in [Audit lineage](#audit-lineage). `scripts/check_repo_consistency.py` runs
+  offline against the working tree: it verifies that this document and the guard's constants agree,
+  and it cannot observe whether an issue is open on GitHub right now. Re-query GitHub before
+  relying on any row above.
 
 ## External validation pending
 
