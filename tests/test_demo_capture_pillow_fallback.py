@@ -60,13 +60,17 @@ CAPTURE = _load_capture()
 
 
 class _StubServer:
-    """Stands in for the mock API / Vite subprocesses `main()` tears down."""
+    """A stand-in for a spawned server.
 
-    def terminate(self):
-        pass
+    `stop_server` is stubbed out alongside this rather than fed one of these:
+    it signals a real process *group*, so a duck-typed fake that reached the
+    `killpg` call would aim at the test runner's own group. The teardown itself
+    is covered where it can be exercised for real, against real child processes,
+    in `tests/test_demo_capture_readiness.py`.
+    """
 
-    def wait(self, timeout=None):
-        return 0
+    def __repr__(self):
+        return "<stub server>"
 
 
 @pytest.fixture
@@ -92,8 +96,10 @@ def run_main(tmp_path, monkeypatch):
     run left on disk.
     """
     monkeypatch.setattr(CAPTURE, "BUILD_DIR", tmp_path / ".build")
+    stopped: list[object] = []
     monkeypatch.setattr(CAPTURE, "start_mock_api", lambda *a, **k: _StubServer())
     monkeypatch.setattr(CAPTURE, "start_frontend", lambda *a, **k: _StubServer())
+    monkeypatch.setattr(CAPTURE, "stop_server", lambda process: stopped.append(process))
     monkeypatch.setattr(CAPTURE, "drive_frontend", lambda *a, **k: "PNG")
 
     def _capture(app_png_b64, fonts, out, quality):
@@ -301,6 +307,7 @@ def test_every_non_webp_suffix_is_refused(name, tmp_path, monkeypatch):
 def test_a_webp_path_with_odd_casing_is_accepted(tmp_path, monkeypatch):
     """The check is case-insensitive on purpose: refusing `hero.WEBP` would be
     pedantry, and the encoder's output does not care what case the suffix is."""
+    stopped: list[object] = []
     monkeypatch.setattr(
         sys,
         "argv",
@@ -308,6 +315,7 @@ def test_a_webp_path_with_odd_casing_is_accepted(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(CAPTURE, "start_mock_api", lambda *a, **k: _StubServer())
     monkeypatch.setattr(CAPTURE, "start_frontend", lambda *a, **k: _StubServer())
+    monkeypatch.setattr(CAPTURE, "stop_server", lambda process: stopped.append(process))
     monkeypatch.setattr(CAPTURE, "drive_frontend", lambda *a, **k: "PNG")
     monkeypatch.setattr(CAPTURE, "capture", lambda app, fonts, out, quality: (out.write_bytes(b"x"), out)[1])
 
@@ -367,3 +375,24 @@ def test_the_capture_script_does_import_playwright():
     """Confirms the split is real: the dependency belongs to the demo, and the
     demo is the only thing that needs it."""
     assert "from playwright.sync_api import" in CAPTURE_PATH.read_text(encoding="utf-8")
+
+
+def test_a_fallback_run_still_tears_the_servers_down(tmp_path, monkeypatch):
+    """The fallback path ends early and warns; it must not skip the teardown on
+    the way out, or a Pillow-less run leaks the same listeners a normal one does."""
+    stopped: list[object] = []
+    monkeypatch.setattr(CAPTURE, "BUILD_DIR", tmp_path / ".build")
+    monkeypatch.setattr(CAPTURE, "start_mock_api", lambda *a, **k: _StubServer())
+    monkeypatch.setattr(CAPTURE, "start_frontend", lambda *a, **k: _StubServer())
+    monkeypatch.setattr(CAPTURE, "stop_server", lambda process: stopped.append(process))
+    monkeypatch.setattr(CAPTURE, "drive_frontend", lambda *a, **k: "PNG")
+    monkeypatch.setattr(CAPTURE, "capture", lambda app, fonts, out, quality: (out.write_bytes(b"x"), out)[1])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["capture_demo.py", "--out", str(tmp_path / "hero.webp"), "--no-font-download"],
+    )
+
+    CAPTURE.main()
+
+    assert len(stopped) == 2, stopped

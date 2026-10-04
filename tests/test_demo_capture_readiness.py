@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -402,3 +404,82 @@ def test_demo_readme_states_the_port_guarantee():
 
     assert "instance_token" in text, "the token handshake must be documented, not just implemented"
     assert "--api-port" in text and "--web-port" in text
+
+
+# ── the whole process group goes away, not just the child ───────────────
+@pytest.fixture
+def spawner():
+    """A child that itself spawns a grandchild holding a port, like `npm run dev`."""
+    script = (
+        "import subprocess, sys, time\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        "print(grandchild.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        start_new_session=True,
+        text=True,
+    )
+    grandchild_pid = int(process.stdout.readline().strip())
+    try:
+        yield process, grandchild_pid
+    finally:
+        for pid in (grandchild_pid, process.pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        process.stdout.close()
+
+
+def _is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def test_stopping_the_child_stops_the_grandchild(spawner):
+    """The regression: `terminate()` on the `npm` Popen left Vite alive and
+    still listening on `--web-port`, so the next run failed the free-port check
+    and every run leaked a process.
+
+    A grandchild stands in for Vite: it is a separate process, so only a
+    process-group signal can reach it.
+    """
+    process, grandchild_pid = spawner
+    assert _is_running(grandchild_pid), "precondition: the grandchild is running"
+
+    CAPTURE.stop_server(process)
+
+    assert process.poll() is not None, "the child was not reaped"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and _is_running(grandchild_pid):
+        time.sleep(0.1)
+    assert not _is_running(grandchild_pid), "the grandchild survived the group teardown"
+
+
+def test_stopping_an_already_dead_process_is_a_no_op():
+    process = subprocess.Popen([sys.executable, "-c", "raise SystemExit(0)"])
+    process.wait(timeout=10)
+    CAPTURE.stop_server(process)  # must not raise
+    CAPTURE.stop_server(None)  # must not raise either
+
+
+def test_both_servers_are_started_in_their_own_session():
+    """Without a new session there is no separate group to signal, so the whole
+    teardown above would degrade back to killing only the direct child."""
+    source = CAPTURE_PATH.read_text(encoding="utf-8")
+    assert source.count("start_new_session=True") >= 2, "both servers need their own process group"
+
+
+def test_every_teardown_path_uses_the_group_helper():
+    """A startup failure has to clean up as thoroughly as a normal exit —
+    otherwise a failed run leaves the port held just as badly."""
+    source = CAPTURE_PATH.read_text(encoding="utf-8")
+    assert "process.terminate()" not in source, "a bare terminate() bypasses the group teardown"
+    assert "process.kill()" not in source, "a bare kill() bypasses the group teardown too"
+    assert source.count("stop_server(process)") >= 3, "both failure paths and main() must use it"

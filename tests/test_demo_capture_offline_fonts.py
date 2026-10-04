@@ -48,13 +48,20 @@ CAPTURE = _load_capture()
 
 
 class _StubServer:
-    """Stands in for the mock API / Vite subprocesses `main()` tears down."""
+    """A stand-in for a spawned server.
 
-    def terminate(self):
-        pass
+    `stop_server` is stubbed out alongside this rather than fed one of these: it
+    signals a real process *group*, so a duck-typed fake reaching the `killpg`
+    call would aim at the test runner's own group. The teardown is covered where
+    it can be exercised against real child processes, in
+    `tests/test_demo_capture_readiness.py`.
+    """
 
-    def wait(self, timeout=None):
-        return 0
+    def __init__(self, label: str):
+        self.label = label
+
+    def __repr__(self):
+        return f"<stub {self.label}>"
 
 
 @pytest.fixture
@@ -65,8 +72,12 @@ def run_main(tmp_path, monkeypatch):
     the network decisions the flag is supposed to control.
     """
     monkeypatch.setattr(CAPTURE, "BUILD_DIR", tmp_path / ".build")
-    monkeypatch.setattr(CAPTURE, "start_mock_api", lambda *a, **k: _StubServer())
-    monkeypatch.setattr(CAPTURE, "start_frontend", lambda *a, **k: _StubServer())
+    # Recorded rather than discarded: `main()` must hand both servers to
+    # `stop_server`, and that is only observable from here.
+    stopped: list[str] = []
+    monkeypatch.setattr(CAPTURE, "start_mock_api", lambda *a, **k: _StubServer("mock_api"))
+    monkeypatch.setattr(CAPTURE, "start_frontend", lambda *a, **k: _StubServer("frontend"))
+    monkeypatch.setattr(CAPTURE, "stop_server", lambda process: stopped.append(process.label))
     monkeypatch.setattr(CAPTURE, "drive_frontend", lambda *a, **k: "PNG")
 
     def _capture(app_png_b64, fonts, out, quality):
@@ -91,8 +102,12 @@ def run_main(tmp_path, monkeypatch):
     def _run(*flags):
         out = tmp_path / "hero.webp"
         monkeypatch.setattr(sys, "argv", ["capture_demo.py", "--out", str(out), *flags])
+        stopped.clear()
         CAPTURE.main()
+        _run.stopped = list(stopped)
         return calls
+
+    _run.stopped = []
 
     return _run
 
@@ -356,3 +371,15 @@ def test_capture_docstring_matches_the_offline_contract():
     doc = CAPTURE.__doc__ or ""
     assert "--no-font-download" in doc
     assert "fresh checkout" in doc
+
+
+def test_a_run_hands_both_servers_to_the_teardown(run_main):
+    """`main()` must stop the frontend as well as the mock.
+
+    `stop_server` signals a whole process group precisely so Vite cannot outlive
+    the `npm` wrapper; a run that tore down only one of the two would leave a
+    listener holding `--web-port` and fail the next run's free-port check.
+    """
+    run_main("--no-font-download")
+
+    assert run_main.stopped == ["frontend", "mock_api"]

@@ -51,6 +51,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -214,6 +215,45 @@ def subset_font_plan(chars: str) -> FontPlan:
 
 
 # ── local servers ──────────────────────────────────────────────────────
+def stop_server(process: subprocess.Popen | None) -> None:
+    """Stop a spawned server and everything it started.
+
+    `terminate()` on the `Popen` is not enough for the frontend. `npm run dev`
+    spawns a shell which spawns Vite, so signalling only `npm` leaves Vite alive
+    and still listening on `--web-port` — which then fails the free-port check
+    on the next run, and leaks a process per run. Both servers are therefore
+    started in their own session, and the whole process group is signalled.
+
+    SIGKILL follows SIGTERM because a dev server with an open pipe may not exit
+    on the polite signal, and a leaked listener is the failure this exists to
+    prevent.
+    """
+    if process is None or process.poll() is not None:
+        return
+
+    def _signal(sig: int) -> None:
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            # Already reaped, or no group to signal: fall back to the child.
+            try:
+                process.send_signal(sig)
+            except (ProcessLookupError, OSError):
+                pass
+
+    _signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    _signal(signal.SIGKILL)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def require_free_port(port: int, flag: str) -> None:
     """Refuse to start if something is already listening on ``port``.
 
@@ -306,6 +346,7 @@ def start_mock_api(port: int, log_path: Path) -> subprocess.Popen:
         ],
         stdout=handle,
         stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
     try:
         wait_for_http(
@@ -315,7 +356,7 @@ def start_mock_api(port: int, log_path: Path) -> subprocess.Popen:
             expect_token=token,
         )
     except BaseException:
-        process.terminate()
+        stop_server(process)
         raise SystemExit(f"the demo mock API never became ready on port {port}. Log: {log_path}") from None
     return process
 
@@ -336,11 +377,12 @@ def start_frontend(port: int, api_port: int, log_path: Path) -> subprocess.Popen
         stdout=handle,
         stderr=subprocess.STDOUT,
         env=env,
+        start_new_session=True,
     )
     try:
         wait_for_http(f"http://127.0.0.1:{port}/", timeout=90, process=process)
     except BaseException:
-        process.terminate()
+        stop_server(process)
         raise SystemExit(f"the Vite dev server never became ready on port {port}. Log: {log_path}") from None
     return process
 
@@ -638,12 +680,7 @@ def main() -> None:
         written = capture(app_png_b64, fonts, args.out, args.quality)
     finally:
         for process in (frontend, mock_api):
-            if process is not None:
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
+            stop_server(process)
 
     # `written` is the artifact that exists. Pillow is optional, so it can be a
     # `.png` sitting next to the requested `.webp`; reporting the requested path
