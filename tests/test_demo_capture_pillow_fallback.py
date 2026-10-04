@@ -262,3 +262,65 @@ def test_capture_docstring_documents_the_fallback():
 
     assert "Pillow is optional" in doc
     assert "never written under the" in doc
+
+
+# ── only WebP is encoded, so only .webp may be requested ────────────────
+def _out_is_refused(monkeypatch, tmp_path, name: str):
+    """Ask `main()` for `name` and return the refusal, if any.
+
+    The validation runs before anything is spawned, so no stubbing is needed
+    beyond making sure a refusal really is a refusal and not a crash later on.
+    """
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["capture_demo.py", "--out", str(tmp_path / name), "--no-font-download"],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        CAPTURE.main()
+    return str(excinfo.value)
+
+
+def test_a_non_webp_output_path_is_refused(tmp_path, monkeypatch):
+    """The regression: `--out hero.png` wrote WebP bytes into a file named
+    `.png`, and the completion line then reported it as PNG — the precise
+    extension/content mismatch the fallback path refuses to create."""
+    message = _out_is_refused(monkeypatch, tmp_path, "hero.png")
+
+    assert "must end in .webp" in message, message
+    assert not (tmp_path / "hero.png").exists()
+
+
+@pytest.mark.parametrize("name", ["hero.png", "hero.jpg", "hero.webp2", "hero"])
+def test_every_non_webp_suffix_is_refused(name, tmp_path, monkeypatch):
+    """Not just `.png`. Anything the encoder will not actually produce is
+    refused, including a bare name with no suffix at all."""
+    assert "must end in .webp" in _out_is_refused(monkeypatch, tmp_path, name)
+
+
+def test_a_webp_path_with_odd_casing_is_accepted(tmp_path, monkeypatch):
+    """The check is case-insensitive on purpose: refusing `hero.WEBP` would be
+    pedantry, and the encoder's output does not care what case the suffix is."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["capture_demo.py", "--out", str(tmp_path / "hero.WEBP"), "--no-font-download"],
+    )
+    monkeypatch.setattr(CAPTURE, "start_mock_api", lambda *a, **k: _StubServer())
+    monkeypatch.setattr(CAPTURE, "start_frontend", lambda *a, **k: _StubServer())
+    monkeypatch.setattr(CAPTURE, "drive_frontend", lambda *a, **k: "PNG")
+    monkeypatch.setattr(CAPTURE, "capture", lambda app, fonts, out, quality: (out.write_bytes(b"x"), out)[1])
+
+    CAPTURE.main()
+    assert (tmp_path / "hero.WEBP").exists()
+
+
+def test_the_default_output_path_is_webp():
+    """The guard is only safe because the default satisfies it."""
+    assert CAPTURE.DEFAULT_OUT.suffix == ".webp"
+
+
+def test_capture_docstring_states_that_only_webp_is_encoded():
+    doc = CAPTURE.__doc__ or ""
+    assert "Only WebP is encoded" in doc
+    assert "--out` must end in `.webp`" in doc

@@ -22,13 +22,17 @@ How it stays honest
   Pillow is optional: without it the PNG lands next to the requested `.webp`
   under a `.png` name, and the run reports and stats the file it actually wrote
   rather than the one it was asked for. PNG bytes are never written under the
-  `.webp` name.
+  `.webp` name. Only WebP is encoded, so `--out` must end in `.webp`.
 
 Usage
 -----
     python3 docs/demo/capture_demo.py
     python3 docs/demo/capture_demo.py --quality 70        # smaller file
     python3 docs/demo/capture_demo.py --no-font-download  # offline: system CJK fonts
+
+`--api-port` / `--web-port` must be free. If either is already taken the child
+exits on bind and the run stops with that port named, rather than quietly
+rendering whatever else is listening there.
 
 Requires: playwright + chromium and node/npm for the Vite dev server. The default
 mode additionally needs outbound network once to fetch a glyph-subset CJK font,
@@ -47,6 +51,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -208,10 +213,48 @@ def subset_font_plan(chars: str) -> FontPlan:
 
 
 # ── local servers ──────────────────────────────────────────────────────
-def wait_for_http(url: str, *, timeout: float = 60.0, expect_json: bool = False) -> None:
+def require_free_port(port: int, flag: str) -> None:
+    """Refuse to start if something is already listening on ``port``.
+
+    Checking before the spawn is what actually closes the hole. A child that
+    cannot bind has usually not exited yet when the first readiness poll runs,
+    so a liveness check on its own still lets the probe succeed against the
+    squatter. Between this check and the child's own bind there is a small
+    window, which is why `wait_for_http` watches the child too — but the window
+    is now the only way in, rather than the default outcome.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.1", port))
+    except OSError as exc:
+        raise SystemExit(
+            f"port {port} is already in use, so the capture cannot start its own server there ({exc}). "
+            f"Re-run with {flag} <free port>."
+        ) from None
+    finally:
+        probe.close()
+
+
+def wait_for_http(
+    url: str,
+    *,
+    timeout: float = 60.0,
+    expect_json: bool = False,
+    process: subprocess.Popen | None = None,
+) -> None:
+    """Poll ``url`` until it answers, or fail.
+
+    ``process`` is the child that is supposed to be answering. Polling the URL
+    alone is not enough: if the child died on bind, the probe succeeds against
+    whatever was already listening there and the capture renders the wrong
+    backend. So the poll also checks the child is still alive, and surfaces its
+    exit code rather than reporting a mystery timeout.
+    """
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise SystemExit(f"{url} never came up: the process exited with code {process.returncode} (see its log)")
         try:
             with urllib.request.urlopen(url, timeout=3) as response:  # noqa: S310 - loopback readiness probe
                 if response.status == 200:
@@ -225,13 +268,18 @@ def wait_for_http(url: str, *, timeout: float = 60.0, expect_json: bool = False)
 
 
 def start_mock_api(port: int, log_path: Path) -> subprocess.Popen:
+    require_free_port(port, "--api-port")
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         [sys.executable, str(DEMO_DIR / "mock_api.py"), "--port", str(port), "--quiet"],
         stdout=handle,
         stderr=subprocess.STDOUT,
     )
-    wait_for_http(f"http://127.0.0.1:{port}/api/health", expect_json=True)
+    try:
+        wait_for_http(f"http://127.0.0.1:{port}/api/health", expect_json=True, process=process)
+    except BaseException:
+        process.terminate()
+        raise SystemExit(f"the demo mock API never became ready on port {port}. Log: {log_path}") from None
     return process
 
 
@@ -241,6 +289,7 @@ def start_frontend(port: int, api_port: int, log_path: Path) -> subprocess.Popen
         raise SystemExit("npm not found — the Vite dev server is required for capture")
     if not (FRONTEND_DIR / "node_modules").exists():
         raise SystemExit("frontend/node_modules missing — run `npm ci` in frontend/")
+    require_free_port(port, "--web-port")
     handle = log_path.open("w", encoding="utf-8")
     env = dict(os.environ)
     env["VITE_API_PROXY_TARGET"] = f"http://127.0.0.1:{api_port}"
@@ -251,7 +300,11 @@ def start_frontend(port: int, api_port: int, log_path: Path) -> subprocess.Popen
         stderr=subprocess.STDOUT,
         env=env,
     )
-    wait_for_http(f"http://127.0.0.1:{port}/", timeout=90)
+    try:
+        wait_for_http(f"http://127.0.0.1:{port}/", timeout=90, process=process)
+    except BaseException:
+        process.terminate()
+        raise SystemExit(f"the Vite dev server never became ready on port {port}. Log: {log_path}") from None
     return process
 
 
@@ -518,6 +571,15 @@ def main() -> None:
     parser.add_argument("--web-port", type=int, default=3111)
     parser.add_argument("--no-font-download", action="store_true")
     args = parser.parse_args()
+
+    # The encoder always produces WebP, so a `.png` `--out` would put WebP bytes
+    # under a name that claims otherwise — the same extension/content mismatch
+    # the Pillow-less fallback goes out of its way to avoid, and worse, because
+    # the completion line would go on to call it PNG. Refuse instead of guessing:
+    # the Pillow-less path already chooses its own sibling `.png` when it needs
+    # one, so there is never a reason to ask for one here.
+    if args.out.suffix.lower() != ".webp":
+        raise SystemExit(f"--out must end in .webp (got {args.out.name!r}); this capture only encodes WebP")
 
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     with CORPUS_PATH.open(encoding="utf-8") as handle:
