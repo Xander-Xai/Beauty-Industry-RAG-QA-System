@@ -461,3 +461,63 @@ def test_both_endpoints_validate_against_the_real_response_models(demo_server):
     parsed = ChatResponse(**chat)
     assert parsed.evidence_doc_ids == EVIDENCE_IDS
     assert parsed.history and parsed.history[-1].role == "assistant"
+
+
+# ── the walkthrough caption must not borrow another path's guarantee ─────
+def _identity_caption() -> str:
+    for row in CORPUS["trace"]["rows"]:
+        if row["step"] == "身份解析":
+            return row["demo"]
+    raise AssertionError("the trace table has no 身份解析 row")
+
+
+def test_the_identity_caption_does_not_claim_uint32_checks_on_the_dev_header_path():
+    """The regression: the caption read "uint32 校验，畸形声明 fail closed" beside
+    a pointer to the identity resolver, while the requests the demo actually
+    makes use the dev-mode headers — and `common/auth.py` parses those with a
+    bare `int(...)`, with no range check. `-1` passes, and `-1 & mask` overlaps
+    every document mask.
+
+    The uint32 validation is real, but it is on the JWT-claims path. Attributing
+    it to the demonstrated path makes the mock's stricter-than-production
+    behaviour look like a guarantee the service provides.
+    """
+    caption = _identity_caption()
+
+    assert "dev-mode header" in caption, caption
+    assert "int()" in caption, caption
+
+
+def test_the_identity_caption_still_credits_the_jwt_path_for_uint32_validation():
+    """Correcting the claim must not delete the part that is true."""
+    assert "uint32" in _identity_caption(), _identity_caption()
+
+
+def test_the_dev_header_path_really_is_an_unbounded_int_conversion():
+    """The caption's correction is only honest if the code matches it.
+
+    Pins the current behaviour of `common/auth.py`'s dev-mode branch so that a
+    future fix to that path has to update the caption in the same change, rather
+    than leaving the figure quietly stale in the other direction.
+    """
+    import inspect
+
+    from common.auth import parse_identity
+
+    source = inspect.getsource(parse_identity)
+    dev_branch = source[source.index("# 2. Dev-mode headers") :]
+
+    assert "int(role_str)" in dev_branch, "the dev-header branch no longer parses headers directly"
+    assert "0xFFFFFFFF" not in dev_branch, (
+        "the dev-header branch now bounds the mask; update the walkthrough caption, "
+        "which currently says this path is an unbounded int() read"
+    )
+
+
+def test_the_mock_fixture_is_stricter_than_the_service_and_says_so():
+    """The fixture deliberately collapses a bad header to 0. That is a fixture
+    choice, and the module has to own it rather than let the figure imply the
+    service behaves the same way."""
+    source = (DEMO_DIR / "mock_api.py").read_text(encoding="utf-8")
+
+    assert "stricter on purpose" in source
