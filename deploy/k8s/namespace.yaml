@@ -1,0 +1,12 @@
+# Namespace for the RAG QA API gateway.
+#
+# Evidence level: REPO_VERIFIED (statically validated by
+# tests/deploy/test_k8s_manifests.py only).
+# No Kubernetes cluster has applied, admitted or served this manifest.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: beauty-rag
+  labels:
+    app.kubernetes.io/name: beauty-industry-rag-qa
+    app.kubernetes.io/part-of: beauty-industry-rag-qa-system
