@@ -200,6 +200,8 @@ npm run build
 
 ### Docker Compose
 
+Docker Compose 是本仓库的 canonical 部署形态。
+
 ```bash
 docker compose up -d
 ```
@@ -211,6 +213,10 @@ docker compose up -d
 - `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`、`SERVICE_AUTH_TOKEN`。
 - 生产环境还需 `CORS_ORIGINS` 与 JWT 密钥（`JWT_PRIVATE_KEY_PATH` / `JWT_PUBLIC_KEY_PATH` / `JWT_ALGORITHM=RS256`）。
 - 反向代理部署若需按真实客户端 IP 限流，显式设置 `TRUSTED_PROXIES`（逗号分隔 IP/CIDR）；未设置时不信任 `X-Forwarded-For`。
+
+### Kubernetes（第二形态，非 canonical）
+
+`deploy/k8s/` 提供 API 网关的最小 Deployment / Service / ConfigMap / Secret 契约与 26 项静态检查。证据等级仅 `REPO_VERIFIED`（YAML 与契约校验）；**本仓库没有集群，真实部署为 `PENDING`**。探针契约与已知边界见 [Kubernetes 部署契约](docs/deployment-guide-k8s.md)。
 
 ### 离线知识构建
 

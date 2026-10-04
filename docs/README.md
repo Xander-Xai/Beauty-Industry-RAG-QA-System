@@ -31,6 +31,9 @@ levels; see [Run outcomes that are not evidence levels](interview-evidence-map.m
 
 - [Project overview and quick start](../README.md)
 - [Deployment guide](deployment-guide.md)
+- [Kubernetes deployment contract](deployment-guide-k8s.md): the minimal second deployment form
+  (`deploy/k8s/`, API gateway only). Manifests are `REPO_VERIFIED` by static check only; any
+  real cluster deployment is `PENDING`. Docker Compose remains the canonical form.
 - [User guide](user-guide.md)
 - [Operations guide](operations-guide.md)
 - [Data administration guide](data-admin-guide.md)

@@ -48,6 +48,17 @@ def _by_kind(kind: str) -> list[dict[str, Any]]:
     return [d for d in _documents() if d.get("kind") == kind]
 
 
+def _file_mode(value: Any) -> int:
+    """Normalize a Kubernetes defaultMode to an int.
+
+    YAML 1.1 resolves a leading-zero literal such as 0440 to the integer 288,
+    while an unquoted value can also arrive as a plain string. Accept both.
+    """
+    if isinstance(value, int):
+        return value
+    return int(str(value), 8)
+
+
 def _container(deployment: dict[str, Any]) -> dict[str, Any]:
     containers = deployment["spec"]["template"]["spec"]["containers"]
     assert len(containers) == 1, "this contract declares exactly one container"
@@ -395,18 +406,79 @@ def test_rs256_key_material_is_mounted_from_a_secret() -> None:
 
 
 def test_inference_service_urls_are_configured() -> None:
-    """Routers fall back to localhost without these, which self-loops the API pod.
+    """The deployed workload reads VLLM_4B_URL / VLLM_GEN_14B_URL.
 
-    api-gateway routers default REWRITE_SERVICE_URL to http://rewrite-service:8101
-    and GENERATION_SERVICE_URL to http://generation-service:8100 via
-    os.environ.get. Pointing them at an unset or absent Service degrades every
-    query, because the API pod would otherwise call back into itself.
+    The image entrypoint is `python app.py` (Dockerfile CMD), so the running
+    process is the monolith in app.py, not the api-gateway/ application.
+    router/stateless_router.py reads VLLM_4B_URL and VLLM_GEN_14B_URL and
+    otherwise defaults to http://localhost:<port>, which would point the
+    container at itself.
+
+    REWRITE_SERVICE_URL / GENERATION_SERVICE_URL are deliberately NOT accepted
+    here: they are read only by api-gateway/routers/*, which this Deployment
+    never starts, so setting them would leave the monolith on localhost.
     """
     config_data = _by_kind("ConfigMap")[0].get("data", {})
-    for key in ("REWRITE_SERVICE_URL", "GENERATION_SERVICE_URL"):
+    for key in ("VLLM_4B_URL", "VLLM_GEN_14B_URL"):
         url = config_data.get(key)
-        assert url, f"{key} must be set explicitly; the default is not a valid in-cluster target"
+        assert url, (
+            f"{key} must be set explicitly; router/stateless_router.py otherwise "
+            "falls back to http://localhost and the pod calls itself"
+        )
         assert "localhost" not in url and "127.0.0.1" not in url, f"{key}={url!r} points back at the pod itself"
+
+    for wrong_key in ("REWRITE_SERVICE_URL", "GENERATION_SERVICE_URL"):
+        assert wrong_key not in config_data, (
+            f"{wrong_key} is consumed only by the api-gateway application, which "
+            "this Deployment does not start; the monolith reads VLLM_*_URL"
+        )
+
+
+def test_jwt_key_mount_is_readable_by_the_non_root_user() -> None:
+    """Secret volumes mount root-owned, so 0400 is unreadable as non-root.
+
+    The image runs as `appuser` under runAsNonRoot. Secret volume files are
+    owned by root, so 0400 leaves them unreadable by the application user and
+    login fails even after the Secret exists. Group-read plus an explicit
+    fsGroup is what makes the mount usable.
+    """
+    deployment = _by_kind("Deployment")[0]
+    pod_spec = deployment["spec"]["template"]["spec"]
+    container = _container(deployment)
+    security = pod_spec.get("securityContext", {})
+
+    assert security.get("runAsNonRoot") is True, "the pod must run as non-root"
+    assert security.get("fsGroup"), (
+        "fsGroup is required: Secret volumes are root-owned, so without it the "
+        "application user cannot read the mounted keys"
+    )
+
+    volumes = {v["name"]: v for v in pod_spec.get("volumes", [])}
+    for mount in container.get("volumeMounts", []):
+        volume = volumes.get(mount["name"], {})
+        if "secret" not in volume:
+            continue
+        mode = _file_mode(volume["secret"].get("defaultMode", 0o644))
+        assert mode & 0o040, (
+            f"secret volume {mount['name']!r} has defaultMode {oct(mode)}: the application user cannot read it"
+        )
+        assert not mode & 0o007, f"secret volume {mount['name']!r} is world-readable ({oct(mode)})"
+
+
+def test_numeric_ids_match_the_pinned_image_user() -> None:
+    """runAsUser/runAsGroup must match the uid/gid the image actually creates.
+
+    The manifests name 1000 and rely on the Dockerfile creating `appuser` with
+    that uid. If the Dockerfile stops pinning it, the manifest would reference an
+    id the image does not have.
+    """
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "--uid" in dockerfile and "--gid" in dockerfile, (
+        "the Dockerfile must pin the uid/gid the Kubernetes securityContext names"
+    )
+    security = _by_kind("Deployment")[0]["spec"]["template"]["spec"]["securityContext"]
+    for field in ("runAsUser", "runAsGroup", "fsGroup"):
+        assert security.get(field), f"securityContext.{field} must be declared"
 
 
 def test_elasticsearch_username_is_configured_beside_its_password() -> None:
