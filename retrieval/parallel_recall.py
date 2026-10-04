@@ -93,6 +93,7 @@ class ParallelRecallManager:
         use_clip: bool = True,
         clip_top_k: int = 20,
         top_k_per_path: dict = None,
+        rrf_weights: dict[str, float] | None = None,
     ) -> tuple[list, float]:
         """
         并行执行多路召回
@@ -105,6 +106,9 @@ class ParallelRecallManager:
             use_clip: 是否启用 CLIP 视觉路
             clip_top_k: CLIP 同步召回 top_k
             top_k_per_path: 各路 top_k 配置
+            rrf_weights: 本次查询的各路 RRF 权重（query-aware）。为 None 时回退到
+                config.json 的静态 retrieval.rrf.weights。显式传入空 dict 表示
+                「不做加权」，由 rrf_fusion 按等权重（1.0）处理。
 
         Returns:
             (list[RecallResult], retrieval_agreement_score)
@@ -183,7 +187,10 @@ class ParallelRecallManager:
             fused_results = rrf_fusion(
                 path_results,
                 k=rrf_config.get("k", 60),
-                weights=rrf_config.get("weights", None),
+                # `is not None` 而不是 `or`：rrf_fusion 的契约是「None 或空 dict 时
+                # 等权重」，因此空 dict 是一个有意义的显式取值，不能被当成「未传入」
+                # 而被静态 config 权重悄悄顶替。未传参的调用方仍走 config 回退。
+                weights=(rrf_weights if rrf_weights is not None else rrf_config.get("weights", None)),
             )
             all_results = fused_results
             logger.info(
