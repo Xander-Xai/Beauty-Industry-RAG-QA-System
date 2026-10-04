@@ -345,3 +345,119 @@ def test_no_document_is_readable_through_media_by_an_identity_the_query_refuses(
             assert readable == (doc_id in query_body["evidence_doc_ids"]), (
                 f"{identity['key']}: media status {status} disagrees with the query evidence set for {doc_id}"
             )
+
+
+# ── the two response shapes are different, and both are honoured ────────
+def _post(base_url: str, path: str, body: dict) -> dict:
+    request = urllib.request.Request(  # noqa: S310 - loopback test server
+        f"{base_url}{path}",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Role-Mask": str(PRIVILEGED["role_mask"]),
+            "X-Dept-Mask": str(PRIVILEGED["dept_mask"]),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - loopback test server
+        return json.loads(response.read().decode("utf-8"))
+
+
+def test_query_returns_a_query_response_without_history(demo_server):
+    """`api/models.py::QueryResponse` has no `history` field. Adding one would be
+    as much a shape lie as omitting one from ChatResponse."""
+    body = _post(demo_server, "/api/query", {"query": CORPUS["query"]["text"]})
+
+    assert "history" not in body
+    for field in ("answer", "session_id", "business_type", "intent", "evidence_doc_ids", "latency_ms", "cache_hit"):
+        assert field in body, field
+
+
+def test_chat_returns_a_chat_response_with_history(demo_server):
+    """The regression: both endpoints shared one branch that returned the query
+    shape, so `/api/chat` omitted the `history` field the contract requires. The
+    current UI happens not to read it, which is exactly why nothing caught it."""
+    body = _post(demo_server, "/api/chat", {"message": CORPUS["query"]["text"]})
+
+    assert "history" in body, sorted(body)
+    assert isinstance(body["history"], list)
+    for message in body["history"]:
+        assert set(message) == {"role", "content"}, message
+        assert message["role"] in ("user", "assistant"), message
+        assert isinstance(message["content"], str) and message["content"].strip(), message
+
+
+def test_chat_history_ends_with_the_exchange_that_was_just_answered(demo_server):
+    body = _post(demo_server, "/api/chat", {"message": CORPUS["query"]["text"]})
+
+    assert body["history"][-1] == {"role": "assistant", "content": body["answer"]}
+    assert body["history"][-2] == {"role": "user", "content": CORPUS["query"]["text"]}
+
+
+def test_chat_history_echoes_prior_turns_the_client_sent(demo_server):
+    """A caller that keeps its own transcript must see it reflected back, not
+    silently replaced by the corpus's stored round."""
+    prior = [{"role": "user", "content": "earlier question"}, {"role": "assistant", "content": "earlier answer"}]
+
+    body = _post(demo_server, "/api/chat", {"message": CORPUS["query"]["text"], "history": prior})
+
+    assert body["history"][:2] == prior
+
+
+def test_chat_history_is_capped_at_the_documented_six_rounds(demo_server):
+    """`ChatResponse.history` is documented as the last 6 rounds, i.e. 12
+    messages. A client sending a long transcript gets a bounded answer."""
+    long_prior = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"} for i in range(40)]
+
+    body = _post(demo_server, "/api/chat", {"message": CORPUS["query"]["text"], "history": long_prior})
+
+    assert len(body["history"]) == 12
+    assert body["history"][-1] == {"role": "assistant", "content": body["answer"]}
+
+
+def test_chat_history_uses_the_corpus_round_when_the_client_sends_none(demo_server):
+    """Fallback comes from the synthetic corpus, never from an invented exchange."""
+    body = _post(demo_server, "/api/chat", {"message": CORPUS["query"]["text"]})
+
+    stored = CORPUS["dialog_history"]["rounds"][0]
+    assert {"role": "user", "content": stored["user_input"]} in body["history"]
+    assert {"role": "assistant", "content": stored["response"]} in body["history"]
+
+
+def test_the_refusal_branch_also_returns_a_chat_history(demo_server):
+    """A refused turn is still a completed exchange; the shape must not depend on
+    whether evidence was found."""
+    request = urllib.request.Request(  # noqa: S310 - loopback test server
+        f"{demo_server}/api/chat",
+        data=json.dumps({"message": CORPUS["query"]["text"]}).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Role-Mask": str(RESTRICTED["role_mask"]),
+            "X-Dept-Mask": str(RESTRICTED["dept_mask"]),
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - loopback test server
+        body = json.loads(response.read().decode("utf-8"))
+
+    assert body["answer"] == CORPUS["answer_refusal_markdown"]
+    assert body["history"][-1] == {"role": "assistant", "content": CORPUS["answer_refusal_markdown"]}
+
+
+def test_both_endpoints_validate_against_the_real_response_models(demo_server):
+    """The strongest form of "the shapes mirror the contracts": parse the live
+    fixture output with the service's own Pydantic models.
+
+    Nothing else in the suite would notice a fixture drifting from
+    `api/models.py`, because the current UI tolerates extra and missing fields —
+    which is exactly how the missing `history` survived review in the first place.
+    """
+    from api.models import ChatResponse, QueryResponse
+
+    query = _post(demo_server, "/api/query", {"query": CORPUS["query"]["text"]})
+    chat = _post(demo_server, "/api/chat", {"message": CORPUS["query"]["text"]})
+
+    assert QueryResponse(**query).evidence_doc_ids == EVIDENCE_IDS
+    parsed = ChatResponse(**chat)
+    assert parsed.evidence_doc_ids == EVIDENCE_IDS
+    assert parsed.history and parsed.history[-1].role == "assistant"

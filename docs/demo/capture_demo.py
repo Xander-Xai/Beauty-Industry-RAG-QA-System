@@ -224,18 +224,30 @@ def stop_server(process: subprocess.Popen | None) -> None:
     on the next run, and leaks a process per run. Both servers are therefore
     started in their own session, and the whole process group is signalled.
 
+    The group is signalled even when the direct child has already exited. That
+    ordering matters: during a startup failure `npm` can be gone while Vite is
+    still holding the port, and returning early in that case is precisely the
+    leak this function exists to prevent.
+
     SIGKILL follows SIGTERM because a dev server with an open pipe may not exit
-    on the polite signal, and a leaked listener is the failure this exists to
-    prevent.
+    on the polite signal, and a leaked listener is the failure this prevents.
     """
-    if process is None or process.poll() is not None:
+    if process is None:
         return
+
+    # Recorded rather than looked up: `start_new_session=True` makes the child
+    # its own group leader, so the pgid is its pid — and it stays valid after the
+    # child is reaped, which is exactly when it is needed. Looking it up with
+    # getpgid() here would fail on an already-exited wrapper and skip the group
+    # signal, leaving Vite alive on `--web-port`.
+    pgid = process.pid
 
     def _signal(sig: int) -> None:
         try:
-            os.killpg(os.getpgid(process.pid), sig)
+            os.killpg(pgid, sig)
         except (ProcessLookupError, PermissionError, OSError):
-            # Already reaped, or no group to signal: fall back to the child.
+            if process.poll() is not None:
+                return
             try:
                 process.send_signal(sig)
             except (ProcessLookupError, OSError):
@@ -244,7 +256,6 @@ def stop_server(process: subprocess.Popen | None) -> None:
     _signal(signal.SIGTERM)
     try:
         process.wait(timeout=10)
-        return
     except subprocess.TimeoutExpired:
         pass
     _signal(signal.SIGKILL)

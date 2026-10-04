@@ -575,3 +575,31 @@ def test_every_teardown_path_uses_the_group_helper():
     assert "process.terminate()" not in source, "a bare terminate() bypasses the group teardown"
     assert "process.kill()" not in source, "a bare kill() bypasses the group teardown too"
     assert source.count("stop_server(process)") >= 3, "both failure paths and main() must use it"
+
+
+def test_an_exited_wrapper_still_gets_its_group_signalled(spawner):
+    """The regression: `stop_server` returned early when `process.poll()` was
+    already non-None. During a startup failure `npm` can be gone while Vite is
+    still holding `--web-port`, so that early return is exactly the case the
+    group signal exists for.
+
+    The group id is recorded rather than looked up, because `getpgid()` on an
+    already-reaped child fails — which would silently skip the signal.
+    """
+    child, _grandchild_pid, port = spawner
+    assert _port_is_busy(port), "precondition: the grandchild is listening"
+
+    # Kill only the direct child, exactly as an npm wrapper exiting would. The
+    # grandchild is untouched and keeps the port.
+    child.kill()
+    child.wait(timeout=10)
+    assert child.poll() is not None
+    time.sleep(0.5)
+    assert _port_is_busy(port), "precondition: the grandchild outlived the wrapper"
+
+    CAPTURE.stop_server(child)
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and _port_is_busy(port):
+        time.sleep(0.1)
+    assert not _port_is_busy(port), "the group was not signalled after the wrapper had exited"

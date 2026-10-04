@@ -251,6 +251,34 @@ class DemoHandler(BaseHTTPRequestHandler):
 
         self._send_json({"error": "not_found", "detail": path}, status=404)
 
+    def _chat_history(self, payload: dict, user_text: str, answer: str, *, max_messages: int = 12) -> list[dict]:
+        """`ChatResponse.history` as `ChatMessage` objects, newest last.
+
+        `api/models.py` documents this as the last 6 rounds, hence the 12-message
+        window. Prior turns come from the request when the client sends them, and
+        otherwise from the corpus's stored round — never invented, so the history
+        in the demo is the same synthetic exchange the answer came from.
+        """
+        messages: list[dict] = []
+
+        def _append(role: str, content: object) -> None:
+            if isinstance(content, str) and content.strip():
+                messages.append({"role": role, "content": content})
+
+        prior = payload.get("history")
+        if isinstance(prior, list):
+            for item in prior:
+                if isinstance(item, dict):
+                    _append(str(item.get("role", "")), item.get("content"))
+        else:
+            for stored in self.corpus["dialog_history"]["rounds"]:
+                _append("user", stored.get("user_input"))
+                _append("assistant", stored.get("response"))
+
+        _append("user", user_text)
+        _append("assistant", answer)
+        return messages[-max_messages:]
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib signature
         path = self.path.partition("?")[0]
         payload = self._read_json()
@@ -271,17 +299,23 @@ class DemoHandler(BaseHTTPRequestHandler):
             dept_mask = _header_mask(self.headers, "X-Dept-Mask")
             evidence = authorized_doc_ids(self.corpus, role_mask, dept_mask)
             answered = bool(evidence)
-            self._send_json(
-                {
-                    "answer": (self.corpus["answer_markdown"] if answered else self.corpus["answer_refusal_markdown"]),
-                    "session_id": query["session_id"],
-                    "business_type": query["business_type"],
-                    "intent": query["intent"],
-                    "evidence_doc_ids": evidence,
-                    "latency_ms": query["latency_ms"] if answered else query["refusal_latency_ms"],
-                    "cache_hit": False,
-                }
-            )
+            answer = self.corpus["answer_markdown"] if answered else self.corpus["answer_refusal_markdown"]
+            body = {
+                "answer": answer,
+                "session_id": query["session_id"],
+                "business_type": query["business_type"],
+                "intent": query["intent"],
+                "evidence_doc_ids": evidence,
+                "latency_ms": query["latency_ms"] if answered else query["refusal_latency_ms"],
+                "cache_hit": False,
+            }
+            # `/api/query` is a QueryResponse and `/api/chat` a ChatResponse; the
+            # only difference is `history`, but the fixture claims to mirror both
+            # contracts, so chat carries the field rather than a query body that
+            # happens to satisfy the current UI.
+            if path == "/api/chat":
+                body["history"] = self._chat_history(payload, user_text, answer)
+            self._send_json(body)
             return
 
         if path == "/api/continuation":
