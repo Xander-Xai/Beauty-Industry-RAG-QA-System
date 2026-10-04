@@ -133,6 +133,50 @@ def html_visible_text(markup: str) -> str:
     return html.unescape(markup)
 
 
+#: Substrings that must survive in the corpus for the rendered image to be
+#: honestly labelled. Each is checked before anything is rendered, so a later edit
+#: to the fixture cannot quietly produce an unlabelled screenshot.
+REQUIRED_DISCLOSURES = (
+    ("auth_metadata.app.subtitle", lambda c: c["auth_metadata"]["app"]["subtitle"], ("DEMO", "非生产")),
+    ("answer_markdown", lambda c: c["answer_markdown"], ("（DEMO：",)),
+    ("answer_refusal_markdown", lambda c: c["answer_refusal_markdown"], ("（DEMO：",)),
+)
+
+
+def require_disclosures(corpus: dict) -> None:
+    """Refuse to render a corpus whose synthetic labels have been removed.
+
+    The badge and the captions in this file are baked in, so they cannot be lost.
+    These three come from `synthetic_corpus.json` and can be: the subtitle the
+    real frontend renders, and the marker inside each answer. Without the check
+    they were a promise in prose only — `docs/demo/README.md` already said that
+    deleting a marker amounts to fabrication and that the script refuses such
+    input, and it did not.
+
+    Failing here costs a second; failing later costs a committed screenshot that
+    misrepresents synthetic output as a result.
+    """
+    missing: list[str] = []
+    for field, read, needles in REQUIRED_DISCLOSURES:
+        try:
+            value = read(corpus)
+        except (KeyError, TypeError):
+            missing.append(f"{field}: absent")
+            continue
+        if not isinstance(value, str):
+            missing.append(f"{field}: not a string")
+            continue
+        for needle in needles:
+            if needle not in value:
+                missing.append(f"{field}: missing {needle!r}")
+    if missing:
+        raise SystemExit(
+            "refusing to render: the synthetic corpus lost a disclosure that makes this image honest.\n"
+            + "\n".join(f"  - {item}" for item in missing)
+            + "\nSee docs/demo/README.md — an unlabelled screenshot would present synthetic values as results."
+        )
+
+
 def render_charset(corpus: dict) -> str:
     """Every character the capture can possibly render.
 
@@ -691,6 +735,8 @@ def main() -> None:
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     with CORPUS_PATH.open(encoding="utf-8") as handle:
         corpus = json.load(handle)
+
+    require_disclosures(corpus)
 
     if args.no_font_download:
         print("· --no-font-download: rendering through the system CJK fonts, no network access")

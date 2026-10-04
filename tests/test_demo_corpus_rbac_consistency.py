@@ -16,6 +16,7 @@ works against a live Qdrant / Elasticsearch / Redis deployment.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import threading
@@ -523,6 +524,16 @@ def test_the_mock_fixture_is_stricter_than_the_service_and_says_so():
     assert "stricter on purpose" in source
 
 
+def _cited_files(row: dict) -> list[Path]:
+    """Every file a trace row cites, split on the " + " separator."""
+    return [REPO_ROOT / part.strip() for part in row["code"].split("+")]
+
+
+def _cited_paths(row: dict) -> set[str]:
+    """The cited paths as written in the corpus, for comparison."""
+    return {part.strip() for part in row["code"].split("+")}
+
+
 def test_every_trace_row_points_at_a_file_that_exists_and_is_the_real_implementation():
     """The README claims each annotation row points at the file that really
     implements the step. `api/dependencies.py` was cited for identity resolution
@@ -534,9 +545,9 @@ def test_every_trace_row_points_at_a_file_that_exists_and_is_the_real_implementa
     behaviour lives.
     """
     for row in CORPUS["trace"]["rows"]:
-        target = REPO_ROOT / row["code"]
-        assert target.is_file(), f"{row['step']} points at missing {row['code']}"
-        source = target.read_text(encoding="utf-8")
+        for target in _cited_files(row):
+            assert target.is_file(), f"{row['step']} points at missing {target.relative_to(REPO_ROOT)}"
+        source = _cited_files(row)[0].read_text(encoding="utf-8")
         if "backward" in source.lower() and "alias" in source.lower():
             pytest.fail(
                 f"{row['step']} points at {row['code']}, which is only a backward-compatibility alias; "
@@ -552,3 +563,153 @@ def test_the_identity_row_points_at_the_module_that_parses_masks():
     assert row["code"] == "common/auth.py", row["code"]
     source = (REPO_ROOT / row["code"]).read_text(encoding="utf-8")
     assert "int(role_str)" in source, "the cited module is no longer the one reading dev-mode masks"
+
+
+def test_a_row_claiming_two_stores_cites_both_implementations():
+    """The regression: the storage row claimed "ES: status+epoch+role_mask+dept_mask"
+    while citing only `common/auth.py`, which builds the *Qdrant* filter and
+    delegates nothing to Elasticsearch. `BM25Retriever._build_es_query` is where
+    the ES filters live, so following the pointer could not verify half the claim.
+    """
+    row = next(row for row in CORPUS["trace"]["rows"] if row["step"] == "存储侧下推")
+
+    cited = _cited_paths(row)
+    assert "common/auth.py" in cited, row["code"]
+    assert "retrieval/bm25_retriever.py" in cited, (
+        f"the ES half of {row['demo']} is implemented elsewhere: {row['code']}"
+    )
+
+
+def test_each_cited_file_really_implements_part_of_the_row_it_is_cited_for():
+    """Named per file so the check is about the claim, not about the path
+    existing: the ES filters must be visible in the file the row now names."""
+    row = next(row for row in CORPUS["trace"]["rows"] if row["step"] == "存储侧下推")
+    by_path = {part.strip(): (REPO_ROOT / part.strip()).read_text(encoding="utf-8") for part in row["code"].split("+")}
+
+    assert "build_qdrant_filter" in by_path["common/auth.py"], "the Qdrant helper moved"
+    es_source = by_path["retrieval/bm25_retriever.py"]
+    assert "_build_es_query" in es_source, "the ES query builder moved"
+    for field in ("status", "role_mask", "dept_mask"):
+        assert field in es_source, f"the cited ES builder no longer filters on {field}"
+
+
+# ── the disclosures that make the image honest are enforced ─────────────
+def _capture_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("demo_capture_disclosures", DEMO_DIR / "capture_demo.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CAPTURE_SCRIPT = _capture_module()
+
+
+def test_the_shipped_corpus_satisfies_its_own_disclosure_requirement():
+    """Nothing to assert about the rule here — that the corpus as committed
+    passes it. Every other test in this file assumes it does."""
+    CAPTURE_SCRIPT.require_disclosures(CORPUS)
+
+
+def test_removing_the_answer_marker_is_refused():
+    """The regression: `docs/demo/README.md` said the script refuses a corpus
+    whose synthetic markers are deleted, and nothing checked. The badge and
+    captions are baked into the generator, but the marker inside each answer and
+    the subtitle the real frontend renders come from the JSON — so an edit there
+    produced a committed screenshot with no label on it.
+    """
+    stripped = copy.deepcopy(CORPUS)
+    stripped["answer_markdown"] = stripped["answer_markdown"].replace("\uff08DEMO\uff1a", "(")
+
+    with pytest.raises(SystemExit) as excinfo:
+        CAPTURE_SCRIPT.require_disclosures(stripped)
+    assert "answer_markdown" in str(excinfo.value)
+
+
+def test_removing_the_refusal_marker_is_refused():
+    """The refusal branch is rendered too, so its marker matters as much."""
+    stripped = copy.deepcopy(CORPUS)
+    stripped["answer_refusal_markdown"] = stripped["answer_refusal_markdown"].replace("\uff08DEMO\uff1a", "(")
+
+    with pytest.raises(SystemExit):
+        CAPTURE_SCRIPT.require_disclosures(stripped)
+
+
+def test_replacing_the_subtitle_with_a_plausible_one_is_refused():
+    """Not only deleting it. An ordinary-looking subtitle is the more dangerous
+    edit, because the screenshot still renders and still looks right."""
+    relabelled = copy.deepcopy(CORPUS)
+    relabelled["auth_metadata"]["app"]["subtitle"] = (
+        "\u5316\u5986\u54c1\u884c\u4e1a\u77e5\u8bc6\u95ee\u7b54\u52a9\u624b"
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        CAPTURE_SCRIPT.require_disclosures(relabelled)
+    assert "subtitle" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("field", ["answer_markdown", "answer_refusal_markdown", "auth_metadata"])
+def test_a_missing_field_is_refused_rather_than_crashing(field):
+    """A fixture edit that removes a key should produce the intended refusal, not
+    a KeyError traceback from inside the checker."""
+    incomplete = copy.deepcopy(CORPUS)
+    if field == "auth_metadata":
+        incomplete["auth_metadata"].pop("app")
+    else:
+        incomplete.pop(field)
+
+    with pytest.raises(SystemExit) as excinfo:
+        CAPTURE_SCRIPT.require_disclosures(incomplete)
+    assert field.split(".")[0] in str(excinfo.value)
+
+
+def test_every_missing_disclosure_is_reported_at_once():
+    """One run should list everything that is wrong, not surface them one
+    capture attempt at a time."""
+    broken = copy.deepcopy(CORPUS)
+    broken["answer_markdown"] = "no marker here"
+    broken["answer_refusal_markdown"] = "no marker here"
+    broken["auth_metadata"]["app"]["subtitle"] = "plain"
+
+    with pytest.raises(SystemExit) as excinfo:
+        CAPTURE_SCRIPT.require_disclosures(broken)
+
+    message = str(excinfo.value)
+    for field in ("answer_markdown", "answer_refusal_markdown", "subtitle"):
+        assert field in message, field
+
+
+def test_the_check_runs_before_anything_is_rendered(tmp_path, monkeypatch):
+    """Ordering is the point: refusing after the servers are up would still have
+    started them, and refusing after the image is written would already have
+    produced the unlabelled artifact."""
+    import json as _json
+    import sys
+
+    started: list[str] = []
+    monkeypatch.setattr(CAPTURE_SCRIPT, "CORPUS_PATH", tmp_path / "synthetic_corpus.json")
+    stripped = copy.deepcopy(CORPUS)
+    stripped["answer_markdown"] = "no marker"
+    (tmp_path / "synthetic_corpus.json").write_text(_json.dumps(stripped, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(CAPTURE_SCRIPT, "start_mock_api", lambda *a, **k: started.append("mock") or None)
+    monkeypatch.setattr(CAPTURE_SCRIPT, "start_frontend", lambda *a, **k: started.append("frontend") or None)
+    # Everything past the servers is stubbed too: if the guard is ever removed, the
+    # failure should be a fast assertion, not a real Chromium launch against a port
+    # nothing is listening on.
+    monkeypatch.setattr(CAPTURE_SCRIPT, "drive_frontend", lambda *a, **k: "PNG")
+    monkeypatch.setattr(CAPTURE_SCRIPT, "capture", lambda app, fonts, out, quality: (out.write_bytes(b"x"), out)[1])
+    # `--no-font-download` so a regression fails without reaching for the network:
+    # a unit test that starts fetching a font subset when its guard is removed is
+    # slow and non-hermetic exactly when it is most needed.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["capture_demo.py", "--out", str(tmp_path / "hero.webp"), "--no-font-download"],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        CAPTURE_SCRIPT.main()
+
+    assert "answer_markdown" in str(excinfo.value)
+    assert started == [], f"servers were started before the refusal: {started}"

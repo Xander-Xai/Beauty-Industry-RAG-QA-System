@@ -133,7 +133,7 @@
       {
         "step": "存储侧下推",
         "demo": "Qdrant：status+epoch；ES：status+epoch+role_mask+dept_mask",
-        "code": "common/auth.py"
+        "code": "common/auth.py + retrieval/bm25_retriever.py"
       },
       {
         "step": "融合前二次过滤",
