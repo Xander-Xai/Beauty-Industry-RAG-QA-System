@@ -18,13 +18,19 @@ metadata:
     app.kubernetes.io/component: api
 data:
   # ── Inference service routing ────────────────────────────────────────────
-  # Without these the routers fall back to http://localhost:8101 / :8100, so
-  # generation and query rewriting would call back into the API pod itself and
-  # degrade every query. These are the same variables docker-compose sets for
-  # the microservices topology; adjust the host names to match the Services you
-  # actually create.
-  REWRITE_SERVICE_URL: "http://rewrite-service:8101"
-  GENERATION_SERVICE_URL: "http://generation-service:8100"
+  # These are the variables the deployed workload actually reads.
+  #
+  # The image entrypoint is `python app.py` (Dockerfile CMD), i.e. the monolith
+  # in app.py, which serves api/routes.py + api/routes_auth.py. That monolith
+  # reaches vLLM through router/stateless_router.py, which reads VLLM_4B_URL
+  # and VLLM_GEN_14B_URL and otherwise defaults to http://localhost:<port>.
+  #
+  # Do NOT substitute REWRITE_SERVICE_URL / GENERATION_SERVICE_URL here: those
+  # are read only by the separate api-gateway/ application
+  # (api-gateway/routers/*), which this Deployment never starts. Setting them
+  # would leave the running monolith still pointed at localhost.
+  VLLM_4B_URL: "http://vllm-4b:8101"
+  VLLM_GEN_14B_URL: "http://vllm-gen-14b:8100"
 
   # ── Datastores ───────────────────────────────────────────────────────────
   # Dependency addresses, mirroring the docker-compose service names.

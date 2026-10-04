@@ -1,6 +1,12 @@
 FROM python:3.10-slim
 
-RUN useradd --create-home --shell /bin/bash appuser
+# The uid/gid are pinned so the container manifests under deploy/ can name them
+# explicitly: they set runAsUser/runAsGroup/fsGroup to 1000 and rely on Secret
+# volumes being group-readable by the application user.
+# The group is created first because --gid alone fails on this base image: it
+# has no group 1000 yet, so useradd exits 6.
+RUN groupadd --gid 1000 appuser \
+    && useradd --create-home --shell /bin/bash --uid 1000 --gid 1000 appuser
 
 WORKDIR /app
 

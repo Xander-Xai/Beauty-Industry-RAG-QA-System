@@ -64,6 +64,12 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+        # The image's only user is `appuser`; name that group so mounted Secret
+        # volumes are group-owned and readable. See the jwt-keys volume below.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: api
           # Image tag policy: pin an explicit version. Do not use a floating tag.
@@ -124,6 +130,12 @@ spec:
             # Absent this mount, /api/auth/login reports the RS256 path as
             # unconfigured and protected endpoints return 401; it never falls
             # open to an unauthenticated mode.
+            #
+            # fsGroup is required, not cosmetic. Secret volumes are mounted
+            # root-owned; the image runs as appuser under runAsNonRoot, so
+            # defaultMode 0400 alone would make both keys unreadable and login
+            # would still fail. 0440 plus fsGroup gives the app group read
+            # access while keeping the private key unreadable by others.
             - name: jwt-keys
               mountPath: /etc/rag-auth
               readOnly: true
@@ -131,7 +143,7 @@ spec:
         - name: jwt-keys
           secret:
             secretName: rag-jwt-keys
-            defaultMode: 0400
+            defaultMode: 0440
 
       # No models volume is declared on purpose. docker-compose.yml bind-mounts
       # ./models into the container, but this repository ships no model weights:
