@@ -22,11 +22,22 @@
 # No workflow file is modified by this script.
 #
 # Usage:
-#   scripts/branch_protection.sh verify    # read-only audit
+#   scripts/branch_protection.sh verify    # gate: compare live state against
+#                                         # the declared contract (read-only)
 #   scripts/branch_protection.sh derive    # print + check the derived context set
 #   scripts/branch_protection.sh payload   # print the exact PUT payload
 #   scripts/branch_protection.sh apply     # PUT the protection (idempotent)
 #   scripts/branch_protection.sh snapshot  # machine-readable JSON snapshot
+#
+# `verify` exit codes:
+#   0  live state satisfies every item of the declared contract
+#   1  drift: at least one item differs from the contract
+#   2  live state could not be read (network/auth error, or the branch has no
+#      protection at all, so there is nothing to compare against)
+#
+# 2 is deliberately distinct from 1: "drift" is a governance finding a human
+# must reconcile, whereas "cannot read" means the audit produced no verdict and
+# must not be mistaken for a clean run by a caller that only checks for zero.
 
 set -euo pipefail
 
@@ -55,6 +66,27 @@ CONDITIONAL_JOBS=(
   "RAGAS evaluator smoke（需显式启用）"
 )
 
+# ---------------------------------------------------------------------------
+# The declared governance contract.
+#
+# `verify` compares live GitHub state against exactly these values and exits
+# non-zero on any deviation. They are the reference, not a report of whatever
+# happens to be configured today: the whole point of the check is to fail when
+# somebody ticks a box in the GitHub UI, so the expectations must be stated
+# here where they can be reviewed, and must never be read back from the live
+# API. Rationale for each value is recorded in docs/main-branch-governance.md.
+# ---------------------------------------------------------------------------
+EXPECT_STRICT=true               # CI must have passed against current main
+EXPECT_ENFORCE_ADMINS=true       # rules must bind the admin too, or not bind
+EXPECT_PR_REQUIRED=true          # main is reachable only through a PR
+EXPECT_APPROVING_REVIEWS=0       # single-author repo; 1 would deadlock merges
+EXPECT_LAST_PUSH_APPROVAL=false  # no self-approval needed
+EXPECT_ALLOW_FORCE_PUSHES=false # no history rewrite
+EXPECT_ALLOW_DELETIONS=false     # main cannot be deleted
+EXPECT_LOCK_BRANCH=false         # keep main operable
+EXPECT_ALLOW_UPDATE_BRANCH=true  # companion to strict mode: "Update branch"
+EXPECT_RULESETS=0                # no competing rule set alongside protection
+
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -64,11 +96,14 @@ require_tools() {
   gh auth status >/dev/null 2>&1 || fail "gh not authenticated"
 }
 
-# Build the PUT payload for PUT /repos/{repo}/branches/{branch}/protection.
+# Build the PUT payload for PUT /repos/{owner}/{repo}/branches/{branch}/protection.
 # Contexts arrive on stdin, one per line, so array elements can never be
 # re-split or word-mangled on the way into JSON.
 build_payload() {
-  printf '%s\n' "${REQUIRED_CONTEXTS[@]}" | STRICT="${STRICT_MODE:-true}" python3 -c '
+  # Defaults to the declared contract so `apply` and `verify` cannot disagree
+  # about `strict`; STRICT_MODE stays as an explicit escape hatch. Without this
+  # link, editing one and not the other would make `verify` unsatisfiable.
+  printf '%s\n' "${REQUIRED_CONTEXTS[@]}" | STRICT="${STRICT_MODE:-$EXPECT_STRICT}" python3 -c '
 import json, os, sys
 contexts = [line for line in sys.stdin.read().split("\n") if line]
 print(json.dumps({
@@ -229,41 +264,220 @@ cmd_apply() {
   log "applied."
 }
 
+# Compare live governance state against the declared contract.
+#
+# READ-ONLY BY CONTRACT. Every gh call below is a bare GET (no --method, no
+# --input). This function must never repair what it finds: silently re-applying
+# the contract would destroy the only evidence that the settings were changed,
+# and would let `verify` pass in a job whose real job was to notice the change.
+# Repair is `apply`'s job, and only after a human decides which side is wrong.
+verify_against_contract() {
+  # Newline-separated, because these contexts contain spaces and would be
+  # re-split by any whitespace-joined handoff.
+  EXP_CONTEXTS=$(printf '%s\n' "${REQUIRED_CONTEXTS[@]}")
+
+  REPO="$REPO" BRANCH="$BRANCH" API="$API" \
+  EXP_CONTEXTS="$EXP_CONTEXTS" \
+  EXP_STRICT="$EXPECT_STRICT" \
+  EXP_ENFORCE_ADMINS="$EXPECT_ENFORCE_ADMINS" \
+  EXP_PR_REQUIRED="$EXPECT_PR_REQUIRED" \
+  EXP_APPROVING_REVIEWS="$EXPECT_APPROVING_REVIEWS" \
+  EXP_LAST_PUSH_APPROVAL="$EXPECT_LAST_PUSH_APPROVAL" \
+  EXP_ALLOW_FORCE_PUSHES="$EXPECT_ALLOW_FORCE_PUSHES" \
+  EXP_ALLOW_DELETIONS="$EXPECT_ALLOW_DELETIONS" \
+  EXP_LOCK_BRANCH="$EXPECT_LOCK_BRANCH" \
+  EXP_ALLOW_UPDATE_BRANCH="$EXPECT_ALLOW_UPDATE_BRANCH" \
+  EXP_RULESETS="$EXPECT_RULESETS" \
+  python3 - <<'PY'
+import difflib, json, os, subprocess, sys
+
+# Keep the verdict on stderr in its original position relative to the report on
+# stdout; block-buffered stdout would otherwise surface the error first.
+sys.stdout.reconfigure(line_buffering=True)
+
+api, repo, branch = os.environ["API"], os.environ["REPO"], os.environ["BRANCH"]
+
+
+def gh_get(path):
+    """GET one API path. No --method, no --input: strictly read-only."""
+    p = subprocess.run(["gh", "api", path], capture_output=True, text=True)
+    if p.returncode != 0:
+        # 404 on the protection endpoint is a legitimate answer ("this branch
+        # has no protection"), not a transport failure, so it is not an error
+        # here; the caller decides what an absent object means.
+        if "HTTP 404" in p.stderr:
+            return None
+        sys.stderr.write("ERROR: cannot read %s\n%s\n" % (path, p.stderr.strip()))
+        sys.exit(2)
+    return json.loads(p.stdout)
+
+
+def want_bool(name):
+    return os.environ[name] == "true"
+
+
+print("== verify: %s @ %s ==" % (repo, branch))
+head = gh_get("%s/commits/%s" % (api, branch))
+if head:
+    print("live %s SHA: %s" % (branch, head["sha"]))
+print("read-only audit: GET requests only, no GitHub state is modified.")
+print("")
+
+protection = gh_get("%s/branches/%s/protection" % (api, branch))
+if protection is None:
+    # Nothing to compare against. Every branch-protection expectation is
+    # undefined here, so reporting each one as "false" would be a fabrication.
+    sys.stderr.write(
+        "ERROR: branch '%s' has no branch protection in %s.\n"
+        "The contract requires protection on this branch; there is no live\n"
+        "state to compare, so no verdict could be reached.\n" % (branch, repo)
+    )
+    sys.exit(2)
+
+settings = gh_get(api)
+if settings is None:
+    sys.stderr.write("ERROR: cannot read repository settings for %s\n" % repo)
+    sys.exit(2)
+
+rulesets = gh_get("%s/rulesets" % api)
+if rulesets is None:
+    # Not defaulted to empty on purpose. An empty list is the state this
+    # contract wants, but a 404 here can also mean the endpoint is invisible to
+    # this token; guessing "no rulesets" would turn a visibility problem into a
+    # passing audit.
+    sys.stderr.write(
+        "ERROR: cannot read rulesets for %s.\n"
+        "Refusing to assume an empty rule set from an unreadable response.\n"
+        % repo
+    )
+    sys.exit(2)
+if not isinstance(rulesets, list):
+    sys.stderr.write("ERROR: unexpected rulesets payload: %r\n" % (rulesets,))
+    sys.exit(2)
+
+# Absent sub-objects read as "unset", not as False: GitHub omits a block that
+# has never been configured, and `None` is the honest value for it.
+rsc = protection.get("required_status_checks") or {}
+rpr = protection.get("required_pull_request_reviews") or {}
+
+
+def enabled(key):
+    block = protection.get(key)
+    return None if block is None else block.get("enabled")
+
+
+expected_contexts = sorted(
+    line for line in os.environ["EXP_CONTEXTS"].split("\n") if line
+)
+
+# (label, expected, actual, kind). `kind` picks the reporting style only;
+# every row is compared the same way -- equality against the declaration.
+CHECKS = [
+    ("required_status_checks.strict",
+     want_bool("EXP_STRICT"), rsc.get("strict"), "scalar"),
+    ("required_status_checks.contexts",
+     expected_contexts, sorted(rsc.get("contexts") or []), "list"),
+    ("enforce_admins",
+     want_bool("EXP_ENFORCE_ADMINS"), enabled("enforce_admins"), "scalar"),
+    ("pull_request_required",
+     want_bool("EXP_PR_REQUIRED"),
+     protection.get("required_pull_request_reviews") is not None, "scalar"),
+    ("required_approving_review_count",
+     int(os.environ["EXP_APPROVING_REVIEWS"]),
+     rpr.get("required_approving_review_count"), "scalar"),
+    ("require_last_push_approval",
+     want_bool("EXP_LAST_PUSH_APPROVAL"),
+     rpr.get("require_last_push_approval"), "scalar"),
+    ("allow_force_pushes",
+     want_bool("EXP_ALLOW_FORCE_PUSHES"), enabled("allow_force_pushes"), "scalar"),
+    ("allow_deletions",
+     want_bool("EXP_ALLOW_DELETIONS"), enabled("allow_deletions"), "scalar"),
+    ("lock_branch",
+     want_bool("EXP_LOCK_BRANCH"), enabled("lock_branch"), "scalar"),
+    ("repo.allow_update_branch",
+     want_bool("EXP_ALLOW_UPDATE_BRANCH"),
+     settings.get("allow_update_branch"), "scalar"),
+    ("repo.rulesets",
+     int(os.environ["EXP_RULESETS"]), len(rulesets), "scalar"),
+]
+
+drifted = [(label, exp, act, kind)
+           for label, exp, act, kind in CHECKS if exp != act]
+# Labels are unique, so a set is enough to mark the summary rows.
+failed = {label for label, _, _, _ in drifted}
+
+
+def show(value, kind):
+    if kind == "list":
+        return "%d context(s)" % len(value)
+    return json.dumps(value)
+
+
+for label, exp, act, kind in CHECKS:
+    print("  [%s] %-33s expected=%-16s actual=%s"
+          % ("FAIL" if label in failed else " ok ", label,
+             show(exp, kind), show(act, kind)))
+
+if not drifted:
+    print("")
+    print("OK: %d/%d governance checks match the declared contract."
+          % (len(CHECKS), len(CHECKS)))
+    sys.exit(0)
+
+print("")
+print("drift: %d of %d checks disagree with the declared contract."
+      % (len(drifted), len(CHECKS)))
+
+for index, (label, exp, act, kind) in enumerate(drifted, start=1):
+    print("")
+    print("%d) %s" % (index, label))
+    print("   expected: %s" % show(exp, kind))
+    print("   actual:   %s" % show(act, kind))
+    print("   diff:")
+    if kind == "list":
+        # `-` is declared-but-absent-from-live, `+` is live-but-undeclared:
+        # either direction is drift, because the contract fixes the set exactly.
+        diff = difflib.unified_diff(
+            exp, act, fromfile="declared", tofile="live", lineterm="", n=0
+        )
+        for line in diff:
+            if line.startswith(("---", "+++")):
+                continue  # header lines; expected/actual are already printed
+            print("     %s" % line)
+    else:
+        print("     -%s" % json.dumps(exp))
+        print("     +%s" % json.dumps(act))
+
+print("")
+# `apply` reconciles branch protection and allow_update_branch only. Naming the
+# exceptions keeps the hint from sending someone to a command that cannot fix
+# what they are looking at.
+NOT_APPLIABLE = {"repo.rulesets"}
+manual = [label for label, _, _, _ in drifted if label in NOT_APPLIABLE]
+
+sys.stderr.write(
+    "FAIL: governance drifted from the declared contract in "
+    "scripts/branch_protection.sh.\n"
+    "Decide which side is wrong, then reconcile deliberately: edit the\n"
+    "EXPECT_* / REQUIRED_CONTEXTS declarations and run `apply`, or change the\n"
+    "live settings and re-run `verify`. verify never repairs drift itself.\n"
+)
+if manual:
+    sys.stderr.write(
+        "Note: `apply` does not manage %s -- reconcile that by hand (or drop\n"
+        "the expectation if a rule set is intentional).\n" % ", ".join(manual)
+    )
+sys.exit(1)
+PY
+}
+
 cmd_verify() {
   require_tools
-  log "== repo     : ${REPO}"
-  log "== branch   : ${BRANCH}"
-  log "== main SHA : $(gh api "${API}/commits/${BRANCH}" --jq .sha)"
-
-  log ""
-  log "-- protection --"
-  if gh api "${API}/branches/${BRANCH}/protection" >/dev/null 2>&1; then
-    gh api "${API}/branches/${BRANCH}/protection" --jq '{
-      status_checks_strict: .required_status_checks.strict,
-      required_status_checks: [.required_status_checks.contexts[]],
-      enforce_admins: .enforce_admins.enabled,
-      allow_force_pushes: .allow_force_pushes.enabled,
-      allow_deletions: .allow_deletions.enabled,
-      pr_required: (.required_pull_request_reviews != null),
-      required_approving_review_count: .required_pull_request_reviews.required_approving_review_count,
-      require_last_push_approval: .required_pull_request_reviews.require_last_push_approval,
-      require_code_owner_reviews: .required_pull_request_reviews.require_code_owner_reviews,
-      lock_branch: .lock_branch.enabled
-    }'
-  else
-    log "  UNPROTECTED"
-  fi
-
-  log ""
-  log "-- merge settings --"
-  gh api "${API}" --jq '{
-    allow_squash_merge, allow_merge_commit, allow_rebase_merge,
-    allow_auto_merge, delete_branch_on_merge, allow_update_branch
-  }'
-
-  log ""
-  log "-- rulesets (must stay empty; no competing config) --"
-  gh api "${API}/rulesets" --jq 'if length == 0 then "[]" else . end'
+  local rc=0
+  # `|| rc=$?` keeps `set -e` from aborting before the status is captured, so
+  # the documented 0/1/2 codes reach the caller intact.
+  verify_against_contract || rc=$?
+  return "$rc"
 }
 
 cmd_snapshot() {

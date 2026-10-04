@@ -7,11 +7,36 @@ GitHub UI 上勾选**：脚本里的 required context 是从真实 check-run 推
 手工勾选无法保证这一点。
 
 ```bash
-scripts/branch_protection.sh verify    # 只读审计，输出当前治理快照
+scripts/branch_protection.sh verify    # 只读门禁：把 live 状态与声明的契约逐项比对
 scripts/branch_protection.sh derive    # 从真实 check-run 重新推导 required context
 scripts/branch_protection.sh payload   # 打印将要写入的 PUT payload
 scripts/branch_protection.sh apply     # 幂等写入（写前强制校验 context 未漂移）
 ```
+
+## `verify` 是门禁，不是快照
+
+`verify` 把 live 治理状态与脚本顶部 `EXPECT_*` / `REQUIRED_CONTEXTS` 声明的
+契约**逐项比对**，任何一项不一致即以非零码退出，并打印 expected / actual /
+diff。契约是声明式的：期望值写死在脚本里，**不会**从 live API 反读，否则
+检查就退化成了"打印现状"。
+
+退出码：
+
+| 码 | 含义 |
+| --- | --- |
+| `0` | 全部 11 项与契约一致 |
+| `1` | 发生漂移（drift），已打印逐项 diff |
+| `2` | 无法读取 live 状态（网络/鉴权失败，或该分支根本没有 protection） |
+
+`2` 与 `1` 刻意分开：「漂移」是需要人决策的治理问题，「读不到」则是本次审计
+没有产出任何结论。混为一谈会让只判断「是否为 0」的调用方把失败的审计当成通过。
+
+`verify` **只发 GET 请求，永远不会修复漂移**。悄悄把配置改回契约值会销毁
+"有人动过设置"这个唯一证据，也让一个本该发现变更的检查变成一个写入方。修复是
+`apply` 的职责，且必须在人判断"哪一边是错的"之后进行。
+
+`apply` 只负责 branch protection 与 `allow_update_branch`，**不管理 rulesets**。
+若 `repo.rulesets` 漂移，需要手工处理（或确认这套规则集本就该存在、改声明）。
 
 ## 适用边界
 
@@ -168,6 +193,7 @@ required status checks。若 CI 长期失败导致无法合并，唯一出口是
 
 ## 变更方式
 
-改动治理配置请编辑 `scripts/branch_protection.sh` 的 `REQUIRED_CONTEXTS`
-并执行 `apply`，然后把 `verify` 的输出附到 PR 里。不要在 UI 上直接勾选，
-否则脚本的 `derive` 校验会与实际配置漂移。
+改动治理配置请编辑 `scripts/branch_protection.sh` 的 `EXPECT_*` 与
+`REQUIRED_CONTEXTS` 并执行 `apply`，然后把 `verify` 的输出附到 PR 里。
+不要在 UI 上直接勾选：`verify` 会立刻发现漂移并以非零码退出，而
+`derive` 校验会与实际配置不一致。
