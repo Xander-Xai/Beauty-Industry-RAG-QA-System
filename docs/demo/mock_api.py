@@ -232,9 +232,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             answered = bool(evidence)
             self._send_json(
                 {
-                    "answer": (
-                        self.corpus["answer_markdown"] if answered else self.corpus["answer_refusal_markdown"]
-                    ),
+                    "answer": (self.corpus["answer_markdown"] if answered else self.corpus["answer_refusal_markdown"]),
                     "session_id": query["session_id"],
                     "business_type": query["business_type"],
                     "intent": query["intent"],

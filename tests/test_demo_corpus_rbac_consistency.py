@@ -96,9 +96,10 @@ def test_fixture_predicate_agrees_with_the_real_one_on_every_pair():
     edit cannot make the two drift apart silently."""
     from common.auth import is_allowed
 
-    identities = [
-        (option["role_mask"], option["dept_mask"]) for option in ROLE_OPTIONS
-    ] + [(0, 0), (0xFFFFFFFF, 0xFFFFFFFF)]
+    identities = [(option["role_mask"], option["dept_mask"]) for option in ROLE_OPTIONS] + [
+        (0, 0),
+        (0xFFFFFFFF, 0xFFFFFFFF),
+    ]
     doc_masks = [(doc["role_mask"], doc["dept_mask"]) for doc in DOCUMENTS.values()]
     doc_masks += [(0, 0), (0, 4), (4, 0), (6, 6)]
 
@@ -147,9 +148,7 @@ def test_no_identity_is_handed_evidence_it_cannot_read():
     """
     from common.auth import is_allowed
 
-    identities = [
-        (option["role_mask"], option["dept_mask"]) for option in ROLE_OPTIONS
-    ] + [
+    identities = [(option["role_mask"], option["dept_mask"]) for option in ROLE_OPTIONS] + [
         (CORPUS["auth_metadata"]["rbac"]["roles"]["admin"], 0),
         (MOCK_API.SUPER_ADMIN_MASK, 0),
         (0, 0),

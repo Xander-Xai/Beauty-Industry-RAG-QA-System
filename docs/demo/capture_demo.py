@@ -192,10 +192,7 @@ def step_chip(number: str) -> str:
 
 def mask_note(identity: dict) -> str:
     """`role_mask=0x04 · dept_mask=0x04`, straight from the corpus."""
-    return (
-        f'role_mask=0x{int(identity["role_mask"]):02x}'
-        f' · dept_mask=0x{int(identity["dept_mask"]):02x}'
-    )
+    return f"role_mask=0x{int(identity['role_mask']):02x} · dept_mask=0x{int(identity['dept_mask']):02x}"
 
 
 def render_document_card(doc: dict, *, primary: bool) -> str:
