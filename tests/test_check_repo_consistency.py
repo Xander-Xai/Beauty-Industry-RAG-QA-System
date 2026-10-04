@@ -3456,3 +3456,61 @@ def test_a_malformed_compound_is_never_certified_as_the_real_count():
         errors = slo_count_errors("README.md", f"{token} SLO objectives", expected=5)
         assert len(errors) == 1, (token, errors)
         assert "cannot verify" in errors[0], (token, errors)
+
+
+# ── a numeric count is captured whole, punctuation included ──────────────
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [("5", 5), ("1005", 1005), ("1,005", 1005), ("1,234,567", 1_234_567)],
+)
+def test_grouped_and_plain_integers_parse_to_the_same_number(token, expected):
+    """`1,005` and `1005` are one number; the separator is not a place to start
+    reading."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) == expected
+
+
+@pytest.mark.parametrize("token", ["1,00", "105.5", "1,00,5", ",5", "5,", "1,005.5", "5.0"])
+def test_a_malformed_or_fractional_numeric_count_is_unverifiable(token):
+    """A count of objectives is an integer written in valid grouping. Anything
+    else declines rather than rounding to something plausible."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "1,005 SLO objectives",
+        "There are 1,005 SLO objectives.",
+        "1,005 个 SLO 目标",
+        "| SLO 目标（1,005 个） |",
+    ],
+)
+def test_a_grouped_count_that_drifts_is_flagged_not_read_as_its_suffix(claim):
+    """The regression: `\\d+` started after the comma, so `1,005` was read as
+    `005` = 5 — a false pass against a five-objective runbook, which is the one
+    outcome worse than not checking at all."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1, (claim, errors)
+    assert "states 1005 SLO objectives" in errors[0], (claim, errors)
+
+
+def test_a_fractional_count_is_reported_as_unverifiable():
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", "105.5 SLO objectives", expected=5)
+    assert len(errors) == 1
+    assert "cannot verify" in errors[0], errors
+
+
+def test_a_correct_grouped_count_is_accepted():
+    """The fix must not turn a legitimate formatted count into a finding."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", "1,005 SLO objectives", expected=1005) == []
+    assert slo_count_errors("README.md", "1,005 个 SLO 目标", expected=1005) == []

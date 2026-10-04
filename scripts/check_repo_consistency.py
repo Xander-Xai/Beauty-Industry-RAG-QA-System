@@ -3068,6 +3068,10 @@ _EN_COUNT_WORDS = _count_word_values()
 #: 21; "hundred-one" and "one-two" are not numbers at all.
 _EN_TENS_VALUES = frozenset({20, 30, 40, 50, 60, 70, 80, 90})
 
+#: A grouped integer, the only numeric form a count may take: "1,005" and "1005"
+#: are the same number, "1,00" is a typo, and "105.5" is not a count of anything.
+_GROUPED_INT_RE = re.compile(r"\d{1,3}(?:,\d{3})+|\d+")
+
 #: Prose that restates how many items the list has, in the two languages this
 #: repository documents in. Spacing is optional because both "六个问题" and
 #: "7 个问题" occur in practice, and a compound count such as "twenty-one
@@ -3098,8 +3102,13 @@ _SLO_COUNT_RE = re.compile(
     # separator to stop the class matching its `五个` tail — without the guard,
     # a claim of 105 would be read as 5 and quietly pass. 零 is what makes that
     # particular tail reachable, so it is in the class.
-    r"(?<![\u4e00-\u9fff])(?P<lead>[一二两三四五六七八九十百千零]+|\d+)\s*个\s*SLO\s*目标"
-    r"|SLO\s*目标\s*[（(]\s*(?<![\u4e00-\u9fff])(?P<trail>[一二两三四五六七八九十百千零]+|\d+)\s*个"
+    # The numeric token is captured whole, comma grouping and decimal point
+    # included, because `\d+` alone starts *after* the punctuation: "1,005" would
+    # match "005" and read as 5, certifying a claim of 1,005 against a
+    # five-objective runbook. The lookbehind is the belt to that braces — it
+    # stops a match beginning mid-number even if the shape changes.
+    r"(?<![\u4e00-\u9fff])(?P<lead>[一二两三四五六七八九十百千零]+|[\d,.]+)\s*个\s*SLO\s*目标"
+    r"|SLO\s*目标\s*[（(]\s*(?<![\u4e00-\u9fff])(?P<trail>[一二两三四五六七八九十百千零]+|[\d,.]+)\s*个"
     # The compound has to sit *inside* the group: capturing only the first word
     # made "twenty-one SLO objectives" parse as 20. The lookbehind keeps the
     # match from starting *inside* one instead — "twenty-one" has a word
@@ -3107,7 +3116,11 @@ _SLO_COUNT_RE = re.compile(
     # load-bearing: `_COUNT_WORDS` is an `a|b|c` alternation, so without it the
     # top-level `|` splits the whole pattern and only the final alternative
     # keeps the trailing `\s+SLO` requirement.
-    r"|(?<![\w-])(?P<english>\d+|(?:" + _COUNT_WORDS + r")(?:[-\s](?:" + _COUNT_WORDS + r"))?)\s+SLO\s+objectives?\b",
+    r"|(?<![\w,.])(?P<english>[\d,.]+|(?:"
+    + _COUNT_WORDS
+    + r")(?:[-\s](?:"
+    + _COUNT_WORDS
+    + r"))?)\s+SLO\s+objectives?\b",
     re.IGNORECASE,
 )
 
@@ -3200,6 +3213,8 @@ def _parse_stated_count(token: str) -> int | None:
     token = token.strip().lower()
     if token.isdigit():
         return int(token)
+    if _GROUPED_INT_RE.fullmatch(token):
+        return int(token.replace(",", ""))
     if not token.isascii():
         return _parse_chinese_number(token)
     for separator in ("-", " "):
