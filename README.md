@@ -23,7 +23,9 @@ Runtime version `2.3.0`（`config.json` → `system.version`）。CI 配置见 `
 
 ![合成数据演示：用户 Query → 带引用的回答 → 引用证据 → 来源文档 → 权限与可信证据。左侧为本仓库前端在 Chromium 中的真实渲染，右侧为演示标注](docs/assets/demo-request-evidence-flow.webp)
 
-五段链路：**用户 Query → 回答（内含〔证据N〕引用）→ 引用证据标签（可点，命中来源文档）→ 来源文档条款 → 权限 / 可信证据**。第二问是切换身份之后的同一问题：证据被权限过滤掉之后，系统拒答，而不是编一个答案。
+五段链路：**用户 Query → 回答（内含〔证据N〕引用）→ 引用证据标签（可点，命中来源文档）→ 来源文档条款 → 权限 / 可信证据**。第二问是切换身份之后的同一问题：`Regulatory Affairs`（role_mask=0x04 · dept_mask=0x04）读得到 ④ 里那两份文档，两份的掩码都是 0x04 / 0x04；切到 `Commercial Team`（0x08 / 0x08）后两份都被权限过滤掉、证据为空，系统拒答而不是编一个答案。
+
+这处对照不是口头承诺：合成语料里每份文档的 `role_mask` / `dept_mask` 都由 `tests/test_demo_corpus_rbac_consistency.py` 用**真实的 `common.auth.is_allowed`** 逐份校验，mock 也按同一谓词逐份过滤，不会端出当前身份打不开的引用。这只证明演示数据与仓库的权限语义自洽，**不构成 RBAC 的运行时验证**。
 
 这张图的边界，先说清楚：**左侧是真实 UI**（`frontend/src/App.jsx`，由 Playwright 驱动真实输入与点击：提问、切换身份、发送），后端是 `docs/demo/mock_api.py` 这个合成 mock；**右侧两张卡片是演示标注**，不是产品界面，每一行都指向仓库里真实实现它的文件；**全部数值是合成的**（`docs/demo/synthetic_corpus.json`）——虚构文档号、占位 CAS 号、杜撰标准名，不含真实法规结论、上一家公司语料、生产日志、凭据或流量数据，**也不是**任何性能或质量测量结果。复现命令 `python3 docs/demo/capture_demo.py`（说明见 [docs/demo/README.md](docs/demo/README.md)）；本仓库**没有**公网 Demo 与演示视频，因此没有 Demo 链接可点。
 

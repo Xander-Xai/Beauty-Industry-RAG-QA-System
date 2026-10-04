@@ -190,6 +190,14 @@ def step_chip(number: str) -> str:
     return f'<span class="chip">{number}</span>'
 
 
+def mask_note(identity: dict) -> str:
+    """`role_mask=0x04 · dept_mask=0x04`, straight from the corpus."""
+    return (
+        f'role_mask=0x{int(identity["role_mask"]):02x}'
+        f' · dept_mask=0x{int(identity["dept_mask"]):02x}'
+    )
+
+
 def render_document_card(doc: dict, *, primary: bool) -> str:
     lines = doc["excerpt"].splitlines()
     truncated = False
@@ -206,9 +214,13 @@ def render_document_card(doc: dict, *, primary: bool) -> str:
             body.append(escaped)
     if truncated:
         body.append("…")
+    # The permission masks are printed on the card because they are the reason
+    # the second identity in the left-hand panel is refused: a reader can check
+    # the refusal against the masks instead of taking the caption's word.
     meta = (
         f'<div class="doc-meta">{html.escape(doc["kind"])} · status={doc["status"]}'
-        f" · epoch={doc['knowledge_version_epoch']}</div>"
+        f" · epoch={doc['knowledge_version_epoch']}"
+        f" · role_mask=0x{int(doc['role_mask']):02x} · dept_mask=0x{int(doc['dept_mask']):02x}</div>"
     )
     stores = f'<div class="doc-stores">离线写入：{html.escape(doc["stores"])}</div>' if primary else ""
     joined = "\n".join(body)
@@ -242,6 +254,11 @@ def build_walkthrough_html(corpus: dict, app_png_b64: str, font_css: str) -> str
     trace = corpus["trace"]
     metadata = corpus["auth_metadata"]
     query_text = corpus["query"]["text"]
+    role_options = metadata["rbac"]["role_options"]
+    # Turn 1 runs as role_options[0] (the UI default), turn 2 as
+    # role_options[3]. `drive_frontend` selects the same two indices, and
+    # tests/test_demo_corpus_rbac_consistency.py pins what each one may read.
+    privileged, restricted = role_options[0], role_options[3]
 
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -327,19 +344,23 @@ mark {{ background: #fef0c7; border-radius: 3px; padding: 0 2px; }}
     <figure class="shot">
       <img src="data:image/png;base64,{app_png_b64}" alt="真实前端界面：用户提问、带引用的回答、引用证据标签">
       <figcaption>{step_chip("123")} <b>真实前端界面（本仓库渲染）</b>：
-        第一问以 <code>{html.escape(metadata["rbac"]["role_options"][0]["label"])}</code> 身份提问
+        第一问以 <code>{html.escape(privileged["label"])}</code> 身份提问
         「{html.escape(query_text[:22])}…」→ 回答用〔证据N〕标注引用，证据标签可点击
         <code>GET /api/media/&#123;doc_id&#125;</code>（服务端二次鉴权 + 审计）。
-        <br>{step_chip("5")} 同一问题切到 <code>{html.escape(metadata["rbac"]["role_options"][3]["label"])}</code>
-        （右上角身份选择器，截图结束时所选）→ 权限过滤后证据为空，Evidence Gate 拒答：
-        界面不给出无出处的答案。
+        <br>{step_chip("5")} 同一问题切到 <code>{html.escape(restricted["label"])}</code>
+        （右上角身份选择器，截图结束时所选）→ 按 ④ 的掩码逐份过滤后证据为空，
+        Evidence Gate 拒答：界面不给出无出处的答案。
+        <br>身份掩码：{html.escape(privileged["label"])}
+        <code>{html.escape(mask_note(privileged))}</code> ·
+        {html.escape(restricted["label"])}
+        <code>{html.escape(mask_note(restricted))}</code>
       </figcaption>
     </figure>
 
     <div class="cards">
       <section class="card">
         <h3>{step_chip("4")} 来源文档（合成示例）</h3>
-        <div class="note">命中的两份示例文档；高亮行即回答引用的条款。</div>
+        <div class="note">命中的两份示例文档，卡片上的 role_mask / dept_mask 即其访问边界；高亮行是回答引用的条款。</div>
         {render_document_card(docs[0], primary=True)}
         {render_document_card(docs[1], primary=False)}
       </section>

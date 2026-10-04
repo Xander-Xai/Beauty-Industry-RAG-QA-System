@@ -30,8 +30,8 @@
       "kind": "合成示例文档 · 1 块",
       "status": "active",
       "knowledge_version_epoch": "demo-epoch-0007",
-      "role_mask": 2,
-      "dept_mask": 2,
+      "role_mask": 4,
+      "dept_mask": 4,
       "excerpt": "示例 INCI 名: DEMO-HUM-7 · 示例 CAS: 000-00-0（占位）· 示例用途: 保湿。\n示例最大用量 0.90% (w/w) · 示例标签阈值 0.50% (w/w) · 示例状态 active · 示例 epoch demo-epoch-0007。\n本卡片仅供演示，不对应任何真实原料或真实限量。",
       "highlight": "示例最大用量",
       "stores": "Elasticsearch（正文 + mapping）· Qdrant（BGE 文本向量 + 元数据）"
@@ -167,6 +167,5 @@
       }
     ]
   },
-  "_privileged_role_mask": 4,
   "answer_refusal_markdown": "**拒答**：当前身份没有可访问的相关文档，权限过滤后证据为空，按 Evidence Gate 规则（综合得分 < 0.55）不生成答案。\n\n检索确实执行了，但候选在融合前的文档级权限过滤中被全部丢弃——身份可信不等于有权查看这些文档。建议切换到具备该主题访问权的角色。\n\n*（DEMO：合成数据演示。）*"
 }
