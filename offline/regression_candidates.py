@@ -251,9 +251,20 @@ class RegressionCandidateStore:
         self._connection.close()
 
     def add(self, candidate: RegressionCandidate) -> bool:
-        """Insert a candidate; return False when the case already exists."""
-        if candidate.review_status not in CANDIDATE_REVIEW_STATUSES:
-            raise ValueError(f"invalid review_status {candidate.review_status!r}")
+        """Insert a new candidate; return False when the case already exists.
+
+        Only ``PENDING_REVIEW`` may be inserted. A terminal status is refused
+        here on purpose: ``export_regression_dataset`` publishes every
+        ``accepted`` row, so accepting one at insert time would let a caller
+        reach the dataset without ever calling :meth:`set_review_status`, which
+        is the only place the human-review gate and its expectation check live.
+        Approval has to travel through that method.
+        """
+        if candidate.review_status != PENDING_REVIEW:
+            raise ValueError(
+                f"new candidates must start as {PENDING_REVIEW}, got {candidate.review_status!r}; "
+                f"use set_review_status() to approve or reject"
+            )
         created_at = candidate.created_at or datetime.now(timezone.utc).isoformat()
         try:
             with self._connection:
@@ -335,13 +346,18 @@ class RegressionCandidateStore:
         ``accepted`` is refused unless the candidate already carries a
         human-authored behaviour and at least one expected evidence item, so the
         approval step cannot ratify a guess.
+
+        ``reviewed_at`` is stamped on every transition rather than preserved
+        from the first one: a candidate that was rejected and later accepted
+        must record when it was accepted, or the exported case attributes the
+        approval to the rejection.
         """
         if status not in CANDIDATE_REVIEW_STATUSES:
             raise ValueError(f"invalid review_status {status!r}")
         candidate = self.require(case_id)
         if status == ACCEPTED:
             _assert_has_expectations(candidate)
-        reviewed_at = candidate.reviewed_at or datetime.now(timezone.utc).isoformat()
+        reviewed_at = datetime.now(timezone.utc).isoformat()
         with self._connection:
             self._connection.execute(
                 """

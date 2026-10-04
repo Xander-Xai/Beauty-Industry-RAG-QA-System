@@ -3247,7 +3247,10 @@ _FRONTEND_BUILD_DENIAL_PATTERNS = [
 # pending states cannot match. Negation-aware via _PROHIBITION_FRAME_RE and
 # _NO_EVIDENCE_NEGATION_RE, so "never say the frontend is validated end-to-end"
 # and "end-to-end runtime integration is PENDING" both stay allowed.
-_FRONTEND_BUILD_ESCALATION_PATTERNS = [
+# Runtime claims, gated on a committed artifact: a browser run against the real
+# backend can establish end-to-end integration (C), so these relax once such an
+# artifact exists.
+_FRONTEND_RUNTIME_ESCALATION_PATTERNS = [
     r"(?:frontend|前端)[^\n]{0,40}?(?:build|构建|编译)[^\n]{0,40}?(?:end[-\s]to[-\s]end|e2e|端到端)\s*"
     r"(?:validat|verif|tested|验证|测试|通过)",
     r"(?:end[-\s]to[-\s]end|e2e|端到端)[^\n]{0,30}?(?:validat|verif|验证)[^\n]{0,40}?(?:frontend|前端)",
@@ -3262,11 +3265,23 @@ _FRONTEND_BUILD_ESCALATION_PATTERNS = [
     r"[^\n]{0,20}?(?:validat|verif|验证)[^\n]{0,20}?(?:frontend|前端)",
     r"(?:real\s+backend|真实\s*后端|monolith)[^\n]{0,40}?(?:validat|verif|验证)"
     r"[^\n]{0,20}?(?:frontend|前端)",
+    r"(?:CI|ci)\s*(?:frontend\s*|前端\s*)?(?:构建|build)[^\n]{0,30}?(?:等于|即为|proves?|means)\s*[^\n]{0,20}?"
+    r"(?:端到端\s*验证|end[-\s]to[-\s]end\s+(?:validat|verif))",
+]
+
+# Deployment claims, never gated on any artifact. No run recorded in a
+# repository can establish that a system is deployed to production, so these
+# checks stay active unconditionally. Gating them on the E2E artifact would let
+# a single browser-run report switch off the production-deployment overclaim
+# check, which is precisely the framework/result conflation this guard exists to
+# prevent: (C) and (D) are separate claims and an artifact for (C) is not
+# evidence for (D).
+_FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS = [
     r"(?:frontend|前端)[^\n]{0,20}?(?:is\s+|已)?(?:deployed|deployed\s+to|部署)[^\n]{0,20}?"
     r"(?:production|生产)",
     r"(?:frontend|前端)[^\n]{0,20}?(?:production|生产)[^\n]{0,10}?(?:deployed|部署)",
     r"(?:CI|ci)\s*(?:frontend\s*|前端\s*)?(?:构建|build)[^\n]{0,30}?(?:等于|即为|proves?|means)\s*[^\n]{0,20}?"
-    r"(?:production\s+validated|生产\s*验证|端到端\s*验证|end[-\s]to[-\s]end\s+(?:validat|verif))",
+    r"(?:production\s+validated|生产\s*验证)",
 ]
 
 # The one committed browser-driven frontend run is the demo capture, and it is
@@ -3448,12 +3463,24 @@ def check_frontend_evidence_classification(errors: list[str]) -> None:
                 mode="denial",
             )
 
+        # Deployment overclaim is checked unconditionally: no repository artifact
+        # can establish a production deployment, so this never relaxes.
+        _scan_frontend_patterns(
+            name,
+            text,
+            _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+            "presents the frontend as deployed to production; deployment state lives outside this "
+            "repository and no committed artifact can establish it",
+            errors,
+            mode="escalation",
+        )
+
         if not has_e2e_artifact:
             _scan_frontend_patterns(
                 name,
                 text,
-                _FRONTEND_BUILD_ESCALATION_PATTERNS,
-                f"presents frontend CI build evidence as end-to-end or deployment evidence, but no "
+                _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
+                f"presents frontend CI build evidence as end-to-end runtime evidence, but no "
                 f"committed artifact matching {FRONTEND_E2E_ARTIFACT_GLOB} exists",
                 errors,
                 mode="escalation",
@@ -3481,10 +3508,15 @@ _FRONTEND_LEVEL_QUALIFIER_RE = re.compile(r"`([A-Z][A-Z0-9_]+)`\s*(?:\(([^)]*)\)
 #: Qualifier wording that names the CI build claim, in either language.
 _FRONTEND_BUILD_QUALIFIER_RE = re.compile(r"\bbuild\b|\bci\b|构建", re.IGNORECASE)
 
-#: Qualifier wording that names the runtime-integration or deployment claims.
+#: Qualifier wording that names the runtime-integration claim.
 _FRONTEND_RUNTIME_QUALIFIER_RE = re.compile(
-    r"end[-\s]to[-\s]end|\be2e\b|runtime|integration|deploy|端到端|运行|部署", re.IGNORECASE
+    r"end[-\s]to[-\s]end|\be2e\b|runtime|integration|端到端|运行", re.IGNORECASE
 )
+
+#: Qualifier wording that names the deployment claim. Kept separate from the
+#: runtime qualifier because deployment is gated differently: an E2E artifact can
+#: close (C) but never (D).
+_FRONTEND_DEPLOYMENT_QUALIFIER_RE = re.compile(r"deploy|部署", re.IGNORECASE)
 
 
 def _frontend_level_qualifiers(status: str, level: str) -> list[str]:
@@ -3513,10 +3545,21 @@ def frontend_audit_classification_errors(status: str, *, builds: bool, has_e2e_a
         pending = _frontend_level_qualifiers(status, "PENDING")
         if not any(_FRONTEND_RUNTIME_QUALIFIER_RE.search(q) for q in pending):
             problems.append(
-                "end-to-end runtime integration and production deployment must stay PENDING, with a "
-                f"qualifier naming them, while no artifact matching {FRONTEND_E2E_ARTIFACT_GLOB} is "
-                f"committed; got {status!r}"
+                "end-to-end runtime integration must stay PENDING, with a qualifier naming it, while no "
+                f"artifact matching {FRONTEND_E2E_ARTIFACT_GLOB} is committed; got {status!r}"
             )
+
+    # Deployment is required to stay PENDING unconditionally. It is *not* gated on
+    # the E2E artifact: a browser-against-backend run establishes runtime
+    # integration, never a production deployment, so letting an artifact close
+    # this would silently merge claims (C) and (D).
+    pending = _frontend_level_qualifiers(status, "PENDING")
+    if not any(_FRONTEND_DEPLOYMENT_QUALIFIER_RE.search(q) for q in pending):
+        problems.append(
+            f"production deployment must stay PENDING with a qualifier naming it; no committed artifact "
+            f"can establish a deployment, so this does not relax with {FRONTEND_E2E_ARTIFACT_GLOB}; "
+            f"got {status!r}"
+        )
     return problems
 
 

@@ -4218,12 +4218,18 @@ def test_demoting_the_ci_build_to_pending_is_rejected():
 
 
 def test_end_to_end_runtime_upgrade_requires_a_committed_artifact():
-    """`REPO_VERIFIED` for runtime integration is only legal once an artifact exists."""
+    """Runtime may upgrade with an artifact; deployment never may.
+
+    The second half is the correction for the review finding: an earlier version
+    of this test asserted that *both* claims could upgrade together once an
+    artifact existed, which is exactly the (C)/(D) conflation the guard exists
+    to prevent.
+    """
     from scripts.check_repo_consistency import frontend_audit_classification_errors as classify
 
     without_artifact = classify(
         "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
-        "`REPO_VERIFIED` (C end-to-end runtime)",
+        "`REPO_VERIFIED` (C end-to-end runtime integration) / `PENDING` (D production deployment)",
         builds=True,
         has_e2e_artifact=False,
     )
@@ -4232,7 +4238,7 @@ def test_end_to_end_runtime_upgrade_requires_a_committed_artifact():
     assert (
         classify(
             "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
-            "`REPO_VERIFIED` (C end-to-end runtime)",
+            "`REPO_VERIFIED` (C end-to-end runtime integration) / `PENDING` (D production deployment)",
             builds=True,
             has_e2e_artifact=True,
         )
@@ -4280,21 +4286,23 @@ def test_the_corrected_row_classifies_cleanly():
 def test_ci_build_is_never_escalated_to_e2e_or_deployment():
     """The overclaims requirement 5 forbids, in both languages."""
     from scripts.check_repo_consistency import (
-        _FRONTEND_BUILD_ESCALATION_PATTERNS,
+        _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+        _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
         _check_frontend_runtime_cooccurrence,
         _scan_frontend_patterns,
     )
 
     def flag(text: str) -> list[str]:
         errors: list[str] = []
-        _scan_frontend_patterns(
-            "doc.md",
-            text,
-            _FRONTEND_BUILD_ESCALATION_PATTERNS,
-            "escalates a CI build to end-to-end or deployment evidence",
-            errors,
-            mode="escalation",
-        )
+        for patterns in (_FRONTEND_RUNTIME_ESCALATION_PATTERNS, _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS):
+            _scan_frontend_patterns(
+                "doc.md",
+                text,
+                patterns,
+                "escalates a CI build to end-to-end or deployment evidence",
+                errors,
+                mode="escalation",
+            )
         _check_frontend_runtime_cooccurrence("doc.md", text, errors)
         return errors
 
@@ -4315,7 +4323,7 @@ def test_ci_build_is_never_escalated_to_e2e_or_deployment():
 
 def test_states_that_runtime_and_deployment_are_pending_are_allowed():
     """The guard must not fire on the corrected, honest documentation."""
-    from scripts.check_repo_consistency import _FRONTEND_BUILD_ESCALATION_PATTERNS, _scan_frontend_patterns
+    from scripts.check_repo_consistency import _FRONTEND_RUNTIME_ESCALATION_PATTERNS, _scan_frontend_patterns
 
     allowed = [
         "End-to-end runtime integration is PENDING; no browser run against the real backend exists.",
@@ -4329,7 +4337,7 @@ def test_states_that_runtime_and_deployment_are_pending_are_allowed():
         _scan_frontend_patterns(
             "doc.md",
             line,
-            _FRONTEND_BUILD_ESCALATION_PATTERNS,
+            _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
             "escalates a CI build to end-to-end or deployment evidence",
             errors,
             mode="escalation",
@@ -4460,3 +4468,149 @@ def test_a_deleted_plan_file_reference_now_fails_the_path_check():
 
     assert any("does not exist" in error for error in errors), errors
     assert not probe.exists()
+
+
+# ── Review findings on PR #34 ────────────────────────────────────────────────
+#
+# An automated reviewer raised three findings against this PR. Two were real
+# defects in code the PR itself introduced; the tests below pin both so they
+# cannot regress.
+
+
+def test_a_candidate_cannot_be_inserted_pre_approved():
+    """P1: `add()` accepted a terminal status, bypassing the review gate.
+
+    `export_regression_dataset` publishes every `accepted` row, so inserting one
+    with `review_status="accepted"` reached the dataset without ever calling
+    `set_review_status` — the only place the human gate and its expectation
+    check live. That is exactly the guarantee the pipeline claims to provide.
+    """
+    from offline.regression_candidates import (
+        ACCEPTED,
+        PENDING_REVIEW,
+        REJECTED,
+        RegressionCandidate,
+        RegressionCandidateStore,
+    )
+
+    store = RegressionCandidateStore(":memory:")
+    try:
+        for status in (ACCEPTED, REJECTED):
+            candidate = RegressionCandidate(
+                case_id=f"c-{status}",
+                source_feedback_id="f1",
+                question="q",
+                expected_behaviour="must cite the ingredient list",
+                expected_evidence=("doc-1",),
+                review_status=status,
+            )
+            with pytest.raises(ValueError, match="set_review_status"):
+                store.add(candidate)
+            # And nothing reached the store, so nothing can be exported.
+            assert store.count(status) == 0
+
+        # The legitimate path still works.
+        ok = RegressionCandidate(
+            case_id="c-ok",
+            source_feedback_id="f1",
+            question="q",
+            expected_behaviour="must cite the ingredient list",
+            expected_evidence=("doc-1",),
+            review_status=PENDING_REVIEW,
+        )
+        assert store.add(ok) is True
+    finally:
+        store.close()
+
+
+def test_each_review_transition_records_its_own_timestamp():
+    """P2: `reviewed_at or now` preserved the first decision's time.
+
+    A candidate rejected and later accepted would attribute the approval to the
+    rejection, corrupting the review audit trail.
+    """
+    from offline.regression_candidates import ACCEPTED, REJECTED, RegressionCandidate, RegressionCandidateStore
+
+    store = RegressionCandidateStore(":memory:")
+    try:
+        store.add(
+            RegressionCandidate(
+                case_id="c1",
+                source_feedback_id="f1",
+                question="q",
+                expected_behaviour="must cite the ingredient list",
+                expected_evidence=("doc-1",),
+            )
+        )
+        first = store.set_review_status("c1", REJECTED, note="too vague")
+        rejected_at = first.reviewed_at
+        assert rejected_at
+
+        second = store.set_review_status("c1", ACCEPTED, reviewer="alice")
+        assert second.reviewed_at != rejected_at, "acceptance must not reuse the rejection timestamp"
+        assert second.reviewed_by == "alice"
+        assert second.review_status == ACCEPTED
+    finally:
+        store.close()
+
+
+def test_deployment_overclaim_checks_do_not_relax_with_an_e2e_artifact():
+    """P2: gating deployment checks on the E2E artifact merged claims (C) and (D).
+
+    A browser-against-real-backend run can establish runtime integration. It can
+    never establish a production deployment. So the deployment patterns must
+    stay active even when an artifact exists.
+    """
+    from scripts.check_repo_consistency import (
+        _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+        _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
+        _scan_frontend_patterns,
+    )
+
+    deployment = [
+        "The frontend is deployed to production.",
+        "CI frontend build proves production validated deployment.",
+        "前端已在生产部署。",
+    ]
+    for line in deployment:
+        errors: list[str] = []
+        _scan_frontend_patterns(
+            "doc.md",
+            line,
+            _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+            "presents the frontend as deployed to production",
+            errors,
+            mode="escalation",
+        )
+        assert errors, f"deployment overclaim not flagged: {line}"
+
+    # The runtime patterns are a separate set, so an artifact can relax them
+    # without touching deployment.
+    assert _FRONTEND_RUNTIME_ESCALATION_PATTERNS is not _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS
+    assert not set(_FRONTEND_RUNTIME_ESCALATION_PATTERNS) & set(_FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS)
+
+
+def test_audit_row_must_keep_deployment_pending_even_with_an_artifact():
+    """The classifier had the same conflation as the scanner."""
+    from scripts.check_repo_consistency import frontend_audit_classification_errors as classify
+
+    full = (
+        "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
+        "`PENDING` (C end-to-end runtime integration) / `PENDING` (D production deployment)"
+    )
+    assert classify(full, builds=True, has_e2e_artifact=False) == []
+
+    # Runtime may upgrade once an artifact exists...
+    artifact_backed = (
+        "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
+        "`REPO_VERIFIED` (C end-to-end runtime integration) / `PENDING` (D production deployment)"
+    )
+    assert classify(artifact_backed, builds=True, has_e2e_artifact=True) == []
+
+    # ...but deployment may not, even with an artifact.
+    assert classify(
+        "`REPO_VERIFIED` (A client) / `REPO_VERIFIED` (B CI build gate) / "
+        "`REPO_VERIFIED` (C end-to-end runtime integration) / `REPO_VERIFIED` (D production deployment)",
+        builds=True,
+        has_e2e_artifact=True,
+    ), "an E2E artifact must never license a production-deployment claim"
