@@ -1,0 +1,39 @@
+# Non-secret runtime configuration for the API gateway.
+#
+# Only variables that the application actually reads are set here. The list was
+# verified against `os.environ.get(...)` call sites in api/, core/, common/ and
+# retrieval/; nothing is listed speculatively.
+#
+# Secrets are never placed in this file. See secret.example.yaml.
+#
+# Evidence level: REPO_VERIFIED (static manifest validation only).
+# Applying this to a real cluster is PENDING.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-api-config
+  namespace: beauty-rag
+  labels:
+    app.kubernetes.io/name: beauty-industry-rag-qa
+    app.kubernetes.io/component: api
+data:
+  # Dependency addresses. Values mirror the docker-compose service names so the
+  # two deployment forms stay comparable.
+  QDRANT_HOST: "qdrant"
+  REDIS_CACHE_HOST: "redis"
+  REDIS_CACHE_PORT: "6379"
+  # Cache database index; matches the compose default.
+  REDIS_CACHE_DB: "0"
+  # Same value as docker-compose.cpu.yml. Production overrides this explicitly.
+  DEPLOYMENT_MODE: "development"
+  # Elasticsearch has no dedicated env override in the application; its host and
+  # index come from config.json (`elasticsearch.host` / `elasticsearch.index`),
+  # which already points at the in-cluster service name. It is therefore NOT
+  # duplicated here.
+  #
+  # Not set here on purpose:
+  #   CONFIG_PATH      - the image already ships the canonical config.json
+  #   CORS_ORIGINS     - a wildcard default is a development-only posture and
+  #                      must be set explicitly per environment
+  #   TRUSTED_PROXIES  - only meaningful behind a load balancer that sets
+  #                      X-Forwarded-For; empty means do not trust it

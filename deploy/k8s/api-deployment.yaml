@@ -1,0 +1,131 @@
+# Minimal Kubernetes deployment contract for the RAG QA API gateway.
+#
+# Scope: exactly one workload (the API gateway) plus its Service, ConfigMap and
+# Secret reference. vLLM inference, Qdrant, Elasticsearch, Redis and MinIO are
+# deliberately NOT included - the gateway expects them to exist as in-cluster
+# services, matching the docker-compose topology.
+#
+# Probe design note (verified against the running application):
+#   GET /api/health returns HTTP 200 even when Redis, Qdrant and Elasticsearch
+#   are ALL unreachable, with body {"status": "degraded", ...}. A readiness
+#   httpGet probe on /api/health therefore cannot fail on dependency loss.
+#   Consequences, both intentional:
+#     - livenessProbe uses tcpSocket so a dependency outage can never trigger a
+#       restart loop of the gateway itself;
+#     - readinessProbe uses httpGet /api/health as a liveness-level gate only.
+#       Dependency health is surfaced through the `status` field, /api/metrics
+#       and the Prometheus alert rules - not through the probe exit code.
+#   GET /api/metrics requires authentication (401 without a token), so it is
+#   NOT used as a probe endpoint.
+#
+# Evidence level: REPO_VERIFIED - meaning only that these manifests pass the
+# deterministic static checks in tests/deploy/test_k8s_manifests.py.
+# No Kubernetes cluster has applied, admitted, rolled out or served this
+# manifest. Real cluster deployment is PENDING.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-api
+  namespace: beauty-rag
+  labels:
+    app.kubernetes.io/name: beauty-industry-rag-qa
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: beauty-industry-rag-qa
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: beauty-industry-rag-qa
+        app.kubernetes.io/component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # Image tag policy: pin an explicit version. Do not use a floating tag.
+          # This repository builds the image locally from the Dockerfile at the
+          # repository root; no published image exists, so the operator must
+          # build and push to their own registry and substitute the reference.
+          image: ghcr.io/example/beauty-industry-rag-qa:2.3.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: rag-api-config
+            # Secret values are referenced, never inlined.
+            - secretRef:
+                name: rag-api-secrets
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+      # No volume mount is declared on purpose. docker-compose.yml bind-mounts
+      # ./models into the container, but this repository ships no model weights:
+      # every real weight is PENDING (see issues #8 and #12). Declaring a
+      # PersistentVolumeClaim here would reference storage that this contract
+      # does not define, and a Pod whose PVC is missing never schedules.
+      # When real weights are provisioned, add the mount together with the
+      # storage that backs it.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-api
+  namespace: beauty-rag
+  labels:
+    app.kubernetes.io/name: beauty-industry-rag-qa
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  # Must stay a subset of the Deployment pod template labels.
+  selector:
+    app.kubernetes.io/name: beauty-industry-rag-qa
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
