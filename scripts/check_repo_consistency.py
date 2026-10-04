@@ -3085,11 +3085,17 @@ _SLO_ROW_RE = re.compile(r"^\|\s*SLO-(\d+)\s*\|", re.MULTILINE)
 #: one drifts, not to police one canonical sentence. Each alternative names its
 #: own group (``re`` forbids reusing one name), and exactly one is set per match.
 _SLO_COUNT_RE = re.compile(
-    # 百 and 千 are matched so the guard *sees* a count it cannot parse and
+    # 百 千 and 零 are matched so the guard *sees* a count it cannot parse and
     # reports "cannot verify", rather than not matching and silently ignoring
     # the claim. A guard that shrugs at what it does not understand is not one.
-    r"(?P<lead>[一二两三四五六七八九十百千]+|\d+)\s*个\s*SLO\s*目标"
-    r"|SLO\s*目标\s*[（(]\s*(?P<trail>[一二两三四五六七八九十百千]+|\d+)\s*个"
+    #
+    # The lookbehind is load-bearing for the same reason the English one is:
+    # Chinese numerals are contiguous ideographs, so `一百零五个` has no
+    # separator to stop the class matching its `五个` tail — without the guard,
+    # a claim of 105 would be read as 5 and quietly pass. 零 is what makes that
+    # particular tail reachable, so it is in the class.
+    r"(?<![\u4e00-\u9fff])(?P<lead>[一二两三四五六七八九十百千零]+|\d+)\s*个\s*SLO\s*目标"
+    r"|SLO\s*目标\s*[（(]\s*(?<![\u4e00-\u9fff])(?P<trail>[一二两三四五六七八九十百千零]+|\d+)\s*个"
     # The compound has to sit *inside* the group: capturing only the first word
     # made "twenty-one SLO objectives" parse as 20. The lookbehind keeps the
     # match from starting *inside* one instead — "twenty-one" has a word
@@ -3200,11 +3206,12 @@ def _parse_stated_count(token: str) -> int | None:
         if tail in ("hundred", "thousand"):
             return _EN_COUNT_WORDS[head] * _EN_COUNT_WORDS[tail]
         # Two words add only when the first is a *tens* word: "twenty-one" and
-        # the unhyphenated "twenty one" are both 21. A unit never precedes
-        # another unit additively, so "one two" is not 3 — it is not a number,
-        # and the spaced form requires a tens word to be believed at all.
+        # the unhyphenated "twenty one" are both 21, and so is "forty-five". A
+        # unit never precedes another unit additively, so neither "one two" nor
+        # the hyphenated "two-three" is a number — they are typos, and reading
+        # them as 3 and 5 would let a mistake pass as a verified count.
         head_value = _EN_COUNT_WORDS[head]
-        if separator == "-" or head_value >= 20:
+        if head_value >= 20:
             return head_value + _EN_COUNT_WORDS[tail]
     return _EN_COUNT_WORDS.get(token)
 

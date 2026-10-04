@@ -3058,8 +3058,11 @@ def test_guard_fails_end_to_end_when_the_summary_count_drifts(tmp_path, monkeypa
         ("ninety-nine", 99),
         # Unhyphenated British spelling of the same compound.
         ("forty five", 45),
-        # A unit never precedes another unit additively, so "one two" is not 3.
+        # A unit never precedes another unit additively, so neither the spaced
+        # "one two" nor the hyphenated "two-three" is a number.
         ("two three", None),
+        ("two-three", None),
+        ("one-two", None),
         # ... except a scale word, which multiplies.
         ("five hundred", 500),
         ("two hundred", 200),
@@ -3323,7 +3326,7 @@ def test_a_malformed_chinese_numeral_returns_none_and_never_raises(token):
 
 @pytest.mark.parametrize(
     "token",
-    ["", "   ", "abc", "5x", "SLO", "-", "forty five hundred", "1-2-3", "one two"],
+    ["", "   ", "abc", "5x", "SLO", "-", "forty five hundred", "1-2-3", "one two", "two-three"],
 )
 def test_unparseable_count_tokens_return_none_rather_than_a_guess(token):
     """`None` makes the guard say "cannot verify". A wrong int would make it
@@ -3362,3 +3365,70 @@ def test_the_consistency_script_still_runs_with_a_malformed_count_in_a_document(
     errors: list[str] = []
     check_slo_objective_counts(errors, root=tmp_path)
     assert any("cannot verify" in error for error in errors), errors
+
+
+# ── the count token must be matched whole, not by its tail ──────────────
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        # Chinese numerals are contiguous ideographs, so the class could match
+        # `五个` inside `一百零五个` — reading a claim of 105 as 5, which passes
+        # when the runbook has five objectives.
+        ("一百零五个 SLO 目标", 5),
+        ("| SLO 目标（一百零五个） |", 5),
+        ("零五个 SLO 目标", 5),
+        ("一百零五个 SLO 目标", 100),
+    ],
+)
+def test_a_chinese_count_is_not_read_as_its_trailing_digits(claim, expected):
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=expected)
+    assert len(errors) == 1, (claim, errors)
+    assert "cannot verify" in errors[0], (claim, errors)
+
+
+@pytest.mark.parametrize("claim", ["十二个 SLO 目标", "| SLO 目标（十二个） |", "5 个 SLO 目标", "十一个 SLO 目标"])
+def test_the_whole_token_guard_does_not_break_the_counts_it_should_accept(claim):
+    """Anchoring the match must not cost the cases that genuinely work."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    stated = 11 if "十一" in claim else (12 if "十二" in claim else 5)
+    assert slo_count_errors("README.md", claim, stated) == []
+
+
+def test_a_hyphenated_unit_pair_is_a_typo_not_a_sum():
+    """`two-three` must not parse as 5, or a documentation typo passes as a
+    verified count — which is the opposite of what this parser is for."""
+    from scripts.check_repo_consistency import _parse_stated_count, slo_count_errors
+
+    assert _parse_stated_count("two-three") is None
+    assert _parse_stated_count("one-two") is None
+
+    errors = slo_count_errors("README.md", "two-three SLO objectives", expected=5)
+    assert len(errors) == 1
+    assert "cannot verify" in errors[0], errors
+
+
+@pytest.mark.parametrize("token", ["二十", "二十一", "二十二", "三十", "九十"])
+def test_the_tens_head_rule_still_accepts_every_real_compound(token):
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is not None
+
+
+def test_a_numeral_with_unrecognised_characters_is_never_read_as_its_tail():
+    """Pins the CJK lookbehind specifically.
+
+    `零` in the character class is what makes 一百零五 parse as one token. The
+    lookbehind is the other half: without it, any numeral whose leading
+    characters fall outside the class would still match its tail, so a claim of
+    105 could be certified as a statement of 5. With it the claim is not matched
+    at all — unchecked, which is the honest outcome, rather than wrong.
+    """
+    from scripts.check_repo_consistency import _SLO_COUNT_RE
+
+    claim = "贰佰零五个 SLO 目标"
+    matches = [match.group("lead") for match in _SLO_COUNT_RE.finditer(claim)]
+
+    assert matches == [], f"the tail of an unrecognised numeral was matched as a count: {matches}"
