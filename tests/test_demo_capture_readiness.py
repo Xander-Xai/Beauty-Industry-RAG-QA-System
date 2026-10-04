@@ -407,34 +407,72 @@ def test_demo_readme_states_the_port_guarantee():
 
 
 # ── the whole process group goes away, not just the child ───────────────
-@pytest.fixture
-def spawner():
-    """A child that itself spawns a grandchild holding a port, like `npm run dev`."""
-    script = (
-        "import subprocess, sys, time\n"
-        "grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
-        "print(grandchild.pid, flush=True)\n"
-        "time.sleep(120)\n"
-    )
-    process = subprocess.Popen(
-        [sys.executable, "-c", script],
-        stdout=subprocess.PIPE,
-        start_new_session=True,
-        text=True,
-    )
-    grandchild_pid = int(process.stdout.readline().strip())
+# Written to files rather than nested into one another with `repr()`: two levels
+# of quoting inside `python -c` is where this gets quietly wrong.
+_HOLD_PORT_SOURCE = """\
+import socket
+import sys
+
+sock = socket.socket()
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(("127.0.0.1", int(sys.argv[1])))
+sock.listen(8)
+print("listening", flush=True)
+
+# Accept and close, the way a real server does. Without this the listen backlog
+# fills after the first probe and every later probe is refused — which makes a
+# live listener look like a released port.
+sock.settimeout(1.0)
+while True:
     try:
-        yield process, grandchild_pid
+        conn, _ = sock.accept()
+    except OSError:
+        continue
+    conn.close()
+"""
+
+_SPAWN_CHILD_SOURCE = """\
+import subprocess
+import sys
+import time
+
+grandchild = subprocess.Popen([sys.executable, sys.argv[2], sys.argv[3]])
+print(grandchild.pid, flush=True)
+time.sleep(120)
+"""
+
+
+def _port_is_busy(port: int) -> bool:
+    """Whether something is accepting connections on ``port``."""
+    probe = socket()
+    probe.settimeout(2)
+    try:
+        probe.connect(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
     finally:
-        for pid in (grandchild_pid, process.pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        process.stdout.close()
+        probe.close()
 
 
-def _is_running(pid: int) -> bool:
+def _is_executing(pid: int) -> bool:
+    """Whether ``pid`` is still running *and* is not a zombie.
+
+    `os.kill(pid, 0)` succeeds for a zombie, so on a host whose PID 1 does not
+    promptly reap orphans — a container, typically — a correctly killed
+    grandchild still answers, and a test waiting for it to vanish spins until it
+    times out and then fails over a process that is neither running nor holding
+    anything. Zombie state is read from procfs where available, and `Z` counts
+    as stopped.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            # State follows `comm`, which is parenthesised and may itself contain
+            # spaces, so split after the final ")".
+            fields = handle.read().rsplit(")", 1)[1].split()
+        return fields[0] != "Z"
+    except (FileNotFoundError, IndexError, OSError):
+        pass
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
@@ -442,24 +480,78 @@ def _is_running(pid: int) -> bool:
     return True
 
 
-def test_stopping_the_child_stops_the_grandchild(spawner):
-    """The regression: `terminate()` on the `npm` Popen left Vite alive and
-    still listening on `--web-port`, so the next run failed the free-port check
-    and every run leaked a process.
+@pytest.fixture
+def spawner(tmp_path):
+    """A child that spawns a grandchild holding a port, like `npm run dev` -> Vite.
 
-    A grandchild stands in for Vite: it is a separate process, so only a
-    process-group signal can reach it.
+    Yields ``(child, grandchild_pid, port)``. The grandchild is a real listener,
+    so the teardown can be asserted against the released port — which is the
+    actual failure — and against process state separately.
     """
-    process, grandchild_pid = spawner
-    assert _is_running(grandchild_pid), "precondition: the grandchild is running"
+    port = _free_port()
+    holder = tmp_path / "holder.py"
+    holder.write_text(_HOLD_PORT_SOURCE, encoding="utf-8")
+    spawner_source = tmp_path / "spawner.py"
+    spawner_source.write_text(_SPAWN_CHILD_SOURCE, encoding="utf-8")
 
-    CAPTURE.stop_server(process)
+    child = subprocess.Popen(
+        [sys.executable, str(spawner_source), sys.executable, str(holder), str(port)],
+        stdout=subprocess.PIPE,
+        start_new_session=True,
+        text=True,
+    )
+    grandchild_pid = int(child.stdout.readline().strip())
 
-    assert process.poll() is not None, "the child was not reaped"
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and _is_running(grandchild_pid):
+    # Wait until the grandchild is really listening, so the test cannot pass by
+    # accident before it ever held anything.
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and not _port_is_busy(port):
         time.sleep(0.1)
-    assert not _is_running(grandchild_pid), "the grandchild survived the group teardown"
+    assert _port_is_busy(port), "the grandchild never started listening"
+
+    try:
+        yield child, grandchild_pid, port
+    finally:
+        for pid in (grandchild_pid, child.pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        child.stdout.close()
+
+
+def test_stopping_the_child_releases_the_grandchild_port(spawner):
+    """The regression: `terminate()` on the `npm` Popen left Vite alive and still
+    listening on `--web-port`, so the next run failed the free-port check and
+    every run leaked a process.
+
+    The released port is the assertion rather than the process state, because
+    the released port *is* the failure. A zombie holds nothing, so a state-only
+    assertion would be asserting something weaker than the bug it guards.
+    """
+    child, _grandchild_pid, port = spawner
+    assert _port_is_busy(port), "precondition: the grandchild is listening"
+
+    CAPTURE.stop_server(child)
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and _port_is_busy(port):
+        time.sleep(0.1)
+    assert not _port_is_busy(port), "the grandchild still holds the port after the group teardown"
+    assert child.poll() is not None, "the child was not reaped"
+
+
+def test_stopping_the_child_stops_the_grandchild(spawner):
+    """The same teardown, checked at the process level as well."""
+    child, grandchild_pid, _port = spawner
+    assert _is_executing(grandchild_pid), "precondition: the grandchild is running"
+
+    CAPTURE.stop_server(child)
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and _is_executing(grandchild_pid):
+        time.sleep(0.1)
+    assert not _is_executing(grandchild_pid), "the grandchild survived the group teardown"
 
 
 def test_stopping_an_already_dead_process_is_a_no_op():

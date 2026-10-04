@@ -95,7 +95,7 @@ Runtime version `2.3.0`（`config.json` → `system.version`）。CI 配置见 `
 
 | 口径 | 事实 |
 |---|---|
-| **仓库规模（可复核）** | 246 个 tracked Python 文件 / 64,394 行；86 个定义了测试的测试文件、1,656 个 `def test_` 函数，`pytest --collect-only` 展开参数化后共 **1,968 个用例**；CI 覆盖 Python 3.10 与 3.11 |
+| **仓库规模（可复核）** | 246 个 tracked Python 文件 / 64,486 行；86 个定义了测试的测试文件、1,657 个 `def test_` 函数，`pytest --collect-only` 展开参数化后共 **1,969 个用例**；CI 覆盖 Python 3.10 与 3.11 |
 | **已实现且有测试覆盖**（`REPO_VERIFIED`） | FastAPI 主链路、离线管线全流程、加权 RRF、两级重排、双 Gate、4B/14B 路由契约、RS256 认证、uint32 RBAC、检索信任边界、指标端点、结构化审计、性能产物**框架**、告警规则、Grafana JSON、SLO/Runbook 文档、OTLP exporter 实现、检索 benchmark **框架** |
 | **框架 ≠ 结果** | 检索 benchmark（Recall@1/3/5/10、HitRate@1/3/5/10、MRR@10、NDCG@10）与性能产物七文件契约都是 `REPO_VERIFIED`（框架）/ `PENDING`（结果）——仓库内**没有任何可复现的真实 benchmark artifact**，因此全仓库不引用任何检索指标数字 |
 | **性能数字** | **本仓库没有可复现的 QPS / 延迟 benchmark 结果。** 仓库中的性能数值仅允许在 `HISTORICAL_PRODUCTION`（历史生产观测，如 10–15 QPS）、`DESIGN_TARGET`（SLO / 告警阈值）或 `SYNTHETIC DEMO`（README 演示夹具中的合成值）三类明确语义下出现，**均不得表述为本仓库实测结果**；5 个 SLO 目标与告警阈值都是 `DESIGN_TARGET`，不是实测 |
@@ -257,7 +257,7 @@ python3 scripts/check_repo_consistency.py
 
 **Q2 · 系统规模有多大？**
 分两个口径，不能混：
-- **本仓库可复核规模**：246 个 Python 文件 / 64,394 行 / 86 个定义了测试的测试文件 / 1,968 个收集到的测试用例，CI 覆盖 Python 3.10 与 3.11。
+- **本仓库可复核规模**：246 个 Python 文件 / 64,486 行 / 86 个定义了测试的测试文件 / 1,969 个收集到的测试用例，CI 覆盖 Python 3.10 与 3.11。
 - **历史生产规模**（`HISTORICAL_PRODUCTION`，不可由本仓库复现）：3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户、高峰短时 10–15 QPS、日均 1500+ 请求，RTX A5000 ×2 推理，后阶段完成 Qwen2.5 → Qwen3-14B/4B 灰度迁移。
 本仓库**没有任何 benchmark artifact**，所以我不给本仓库报任何 QPS 或延迟数字。
 
