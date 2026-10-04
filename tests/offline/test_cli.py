@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
 
 import offline.scheduler as scheduler_module
 import offline.snapshot_builder as snapshot_module
-from run_offline import main
+from run_offline import _build_parser, main
 
 
 def test_no_command_returns_2(monkeypatch):
@@ -163,10 +164,92 @@ def test_full_rebuild_command_delegates(monkeypatch):
     calls = {}
 
     class FakeScheduler:
-        def run_full_rebuild_cycle(self, **kwargs):
-            calls.update(kwargs)
+        def run_full_rebuild_cycle(self, epoch=None, seal=False):
+            calls.update(epoch=epoch, seal=seal)
             return {"epoch": "epoch_3"}
 
     monkeypatch.setattr(scheduler_module, "OfflineScheduler", FakeScheduler)
     assert main(["full-rebuild", "--epoch", "epoch_3"]) == 0
     assert calls == {"epoch": "epoch_3", "seal": False}
+
+
+# ── export-regression-candidates ────────────────────────────────────────────
+
+
+def _reviewed_negative_feedback(store_path, query="视黄醇可以和维生素 A 一起用吗"):
+    from offline.feedback_loop import (
+        ACCEPTED,
+        FeedbackRecord,
+        FeedbackStore,
+        make_feedback_id,
+    )
+
+    store = FeedbackStore(store_path)
+    record = FeedbackRecord(
+        feedback_id=make_feedback_id(query, "req-1"),
+        query=query,
+        answer="不可以，两者会互相抵消。",
+        evidence_doc_ids=["doc-wrong-1"],
+        request_id="req-1",
+        rating=-1.0,
+        business_type="ingredient",
+    )
+    store.add(record)
+    store.set_review_status(record.feedback_id, ACCEPTED)
+    store.close()
+    return record
+
+
+def test_export_regression_candidates_writes_queue_and_dataset(tmp_path):
+    store_path = tmp_path / "feedback.sqlite3"
+    output_dir = tmp_path / "out"
+    _reviewed_negative_feedback(store_path)
+
+    assert (
+        main(
+            [
+                "export-regression-candidates",
+                "--store-path",
+                str(store_path),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    queue = [
+        json.loads(line)
+        for line in (output_dir / "regression_candidates.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["review_status"] for row in queue] == ["PENDING_REVIEW"]
+    assert (output_dir / "regression_dataset.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_export_regression_candidates_fails_closed_on_missing_expectation(tmp_path):
+    """An approval that skipped the human expectation must stop the export."""
+    import sqlite3
+
+    store_path = tmp_path / "feedback.sqlite3"
+    output_dir = tmp_path / "out"
+    _reviewed_negative_feedback(store_path)
+    argv = ["export-regression-candidates", "--store-path", str(store_path), "--output-dir", str(output_dir)]
+    assert main(argv) == 0
+
+    with sqlite3.connect(store_path) as connection:
+        connection.execute("UPDATE regression_candidates SET review_status = 'accepted'")
+
+    assert main(argv) == 2
+
+
+def test_export_regression_candidates_status_choices_match_the_module():
+    """The parser spells the statuses out to keep `--help` import-free; keep them honest."""
+    from offline.regression_candidates import ACCEPTED, CANDIDATE_REVIEW_STATUSES, PENDING_REVIEW, REJECTED
+
+    parser = _build_parser()
+    command_action = next(item for item in parser._actions if item.dest == "command")
+    export_parser = command_action.choices["export-regression-candidates"]
+    status_action = next(item for item in export_parser._actions if item.dest == "status")
+
+    assert set(status_action.choices) == {PENDING_REVIEW, ACCEPTED, REJECTED, "all"}
+    assert CANDIDATE_REVIEW_STATUSES == {PENDING_REVIEW, ACCEPTED, REJECTED}

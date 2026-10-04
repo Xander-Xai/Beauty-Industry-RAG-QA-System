@@ -21,6 +21,12 @@ Changes present on `main` after the 2.3.0 release entry:
     (legacy `ingest-text` preserved).
   - Framework-independent scheduler and config-driven Airflow DAG definitions.
   - Unified, review-gated feedback pipeline.
+  - Regression candidate pipeline (`offline/regression_candidates.py`): reviewed negative
+    feedback becomes a `PENDING_REVIEW` candidate with stable `case_id`, human-only
+    `expected_behaviour`/`expected_evidence` (fail closed when absent), preserved provenance,
+    and `accepted`-only export to `regression_dataset.jsonl`. Model answers and their
+    retrieved documents are never promoted to ground truth. New CLI:
+    `export-regression-candidates`. Produces no RAGAS score.
   - Cross-platform file lock adapter (POSIX `fcntl` / Windows `msvcrt`).
   - Real BGE smoke harness (`scripts/smoke_bge_ingestion.py`, `@pytest.mark.model_smoke`).
 - QLoRA fine-tuning utility, sample data, and separate fine-tuning dependencies.

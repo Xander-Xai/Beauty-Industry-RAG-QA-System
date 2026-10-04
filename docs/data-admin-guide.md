@@ -178,6 +178,21 @@ python3 run_offline.py seal-epoch --epoch phase_2 --skip-validation
   `pending` 记录进入人工审核队列。
 - 复用现有 rewrite 反馈日志，不重复造第二套系统。
 
+### 16.1 回归候选（负向反馈 → 人工审批 → 回归数据集）
+
+在上述反馈关卡之上再叠一道候选关卡，用于把"线上真实失败"沉淀成回归用例：
+
+```bash
+python3 run_offline.py export-regression-candidates
+```
+
+- 只有 `accepted` 且 `rating <= 0` 的反馈会生成候选；候选一律 `PENDING_REVIEW`，无自动批准路径。
+- `expected_evidence` 永远只能由人工填写；缺失时接受会失败（fail closed），CLI 退出码 2 且不写出残缺数据集。
+- 模型当前回答与它检索到的文档**绝不**作为 ground truth（分别记为 `provenance.model_answer_promoted=false`
+  与 `observed_evidence_doc_ids`）。
+- 存储与审批 API、字段说明、fail-closed 清单见
+  [RAGAS 评估指南 §9](ragas-evaluation-guide.md)。
+
 ## 17. 故障排查
 
 | 现象 | 检查 |

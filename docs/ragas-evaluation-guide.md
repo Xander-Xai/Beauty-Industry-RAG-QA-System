@@ -131,6 +131,8 @@ python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden
 - 包含边缘案例：否定查询、多意图查询、模糊查询、跨域查询
 - 定期更新以反映知识库变化
 
+黄金数据集是人工从零编写的。另一条来源是**线上真实失败**：见 [§9 回归数据集](#9-回归数据集负向反馈--人工审批)。
+
 ---
 
 ## 4. 管线评估
@@ -314,6 +316,145 @@ python -m tests.evaluation.ragas_eval \
 
 ---
 
+## 9. 回归数据集（负向反馈 → 人工审批）
+
+黄金数据集（`golden_set.jsonl`）是人工从零编写的；回归数据集是另一条来源：**线上真实失败**。它回答的是"已经坏掉过的用例，现在修好了吗"。
+
+**本节不产生任何 RAGAS score。** 它只产出待测用例；打分仍然只能由第 2 节的真实 evaluator 路径产生。
+
+### 9.1 四个阶段，两道独立的审核关卡
+
+```
+已审核的负向反馈 → 回归候选（PENDING_REVIEW） → 人工审批 → 回归数据集
+```
+
+| 阶段 | 谁做 | 关卡 |
+|------|------|------|
+| 反馈入库 | 系统 | 已有反馈关卡：`review_status` 必须为 `accepted` |
+| 生成候选 | 系统（自动） | 无——候选一律 `PENDING_REVIEW` |
+| 填写期望 | 人工 | 无 |
+| 接受 / 拒绝 | 人工 | 缺人工期望时**拒绝接受** |
+| 导出数据集 | 系统（自动） | 仅 `accepted`，且逐条校验，缺字段即整体失败 |
+
+两道关卡故意不合并：反馈关卡回答"这条用户信号值不值得采信"，候选关卡回答"这个用例值不值得长期回归测试"。合并就等于让未审核的信号跳过人工决策。
+
+### 9.2 铁律：模型当前回答永远不是 ground truth
+
+对一条**负向**反馈而言，`answer` 和它检索到的 `evidence_doc_ids` 恰恰是**失败本身**，不是期望答案。因此：
+
+| 字段 | 来源 | 可以作为期望吗 |
+|------|------|----------------|
+| `answer` | 模型生成 | **绝不** |
+| `evidence_doc_ids` | 检索结果 | **绝不**（记入 `provenance.observed_evidence_doc_ids`，仅供诊断） |
+| `correction` | 人工纠正 | 可以（但若与 `answer` 相同则视为未验证，不采信） |
+| `expected_evidence` | 人工填写 | 唯一来源 |
+
+`expected_evidence` **永远没有自动来源**——没有任何代码路径会写入它。缺它就接受不了。
+
+### 9.3 数据格式
+
+`regression_candidates.jsonl`（候选/审核队列）：
+
+| 字段 | 说明 |
+|------|------|
+| `case_id` | 稳定 case id，见 9.4 |
+| `source_feedback_id` | 来源反馈记录 id |
+| `question` | 用户问题 |
+| `expected_behaviour` | 人工书写的期望行为；初始为空 |
+| `expected_evidence` | 人工书写的期望证据（doc id 列表）；初始恒为 `[]` |
+| `business_type` / `intent` | 分类字段 |
+| `provenance` | 来源审计，见 9.5 |
+| `review_status` | `PENDING_REVIEW` / `accepted` / `rejected` |
+| `review_note` / `reviewed_at` / `reviewed_by` | 人工决定留痕 |
+| `created_at` | 候选创建时间（UTC） |
+
+`regression_dataset.jsonl`（仅 `accepted`）：上表去掉 `intent`，加上 `reviewed_*`，并**只保留 `expected_*` 作为期望**。
+
+### 9.4 稳定 case_id 与去重
+
+`case_id = sha256(normalize(question) + "|" + business_type)`，归一化会折叠空白并忽略大小写。
+
+只依赖审核者可见的内容——**不含时间、评分、request_id、feedback_id**。因此：
+
+- 同一个问题再次失败 → 同一个 case，不会堆积近似重复项；
+- 从同一批反馈重建整个 store → case_id 完全一致；
+- 重复执行收集是幂等的（已存在则跳过）。
+
+代价：同一问题的不同期望会合并到同一个 case，需要人工在审核时决定保留哪一份。这是刻意的——回归集要的是"这个用例必须一直对"，不是"这个错误出现过几次"。
+
+### 9.5 provenance 保留
+
+`provenance` 记录来源反馈的 id / 渠道 / 评分 / 当时的审核状态 / 创建时间 / request_id / 已哈希的 session_ref，以及：
+
+- `expected_behaviour_origin`：`human_correction` 或 `pending_human_annotation`
+- `expected_evidence_origin`：`pending_human_annotation`
+- `model_answer_promoted`：恒为 `false`
+- `observed_evidence_doc_ids`：被拒绝那次检索到的文档（**诊断用，不是期望**）
+
+`provenance` 随 case 一起进入回归数据集，因此任何一条回归用例都能回溯到具体的一次线上失败。
+
+### 9.6 使用方式
+
+```bash
+# 1) 从已审核的负向反馈生成候选，并导出审核队列 + 当前回归数据集
+python3 run_offline.py export-regression-candidates
+
+# 换路径 / 导出全部候选
+python3 run_offline.py export-regression-candidates \
+  --store-path ./data/feedback/feedback.sqlite3 \
+  --output-dir ./data/feedback \
+  --status all
+```
+
+人工审批通过 API 完成（CLI 不提供自动批准，这是有意的）：
+
+```python
+from offline.regression_candidates import ACCEPTED, RegressionCandidateLoop
+
+loop = RegressionCandidateLoop("./data/feedback/feedback.sqlite3", output_dir="./data/feedback")
+case_id = loop.candidate_store.list_candidates()[0].case_id
+
+loop.candidate_store.set_expectations(
+    case_id,
+    expected_behaviour="说明叠加使用的浓度上限与刺激性风险，而不是一概判定为不可用。",
+    expected_evidence=["doc-retinol-guideline", "doc-vitamin-a-limit"],
+    reviewer="qa-owner",
+)
+loop.candidate_store.set_review_status(case_id, ACCEPTED, reviewer="qa-owner")
+loop.export_regression_dataset()
+```
+
+### 9.7 Fail-closed 行为
+
+| 情况 | 行为 |
+|------|------|
+| 候选没有 `expected_behaviour` / `expected_evidence` | `set_review_status(..., ACCEPTED)` 抛 `MissingExpectationError`，状态不变 |
+| 只有 behaviour、缺 evidence | 同上，**不接受**——行为描述不足以断言"该检索到什么" |
+| 空白字符串 / 空列表 | 等同于缺失 |
+| `case_id` 不存在 | 抛 `UnknownRegressionCase`（不会静默无操作） |
+| 非法状态值 | 抛 `ValueError` |
+| 数据库中存在一条绕过 API 的非法 `accepted` 行 | 导出整体失败，CLI 退出码 2，**不写出残缺数据集** |
+| 反馈本身没有 `question` | 跳过并计入 `candidates_skipped`，不入库 |
+
+### 9.8 与黄金数据集的关系
+
+两者字段不同，**不要混用**：
+
+| | `golden_set.jsonl` | `regression_dataset.jsonl` |
+|---|---|---|
+| 来源 | 人工从零编写 | 线上已发生的真实失败 |
+| 答案字段 | `answer` + `ground_truth` + `contexts` | `expected_behaviour` + `expected_evidence` |
+| 维护节奏 | 随知识库演进 | 每次线上负向反馈被接受时增长 |
+| 最小条目数 | `MIN_ENTRIES = 300` | 无（真实失败量决定） |
+
+回归数据集**不能**直接喂给 `ragas_eval`：`expected_evidence` 是 doc id 列表而非 `contexts` 文本，且它不含 `ground_truth`。把它当作"必须持续通过的用例清单"，而不是 RAGAS 输入。
+
+### 9.9 测试
+
+`tests/offline/test_regression_candidates.py` 与 `tests/offline/test_cli.py` 全部为确定性合成测试：无 LLM、无检索、无网络、无 GPU，因此 CI 可直接运行（`pytest tests/offline/`）。覆盖：负向反馈生成候选、候选不被自动提升、人工接受后成为回归用例、重复幂等、缺失期望 fail closed、provenance 保留、模型回答与检索证据不进入期望。
+
+---
+
 ## 相关文件
 
 | 文件 | 说明 |
@@ -324,3 +465,5 @@ python -m tests.evaluation.ragas_eval \
 | [tests/evaluation/golden_set.jsonl](../tests/evaluation/golden_set.jsonl) | 黄金数据集（seed 27 条，现 300+；实际条数以校验工具输出为准） |
 | [tests/evaluation/validate_golden_set.py](../tests/evaluation/validate_golden_set.py) | 数据集验证工具 |
 | [tests/evaluation/sample_golden_set.jsonl](../tests/evaluation/sample_golden_set.jsonl) | 示例数据集（5 条，兼容旧版） |
+| [offline/regression_candidates.py](../offline/regression_candidates.py) | 回归候选流水线：负向反馈 → 人工审批 → 回归数据集 |
+| [tests/offline/test_regression_candidates.py](../tests/offline/test_regression_candidates.py) | 回归候选审核关卡测试（确定性，无 LLM/检索/网络） |

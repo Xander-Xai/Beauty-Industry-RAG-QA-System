@@ -66,6 +66,23 @@ def _build_parser() -> argparse.ArgumentParser:
     seal = subparsers.add_parser("seal-epoch", help="Validate and seal an epoch snapshot")
     seal.add_argument("--epoch", required=True)
     seal.add_argument("--skip-validation", action="store_true")
+
+    # Candidate review statuses are spelled out here so `--help` stays free of
+    # offline imports; tests assert they match offline.regression_candidates.
+    regression = subparsers.add_parser(
+        "export-regression-candidates",
+        help="Build regression candidates from reviewed negative feedback and export the approved dataset",
+    )
+    regression.add_argument("--store-path", default=None, help="Feedback store (default: offline.feedback.store_path)")
+    regression.add_argument(
+        "--output-dir", default=None, help="Export directory (default: offline.feedback.output_dir)"
+    )
+    regression.add_argument(
+        "--status",
+        choices=["PENDING_REVIEW", "accepted", "rejected", "all"],
+        default="PENDING_REVIEW",
+        help="Candidate review status to export for review (default: PENDING_REVIEW)",
+    )
     return parser
 
 
@@ -222,6 +239,44 @@ def _handle_rewrite_feedback() -> int:
     return 0
 
 
+def _handle_export_regression_candidates(args) -> int:
+    """Build regression candidates and export the human-approved dataset.
+
+    Collecting candidates is safe and repeatable. The export is where the gate
+    matters: candidates start as PENDING_REVIEW, only a reviewer's explicit
+    acceptance puts a case in the dataset, and a case missing a human-authored
+    expectation fails the whole export rather than shipping an empty field.
+    """
+    from common.config import get_config_dict
+    from offline.regression_candidates import RegressionCandidateError, RegressionCandidateLoop
+
+    feedback_config = get_config_dict().get("offline", {}).get("feedback", {})
+    store_path = args.store_path or feedback_config.get("store_path", "./data/feedback/feedback.sqlite3")
+    output_dir = args.output_dir or feedback_config.get("output_dir", "./data/feedback")
+    status = None if args.status == "all" else args.status
+
+    loop = RegressionCandidateLoop(store_path, output_dir=output_dir)
+    try:
+        result = loop.run_export_cycle(status=status)
+    except RegressionCandidateError as exc:
+        logger.error("Regression candidate export failed closed: %s", exc)
+        return 2
+    finally:
+        loop.close()
+
+    logger.info(
+        "Regression candidates: %d created (%d total; %d pending review, %d accepted, %d rejected)",
+        result["candidates_created"],
+        result["candidates_total"],
+        result["pending_review"],
+        result["accepted"],
+        result["rejected"],
+    )
+    logger.info("Review queue: %s", result["review_queue"])
+    logger.info("Regression dataset: %s", result["regression_dataset"])
+    return 0
+
+
 def main(argv=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -236,6 +291,7 @@ def main(argv=None) -> int:
         "incremental-build": _handle_incremental_build,
         "full-rebuild": _handle_full_rebuild,
         "seal-epoch": _handle_seal_epoch,
+        "export-regression-candidates": _handle_export_regression_candidates,
     }
     handler = handlers.get(args.command)
     if handler is None:
