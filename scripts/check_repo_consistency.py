@@ -3064,6 +3064,10 @@ def _count_word_values() -> dict[str, int]:
 
 _EN_COUNT_WORDS = _count_word_values()
 
+#: The only values that may head an additive English compound. "twenty-one" is
+#: 21; "hundred-one" and "one-two" are not numbers at all.
+_EN_TENS_VALUES = frozenset({20, 30, 40, 50, 60, 70, 80, 90})
+
 #: Prose that restates how many items the list has, in the two languages this
 #: repository documents in. Spacing is optional because both "六个问题" and
 #: "7 个问题" occur in practice, and a compound count such as "twenty-one
@@ -3205,14 +3209,15 @@ def _parse_stated_count(token: str) -> int | None:
         # A scale word multiplies: "five hundred" is 500, not 105.
         if tail in ("hundred", "thousand"):
             return _EN_COUNT_WORDS[head] * _EN_COUNT_WORDS[tail]
-        # Two words add only when the first is a *tens* word: "twenty-one" and
-        # the unhyphenated "twenty one" are both 21, and so is "forty-five". A
-        # unit never precedes another unit additively, so neither "one two" nor
-        # the hyphenated "two-three" is a number — they are typos, and reading
-        # them as 3 and 5 would let a mistake pass as a verified count.
-        head_value = _EN_COUNT_WORDS[head]
-        if head_value >= 20:
-            return head_value + _EN_COUNT_WORDS[tail]
+        # An additive compound is a tens word plus a unit, and nothing else:
+        # "twenty-one", "forty-five", "ninety-nine". Constraining both sides is
+        # what makes malformed shapes unreadable rather than merely unlikely —
+        # "twenty-zero" is not 20, "twenty-eleven" is not 31, "twenty-thirty" is
+        # not 50, and "hundred-one" is not 101. Each of those would otherwise
+        # compute to a number that could coincide with the real count, and the
+        # guard would certify a typo.
+        if _EN_COUNT_WORDS[head] in _EN_TENS_VALUES and 1 <= _EN_COUNT_WORDS[tail] <= 9:
+            return _EN_COUNT_WORDS[head] + _EN_COUNT_WORDS[tail]
     return _EN_COUNT_WORDS.get(token)
 
 

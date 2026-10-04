@@ -3058,11 +3058,23 @@ def test_guard_fails_end_to_end_when_the_summary_count_drifts(tmp_path, monkeypa
         ("ninety-nine", 99),
         # Unhyphenated British spelling of the same compound.
         ("forty five", 45),
+        ("twenty-two", 22),
+        ("thirty-three", 33),
+        ("ninety-nine", 99),
         # A unit never precedes another unit additively, so neither the spaced
         # "one two" nor the hyphenated "two-three" is a number.
         ("two three", None),
         ("two-three", None),
         ("one-two", None),
+        # An additive compound is a tens word plus a unit 1..9. Each of these
+        # used to compute to a plausible number — 20, 31, 50, 101 — which is
+        # exactly how a typo could be certified as a verified count.
+        ("twenty-zero", None),
+        ("twenty-eleven", None),
+        ("twenty-thirty", None),
+        ("hundred-one", None),
+        ("thirty-zero", None),
+        ("ninety-ten", None),
         # ... except a scale word, which multiplies.
         ("five hundred", 500),
         ("two hundred", 200),
@@ -3432,3 +3444,15 @@ def test_a_numeral_with_unrecognised_characters_is_never_read_as_its_tail():
     matches = [match.group("lead") for match in _SLO_COUNT_RE.finditer(claim)]
 
     assert matches == [], f"the tail of an unrecognised numeral was matched as a count: {matches}"
+
+
+def test_a_malformed_compound_is_never_certified_as_the_real_count():
+    """The shape of the finding: a typo whose computed value coincides with the
+    runbook's count must not be reported as verified. Each token here computes
+    to 5 under a naive additive rule, against a five-objective runbook."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for token in ("twenty-zero", "two-three", "one-two", "hundred-one"):
+        errors = slo_count_errors("README.md", f"{token} SLO objectives", expected=5)
+        assert len(errors) == 1, (token, errors)
+        assert "cannot verify" in errors[0], (token, errors)
