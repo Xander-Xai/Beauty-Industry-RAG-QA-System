@@ -3085,8 +3085,11 @@ _SLO_ROW_RE = re.compile(r"^\|\s*SLO-(\d+)\s*\|", re.MULTILINE)
 #: one drifts, not to police one canonical sentence. Each alternative names its
 #: own group (``re`` forbids reusing one name), and exactly one is set per match.
 _SLO_COUNT_RE = re.compile(
-    r"(?P<lead>[一二两三四五六七八九十]|\d+)\s*个\s*SLO\s*目标"
-    r"|SLO\s*目标\s*[（(]\s*(?P<trail>[一二两三四五六七八九十]|\d+)\s*个"
+    # 百 and 千 are matched so the guard *sees* a count it cannot parse and
+    # reports "cannot verify", rather than not matching and silently ignoring
+    # the claim. A guard that shrugs at what it does not understand is not one.
+    r"(?P<lead>[一二两三四五六七八九十百千]+|\d+)\s*个\s*SLO\s*目标"
+    r"|SLO\s*目标\s*[（(]\s*(?P<trail>[一二两三四五六七八九十百千]+|\d+)\s*个"
     # The compound has to sit *inside* the group: capturing only the first word
     # made "twenty-one SLO objectives" parse as 20. The lookbehind keeps the
     # match from starting *inside* one instead — "twenty-one" has a word
@@ -3101,7 +3104,34 @@ _SLO_COUNT_RE = re.compile(
 #: Chinese and English count words, so the guard compares numbers rather than
 #: strings: "十个" must not slip past a check that only understands "10", and
 #: "twenty-one" must not slip past one that only reads the first word.
-_CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+#: "十" is handled structurally by `_parse_chinese_number`, not looked up here.
+_CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _parse_chinese_number(token: str) -> int | None:
+    """Parse a Chinese numeral up to 99: 十一 = 11, 二十 = 20, 二十一 = 21.
+
+    Needed because these are single words: a character class would match only
+    the `二` in `十二个 SLO 目标` and report 2, rejecting a correct document, and
+    the trailing form `SLO 目标（十二个）` would not match at all.
+
+    Past 99 the notation stops being compositional — 一百 is 100 and 一千 is 1000,
+    and 二百一十 has its own rules — so those return None rather than a wrong
+    number. "Cannot verify" is the honest answer; 210 would not be.
+    """
+    if not token or (set(token) - set(_CN_DIGITS)) - {"十"}:
+        return None
+    if "十" not in token:
+        # A lone digit, or a run of digits with no 十, which is not a number.
+        return _CN_DIGITS[token] if len(token) == 1 else None
+    head, _, tail = token.partition("十")
+    # Exactly one 十, with at most one digit on each side of it.
+    if "十" in head or "十" in tail:
+        return None
+    # An omitted leading 一 means one ten, so 十 = 10 and 十一 = 11.
+    tens = _CN_DIGITS[head] if head else 1
+    ones = _CN_DIGITS[tail] if tail else 0
+    return tens * 10 + ones
 
 
 def slo_objective_rows(runbook_text: str) -> list[int]:
@@ -3151,8 +3181,8 @@ def _parse_stated_count(token: str) -> int | None:
     token = token.strip().lower()
     if token.isdigit():
         return int(token)
-    if token in _CN_DIGITS:
-        return _CN_DIGITS[token]
+    if not token.isascii():
+        return _parse_chinese_number(token)
     for separator in ("-", " "):
         head, found, tail = token.partition(separator)
         if found and head in _EN_COUNT_WORDS and tail in _EN_COUNT_WORDS:

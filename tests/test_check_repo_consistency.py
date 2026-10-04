@@ -3221,3 +3221,80 @@ def test_the_current_runbook_has_unique_contiguous_identifiers():
 
     text = (ROOT / "docs/slo-runbook.md").read_text(encoding="utf-8")
     assert slo_objective_id_errors("docs/slo-runbook.md", text) == []
+
+
+# ── Chinese numerals are words, not characters ──────────────────────────
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("一", 1),
+        ("两", 2),
+        ("九", 9),
+        # 十 is structural: an omitted leading 一 means one ten.
+        ("十", 10),
+        ("十一", 11),
+        ("十二", 12),
+        ("十九", 19),
+        ("二十", 20),
+        ("二十一", 21),
+        ("三十", 30),
+        ("九十九", 99),
+    ],
+)
+def test_chinese_count_tokens_parse_to_the_number_they_spell(token, expected):
+    """The regression: the character class matched one character, so
+    `十二个 SLO 目标` matched `二个` and read as 2 — rejecting a correct
+    document — and `SLO 目标（十二个）` did not match at all."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) == expected
+
+
+@pytest.mark.parametrize("token", ["一百", "二百一十", "一千", "十十", "零"])
+def test_a_chinese_numeral_beyond_the_supported_range_is_unverifiable(token):
+    """Past 99 the notation stops being compositional, so guessing would be
+    worse than declining: `None` makes the guard say "cannot verify"."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize(
+    ("claim", "stated"),
+    [
+        ("十二个 SLO 目标与告警阈值", 12),
+        ("| SLO 目标（十二个） | `DESIGN_TARGET` |", 12),
+        ("十一个 SLO 目标", 11),
+        ("二十一个 SLO 目标", 21),
+    ],
+)
+def test_a_multi_character_chinese_count_is_not_flagged_when_correct(claim, stated):
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, stated) == []
+
+
+def test_a_multi_character_chinese_count_that_drifts_is_flagged():
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", "十二个 SLO 目标", expected=5)
+    assert len(errors) == 1
+    assert "states 12 SLO objectives but docs/slo-runbook.md defines 5" in errors[0]
+
+
+def test_a_count_the_parser_cannot_read_is_reported_not_ignored():
+    """百/千 are matched on purpose so the claim surfaces as unverifiable
+    rather than slipping past the guard entirely."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for claim in ("一百个 SLO 目标", "| SLO 目标（一千个） |"):
+        errors = slo_count_errors("README.md", claim, expected=100)
+        assert len(errors) == 1, (claim, errors)
+        assert "cannot verify" in errors[0], (claim, errors)
+
+
+def test_digit_counts_still_win_over_the_character_class():
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", "12 个 SLO 目标", expected=12) == []
+    assert slo_count_errors("README.md", "5 个 SLO 目标", expected=5) == []
