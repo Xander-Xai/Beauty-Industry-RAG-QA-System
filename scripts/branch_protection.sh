@@ -99,17 +99,77 @@ print(json.dumps({
 '
 }
 
+# Number of the most recently merged pull request, by `merged_at`.
+#
+# `GET /repos/{o}/{r}/pulls` only understands `state=open|closed|all`. Passing
+# `state=merged` is silently ignored and returns unmerged PRs too, so merged-ness
+# must never be inferred by filtering closed PRs client-side. The search
+# endpoint's `is:merged` qualifier is a filter GitHub actually enforces, and it
+# is applied server-side rather than guessed here.
+#
+# The result set is walked to the end instead of to a fixed page count, so the
+# answer does not depend on how many recently-closed PRs happen to sit in front
+# of the newest merge. Read-only: `gh api` GETs only.
+#
+# Exit codes: 0 = number on stdout, 3 = repository has never merged a pull
+# request, anything else = the query itself failed. Callers must not report a
+# transport failure as "no merged PR", which is a different fact.
+latest_merged_pr_number() {
+  local out
+  # `set -o pipefail` makes a `gh` failure fail the pipeline, so a transport
+  # error is never silently downgraded to an empty result.
+  out=$(gh api --paginate \
+    "search/issues?q=repo:${REPO}+is:pr+is:merged&sort=updated&order=desc&per_page=100" \
+    | python3 -c '
+import json, sys
+
+decoder = json.JSONDecoder()
+raw, pos, best, seen, total = sys.stdin.read(), 0, None, 0, 0
+
+while pos < len(raw):
+    while pos < len(raw) and raw[pos].isspace():
+        pos += 1
+    if pos >= len(raw):
+        break
+    page, pos = decoder.raw_decode(raw, pos)
+    total = max(total, page.get("total_count") or 0)
+    for item in page.get("items") or []:
+        merged_at = (item.get("pull_request") or {}).get("merged_at")
+        if merged_at and (best is None or merged_at > best[0]):
+            best = (merged_at, item["number"])
+        seen += 1
+
+# Search stops at 1000 results. Report the truncation instead of presenting the
+# newest merge among the first 1000 rows as the newest merge overall.
+if total > seen:
+    sys.stderr.write(
+        "WARNING: %d merged pull requests match but search returned %d; "
+        "the most recent merge may lie outside that window\n" % (total, seen))
+
+if best is not None:
+    print(best[1])
+') || return 1
+
+  [ -n "$out" ] || return 3
+  printf '%s\n' "$out"
+}
+
 # Recompute the required set from a real pull-request head: every check-run
 # GitHub actually reported as executed (i.e. not `skipped`).
 derive_contexts() {
-  local head_sha
-  head_sha=$(gh api "${API}/pulls?state=closed&per_page=20" \
-    --jq '[.[] | select(.merged_at != null)][0].head.sha' 2>/dev/null || true)
+  local pr_number head_sha rc=0
+  pr_number=$(latest_merged_pr_number) || rc=$?
+  case "$rc" in
+    0) ;;
+    3) fail "no merged pull request exists in ${REPO}; nothing to derive from" ;;
+    *) fail "could not query merged pull requests in ${REPO}" ;;
+  esac
 
+  head_sha=$(gh api "${API}/pulls/${pr_number}" --jq .head.sha)
   [ -n "$head_sha" ] && [ "$head_sha" != "null" ] \
-    || fail "no merged pull request found to derive contexts from"
+    || fail "merged PR #${pr_number} reported no head SHA to derive contexts from"
 
-  printf '# deriving from merged PR head %s\n' "$head_sha" >&2
+  printf '# deriving from merged PR #%s head %s\n' "$pr_number" "$head_sha" >&2
   gh api "${API}/commits/${head_sha}/check-runs?per_page=100" \
     --jq '.check_runs[] | select(.conclusion != "skipped") | .name' | sort -u
 }

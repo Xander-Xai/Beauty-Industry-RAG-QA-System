@@ -68,6 +68,23 @@ pip-audit 依赖漏洞扫描
 展开成 `测试套件 (3.10)` 与 `测试套件 (3.11)` 两个独立 check，因此**两项都要
 required**，漏掉任何一个都会让保护看起来生效、实际却在少一道门。
 
+### 推导用的 head SHA 是怎么选的
+
+`derive` 取**最近一次真正 merged 的 PR** 的 head SHA 作为推导基准。
+
+- 过滤条件用 search 接口的 `is:merged`，即由 GitHub 服务端保证 merged，
+  **不是**先取 closed PR 再在本地用 `merged_at` 猜。`GET /repos/{owner}/{repo}/pulls`
+  只接受 `state=open|closed|all`，传 `state=merged` 会被**静默忽略**并照样返回
+  未合并的 PR，因此该端点上根本不存在可用的 merged 过滤。
+- 结果按 `merged_at` 取最大值，而不是取返回列表的第一行或最近更新的那一行。
+- 结果集翻页取完，不固定只看前若干条。因此「最近若干个 PR 全部 closed 且未
+  merge」不会让 `derive` 误报找不到 merged PR。
+- 只有在**该仓库确实从未合并过任何 PR** 时才失败；查询本身出错会作为查询失败
+  单独报错，不会伪装成「没有 merged PR」。
+- search 接口有 1000 条结果上限。若触到上限，脚本会在 stderr 打印 `WARNING`
+  说明窗口被截断，而不是把截断后的结果当作全集。
+- 全程只读（仅 GET），不写任何仓库设置。
+
 ### 为什么 `RAGAS evaluator smoke（需显式启用）` 不是 required
 
 它在 `ci.yml` 里被 `if:` 限定为
