@@ -413,7 +413,8 @@ mark {{ background: #fef0c7; border-radius: 3px; padding: 0 2px; }}
       <figcaption>{step_chip("123")} <b>真实前端界面（本仓库渲染）</b>：
         第一问以 <code>{html.escape(privileged["label"])}</code> 身份提问
         「{html.escape(query_text[:22])}…」→ 回答用〔证据N〕标注引用，证据标签可点击
-        <code>GET /api/media/&#123;doc_id&#125;</code>（服务端二次鉴权 + 审计）。
+        <code>GET /api/media/&#123;doc_id&#125;</code>（服务端二次鉴权：掩码不符返回 403；
+        真实服务另记审计，本合成 mock 不写审计）。
         <br>{step_chip("5")} 同一问题切到 <code>{html.escape(restricted["label"])}</code>
         （右上角身份选择器，截图结束时所选）→ 按 ④ 的掩码逐份过滤后证据为空，
         Evidence Gate 拒答：界面不给出无出处的答案。

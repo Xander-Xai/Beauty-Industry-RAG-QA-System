@@ -84,3 +84,5 @@ README 引用的 hero 图是 **WebP**，仓库里也只有这一张图。没有 
 `docs/demo/mock_api.py` 只实现演示需要的端点（`/api/auth/metadata`、`/api/query`、`/api/chat`、`/api/dialog_history`、`/api/stats`、`/api/media/{doc_id}`），响应结构对齐 `api/models.py` 里的 `QueryResponse` / `ChatResponse` / `StatsResponse`。它是演示夹具，**不属于请求路径，任何部署都不应启动它**。
 
 其中 `/api/query` 的证据集按 `common.auth.is_allowed` 的语义**逐份文档**过滤（`authorized_doc_ids()`），而不是按角色整体放行或整体拒绝——一个身份如果只能读其中一份，就必须只拿到那一份。该谓词在这个文件里是重写的（夹具要保持纯标准库、不依赖服务依赖），由上面那个测试与真实实现逐对核对，因此不会各自漂移。
+
+`/api/media/{doc_id}` 同样逐份校验：对齐 `api/routes.py::media_handler`（先 404 判存在，再 403 判权限），掩码缺失或不可解析一律 fail-closed 到 0，因此匿名身份拿不到 URL。这一层不是装饰——少了它，第一问被拒答的那个身份可以直接 GET 到第二问引用的那份文档的媒体地址，图里"服务端二次鉴权"那句话就成了假话。测试同时断言两个端点对每个身份、每份文档给出同一个结论（能取到 ⟺ 出现在证据集里），避免它们各说各话。

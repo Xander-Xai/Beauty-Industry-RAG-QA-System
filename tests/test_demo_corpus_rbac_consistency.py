@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import threading
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -247,3 +248,100 @@ def test_query_endpoint_denies_anonymous_and_malformed_masks(demo_server):
             body = json.loads(response.read().decode("utf-8"))
         assert body["evidence_doc_ids"] == [], f"leaked evidence for headers {headers}"
         assert body["answer"] == CORPUS["answer_refusal_markdown"]
+
+
+# ── the media endpoint is the second authorization pass ──────────────────
+def _fetch_media(base_url: str, doc_id: str, headers: dict) -> tuple[int, dict]:
+    """GET a media URL and return ``(status, body)`` instead of raising on 4xx."""
+    request = urllib.request.Request(  # noqa: S310 - loopback test server
+        f"{base_url}/api/media/{doc_id}",
+        headers=headers,
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - loopback test server
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _identity_headers(identity: dict) -> dict:
+    return {
+        "X-User-ID": CORPUS["auth_metadata"]["auth"]["anonymous_user_id"],
+        "X-Role-Mask": str(identity["role_mask"]),
+        "X-Dept-Mask": str(identity["dept_mask"]),
+    }
+
+
+def test_fixture_media_predicate_agrees_with_the_real_one_on_every_pair():
+    """`mock_api` mirrors `common.auth.is_document_authorized` for the media
+    path. Pin the copy to the original across the same document x identity grid
+    the query path uses, so the two mirrors cannot drift apart."""
+    from common.auth import is_document_authorized
+
+    identities = [(option["role_mask"], option["dept_mask"]) for option in ROLE_OPTIONS] + [
+        (0, 0),
+        (CORPUS["auth_metadata"]["rbac"]["roles"]["admin"], 0),
+        (MOCK_API.SUPER_ADMIN_MASK, 0xFFFFFFFF),
+        (PRIVILEGED["role_mask"], RESTRICTED["dept_mask"]),
+    ]
+    for doc in DOCUMENTS.values():
+        for role_mask, dept_mask in identities:
+            expected = is_document_authorized(doc, role_mask, dept_mask)
+            assert (
+                MOCK_API.is_document_authorized(doc["role_mask"], role_mask, doc["dept_mask"], dept_mask) == expected
+            ), f"fixture disagrees at doc={doc['doc_id']} user={role_mask}/{dept_mask}"
+
+
+def test_media_endpoint_grants_the_privileged_identity_and_refuses_the_restricted_one(demo_server):
+    """The regression: this handler used to check only that the document id
+    existed, so the identity the query endpoint refuses could still fetch the
+    media URL — while the generated caption claims the click performs
+    server-side secondary authorization."""
+    for doc_id in EVIDENCE_IDS:
+        status, body = _fetch_media(demo_server, doc_id, _identity_headers(PRIVILEGED))
+        assert status == 200, (doc_id, status, body)
+        assert body["doc_id"] == doc_id
+
+        status, body = _fetch_media(demo_server, doc_id, _identity_headers(RESTRICTED))
+        assert status == 403, (doc_id, status, body)
+        assert body["error"] == "forbidden"
+        assert "url" not in body
+
+
+def test_media_endpoint_refuses_anonymous_and_malformed_masks(demo_server):
+    """Mask 0 collapses an absent or unparsable header to an identity that
+    clears nothing. Defaulting to the demo's privileged identity here would
+    make the endpoint a way around the query filter."""
+    doc_id = EVIDENCE_IDS[0]
+    for headers in (
+        {"X-Role-Mask": "0", "X-Dept-Mask": "0"},
+        {"X-Role-Mask": "not-a-mask", "X-Dept-Mask": "not-a-mask"},
+        {"X-Role-Mask": "-4", "X-Dept-Mask": "-4"},
+        {},
+    ):
+        status, body = _fetch_media(demo_server, doc_id, headers)
+        assert status == 403, (headers, status, body)
+        assert "url" not in body
+
+
+def test_media_endpoint_still_reports_an_unknown_document_as_not_found(demo_server):
+    """Existence is checked before authorization, matching `media_handler`
+    (404 then 403). A 403 for a document that does not exist would leak the
+    id space; a 200 would be worse."""
+    status, body = _fetch_media(demo_server, "demo_does_not_exist", _identity_headers(PRIVILEGED))
+    assert status == 404
+    assert body["error"] == "not_found"
+
+
+def test_no_document_is_readable_through_media_by_an_identity_the_query_refuses(demo_server):
+    """The two endpoints must agree. If the query hides a document but media
+    serves it, the permission boundary the demo advertises does not exist."""
+    for identity in ROLE_OPTIONS:
+        for doc_id in EVIDENCE_IDS:
+            status, _ = _fetch_media(demo_server, doc_id, _identity_headers(identity))
+            readable = status == 200
+            query_body = _ask(demo_server, identity)
+            assert readable == (doc_id in query_body["evidence_doc_ids"]), (
+                f"{identity['key']}: media status {status} disagrees with the query evidence set for {doc_id}"
+            )

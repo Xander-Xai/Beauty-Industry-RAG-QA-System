@@ -133,6 +133,26 @@ def _header_mask(headers, name: str) -> int:
     return mask
 
 
+def is_document_authorized(
+    doc_role_mask: int,
+    user_role_mask: int,
+    doc_dept_mask: int,
+    user_dept_mask: int,
+) -> bool:
+    """Mirror of ``common.auth.is_document_authorized`` for one document.
+
+    The real helper takes the Qdrant payload dict; this one takes the two stored
+    masks directly, because the corpus already holds them. The fail-closed type
+    and range check is kept rather than dropped: ``is_allowed`` on its own would
+    treat a missing mask as public, and the media path is exactly where being
+    permissive would hand out a document URL.
+    """
+    masks = (doc_role_mask, user_role_mask, doc_dept_mask, user_dept_mask)
+    if any(type(mask) is not int or not 0 <= mask <= 0xFFFFFFFF for mask in masks):
+        return False
+    return is_allowed(doc_role_mask, user_role_mask, doc_dept_mask, user_dept_mask)
+
+
 class DemoHandler(BaseHTTPRequestHandler):
     server_version = "SyntheticDemoAPI/1.0"
     protocol_version = "HTTP/1.1"
@@ -192,11 +212,25 @@ class DemoHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/api/media/"):
             doc_id = path.removeprefix("/api/media/")
-            known = {doc["doc_id"] for doc in self.corpus["documents"]}
-            if doc_id not in known:
+            by_id = {doc["doc_id"]: doc for doc in self.corpus["documents"]}
+            doc = by_id.get(doc_id)
+            if doc is None:
                 self._send_json(
                     {"error": "not_found", "detail": f"文档 {doc_id} 不存在"},
                     status=404,
+                )
+                return
+            # `api/routes.py::media_handler` re-checks the document's own masks
+            # before handing out a presigned URL — the second authorization pass
+            # the demo caption points at. Checking only that the id exists would
+            # make that caption false and let the restricted identity fetch the
+            # media the query endpoint just refused to cite.
+            role_mask = _header_mask(self.headers, "X-Role-Mask")
+            dept_mask = _header_mask(self.headers, "X-Dept-Mask")
+            if not is_document_authorized(doc["role_mask"], role_mask, doc["dept_mask"], dept_mask):
+                self._send_json(
+                    {"error": "forbidden", "detail": f"当前身份无权访问文档 {doc_id}"},
+                    status=403,
                 )
                 return
             self._send_json(
