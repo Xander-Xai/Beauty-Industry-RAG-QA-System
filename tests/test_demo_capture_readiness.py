@@ -16,10 +16,12 @@ process exiting and a probe succeeding.
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import time
-from contextlib import closing
+import urllib.request
+from contextlib import closing, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import socket
@@ -217,3 +219,186 @@ def test_capture_docstring_names_the_port_collision():
     doc = CAPTURE.__doc__ or ""
     assert "--api-port" in doc
     assert "--web-port" in doc
+
+
+# ── a squatter on the port cannot pass for the child ────────────────────
+class _ImpostorHandler(BaseHTTPRequestHandler):
+    """A healthy server that is not the child we spawned.
+
+    It answers `/api/health` with a perfectly valid body — which is all a
+    URL-only probe ever looked at — but knows nothing about this run's instance
+    token, which is exactly the situation the token exists to catch.
+    """
+
+    token: str | None = None
+
+    def do_GET(self):  # noqa: N802 - stdlib signature
+        payload = json.dumps({"status": "healthy", "instance_token": self.token}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args):
+        pass
+
+
+@contextmanager
+def _stand_in_server(token: str | None):
+    """Run a non-child HTTP server on loopback, yielding its base URL."""
+    handler = type("_Handler", (_ImpostorHandler,), {"token": token})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_a_server_that_does_not_echo_the_token_is_refused(sleeper):
+    """The window the preflight check cannot close: something answers on the
+    port before our child does. The token is the only check that cannot be
+    raced, because the squatter never saw it."""
+    with _stand_in_server(None) as base_url:
+        with pytest.raises(SystemExit) as excinfo:
+            CAPTURE.wait_for_http(
+                f"{base_url}/api/health",
+                expect_json=True,
+                process=sleeper,
+                expect_token="this-runs-token",
+                timeout=30,
+            )
+    assert "instance token" in str(excinfo.value), str(excinfo.value)
+
+
+def test_a_server_echoing_the_right_token_is_accepted(sleeper):
+    """The happy path for the new check, so it cannot rot into a refusal."""
+    with _stand_in_server("this-runs-token") as base_url:
+        CAPTURE.wait_for_http(
+            f"{base_url}/api/health",
+            expect_json=True,
+            process=sleeper,
+            expect_token="this-runs-token",
+            timeout=10,
+        )
+
+
+class _DiesAfterFirstPoll:
+    """A child that is alive for the pre-response check and gone for the next.
+
+    The window the finding named is a genuine race, so it cannot be arranged
+    with real processes and real timing. This models exactly the interleaving:
+    ``poll()`` answers "still running" the first time — which is what the
+    pre-`urlopen` check sees — and reports the exit code afterwards, which is
+    what the post-response check sees.
+    """
+
+    def __init__(self, returncode: int = 4):
+        self.returncode = returncode
+        self.polls = 0
+
+    def poll(self):
+        self.polls += 1
+        return None if self.polls == 1 else self.returncode
+
+
+def test_liveness_is_rechecked_after_a_successful_response():
+    """The specific line the finding named: liveness was checked before
+    `urlopen` only, so a 200 that arrived from a child that had meanwhile lost
+    the bind was still accepted. Here the response is a valid 200 *and* carries
+    the right token — only the post-response check can catch it.
+    """
+    with _stand_in_server("this-runs-token") as base_url:
+        # Sanity: the same server with no process attached is accepted, so the
+        # refusal below is attributable to the liveness re-check alone.
+        CAPTURE.wait_for_http(f"{base_url}/api/health", expect_json=True, process=None, timeout=10)
+
+        child = _DiesAfterFirstPoll()
+        with pytest.raises(SystemExit) as excinfo:
+            CAPTURE.wait_for_http(
+                f"{base_url}/api/health",
+                expect_json=True,
+                process=child,
+                expect_token="this-runs-token",
+                timeout=10,
+            )
+
+    assert "already exited with code 4" in str(excinfo.value), str(excinfo.value)
+    assert child.polls >= 2, "liveness must be polled again after the response"
+
+
+def test_a_refusal_does_not_wait_out_the_timeout(sleeper):
+    """A token mismatch is not a readiness failure, so retrying cannot help.
+    Burning the full timeout would make a real collision take 60s to report."""
+    with _stand_in_server("something-else") as base_url:
+        started = time.monotonic()
+        with pytest.raises(SystemExit):
+            CAPTURE.wait_for_http(
+                f"{base_url}/api/health",
+                expect_json=True,
+                process=sleeper,
+                expect_token="this-runs-token",
+                timeout=45,
+            )
+        assert time.monotonic() - started < 10
+
+
+def test_the_mock_echoes_the_token_it_was_given_over_http():
+    """Wiring check on the child side: the flag has to reach the response body.
+
+    Driven through the real handler, so a rename of either end is caught here
+    rather than as a mysterious capture failure.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("demo_mock_readiness", REPO_ROOT / "docs" / "demo" / "mock_api.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    module.DemoHandler.corpus = module.load_corpus()
+    module.DemoHandler.instance_token = "tok-from-the-command-line"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), module.DemoHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        with urllib.request.urlopen(f"{base}/api/health", timeout=10) as response:  # noqa: S310 - loopback test server
+            body = json.loads(response.read().decode("utf-8"))
+        assert body["instance_token"] == "tok-from-the-command-line"
+        assert body["status"] == "healthy"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        module.DemoHandler.instance_token = None
+
+
+def test_the_default_token_is_absent_so_no_run_can_be_impersonated_by_default():
+    """The capture generates a fresh token per run; a server started without
+    the flag must report null rather than a value someone could predict."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("demo_mock_default", REPO_ROOT / "docs" / "demo" / "mock_api.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.DemoHandler.instance_token is None
+
+
+def test_the_capture_generates_a_fresh_token_per_run():
+    """A hardcoded or reused token would be guessable by a squatter."""
+    source = CAPTURE_PATH.read_text(encoding="utf-8")
+    assert "uuid.uuid4().hex" in source
+    assert "expect_token=token" in source
+
+
+def test_demo_readme_states_the_port_guarantee():
+    """The reason the capture refuses an occupied port is not obvious, and a
+    reader who hits it deserves to be told rather than left to guess."""
+    text = (REPO_ROOT / "docs" / "demo" / "README.md").read_text(encoding="utf-8")
+
+    assert "instance_token" in text, "the token handshake must be documented, not just implemented"
+    assert "--api-port" in text and "--web-port" in text

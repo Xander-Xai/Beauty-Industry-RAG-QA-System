@@ -52,6 +52,7 @@ python3 docs/demo/capture_demo.py --no-font-download   # 完全离线：用系�
 * `node` / `npm`，且 `frontend/node_modules` 已安装（脚本用 Vite dev server 提供真实前端）
 * `pillow`（可选，仅用于转 WebP；缺失时写出同名 `.png`，见下节）
 * 网络：**只有默认模式需要**，且仅首次——用于取一份按本次字符集裁剪的 Noto Sans SC 子集，缓存在 `docs/demo/.build/`（已 gitignore）。
+* `--api-port` / `--web-port` 需空闲。端口被占时脚本会**明确报错并写出端口号**，而不是继续跑——因为继续跑意味着抓到的是别人的服务，产出的是一张与 `synthetic_corpus.json` 无关的图。判定分三步：spawn 前预检端口、轮询时确认子进程仍活着、收到 200 之后再确认一次；另外每次运行会生成一个一次性 `instance_token` 交给 mock，`/api/health` 必须原样回显才算数——前两道检查存在极窄竞态，token 是唯一无法被抢占的判据。
 
 ## 输出格式：committed 的是 WebP，本地可能是 PNG
 

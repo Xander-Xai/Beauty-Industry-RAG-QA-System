@@ -57,6 +57,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import NamedTuple
 
@@ -235,20 +236,30 @@ def require_free_port(port: int, flag: str) -> None:
         probe.close()
 
 
+class _WrongServer(Exception):
+    """Something other than the spawned child answered on the expected port."""
+
+
 def wait_for_http(
     url: str,
     *,
     timeout: float = 60.0,
     expect_json: bool = False,
     process: subprocess.Popen | None = None,
+    expect_token: str | None = None,
 ) -> None:
-    """Poll ``url`` until it answers, or fail.
+    """Poll ``url`` until *this* child answers, or fail.
 
-    ``process`` is the child that is supposed to be answering. Polling the URL
-    alone is not enough: if the child died on bind, the probe succeeds against
-    whatever was already listening there and the capture renders the wrong
-    backend. So the poll also checks the child is still alive, and surfaces its
-    exit code rather than reporting a mystery timeout.
+    Three checks, because no single one is enough. `require_free_port` closes
+    the ordinary case before the spawn. Liveness closes a child that dies while
+    polling. Neither closes the window between them, where another process
+    answers first: the preflight socket is already closed and the losing child
+    has not exited yet, so a pre-response liveness check passes and the response
+    is accepted.
+
+    So the liveness check runs *again after* a 200, and where the caller can
+    identify its own server, `expect_token` must match too. The token is the
+    only check that cannot be raced: a squatter never saw it.
     """
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
@@ -258,9 +269,20 @@ def wait_for_http(
         try:
             with urllib.request.urlopen(url, timeout=3) as response:  # noqa: S310 - loopback readiness probe
                 if response.status == 200:
-                    if expect_json:
-                        json.loads(response.read().decode("utf-8"))
+                    body = json.loads(response.read().decode("utf-8")) if expect_json else None
+                    if expect_token is not None and (
+                        not isinstance(body, dict) or body.get("instance_token") != expect_token
+                    ):
+                        raise _WrongServer(f"{url} answered but did not echo this run's instance token")
+                    if process is not None and process.poll() is not None:
+                        raise _WrongServer(
+                            f"{url} answered but the spawned process had already exited with code {process.returncode}"
+                        )
                     return
+        except _WrongServer as exc:
+            # Not a readiness failure: something answered that is not ours, and
+            # waiting longer cannot fix that.
+            raise SystemExit(str(exc)) from None
         except Exception as exc:  # noqa: BLE001 - polling a starting server
             last_error = exc
         time.sleep(0.4)
@@ -269,14 +291,29 @@ def wait_for_http(
 
 def start_mock_api(port: int, log_path: Path) -> subprocess.Popen:
     require_free_port(port, "--api-port")
+    # Fresh per run, so a stale or foreign server cannot echo it by accident.
+    token = uuid.uuid4().hex
     handle = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
-        [sys.executable, str(DEMO_DIR / "mock_api.py"), "--port", str(port), "--quiet"],
+        [
+            sys.executable,
+            str(DEMO_DIR / "mock_api.py"),
+            "--port",
+            str(port),
+            "--quiet",
+            "--instance-token",
+            token,
+        ],
         stdout=handle,
         stderr=subprocess.STDOUT,
     )
     try:
-        wait_for_http(f"http://127.0.0.1:{port}/api/health", expect_json=True, process=process)
+        wait_for_http(
+            f"http://127.0.0.1:{port}/api/health",
+            expect_json=True,
+            process=process,
+            expect_token=token,
+        )
     except BaseException:
         process.terminate()
         raise SystemExit(f"the demo mock API never became ready on port {port}. Log: {log_path}") from None

@@ -155,6 +155,12 @@ def is_document_authorized(
 
 class DemoHandler(BaseHTTPRequestHandler):
     server_version = "SyntheticDemoAPI/1.0"
+
+    #: Echoed by ``/api/health`` so the capture can tell *its* backend from a
+    #: squatter that won the bind. The capture generates a fresh value per run
+    #: and passes it on the command line; anything else answering on this port
+    #: cannot produce it.
+    instance_token: str | None = None
     protocol_version = "HTTP/1.1"
 
     corpus: dict = {}
@@ -206,6 +212,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                     "status": "healthy",
                     "version": self.corpus["auth_metadata"]["app"]["version"],
                     "dependencies": {"redis": True, "qdrant": True, "elasticsearch": True},
+                    "instance_token": self.instance_token,
                 }
             )
             return
@@ -296,6 +303,11 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8799)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--instance-token",
+        default=None,
+        help="value echoed as `instance_token` by /api/health so the capture can verify it reached its own backend",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -304,6 +316,7 @@ def main() -> None:
     )
 
     DemoHandler.corpus = load_corpus()
+    DemoHandler.instance_token = args.instance_token
     server = ThreadingHTTPServer((args.host, args.port), DemoHandler)
     print(f"synthetic demo API on http://{args.host}:{args.port}", flush=True)
     try:
