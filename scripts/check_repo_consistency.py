@@ -3118,6 +3118,11 @@ def _parse_chinese_number(token: str) -> int | None:
     Past 99 the notation stops being compositional — 一百 is 100 and 一千 is 1000,
     and 二百一十 has its own rules — so those return None rather than a wrong
     number. "Cannot verify" is the honest answer; 210 would not be.
+
+    Total by construction: it returns None for anything it does not understand
+    and never raises. This runs in CI, so a documentation typo like `二一十个`
+    must produce a "cannot verify" error, not a traceback that aborts the whole
+    consistency check and hides every other problem with the repository.
     """
     if not token or (set(token) - set(_CN_DIGITS)) - {"十"}:
         return None
@@ -3125,12 +3130,16 @@ def _parse_chinese_number(token: str) -> int | None:
         # A lone digit, or a run of digits with no 十, which is not a number.
         return _CN_DIGITS[token] if len(token) == 1 else None
     head, _, tail = token.partition("十")
-    # Exactly one 十, with at most one digit on each side of it.
+    # Exactly one 十, with at most one known digit on each side of it. `.get`
+    # rather than indexing: `二一十个` and `十一二个` are typos, not numbers, and
+    # a KeyError here would take down the checker instead of reporting them.
     if "十" in head or "十" in tail:
         return None
     # An omitted leading 一 means one ten, so 十 = 10 and 十一 = 11.
-    tens = _CN_DIGITS[head] if head else 1
-    ones = _CN_DIGITS[tail] if tail else 0
+    tens = _CN_DIGITS.get(head, 1) if len(head) <= 1 else None
+    ones = _CN_DIGITS.get(tail, 0) if len(tail) <= 1 else None
+    if tens is None or ones is None:
+        return None
     return tens * 10 + ones
 
 
@@ -3185,13 +3194,18 @@ def _parse_stated_count(token: str) -> int | None:
         return _parse_chinese_number(token)
     for separator in ("-", " "):
         head, found, tail = token.partition(separator)
-        if found and head in _EN_COUNT_WORDS and tail in _EN_COUNT_WORDS:
-            # "five hundred" is 500, not 105: a scale word multiplies what
-            # precedes it. Everything else in these lists adds
-            # ("twenty-one" = 21, "forty-five" = 45).
-            if tail in ("hundred", "thousand"):
-                return _EN_COUNT_WORDS[head] * _EN_COUNT_WORDS[tail]
-            return _EN_COUNT_WORDS[head] + _EN_COUNT_WORDS[tail]
+        if not (found and head in _EN_COUNT_WORDS and tail in _EN_COUNT_WORDS):
+            continue
+        # A scale word multiplies: "five hundred" is 500, not 105.
+        if tail in ("hundred", "thousand"):
+            return _EN_COUNT_WORDS[head] * _EN_COUNT_WORDS[tail]
+        # Two words add only when the first is a *tens* word: "twenty-one" and
+        # the unhyphenated "twenty one" are both 21. A unit never precedes
+        # another unit additively, so "one two" is not 3 — it is not a number,
+        # and the spaced form requires a tens word to be believed at all.
+        head_value = _EN_COUNT_WORDS[head]
+        if separator == "-" or head_value >= 20:
+            return head_value + _EN_COUNT_WORDS[tail]
     return _EN_COUNT_WORDS.get(token)
 
 

@@ -3056,9 +3056,15 @@ def test_guard_fails_end_to_end_when_the_summary_count_drifts(tmp_path, monkeypa
         ("twenty one", 21),
         ("forty-five", 45),
         ("ninety-nine", 99),
+        # Unhyphenated British spelling of the same compound.
+        ("forty five", 45),
+        # A unit never precedes another unit additively, so "one two" is not 3.
+        ("two three", None),
         # ... except a scale word, which multiplies.
         ("five hundred", 500),
         ("two hundred", 200),
+        # Hyphenated spelling of the same thing; the separator loop tries "-" first.
+        ("one-hundred", 100),
         ("twelve thousand", 12_000),
     ],
 )
@@ -3298,3 +3304,61 @@ def test_digit_counts_still_win_over_the_character_class():
 
     assert slo_count_errors("README.md", "12 个 SLO 目标", expected=12) == []
     assert slo_count_errors("README.md", "5 个 SLO 目标", expected=5) == []
+
+
+# ── the count parsers must be total ─────────────────────────────────────
+@pytest.mark.parametrize(
+    "token",
+    ["二一十个", "十一二个", "十十", "一一十", "二十一十一", "二二", "", "十百"],
+)
+def test_a_malformed_chinese_numeral_returns_none_and_never_raises(token):
+    """The regression: indexing the digit map with a multi-character side raised
+    KeyError, so a documentation typo aborted the whole consistency check with a
+    traceback — hiding every other problem with the repository along with it.
+    This function runs in CI, so it has to be total."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "   ", "abc", "5x", "SLO", "-", "forty five hundred", "1-2-3", "one two"],
+)
+def test_unparseable_count_tokens_return_none_rather_than_a_guess(token):
+    """`None` makes the guard say "cannot verify". A wrong int would make it
+    confidently reject a correct document."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize("claim", ["二一十个 SLO 目标", "十一二个 SLO 目标", "十十个 SLO 目标"])
+def test_a_malformed_chinese_count_in_a_document_is_reported_not_crashed(claim):
+    """The end-to-end shape of the finding: the guard emits its intended
+    'cannot verify' error instead of taking the process down."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1, (claim, errors)
+    assert "cannot verify" in errors[0], (claim, errors)
+
+
+def test_the_consistency_script_still_runs_with_a_malformed_count_in_a_document(tmp_path, monkeypatch):
+    """The reason totality matters: one typo must not stop the other checks."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text(
+        "| SLO-1 | a | x | y | `DESIGN_TARGET` |\n| SLO-2 | b | x | y | `DESIGN_TARGET` |\n",
+        encoding="utf-8",
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text("二一十个 SLO 目标。\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    monkeypatch.setattr("scripts.check_repo_consistency.CANONICAL_DOCS", [readme])
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert any("cannot verify" in error for error in errors), errors
