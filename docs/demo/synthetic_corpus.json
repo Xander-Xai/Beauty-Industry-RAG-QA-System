@@ -128,7 +128,7 @@
       {
         "step": "身份解析",
         "demo": "role_mask=0x04 · dept_mask=0x04（JWT 声明按 uint32 校验、畸形即 fail closed；本演示走 dev-mode header，该分支是 int() 直读）",
-        "code": "api/dependencies.py"
+        "code": "common/auth.py"
       },
       {
         "step": "存储侧下推",

@@ -18,7 +18,11 @@ How it stays honest
   regulation text, no proprietary corpus, no production metrics, no secrets.
 * The two right-hand cards are labelled demo annotation. Each row points at
   the file that really implements that step, so a reviewer can open it.
-* The image is committed as WebP; nothing else from the capture run is kept.
+* Servers are torn down by process group so `npm`'s Vite child cannot survive
+and hold `--web-port`; on Windows there is no process group, so only the direct
+child is reached and a re-run may need a free port.
+
+The image is committed as WebP; nothing else from the capture run is kept.
   Pillow is optional: without it the PNG lands next to the requested `.webp`
   under a `.png` name, and the run reports and stats the file it actually wrote
   rather than the one it was asked for. PNG bytes are never written under the
@@ -231,6 +235,11 @@ def stop_server(process: subprocess.Popen | None) -> None:
 
     SIGKILL follows SIGTERM because a dev server with an open pipe may not exit
     on the polite signal, and a leaked listener is the failure this prevents.
+
+    On Windows there is no process group to signal, so only the direct child is
+    reached and a grandchild may survive. The script still runs there — it ships a
+    Windows font path — but the teardown guarantee is narrower on that platform,
+    and re-running may need a free `--web-port`.
     """
     if process is None:
         return
@@ -243,15 +252,23 @@ def stop_server(process: subprocess.Popen | None) -> None:
     pgid = process.pid
 
     def _signal(sig: int) -> None:
-        try:
-            os.killpg(pgid, sig)
-        except (ProcessLookupError, PermissionError, OSError):
-            if process.poll() is not None:
-                return
+        # `killpg` is POSIX-only. On Windows there is no group to signal, so the
+        # direct child is all we can reach — a weaker guarantee, stated rather
+        # than assumed. Reading the attribute per call (instead of caching a
+        # module-level flag) keeps this testable on a POSIX host.
+        killpg = getattr(os, "killpg", None)
+        if killpg is not None:
             try:
-                process.send_signal(sig)
-            except (ProcessLookupError, OSError):
+                killpg(pgid, sig)
+                return
+            except (ProcessLookupError, PermissionError, OSError):
                 pass
+        if process.poll() is not None:
+            return
+        try:
+            process.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            pass
 
     _signal(signal.SIGTERM)
     try:

@@ -521,3 +521,34 @@ def test_the_mock_fixture_is_stricter_than_the_service_and_says_so():
     source = (DEMO_DIR / "mock_api.py").read_text(encoding="utf-8")
 
     assert "stricter on purpose" in source
+
+
+def test_every_trace_row_points_at_a_file_that_exists_and_is_the_real_implementation():
+    """The README claims each annotation row points at the file that really
+    implements the step. `api/dependencies.py` was cited for identity resolution
+    while being only a backward-compatibility alias for `common.auth.parse_identity`
+    — so the row sent a reader to a shim.
+
+    Aliases are rejected as well as missing paths: a file that exists but says of
+    itself that it only re-exports the real implementation is not where the
+    behaviour lives.
+    """
+    for row in CORPUS["trace"]["rows"]:
+        target = REPO_ROOT / row["code"]
+        assert target.is_file(), f"{row['step']} points at missing {row['code']}"
+        source = target.read_text(encoding="utf-8")
+        if "backward" in source.lower() and "alias" in source.lower():
+            pytest.fail(
+                f"{row['step']} points at {row['code']}, which is only a backward-compatibility alias; "
+                "cite the module that implements it"
+            )
+
+
+def test_the_identity_row_points_at_the_module_that_parses_masks():
+    """Named separately so a regression reports as a wrong pointer rather than as
+    one anonymous line item in a loop."""
+    row = next(row for row in CORPUS["trace"]["rows"] if row["step"] == "身份解析")
+
+    assert row["code"] == "common/auth.py", row["code"]
+    source = (REPO_ROOT / row["code"]).read_text(encoding="utf-8")
+    assert "int(role_str)" in source, "the cited module is no longer the one reading dev-mode masks"

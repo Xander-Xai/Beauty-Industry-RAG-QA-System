@@ -603,3 +603,54 @@ def test_an_exited_wrapper_still_gets_its_group_signalled(spawner):
     while time.monotonic() < deadline and _port_is_busy(port):
         time.sleep(0.1)
     assert not _port_is_busy(port), "the group was not signalled after the wrapper had exited"
+
+
+def test_teardown_falls_back_when_there_is_no_process_group(tmp_path, monkeypatch):
+    """`os.killpg` is POSIX-only. On Windows it does not exist, and an
+    `AttributeError` inside `finally` would fail the documented capture command
+    during cleanup — after the image was already written — and leave the children
+    running.
+
+    Simulated by removing the attribute on a POSIX host: the teardown must still
+    stop the direct child instead of raising.
+    """
+    marker = tmp_path / "child.pid"
+    script = f"import pathlib, sys, time\npathlib.Path({str(marker)!r}).write_text(str(os.getpid()) if (os := __import__('os')) else '')\ntime.sleep(120)\n"
+    child = subprocess.Popen([sys.executable, "-c", script])
+    try:
+        # Wait for the child to record its pid, so the assertion below is about
+        # the teardown and not about a process that never started.
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not marker.exists():
+            time.sleep(0.1)
+        assert marker.exists(), "the child never started"
+
+        monkeypatch.delattr(os, "killpg", raising=False)
+        CAPTURE.stop_server(child)
+
+        assert child.poll() is not None, "the direct child survived the fallback teardown"
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+
+
+def test_teardown_does_not_raise_when_the_process_group_is_already_gone(tmp_path, monkeypatch):
+    """A group that no longer exists raises ProcessLookupError, and a child that
+    is already reaped cannot be signalled either. Neither is a reason to fail a
+    capture that has already produced its image."""
+
+    def _vanished(*_args, **_kwargs):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "killpg", _vanished)
+    process = subprocess.Popen([sys.executable, "-c", "raise SystemExit(0)"])
+    process.wait(timeout=10)
+
+    CAPTURE.stop_server(process)  # must not raise
+
+
+def test_the_docstring_states_the_narrower_windows_guarantee():
+    """A weaker guarantee on one platform has to be written down, not assumed."""
+    doc = CAPTURE.__doc__ or ""
+    assert "Windows" in doc
