@@ -25,7 +25,7 @@
 #   scripts/branch_protection.sh verify    # gate: compare live state against
 #                                         # the declared contract (read-only)
 #   scripts/branch_protection.sh derive    # print + check the derived context set
-#   scripts/branch_protection.sh payload   # print the exact PUT payload
+#   scripts/branch_protection.sh payload   # print the exact PUT + PATCH payloads
 #   scripts/branch_protection.sh apply     # PUT the protection (idempotent)
 #   scripts/branch_protection.sh snapshot  # machine-readable JSON snapshot
 #
@@ -189,6 +189,28 @@ if best is not None:
   printf '%s\n' "$out"
 }
 
+# Build the body for PATCH /repos/{owner}/{repo}.
+#
+# `allow_update_branch` is a repository-level setting, not a member of the
+# branch-protection object above, so it cannot ride along in the PUT and needs
+# its own PATCH. The body is built with json.dumps for the same reason the PUT
+# payload is: the value must reach GitHub as a JSON boolean, and only a real
+# JSON encoder guarantees that.
+#
+# `gh api -f/--raw-field` cannot do this job. It is documented as "add a string
+# parameter", and it behaves that way: `-f allow_update_branch=true` puts
+# {"allow_update_branch":"true"} on the wire -- a quoted string -- where the
+# API expects a boolean. `-F/--field` does emit a real boolean, but it gets
+# there by inferring a type from the literal text "true", which breaks the
+# moment the value is spelled any other way ("True", "1", "yes"). Encoding the
+# boolean in python has no such failure mode.
+build_update_branch_payload() {
+  python3 -c '
+import json
+print(json.dumps({"allow_update_branch": True}, indent=2))
+'
+}
+
 # Recompute the required set from a real pull-request head: every check-run
 # GitHub actually reported as executed (i.e. not `skipped`).
 derive_contexts() {
@@ -258,8 +280,22 @@ cmd_apply() {
 
   # Companion repo setting for strict mode: without it the "Update branch"
   # button is unavailable and re-syncing a stale base becomes a local chore.
+  #
+  # Sent as an explicit JSON body rather than as a gh field flag, so that the
+  # value arrives as a boolean. Echoed before sending, because this is the one
+  # request in the script whose type is easy to get silently wrong, and
+  # "true"/true is invisible once it has been through a flag parser.
+  local update_branch_payload
+  update_branch_payload=$(build_update_branch_payload)
   log "# enabling allow_update_branch (companion to strict status checks)"
-  gh api --method PATCH "${API}" -f allow_update_branch=true >/dev/null
+  printf '%s\n' "$update_branch_payload"
+
+  # The body carries that one key and nothing else, so this PATCH cannot
+  # disturb the merge settings `verify` also asserts on. Repeating it against an
+  # already-correct repository is a no-op: PATCH states the target value
+  # rather than toggling, so `apply` stays idempotent.
+  printf '%s\n' "$update_branch_payload" \
+    | gh api --method PATCH "${API}" --input - >/dev/null
 
   log "applied."
 }
@@ -534,11 +570,21 @@ print(json.dumps({
 PY
 }
 
+# Print every request body `apply` will send, in order, so the exact bytes can
+# be reviewed -- and asserted against -- without touching the live repository.
+cmd_payload() {
+  log "# PUT ${API}/branches/${BRANCH}/protection"
+  build_payload
+  log ""
+  log "# PATCH ${API}"
+  build_update_branch_payload
+}
+
 case "${1:-verify}" in
   verify)   cmd_verify ;;
   derive)   cmd_derive ;;
   apply)    cmd_apply ;;
-  payload)  build_payload ;;
+  payload)  cmd_payload ;;
   snapshot) cmd_snapshot ;;
   *) fail "unknown command: ${1} (expected verify|derive|apply|payload|snapshot)" ;;
 esac

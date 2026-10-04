@@ -9,7 +9,7 @@ GitHub UI 上勾选**：脚本里的 required context 是从真实 check-run 推
 ```bash
 scripts/branch_protection.sh verify    # 只读门禁：把 live 状态与声明的契约逐项比对
 scripts/branch_protection.sh derive    # 从真实 check-run 重新推导 required context
-scripts/branch_protection.sh payload   # 打印将要写入的 PUT payload
+scripts/branch_protection.sh payload   # 打印将要写入的 PUT + PATCH payload
 scripts/branch_protection.sh apply     # 幂等写入（写前强制校验 context 未漂移）
 ```
 
@@ -58,8 +58,30 @@ diff。契约是声明式的：期望值写死在脚本里，**不会**从 live 
 | `lock_branch` | `false` | 不锁定分支 |
 | `allow_squash_merge` | `true` | 保持 squash merge 可用 |
 | `delete_branch_on_merge` | `true` | 合并后自动删除分支 |
-| `allow_update_branch` | `true` | `strict` 模式的必要配套，让 "Update branch" 按钮可用 |
+| `allow_update_branch` | `true`（JSON 布尔值，非字符串 `"true"`） | `strict` 模式的必要配套，让 "Update branch" 按钮可用 |
 | rulesets | 空（`[]`） | 不引入第二套并行规则，避免与 branch protection 冲突 |
+
+### `allow_update_branch` 为什么单独发一次 PATCH
+
+其余配置项都属于 branch protection 对象，能一次性写进
+`PUT /repos/{owner}/{repo}/branches/{branch}/protection`。但
+`allow_update_branch` 是**仓库级设置**，不在该对象里，因此 `apply` 在 PUT
+之后另发一次 `PATCH /repos/{owner}/{repo}` 来写它。
+
+这次 PATCH 的请求体由 python 的 `json.dumps` 生成，请求里必须是 JSON 布尔值
+`true`，而不是字符串 `"true"`。这一点很容易写错：早期版本用的是
+`gh api -f allow_update_branch=true`，而 `-f/--raw-field` 的定义就是
+「添加一个**字符串**参数」，实测发出去的请求体是
+`{"allow_update_branch":"true"}`——与接口要求的类型不符。至于 GitHub 是拒绝
+还是容错转成布尔，本文件不做断言，也不该依赖：脚本必须自己保证类型正确。
+改用显式 JSON 请求体后，类型由 JSON 编码器保证，不再依赖 gh 对字面量的猜测
+（`-F/--field` 虽然也能得到布尔值，但它靠把文本 `"true"` 推断为 bool，换一种
+写法就会退化）。
+
+该请求体只含这一个键，因此不会影响 `verify` 同时校验的其他仓库级 merge 设置；
+它写的是绝对值而非开关，所以重复执行 `apply` 是幂等的。
+
+可用 `scripts/branch_protection.sh payload` 查看将要写入的这两个请求体。
 
 ## required context 的来源
 
