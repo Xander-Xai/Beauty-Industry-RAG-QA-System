@@ -97,8 +97,14 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
 
 ## Historical / Implementation Plans
 
-- [`docs/superpowers/plans/`](superpowers/plans/)
-- [`docs/superpowers/specs/`](superpowers/specs/)
+- Superseded implementation plans and design specs are **not carried in the working tree**.
+  The former `docs/superpowers/` directory was removed from the current branch; the files
+  remain retrievable from this repository's Git history, which is their only archive.
+- [Repository truth audit](repository-truth-audit.md) and the canonical guides above are the
+  only sources for the current repository state.
 
-Historical plan ≠ current implementation status. Keep historical plans intact; use the audit
-and canonical guides for the current repository state.
+Historical plan ≠ current implementation status, and a plan that has been executed is not a
+current capability statement. When a historical plan and a current document disagree, the
+current document wins: [interview architecture baseline](interview-architecture-baseline.md),
+[interview evidence map](interview-evidence-map.md) and the [repository truth
+audit](repository-truth-audit.md).
