@@ -1,0 +1,13 @@
+# Python dependencies for regenerating the README demo image.
+#
+#     pip install -r docs/demo/requirements.txt
+#     playwright install chromium
+#
+# Kept out of the top-level requirements.txt on purpose: the service does not
+# import playwright, and every install of the service should not pull a browser
+# automation stack. Only `docs/demo/capture_demo.py` needs it.
+#
+# Pillow is intentionally absent because it is already a service dependency
+# (requirements.txt). It is optional *for the capture*: without it the run
+# degrades to a sibling .png — see docs/demo/README.md.
+playwright>=1.44

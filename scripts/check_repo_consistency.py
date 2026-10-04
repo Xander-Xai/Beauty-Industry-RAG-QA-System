@@ -3031,11 +3031,46 @@ _ENUMERATED_ITEM_RE = re.compile(r"^\*\*Q(\d+)\s+\S", re.MULTILINE)
 #: English count words that may precede "questions". The list runs well past
 #: "ten" on purpose: the marker syntax accepts any ``Q<n>``, so a list that grows
 #: to twelve or twenty-one items must be guarded exactly like a shorter one.
-_COUNT_WORDS = (
-    "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen"
-    "|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty"
-    "|fifty|sixty|seventy|eighty|ninety|hundred|thousand"
-)
+#: Every English count word the guards accept. Kept as one tuple and turned into
+#: both the regex alternation and the word->value map below, because maintaining
+#: those two lists separately is how "twenty-one" came to parse as 20 and
+#: "thirty" came to be matchable but unparseable.
+_COUNT_WORD_LIST = (
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand"
+).split()
+_COUNT_WORDS = "|".join(_COUNT_WORD_LIST)
+
+
+def _count_word_values() -> dict[str, int]:
+    """``zero``..``nineteen`` count up; the rest are tens, then hundred/thousand.
+
+    Built by position for the first twenty and from an explicit table for the
+    rest, because an index is not a value: ``thirty`` is the 22nd word in the
+    list but the number 30.
+    """
+    values = {word: index for index, word in enumerate(_COUNT_WORD_LIST[:20])}
+    values.update(
+        zip(
+            ("twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"),
+            (20, 30, 40, 50, 60, 70, 80, 90),
+            strict=True,
+        )
+    )
+    values["hundred"] = 100
+    values["thousand"] = 1000
+    return values
+
+
+_EN_COUNT_WORDS = _count_word_values()
+
+#: The only values that may head an additive English compound. "twenty-one" is
+#: 21; "hundred-one" and "one-two" are not numbers at all.
+_EN_TENS_VALUES = frozenset({20, 30, 40, 50, 60, 70, 80, 90})
+
+#: A grouped integer, the only numeric form a count may take: "1,005" and "1005"
+#: are the same number, "1,00" is a typo, and "105.5" is not a count of anything.
+_GROUPED_INT_RE = re.compile(r"\d{1,3}(?:,\d{3})+|\d+")
 
 #: Prose that restates how many items the list has, in the two languages this
 #: repository documents in. Spacing is optional because both "六个问题" and
@@ -3046,6 +3081,251 @@ _RESTATED_COUNT_RE = re.compile(
     r"|\b(?:\d+|" + _COUNT_WORDS + r")(?:[-\s](?:" + _COUNT_WORDS + r"))?\s+questions\b",
     re.IGNORECASE,
 )
+
+#: One objective row in the SLO runbook, e.g. ``| SLO-1 | Availability ... |``.
+#: The marker must open the line so a prose reference to ``SLO-3`` is not counted
+#: as a sixth objective.
+_SLO_ROW_RE = re.compile(r"^\|\s*SLO-(\d+)\s*\|", re.MULTILINE)
+
+#: A stated objective count, in either order and either language:
+#: ``5 个 SLO 目标``, ``SLO 目标（5 个）``, ``five SLO objectives``. Every phrasing
+#: the README actually uses is matched, because the point is to catch whichever
+#: one drifts, not to police one canonical sentence. Each alternative names its
+#: own group (``re`` forbids reusing one name), and exactly one is set per match.
+_SLO_COUNT_RE = re.compile(
+    # 百 千 and 零 are matched so the guard *sees* a count it cannot parse and
+    # reports "cannot verify", rather than not matching and silently ignoring
+    # the claim. A guard that shrugs at what it does not understand is not one.
+    #
+    # The lookbehind is load-bearing for the same reason the English one is:
+    # Chinese numerals are contiguous ideographs, so `一百零五个` has no
+    # separator to stop the class matching its `五个` tail — without the guard,
+    # a claim of 105 would be read as 5 and quietly pass. 零 is what makes that
+    # particular tail reachable, so it is in the class.
+    # The numeric token is captured whole, and comma grouping, decimal point and
+    # sign included, because a bare `\d+` starts *after* the punctuation:
+    # "1,005" would match "005" and read as 5, certifying a claim of 1,005
+    # against a five-objective runbook, and "-5" would match "5" and certify a
+    # claim of -5 as 5. Capturing the sign instead makes the parser see "-5",
+    # decline it, and report "cannot verify" — unchecked is safe, wrong is not.
+    # The lookbehind stops a match beginning mid-number even if the shape
+    # changes later.
+    r"(?<![\u4e00-\u9fff])(?P<lead>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*个\s*SLO\s*目标"
+    r"|SLO\s*目标\s*[（(]\s*(?<![\u4e00-\u9fff])(?P<trail>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*个"
+    # The compound has to sit *inside* the group: capturing only the first word
+    # made "twenty-one SLO objectives" parse as 20. The lookbehind keeps the
+    # match from starting *inside* one instead — "twenty-one" has a word
+    # boundary before "one". The `(?:...)` around the interpolated word list is
+    # load-bearing: `_COUNT_WORDS` is an `a|b|c` alternation, so without it the
+    # top-level `|` splits the whole pattern and only the final alternative
+    # keeps the trailing `\s+SLO` requirement.
+    r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
+    + _COUNT_WORDS
+    + r")(?:[-\s](?:"
+    + _COUNT_WORDS
+    + r"))?)\s+SLO\s+objectives?\b",
+    re.IGNORECASE,
+)
+
+#: Chinese and English count words, so the guard compares numbers rather than
+#: strings: "十个" must not slip past a check that only understands "10", and
+#: "twenty-one" must not slip past one that only reads the first word.
+#: "十" is handled structurally by `_parse_chinese_number`, not looked up here.
+_CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _parse_chinese_number(token: str) -> int | None:
+    """Parse a Chinese numeral up to 99: 十一 = 11, 二十 = 20, 二十一 = 21.
+
+    Needed because these are single words: a character class would match only
+    the `二` in `十二个 SLO 目标` and report 2, rejecting a correct document, and
+    the trailing form `SLO 目标（十二个）` would not match at all.
+
+    Past 99 the notation stops being compositional — 一百 is 100 and 一千 is 1000,
+    and 二百一十 has its own rules — so those return None rather than a wrong
+    number. "Cannot verify" is the honest answer; 210 would not be.
+
+    Total by construction: it returns None for anything it does not understand
+    and never raises. This runs in CI, so a documentation typo like `二一十个`
+    must produce a "cannot verify" error, not a traceback that aborts the whole
+    consistency check and hides every other problem with the repository.
+    """
+    if not token or (set(token) - set(_CN_DIGITS)) - {"十"}:
+        return None
+    if "十" not in token:
+        # A lone digit, or a run of digits with no 十, which is not a number.
+        return _CN_DIGITS[token] if len(token) == 1 else None
+    head, _, tail = token.partition("十")
+    # Exactly one 十, with at most one known digit on each side of it. `.get`
+    # rather than indexing: `二一十个` and `十一二个` are typos, not numbers, and
+    # a KeyError here would take down the checker instead of reporting them.
+    if "十" in head or "十" in tail:
+        return None
+    # An omitted leading 一 means one ten, so 十 = 10 and 十一 = 11.
+    tens = _CN_DIGITS.get(head, 1) if len(head) <= 1 else None
+    ones = _CN_DIGITS.get(tail, 0) if len(tail) <= 1 else None
+    if tens is None or ones is None:
+        return None
+    return tens * 10 + ones
+
+
+def slo_objective_rows(runbook_text: str) -> list[int]:
+    """The objective identifiers the runbook defines, in document order.
+
+    A list, not a set. Deduplicating here would hide exactly the mistake worth
+    catching: six rows where two share an ``SLO-5`` would count as five, and
+    every "5 个 SLO 目标" in the summaries would keep passing while the runbook
+    described a sixth objective under an id that already existed.
+    """
+    return [int(number) for number in _SLO_ROW_RE.findall(runbook_text)]
+
+
+def slo_objective_count(runbook_text: str) -> int:
+    """How many SLO objectives ``docs/slo-runbook.md`` actually defines."""
+    return len(slo_objective_rows(runbook_text))
+
+
+def slo_objective_id_errors(runbook_name: str, runbook_text: str) -> list[str]:
+    """Identifiers must be unique and contiguous from 1.
+
+    Contiguity is what makes "SLO-6" mean the sixth objective. A gap or a repeat
+    means a row was inserted or copy-pasted, and every stated count becomes
+    ambiguous — so it is rejected here rather than silently absorbed into a
+    total.
+    """
+    numbers = slo_objective_rows(runbook_text)
+    if not numbers:
+        return []
+    errors: list[str] = []
+    duplicates = sorted({number for number in numbers if numbers.count(number) > 1})
+    if duplicates:
+        errors.append(f"{runbook_name}: duplicate objective identifiers {duplicates}; each SLO-<n> must appear once")
+    expected = list(range(1, len(numbers) + 1))
+    if numbers != expected:
+        errors.append(f"{runbook_name}: objective identifiers are {numbers} instead of a contiguous 1..{len(numbers)}")
+    return errors
+
+
+def _parse_stated_count(token: str) -> int | None:
+    """Turn one captured count token into an int, or ``None`` if it is not one.
+
+    An unrecognised token returns ``None`` so the guard reports "cannot verify"
+    rather than silently accepting a phrase it failed to parse — a guard that
+    shrugs at what it does not understand is not a guard.
+    """
+    token = token.strip().lower()
+    if token.isdigit():
+        return int(token)
+    if _GROUPED_INT_RE.fullmatch(token):
+        return int(token.replace(",", ""))
+    if not token.isascii():
+        return _parse_chinese_number(token)
+    for separator in ("-", " "):
+        head, found, tail = token.partition(separator)
+        if not (found and head in _EN_COUNT_WORDS and tail in _EN_COUNT_WORDS):
+            continue
+        # A scale word multiplies: "five hundred" is 500, not 105.
+        if tail in ("hundred", "thousand"):
+            return _EN_COUNT_WORDS[head] * _EN_COUNT_WORDS[tail]
+        # An additive compound is a tens word plus a unit, and nothing else:
+        # "twenty-one", "forty-five", "ninety-nine". Constraining both sides is
+        # what makes malformed shapes unreadable rather than merely unlikely —
+        # "twenty-zero" is not 20, "twenty-eleven" is not 31, "twenty-thirty" is
+        # not 50, and "hundred-one" is not 101. Each of those would otherwise
+        # compute to a number that could coincide with the real count, and the
+        # guard would certify a typo.
+        if _EN_COUNT_WORDS[head] in _EN_TENS_VALUES and 1 <= _EN_COUNT_WORDS[tail] <= 9:
+            return _EN_COUNT_WORDS[head] + _EN_COUNT_WORDS[tail]
+    return _EN_COUNT_WORDS.get(token)
+
+
+#: Words that can precede a count token as part of a *larger* numeral, rather than
+#: starting one: "one hundred and five" continues into "five", and "twenty one"
+#: is one numeral rather than two. `re` cannot express "not preceded by an
+#: arbitrarily long number phrase" with a lookbehind, so the preceding context is
+#: inspected in Python instead.
+_NUMERAL_CONTINUATION_WORDS = frozenset(_COUNT_WORD_LIST) | {"and"}
+
+
+def _continues_a_larger_numeral(text: str, start: int) -> bool:
+    """Whether the match at ``start`` is the tail of a longer numeral.
+
+    True for "five" in "one hundred and five SLO objectives", which would
+    otherwise be read as a statement of five when the runbook defines five — a
+    false pass, and the reason the regex alone cannot be trusted here.
+    """
+    prefix = text[:start].rstrip(" \t\u3000-")
+    numerals = 0
+    while prefix:
+        head, _separator, last = prefix.rpartition(" ")
+        candidate = last.strip(" \t\u3000-,").lower()
+        if not candidate or candidate not in _NUMERAL_CONTINUATION_WORDS:
+            break
+        # "and" alone introduces a numeral; "and" after a numeral continues one.
+        # Counting only the numeral words is what tells those two apart. The walk
+        # ends by itself: the final token leaves an empty `head`.
+        if candidate != "and":
+            numerals += 1
+        prefix = head.rstrip(" \t\u3000-")
+    return numerals > 0
+
+
+def slo_count_errors(name: str, text: str, expected: int) -> list[str]:
+    """Return errors for objective counts that contradict the SLO runbook.
+
+    The README states how many SLO objectives there are in three separate places
+    while ``docs/slo-runbook.md`` is the only place that defines them. Nothing
+    tied the two together, so a runbook edit left the summary claiming "十个"
+    next to two correct "5"s in the same file — a self-contradiction inside a
+    section presented as repository-reproducible evidence.
+
+    Deriving the count from the runbook instead of restating it means adding
+    SLO-6 can no longer leave the summary quietly behind.
+    """
+    errors: list[str] = []
+    for match in _SLO_COUNT_RE.finditer(text):
+        if _continues_a_larger_numeral(text, match.start()):
+            errors.append(
+                f"{name}: cannot verify the SLO objective count in {match.group(0)!r}; "
+                f"it continues a longer numeral, and docs/slo-runbook.md defines {expected}"
+            )
+            continue
+        token = match.group("lead") or match.group("trail") or match.group("english") or ""
+        stated = _parse_stated_count(token)
+        if stated is None:
+            errors.append(
+                f"{name}: cannot verify the SLO objective count in {match.group(0)!r}; "
+                f"docs/slo-runbook.md defines {expected}"
+            )
+        elif stated != expected:
+            errors.append(
+                f"{name}: states {stated} SLO objectives but docs/slo-runbook.md defines {expected} "
+                f"({match.group(0)!r})"
+            )
+    return errors
+
+
+def check_slo_objective_counts(errors: list[str], root: Path | None = None) -> None:
+    """Every stated SLO objective count must match the runbook that defines them."""
+    base = ROOT if root is None else root
+    runbook = base / "docs" / "slo-runbook.md"
+    if not runbook.is_file():
+        return
+    runbook_text = runbook.read_text(encoding="utf-8")
+    expected = slo_objective_count(runbook_text)
+    if expected == 0:
+        errors.append(
+            "docs/slo-runbook.md: no `| SLO-<n> |` objective rows found; the count guard has nothing to compare"
+        )
+        return
+    # Identifiers first: if two rows share an id then the count above is not a
+    # count of objectives, and comparing summaries against it would bless the
+    # very duplication that produced the wrong number.
+    errors.extend(slo_objective_id_errors("docs/slo-runbook.md", runbook_text))
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        errors.extend(slo_count_errors(_display(path), path.read_text(encoding="utf-8"), expected))
 
 
 def _markdown_sections(text: str) -> list[tuple[str, str]]:
@@ -3161,6 +3441,7 @@ def main() -> int:
     check_legacy_jaeger_agent_config_is_absent(errors)
     check_canonical_runtime_is_not_observability_gated(errors)
     check_enumerated_section_counts(errors)
+    check_slo_objective_counts(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):

@@ -1,6 +1,9 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
-> 面向化妆品法规 / 成分 / 产品知识库的**企业内部多模态 RAG 问答系统**：FastAPI 单体在线主链路 + React 前端，离线知识构建（Qdrant 向量 + Elasticsearch BM25）与在线检索（动态 2–4 路召回 → 两级重排 → 双 Gate）分离。
+> **一句话定位**：面向化妆品法规 / 成分 / 产品知识库的**企业内部多模态 RAG 问答系统**——把散落在 PDF、图片、表格里的法规与成分知识变成可检索资产，在线给出**带引用、带出处、证据不足就拒答**的答案，并按角色与部门做权限隔离。
+>
+> **技术栈**：FastAPI 单体在线主链路 + React 前端；离线知识构建（Qdrant 向量 + Elasticsearch BM25）与在线检索（动态 2–4 路召回 → 两级重排 → 双 Gate）分离；Redis 承载会话 / L2 缓存 / 限流 / 审计流。
+>
 > **这个仓库把"实现了"和"验证过"分开标注**：每条能力都带证据等级，`scripts/check_repo_consistency.py` 在 CI 中强制这些标注不得漂移。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -16,21 +19,51 @@ Runtime version `2.3.0`（`config.json` → `system.version`）。CI 配置见 `
 
 ---
 
-## Project Highlights
+## 一次请求长什么样（合成数据演示）
 
-| | |
-|---|---|
-| **检索不是固定四路** | 简单问题 2 路（`dense_bge` + `bm25_es`）；复杂问题 +1 路 `rewrite_variant`；复杂且视觉相关再 +1 路 `clip_visual`。ES Fallback 是降级补召回，不算一路。 |
-| **两级重排** | 融合后 BiEncoder 宽保留 Top 150，再由双 CrossEncoder ensemble 精排到 Top 10（请求内批量预测）。 |
-| **双 Gate 把幻觉关在门外** | 生成前 **Evidence Gate** 综合 Top 1 / Top 3 / 多路一致性 / 文档间一致性，输出「正常生成 / 增强证据后生成 / 拒答」；生成后 **Answer Gate** 校验答案与核心证据一致性，法规类矛盾直接拒答。 |
-| **权限是双层的** | 存储侧下推（Qdrant 下推文档状态与知识版本；ES 下推状态、版本、role、dept）+ 融合前位掩码 RBAC 二次过滤；Redis L2 物理 key 按 `rag:l2:rm:{role_mask}:dm:{dept_mask}:{key}` 分区，由 cache 对象自身强制，旧的无分区 key 不回落。 |
-| **知识版本有发布纪律** | 构建 / 校验 / 封存（seal）可自动化，但**激活 `knowledge_version_epoch` 是显式人工步骤**；封存后 epoch 不可变，`--skip-validation` 是明确的危险逃生口。 |
-| **检索证据按不可信数据处理** | 保留标记集中定义并在所有不可信通道转义，证据被限定在 `<retrieved_context>` 数据区块内、当前请求在 `<user_query>` 区块内。这是 **prompt 层结构约束，不是强隔离**——它不解决 prompt injection，也不能证明越狱不可能。 |
-| **运维证据闭环** | `/api/metrics`（需认证）、6 条只引用真实 emit 指标的 Prometheus 告警规则、10 面板 Grafana JSON、9 字段结构化业务动作审计（Redis Stream + 每日 JSONL）、SLO + 故障 Runbook（按代码中真实存在的降级路径编写）、可选 OTLP exporter。 |
-| **仓库自身的证据治理** | 一套 canonical 证据等级 + 文档一致性守卫，把"设计目标 / 已实现 / 本地真实验证 / 历史生产"四种话术在文档层面隔离开。 |
-| **仓库规模（可复核）** | 240 个 tracked Python 文件 / 60,543 行；81 个测试文件、1,529 个 `def test_` 函数，`pytest --collect-only` 展开参数化后共 **1,724 个用例**；CI 覆盖 Python 3.10 与 3.11。复核方式：`git ls-files '*.py' \| xargs wc -l`、`python3 -m pytest --collect-only -q`。 |
+![合成数据演示：用户 Query → 带引用的回答 → 引用证据 → 来源文档 → 权限与可信证据。左侧为本仓库前端在 Chromium 中的真实渲染，右侧为演示标注](docs/assets/demo-request-evidence-flow.webp)
 
-> 上面每一行的等级都是 `REPO_VERIFIED`（代码 + 确定性测试覆盖），**不是** `LOCAL_REAL_VALIDATION`，更不是生产验证。逐项等级见 [Evidence Matrix](#evidence-matrix)。
+五段链路：**用户 Query → 回答（内含〔证据N〕引用）→ 引用证据标签（可点，命中来源文档）→ 来源文档条款 → 权限 / 可信证据**。第二问是切换身份之后的同一问题：`Regulatory Affairs`（role_mask=0x04 · dept_mask=0x04）读得到 ④ 里那两份文档，两份的掩码都是 0x04 / 0x04；切到 `Commercial Team`（0x08 / 0x08）后两份都被权限过滤掉、证据为空，系统拒答而不是编一个答案。
+
+这处对照不是口头承诺：合成语料里每份文档的 `role_mask` / `dept_mask` 都由 `tests/test_demo_corpus_rbac_consistency.py` 用**真实的 `common.auth.is_allowed`** 逐份校验，mock 也按同一谓词逐份过滤，不会端出当前身份打不开的引用。这只证明演示数据与仓库的权限语义自洽，**不构成 RBAC 的运行时验证**。
+
+这张图的边界，先说清楚：**左侧是真实 UI**（`frontend/src/App.jsx`，由 Playwright 驱动真实输入与点击：提问、切换身份、发送），后端是 `docs/demo/mock_api.py` 这个合成 mock；**右侧两张卡片是演示标注**，不是产品界面，每一行都指向仓库里真实实现它的文件；**全部数值是合成的**（`docs/demo/synthetic_corpus.json`）——虚构文档号、占位 CAS 号、杜撰标准名，不含真实法规结论、上一家公司语料、生产日志、凭据或流量数据，**也不是**任何性能或质量测量结果。复现命令 `python3 docs/demo/capture_demo.py`（说明见 [docs/demo/README.md](docs/demo/README.md)）；本仓库**没有**公网 Demo 与演示视频，因此没有 Demo 链接可点。
+
+---
+
+## 核心工程能力（5 项）
+
+> 每一项的等级都是 `REPO_VERIFIED`（代码 + 确定性测试覆盖），**不是** `LOCAL_REAL_VALIDATION`，更不是生产验证。逐项的等级、代码位置、测试位置与升级路径见 [Evidence Matrix](#evidence-matrix) 与 [docs/interview-evidence-map.md](docs/interview-evidence-map.md)。
+
+### 1 · 动态 2–4 路召回 + 两级重排，而不是固定四路
+
+简单问题 2 路（`dense_bge` + `bm25_es`）；复杂问题 +1 路 `rewrite_variant`；复杂且视觉相关再 +1 路 `clip_visual`。ES Fallback 是降级补召回，不算一路。融合后 BiEncoder 宽保留 Top 150，再由双 CrossEncoder ensemble 精排到 Top 10（请求内批量预测）。加权 RRF 按问题类型调整权重：法规类提高 BM25，视觉类提高 CLIP。
+`retrieval/parallel_recall.py` · `retrieval/bi_encoder.py` · `retrieval/cross_encoder_ensemble.py`
+
+### 2 · 双 Gate 把幻觉关在门外
+
+生成前 **Evidence Gate** 综合 Top 1 / Top 3 / 多路一致性 / 文档间一致性，输出「正常生成 / 增强证据后生成 / 拒答」；生成后 **Answer Gate** 校验答案与核心证据一致性，法规类矛盾直接拒答。拒答是业务需求，不是装饰。
+`retrieval/evidence_gate.py` · `retrieval/answer_gate.py`
+
+### 3 · 权限与信任边界都是纵深的——但只是纵深防御
+
+存储侧下推（Qdrant 下推文档状态与知识版本；ES 下推状态、版本、role、dept）+ 融合前 uint32 位掩码 RBAC 二次过滤；Redis L2 物理 key 按 `rag:l2:rm:{role_mask}:dm:{dept_mask}:{key}` 分区，由 cache 对象自身强制，旧的无分区 key 不回落（宁可 miss）。签名有效只证明 token 来自持钥方；畸形授权声明 **fail closed**。认证以 RS256 为准，旧 HS256 `JWT_SECRET` 仅为可选兼容回退。登录限流 5 次/分钟，仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才解析 `X-Forwarded-For`（`app.py` 设 `proxy_headers=False`，使应用策略具备权威性）。
+
+检索证据按不可信数据处理：保留标记集中定义并在所有不可信通道转义，证据被限定在 `<retrieved_context>` 数据区块内、当前请求在 `<user_query>` 区块内。这是 **prompt 层结构约束，不是强隔离**——它不解决 prompt injection，也不能证明越狱不可能；同样不代表 RBAC 已在生产环境验证。
+`common/auth.py` · `api/routes_auth.py` · 逐项控制、测试与仍然开放的缺口见 [docs/security-regression-coverage.md](docs/security-regression-coverage.md)
+
+### 4 · 离线知识构建与在线检索分离，知识版本有发布纪律
+
+多格式解析：UTF-8 TXT、PDF（文本页 + 扫描页 OCR 路由）、DOCX、XLSX，以及独立图片（PNG/JPEG/WebP/BMP/TIFF）。确定性切块默认 500 字符 / 10% 重叠；`doc_id` / `chunk_id` / `image_id` 为逻辑身份，物理 Qdrant point ID 按 epoch 版本化。增量状态检测以内容哈希为准（不是 mtime/size 短路）、snapshot carry-forward、全量重建、快照校验、epoch 封存。反馈闭环统一 review 门控，只有 `accepted` 记录进入训练导出。
+
+构建 / 校验 / 封存（seal）可自动化，但**激活 `knowledge_version_epoch` 是显式人工步骤**；封存后 epoch 不可变，`--skip-validation` 是明确的危险逃生口。cron / Airflow / CLI 共用同一业务逻辑，调度器**从不**自动激活 epoch——DAG 代码存在不等于调度器在运行。
+`offline/` · `run_offline.py` · `dags/` · 操作细节见 [数据管理手册](docs/data-admin-guide.md)
+
+### 5 · 仓库自身的证据治理——这是本项目最想展示的能力
+
+一套 canonical 证据等级（`HISTORICAL_PRODUCTION` / `HISTORICAL` / `REPO_VERIFIED` / `LOCAL_REAL_VALIDATION` / `DESIGN_TARGET` / `PENDING`）把"设计目标 / 已实现 / 本地真实验证 / 历史生产"四种话术在文档层面隔离，并由 `scripts/check_repo_consistency.py` 在 CI 里强制：不得把设计目标写成实测、不得引用不存在的指标 series、不得把 RAGAS 缺失写成零分、不得把未测量写成 `0`。文档漂移会被机器拦住。
+
+运维侧同样只认真实存在的东西：`/api/metrics`（需认证）、6 条只引用真实 emit 指标的 Prometheus 告警规则、10 面板 Grafana JSON、9 字段结构化业务动作审计（Redis Stream + 每日 JSONL）、按代码中真实存在的降级路径编写的 SLO + 故障 Runbook，以及**已实现但默认关闭**的 OTLP exporter。
 
 ---
 
@@ -40,64 +73,42 @@ Runtime version `2.3.0`（`config.json` → `system.version`）。CI 配置见 `
 >
 > **本公开仓库不包含**对应的专有语料、生产日志、模型权重、监控数据或流量切分配置，因此这些数字**不是** `REPO_VERIFIED`，**不是**本仓库的 benchmark，**也无法由本仓库复现**。请勿把它们当成本仓库的测量结果引用。
 
-| 维度 | 历史生产环境事实 | 等级 | 边界 |
-|---|---|---|---|
-| 文档 | 3000+ | `HISTORICAL_PRODUCTION` | 公司生产环境事实；专有语料 / 日志 / 模型不在本仓库 |
-| 图片 | 5000+ | `HISTORICAL_PRODUCTION` | 同上 |
-| 产品 | 1500+ | `HISTORICAL_PRODUCTION` | 同上 |
-| 成分 | 2000+ | `HISTORICAL_PRODUCTION` | 同上 |
-| 法规体系 | 8 大 | `HISTORICAL_PRODUCTION` | 同上 |
-| 内部用户 | 200+ | `HISTORICAL_PRODUCTION` | 同上 |
-| 高峰短时 QPS | 10–15 | `HISTORICAL_PRODUCTION` | **生产观测值，不是本仓库 benchmark**；本仓库从未测过 QPS |
-| 日均请求 | 1500+ | `HISTORICAL_PRODUCTION` | 生产观测值，不是本仓库 benchmark |
-| 生产推理硬件 | RTX A5000 ×2 | `HISTORICAL_PRODUCTION` | **服务主机不在本仓库**；本仓库没有执行过任何等价 GPU 拓扑 |
-| 后续模型迁移 | Qwen2.5 → Qwen3-14B / Qwen3-4B 灰度迁移验证 | `HISTORICAL_PRODUCTION` | 权重、日志、流量切分配置均为专有资产，本仓库**不复现**该迁移 |
-| 公司认可 | 年度技术创新奖 | `HISTORICAL_PRODUCTION` | 对既往工作的公司认可，**不是**本代码库的运行时技术验证 |
+| 维度 | 历史生产环境事实 |
+|---|---|
+| 知识资产 | 3000+ 文档 · 5000+ 图片 · 1500+ 产品 · 2000+ 成分 · 8 大法规体系 |
+| 用户与流量 | 200+ 内部用户 · 高峰短时 10–15 QPS · 日均 1500+ 请求 |
+| 生产推理硬件 | RTX A5000 ×2 |
+| 后续模型迁移 | Qwen2.5 → Qwen3-14B / Qwen3-4B 灰度迁移验证 |
+| 公司认可 | 年度技术创新奖 |
 
-三条不可跨越的边界（完整版见 [Interview evidence map → Business scale](docs/interview-evidence-map.md)）：
+三条不可跨越的边界：
 
 1. **不得**把上表任何一项归类为 `REPO_VERIFIED`——本仓库没有任何代码、配置、测试或产物能证明服务硬件、灰度迁移或奖项。
 2. **不得**用历史生产经验替代仓库验证：`config.json` 里 4B / 14B vLLM 拓扑**在本仓库从未执行过**（权重缺失、`vllm` 未安装），该项为 `PENDING`。
 3. **奖项不是运行时验证**，它不携带关于本仓库延迟、吞吐或正确性的任何证据。
 
+> **10–15 QPS 与 1500+ 日请求是生产观测值，不是本仓库 benchmark**——本仓库没有可复现的 QPS / 延迟 benchmark 结果。逐行边界与完整版见 [docs/interview-evidence-map.md](docs/interview-evidence-map.md) 的 *Business scale — historical production context* 一节。
+
 ---
 
-## Core Engineering Capabilities
+## Repository-Reproducible Evidence
 
-按能力域组织；每项的等级、代码位置、测试位置与升级路径在 [Evidence Matrix](#evidence-matrix) 与 [docs/interview-evidence-map.md](docs/interview-evidence-map.md) 中逐条给出。
+| 口径 | 事实 |
+|---|---|
+| **仓库规模（可复核）** | 246 个 tracked Python 文件 / 65,153 行；86 个定义了测试的测试文件、1,687 个 `def test_` 函数，`pytest --collect-only` 展开参数化后共 **2,012 个用例**；CI 覆盖 Python 3.10 与 3.11 |
+| **已实现且有测试覆盖**（`REPO_VERIFIED`） | FastAPI 主链路、离线管线全流程、加权 RRF、两级重排、双 Gate、4B/14B 路由契约、RS256 认证、uint32 RBAC、检索信任边界、指标端点、结构化审计、性能产物**框架**、告警规则、Grafana JSON、SLO/Runbook 文档、OTLP exporter 实现、检索 benchmark **框架** |
+| **框架 ≠ 结果** | 检索 benchmark（Recall@1/3/5/10、HitRate@1/3/5/10、MRR@10、NDCG@10）与性能产物七文件契约都是 `REPO_VERIFIED`（框架）/ `PENDING`（结果）——仓库内**没有任何可复现的真实 benchmark artifact**，因此全仓库不引用任何检索指标数字 |
+| **性能数字** | **本仓库没有可复现的 QPS / 延迟 benchmark 结果。** 仓库中的性能数值仅允许在 `HISTORICAL_PRODUCTION`（历史生产观测，如 10–15 QPS）、`DESIGN_TARGET`（SLO / 告警阈值）或 `SYNTHETIC DEMO`（README 演示夹具中的合成值）三类明确语义下出现，**均不得表述为本仓库实测结果**；5 个 SLO 目标与告警阈值都是 `DESIGN_TARGET`，不是实测 |
+| **本地真实验证**（`LOCAL_REAL_VALIDATION`，只有这 5 项） | Redis 多进程会话持久化 · Redis 跨进程登录限流 · nginx / `TRUSTED_PROXIES` 客户端 IP 解析 · 认证 Elasticsearch 8.11 · 带 Bearer token 的 Prometheus 抓取 |
+| **仍为 `PENDING`** | 真实性能产物 · 真实检索 benchmark 结果 · 真实 RAGAS 分数 · OTLP 运行期闭环尚未跑通 · 告警在生产触发 · Grafana 面板被真实数据填充 · 真实 4B/14B vLLM GPU 部署 · 真实 BGE/CLIP/PaddleOCR smoke · QLoRA 训练产物 · 真实 Airflow DAG 执行（逐项与升级路径见下方 [Evidence Matrix](#evidence-matrix)） |
 
-### 检索与答案质量
-- **动态 2–4 路召回 + 加权 RRF**：法规类问题提高 BM25 权重，视觉类问题提高 CLIP 权重（`retrieval/parallel_recall.py`）。
-- **两级重排**：BiEncoder 宽保留 + 双 CrossEncoder 精排（`retrieval/bi_encoder.py`、`retrieval/cross_encoder_ensemble.py`）。
-- **Evidence Gate / Answer Gate**：两道独立的拒答机制（`retrieval/evidence_gate.py`、`retrieval/answer_gate.py`）。
-- **可复现的检索评测框架**：纯函数实现 Recall@1/3/5/10、HitRate@1/3/5/10、MRR@10、NDCG@10，带 provenance 与 artifact 契约，支持 `overall` / `business_type` / `difficulty` 分桶。**框架为 `REPO_VERIFIED`，结果为 `PENDING`**——仓库内没有任何可复现的真实 benchmark artifact，因此全仓库不引用任何检索指标数字。
+复核方式（只用 `git`、`grep`、`wc`、`awk` 与本仓库的 Python，不依赖 `bc` 等未声明的系统包）：`git ls-files '*.py' | xargs wc -l`、`git ls-files '*.py' | xargs grep -hcE '^\s*(async )?def test_' | awk '{s+=$1} END {print s}'`、`python3 -m pytest --collect-only -q`、`python3 scripts/check_repo_consistency.py`。
 
-### 安全与权限
-- **RS256 为准**：`POST /api/auth/login` 签发 RS256 access/refresh token；旧 HS256 `JWT_SECRET` 仅为可选兼容回退。
-- **uint32 位掩码 RBAC**：`role_mask` / `dept_mask` 在身份入口按 uint32 无符号范围严格校验（要求真正的 `int`，拒绝布尔与字符串，不做 `int()` 转换或截断）。签名有效只证明 token 来自持钥方；畸形授权声明 **fail closed**。
-- **检索证据信任边界**：保留标记结构化编码 + 请求与证据分区（见 Project Highlights）。
-- **限流与客户端 IP**：登录 5 次/分钟；仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才解析 `X-Forwarded-For`，否则一律用对端地址（`app.py` 设 `proxy_headers=False`，使应用策略具备权威性）。
+**评测的诚实边界**：RAGAS harness / reporter / validator 与 golden set 存在（最初 seed 27 条，现 300+ 条，实际条数以 `validate_golden_set` 输出与 `golden_set.jsonl` 为准），但**格式校验通过 ≠ 领域事实正确**。RAGAS 是隔离的可选 evaluator，不在默认依赖中；库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast**，返回非零状态且不生成 quality report。当前仓库**没有**经过验证的真实 RAGAS quality score。
 
-> 以上均为 **defense-in-depth（纵深防御）** 控制，**不是隔离墙**：它们不代表 prompt injection 已解决、模型对越狱免疫，也**不代表 RBAC 已在生产环境验证**。逐条控制项、测试与仍然开放的缺口见 [docs/security-regression-coverage.md](docs/security-regression-coverage.md)。
+**生成的诚实边界**：当前生成拓扑是**单一共享 4B vLLM 端点**（`config.json` → `gpu1.models.vllm_4b`，端口 8101）承担 Query Rewrite 与简单生成，复杂生成路由到 `gpu0.models.gen_14b`（Qwen3-14B）；旧 PRD 的双实例拓扑是历史/目标设计，不是当前实现。KV 压力过高时可截断、降级或拒绝。
 
-### 知识工程与版本治理
-- **多格式解析**：UTF-8 TXT、PDF（文本页 + 扫描页 OCR 路由）、DOCX、XLSX，以及独立图片（PNG/JPEG/WebP/BMP/TIFF）。
-- **确定性切块与稳定身份**：默认 500 字符 / 10% 重叠；`doc_id` / `chunk_id` / `image_id` 为逻辑身份，物理 Qdrant point ID 按 epoch 版本化。
-- **增量状态检测**：以内容哈希为准（不是 mtime/size 短路）、snapshot carry-forward、全量重建、快照校验、epoch 封存。
-- **调度抽象**：cron / Airflow / CLI 共用同一业务逻辑；调度器**从不**自动激活 epoch。DAG 代码存在不等于调度器在运行。
-- **反馈闭环**：统一 review 门控，只有 `accepted` 记录进入训练导出。
-
-### 生成与路由
-- **单一共享 4B vLLM 端点**（`config.json` → `gpu1.models.vllm_4b`，端口 8101）承担 Query Rewrite 与简单生成；复杂生成路由到 `gpu0.models.gen_14b`（Qwen3-14B）。旧 PRD 的双实例拓扑是历史/目标设计，不是当前实现。KV 压力过高时可截断、降级或拒绝。
-
-### 可观测性与运维证据
-- `/api/stats` 与 `/api/metrics` 需要身份认证（`require_identity`）；`/api/health` 公开。Prometheus 抓取需配置 Bearer token。
-- **本仓库唯一的告警契约**是 [`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)，由外部 Prometheus 加载评估。`monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，**没有**接入 canonical 请求路径，属于遗留代码，喂给它的 `config.json` → `alerting.rules` 配置块也已移除。判定依据见 [audit](docs/repository-truth-audit.md#two-alerting-mechanisms-and-which-one-is-canonical)。
-- 排障时引用的 `rag_*` 指标名必须真实存在：exporter 只暴露原始计数器（例如 `rag_cache_hit_L1`、`rag_cache_total`），**没有** `rag_cache_hit_rate` 或 `rag_rewrite_fallback_rate` 这类 series；比率要么用基于已 emit counter 的 PromQL ratio，要么读 `/api/stats` 的计算字段。`scripts/check_repo_consistency.py` 强制这条契约。
-- **OTLP exporter 已实现但默认关闭**（`monitoring/otel_exporter.py`，开关 `OTEL_EXPORT_ENABLED`，可选依赖隔离在 `requirements-otel.txt`），失败不影响业务，span 属性走白名单。追踪钩子已接入主链路。**运行期闭环为 `PENDING`**：应用 → exporter → collector → 后端 → 查到 span 这条链路没有任何运行记录，本仓库没有一个 span 被后端查询到过。
-
-### 评测的诚实边界
-RAGAS harness / reporter / validator 与 golden set 存在（最初 seed 27 条，现 300+ 条，实际条数以 `validate_golden_set` 输出与 `golden_set.jsonl` 为准）。**格式校验通过 ≠ 领域事实正确。** RAGAS 是隔离的可选 evaluator，不在默认依赖中；库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast** 并返回非零状态且不生成 quality report。当前仓库**没有**经过验证的真实 RAGAS quality score。
+**追踪的诚实边界**：追踪钩子已接入主链路，OTLP exporter 已实现但**默认关闭**（`OTEL_EXPORT_ENABLED`，可选依赖隔离在 `requirements-otel.txt`），失败不影响业务，span 属性走白名单；**运行期闭环为 `PENDING`**——应用 → exporter → collector → 后端 → 查到 span 这条链路没有任何运行记录，本仓库没有一个 span 被后端查询到过。
 
 ---
 
@@ -157,41 +168,6 @@ flowchart TB
 ```
 
 读图约定：`CACHE`/`AUTH`/`OUT` 指向 Redis 的边表示**状态依赖**（会话、L2 缓存、限流计数、审计流），不是独立服务调用；`OUT` 的 `rag_* metrics` 由 `/api/metrics` 暴露给外部 Prometheus，图中未画出 Prometheus 本身。`OFFLINE` 到存储的虚线表示**离线写入**方向，与在线召回互不依赖。微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上图这个单体应用。
-
----
-
-## 2-minute Interviewer Guide
-
-给技术面试官的问题清单与本仓库可支撑的答案。每条都标了证据等级——**这本身就是我想让你看到的能力：把"实现了"和"验证过"分开。**
-
-**Q1 · 这个系统解决什么业务问题？**
-化妆品行业内部知识问答：法规条款、成分机理、产品资料分散在 PDF / 图片 / 表格里，检索体验差且回答容易编造。系统把多模态知识建成可检索资产，在线给出**带证据、带出处、证据不足就拒答**的答案，并对不同角色和部门做权限隔离。拒答机制（双 Gate）是业务需求，不是装饰。
-
-**Q2 · 系统规模有多大？**
-分两个口径，不能混：
-- **本仓库可复核规模**：240 个 Python 文件 / 60,543 行 / 81 个测试文件 / 1,724 个收集到的测试用例，CI 覆盖 Python 3.10 与 3.11。
-- **历史生产规模**（`HISTORICAL_PRODUCTION`，不可由本仓库复现）：3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户、高峰短时 10–15 QPS、日均 1500+ 请求，RTX A5000 ×2 推理，后阶段完成 Qwen2.5 → Qwen3-14B/4B 灰度迁移。
-本仓库**没有任何 benchmark artifact**，所以我不给本仓库报任何 QPS 或延迟数字。
-
-**Q3 · 核心架构是什么？**
-FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE 文本向量 / CLIP 图像向量写入 Qdrant、文本写入 Elasticsearch。在线侧：身份解析 → 带知识版本与权限指纹的 L1/L2 缓存 → Query Rewrite 与复杂度判断并行 → 动态 2–4 路召回 → 文档级 RBAC 二次过滤 + 加权 RRF → BiEncoder 宽保留 + 双 CrossEncoder 精排 → Evidence Gate → 4B/14B 路由生成 → Answer Gate。生成拓扑是**单一共享 4B 端点**承担 rewrite 与简单生成，复杂请求走 14B。
-
-**Q4 · 你想展示的核心工程能力是什么？**
-- **证据分级与文档治理**：仓库自带一套 canonical 证据等级，并用 `scripts/check_repo_consistency.py` 在 CI 里强制"不得把设计目标写成实测""不得引用不存在的指标 series""不得把 RAGAS 缺失写成零分"。文档漂移会被机器拦住。
-- **降级路径是真的**：Redis→进程内会话、ES→空结果走 dense、Qdrant→BM25-only、rewrite→简单档位，SLO Runbook 按这些真实降级路径编写，不是通用模板。
-- **权限纵深防御**：存储下推 + 融合前位掩码二次过滤 + L2 缓存物理分区，旧 key 不回落（宁可 miss）。
-- **发布纪律**：知识版本 seal 后不可变，激活是显式人工步骤；schema 变更 fail closed 而非静默回退。
-
-**Q5 · 哪些是历史生产事实？**
-上表 `HISTORICAL_PRODUCTION` 全部内容。**边界**：专有语料、生产日志、模型权重、监控数据都不在本仓库，所以这些不是 `REPO_VERIFIED`，也不可复现；奖项是公司认可，不是运行时技术验证；本仓库的 4B/14B vLLM 拓扑从未在这里执行过。
-
-**Q6 · 哪些是本仓库可复现的？**
-`REPO_VERIFIED`：FastAPI 主链路、离线管线全流程、RRF、两级重排、双 Gate、4B/14B 路由契约、RS256 认证、uint32 RBAC、检索信任边界、指标端点、结构化审计、性能产物**框架**、告警规则、Grafana JSON、SLO/Runbook 文档、OTLP exporter 实现、检索 benchmark **框架**。
-`LOCAL_REAL_VALIDATION`（本地单主机 + 真实依赖，只有这五项）：Redis 多进程会话持久化、Redis 跨进程登录限流、nginx / `TRUSTED_PROXIES` 客户端 IP 解析、认证 Elasticsearch、带 Bearer token 的 Prometheus 抓取。
-`PENDING`：真实性能产物、真实检索 benchmark 结果、真实 RAGAS 分数、OTLP 运行期闭环、告警在生产触发、Grafana 面板被真实数据填充、真实 4B/14B vLLM GPU 部署、真实 BGE/CLIP/PaddleOCR smoke、QLoRA 训练产物、真实 Airflow DAG 执行。
-
-**Q7 · 怎么跑起来？**
-见 [Quick Start](#quick-start)。`python3 -m pip install -r requirements.txt && cp .env.example .env && python3 app.py`，然后 `http://localhost:8000/docs`。全量校验：`python3 -m pytest tests/ -v --tb=short`。
 
 ---
 
@@ -272,6 +248,41 @@ python3 scripts/check_repo_consistency.py
 
 ---
 
+## 2-minute Interviewer Guide
+
+给技术面试官的问题清单与本仓库可支撑的答案。每条都标了证据等级——**这本身就是我想让你看到的能力：把"实现了"和"验证过"分开。**
+
+**Q1 · 这个系统解决什么业务问题？**
+化妆品行业内部知识问答：法规条款、成分机理、产品资料分散在 PDF / 图片 / 表格里，检索体验差且回答容易编造。系统把多模态知识建成可检索资产，在线给出**带证据、带出处、证据不足就拒答**的答案，并对不同角色和部门做权限隔离。拒答机制（双 Gate）是业务需求，不是装饰。
+
+**Q2 · 系统规模有多大？**
+分两个口径，不能混：
+- **本仓库可复核规模**：246 个 Python 文件 / 65,153 行 / 86 个定义了测试的测试文件 / 2,012 个收集到的测试用例，CI 覆盖 Python 3.10 与 3.11。
+- **历史生产规模**（`HISTORICAL_PRODUCTION`，不可由本仓库复现）：3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户、高峰短时 10–15 QPS、日均 1500+ 请求，RTX A5000 ×2 推理，后阶段完成 Qwen2.5 → Qwen3-14B/4B 灰度迁移。
+本仓库**没有任何 benchmark artifact**，所以我不给本仓库报任何 QPS 或延迟数字。
+
+**Q3 · 核心架构是什么？**
+FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE 文本向量 / CLIP 图像向量写入 Qdrant、文本写入 Elasticsearch。在线侧：身份解析 → 带知识版本与权限指纹的 L1/L2 缓存 → Query Rewrite 与复杂度判断并行 → 动态 2–4 路召回 → 文档级 RBAC 二次过滤 + 加权 RRF → BiEncoder 宽保留 + 双 CrossEncoder 精排 → Evidence Gate → 4B/14B 路由生成 → Answer Gate。生成拓扑是**单一共享 4B 端点**承担 rewrite 与简单生成，复杂请求走 14B。
+
+**Q4 · 你想展示的核心工程能力是什么？**
+- **证据分级与文档治理**：仓库自带一套 canonical 证据等级，并用 `scripts/check_repo_consistency.py` 在 CI 里强制"不得把设计目标写成实测""不得引用不存在的指标 series""不得把 RAGAS 缺失写成零分"。文档漂移会被机器拦住。
+- **降级路径是真的**：Redis→进程内会话、ES→空结果走 dense、Qdrant→BM25-only、rewrite→简单档位，SLO Runbook 按这些真实降级路径编写，不是通用模板。
+- **权限纵深防御**：存储下推 + 融合前位掩码二次过滤 + L2 缓存物理分区，旧 key 不回落（宁可 miss）。
+- **发布纪律**：知识版本 seal 后不可变，激活是显式人工步骤；schema 变更 fail closed 而非静默回退。
+
+**Q5 · 哪些是历史生产事实？**
+上表 `HISTORICAL_PRODUCTION` 全部内容。**边界**：专有语料、生产日志、模型权重、监控数据都不在本仓库，所以这些不是 `REPO_VERIFIED`，也不可复现；奖项是公司认可，不是运行时技术验证；本仓库的 4B/14B vLLM 拓扑从未在这里执行过。
+
+**Q6 · 哪些是本仓库可复现的？**
+`REPO_VERIFIED`：FastAPI 主链路、离线管线全流程、RRF、两级重排、双 Gate、4B/14B 路由契约、RS256 认证、uint32 RBAC、检索信任边界、指标端点、结构化审计、性能产物**框架**、告警规则、Grafana JSON、SLO/Runbook 文档、OTLP exporter 实现、检索 benchmark **框架**。
+`LOCAL_REAL_VALIDATION`（本地单主机 + 真实依赖，只有这五项）：Redis 多进程会话持久化、Redis 跨进程登录限流、nginx / `TRUSTED_PROXIES` 客户端 IP 解析、认证 Elasticsearch、带 Bearer token 的 Prometheus 抓取。
+`PENDING`：真实性能产物、真实检索 benchmark 结果、真实 RAGAS 分数、OTLP 运行期闭环、告警在生产触发、Grafana 面板被真实数据填充、真实 4B/14B vLLM GPU 部署、真实 BGE/CLIP/PaddleOCR smoke、QLoRA 训练产物、真实 Airflow DAG 执行。
+
+**Q7 · 怎么跑起来？**
+见 [Quick Start](#quick-start)。`python3 -m pip install -r requirements.txt && cp .env.example .env && python3 app.py`，然后 `http://localhost:8000/docs`。全量校验：`python3 -m pytest tests/ -v --tb=short`。
+
+---
+
 ## Evidence Matrix
 
 完整逐条表格（能力 / 等级 / 代码证据 / 测试证据 / 升级路径）见 [docs/interview-evidence-map.md](docs/interview-evidence-map.md)；实现与证据状态的完整审计见 [docs/repository-truth-audit.md](docs/repository-truth-audit.md)。本节是摘要。
@@ -299,7 +310,7 @@ python3 scripts/check_repo_consistency.py
 |---|---|---|---|
 | 检索 benchmark（Recall/NDCG/MRR…） | `REPO_VERIFIED` | `PENDING` | 一次真实 ES/Qdrant 运行并提交可复现 artifact（含 `git_sha` / 数据集 sha256 / 模型 revision / 硬件 / 样本数 / 延迟 / 命令 / 限制说明，见 [验收标准](docs/interview-evidence-map.md#benchmark-artifact-acceptance-criteria)） |
 | 性能产物契约（七文件、`null` 不写 `0`） | `REPO_VERIFIED` | `PENDING` | 对真实 API + LLM + 检索栈执行既定负载并提交一份 artifact |
-| QPS / 延迟数字 | — | `PENDING` | 同上。**本仓库从未测过，因此全仓库不引用任何性能数字** |
+| QPS / 延迟数字 | — | `PENDING` | 同上：**本仓库没有可复现的 QPS / 延迟 benchmark 结果**。性能数值仅在 `HISTORICAL_PRODUCTION` / `DESIGN_TARGET` / `SYNTHETIC DEMO` 语义下出现，均不表述为实测 |
 | SLO 目标（5 个） | `REPO_VERIFIED`（文档） | `DESIGN_TARGET` | 在真实环境达成该目标 |
 | Prometheus 告警（6 条） | `REPO_VERIFIED`（配置） | `PENDING`（生产触发） | 一个真实 Prometheus 实例加载并触发这些规则。阈值本身是 `DESIGN_TARGET` |
 | Grafana 仪表盘（10 面板） | `REPO_VERIFIED`（JSON） | `PENDING` | 导入运行中的 Grafana 并确认面板被真实数据填充 |
@@ -324,6 +335,12 @@ python3 scripts/check_repo_consistency.py
 
 **这不等于生产集群验证**：Redis Cluster/Sentinel、云负载均衡拓扑、多节点 ES/TLS、长期 Prometheus/Grafana 运维、生产 HA/SLO，以及 4B/14B vLLM GPU 部署，均未在本仓库验证。
 
+### 指标与告警的契约
+
+- 排障时引用的 `rag_*` 指标名必须真实存在：exporter 只暴露原始计数器（例如 `rag_cache_hit_L1`、`rag_cache_total`），**没有** `rag_cache_hit_rate` 或 `rag_rewrite_fallback_rate` 这类 series；比率要么用基于已 emit counter 的 PromQL ratio，要么读 `/api/stats` 的计算字段。`scripts/check_repo_consistency.py` 强制这条契约。
+- **本仓库唯一的告警契约**是 [`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)，由外部 Prometheus 加载评估。`monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，**没有**接入 canonical 请求路径，属于遗留代码，喂给它的 `config.json` → `alerting.rules` 配置块也已移除。判定依据见 [audit](docs/repository-truth-audit.md#two-alerting-mechanisms-and-which-one-is-canonical)。
+- `/api/stats` 与 `/api/metrics` 需要身份认证（`require_identity`）；`/api/health` 公开。Prometheus 抓取需配置 Bearer token。
+
 ---
 
 ## Documentation
@@ -337,6 +354,7 @@ python3 scripts/check_repo_consistency.py
 | [docs/repository-truth-audit.md](docs/repository-truth-audit.md) | 逐能力实现 / 证据 / 状态审计，含 Qdrant 两态、告警双机制、外部验证边界 |
 | [docs/security-regression-coverage.md](docs/security-regression-coverage.md) | 固定威胁清单、每项控制与测试、以及仍然开放的有界缺口 |
 | [docs/slo-runbook.md](docs/slo-runbook.md) | 5 个 SLO 目标（均为 `DESIGN_TARGET`）+ 8 个按真实降级路径写的处置流程 |
+| [docs/demo/README.md](docs/demo/README.md) | 首屏那张合成数据演示图的生成方式与复现命令 |
 | [PRD.md](PRD.md) | 产品与架构设计；顶部 runtime reconciliation 表区分当前实现与历史/目标设计 |
 
 **README 只保留摘要。** 详细的 caveat、逐项证据、边界条件与"不能怎么说"清单都在上表文档里，不在 README 重复。

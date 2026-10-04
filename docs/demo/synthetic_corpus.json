@@ -1,0 +1,171 @@
+{
+  "_disclaimer": "SYNTHETIC DEMO DATA — 全部为虚构内容，用于生成 README 演示图。不含任何真实法规结论、真实企业语料、生产日志、凭据或流量数据。文档编号、CAS 号、标准号均为占位符。",
+  "data_class": "SYNTHETIC",
+  "query": {
+    "text": "示例保湿剂 DEMO-HUM-7 在示例驻留产品中的最大使用浓度是多少？标签需要怎么写？",
+    "session_id": "demo_sess_0001",
+    "business_type": "regulation",
+    "intent": "compliance",
+    "latency_ms": 812.4,
+    "cache_hit": false,
+    "refusal_latency_ms": 214.6
+  },
+  "answer_markdown": "**示例结论**：示例保湿剂 `DEMO-HUM-7` 在示例驻留产品中的最大使用浓度为 **0.90%（w/w）**〔证据1〕。\n\n- **上限与适用部位**：DEMO-STD-001 v4.2.1 允许 `DEMO-HUM-7` 用于示例驻留产品，上限 0.90%（w/w）；示例眼部产品不得使用〔证据1〕。\n- **标签要求**：含量超过 0.50%（w/w）时，示例标签需在示例成分栏标注示例 CAS 号与含量区间〔证据1〕〔证据2〕。\n\n> 证据不足时系统会在生成前拒答，而不是给出一个无出处的答案。\n\n*（DEMO：以上条款、限量与原料卡片均为合成演示数据，不构成任何真实法规结论。）*",
+  "documents": [
+    {
+      "doc_id": "demo_reg_014",
+      "title": "DEMO-STD-001《示例化妆品安全技术规范》v4.2",
+      "kind": "合成示例文档 · 3 块 / 500 字符 · 10% 重叠",
+      "status": "active",
+      "knowledge_version_epoch": "demo-epoch-0007",
+      "role_mask": 4,
+      "dept_mask": 4,
+      "excerpt": "4.2.1 示例保湿剂 DEMO-HUM-7 允许用于示例驻留产品，最大使用浓度为 0.90%（w/w）。\n4.2.2 当 DEMO-HUM-7 含量超过 0.50%（w/w）时，示例标签需在示例成分栏标注其示例 CAS 号与含量区间。\n4.2.3 示例眼部产品不得使用 DEMO-HUM-7。",
+      "highlight": "4.2.1",
+      "stores": "Elasticsearch（正文 + mapping）· Qdrant（BGE 文本向量 + 元数据）"
+    },
+    {
+      "doc_id": "demo_ing_0031",
+      "title": "DEMO-ING-0031 示例原料卡片",
+      "kind": "合成示例文档 · 1 块",
+      "status": "active",
+      "knowledge_version_epoch": "demo-epoch-0007",
+      "role_mask": 4,
+      "dept_mask": 4,
+      "excerpt": "示例 INCI 名: DEMO-HUM-7 · 示例 CAS: 000-00-0（占位）· 示例用途: 保湿。\n示例最大用量 0.90% (w/w) · 示例标签阈值 0.50% (w/w) · 示例状态 active · 示例 epoch demo-epoch-0007。\n本卡片仅供演示，不对应任何真实原料或真实限量。",
+      "highlight": "示例最大用量",
+      "stores": "Elasticsearch（正文 + mapping）· Qdrant（BGE 文本向量 + 元数据）"
+    }
+  ],
+  "evidence_doc_ids": [
+    "demo_reg_014",
+    "demo_ing_0031"
+  ],
+  "auth_metadata": {
+    "app": {
+      "title": "化妆品行业知识问答助手",
+      "subtitle": "DEMO · 合成数据演示环境 · 非生产",
+      "version": "2.3.0-demo"
+    },
+    "auth": {
+      "dev_mode": true,
+      "auth_required": false,
+      "jwt_enabled": true,
+      "login_enabled": true,
+      "anonymous_user_id": "demo-user"
+    },
+    "rbac": {
+      "default_role": "regulation",
+      "roles": {
+        "rd": 1,
+        "quality": 2,
+        "regulation": 4,
+        "sales": 8,
+        "admin": 2147483647
+      },
+      "departments": {
+        "all": 0,
+        "rd_dept": 1,
+        "quality_dept": 2,
+        "regulation_dept": 4,
+        "sales_dept": 8
+      },
+      "role_options": [
+        {
+          "key": "regulation",
+          "label": "Regulatory Affairs",
+          "role_mask": 4,
+          "dept_mask": 4
+        },
+        {
+          "key": "quality",
+          "label": "Quality Assurance",
+          "role_mask": 2,
+          "dept_mask": 2
+        },
+        {
+          "key": "rd",
+          "label": "Research and Development",
+          "role_mask": 1,
+          "dept_mask": 1
+        },
+        {
+          "key": "sales",
+          "label": "Commercial Team",
+          "role_mask": 8,
+          "dept_mask": 8
+        }
+      ]
+    }
+  },
+  "dialog_history": {
+    "rounds": [
+      {
+        "user_input": "示例保湿剂 DEMO-HUM-7 在示例驻留产品中的最大使用浓度是多少？标签需要怎么写？",
+        "response": "示例结论：0.90%（w/w），标签阈值 0.50%（w/w）。〔合成演示数据〕"
+      }
+    ],
+    "locked_doc_ids": [
+      "demo_reg_014",
+      "demo_ing_0031"
+    ]
+  },
+  "stats": {
+    "uptime_seconds": 4210,
+    "cache_hit_rate": {
+      "L1": 0.0,
+      "L2": 0.0
+    },
+    "rewrite_fallback_rate": 0.0,
+    "latency_percentiles": {},
+    "kv_pressure": 0.0,
+    "active_requests": 0
+  },
+  "trace": {
+    "_note": "以下为演示标注：数值为合成示例，用于说明链路，不是一次真实运行的测量结果。",
+    "identity": "role_mask=0x04 (regulation) · dept_mask=0x04 (regulation_dept)",
+    "rows": [
+      {
+        "step": "身份解析",
+        "demo": "role_mask=0x04 · dept_mask=0x04（JWT 声明按 uint32 校验、畸形即 fail closed；本演示走 dev-mode header，该分支是 int() 直读）",
+        "code": "common/auth.py"
+      },
+      {
+        "step": "存储侧下推",
+        "demo": "Qdrant：status+epoch；ES：status+epoch+role_mask+dept_mask",
+        "code": "common/auth.py + retrieval/bm25_retriever.py"
+      },
+      {
+        "step": "融合前二次过滤",
+        "demo": "11 条重排候选 → 3 条进入生成，其余 8 条在此丢弃",
+        "code": "retrieval/parallel_recall.py"
+      },
+      {
+        "step": "L2 缓存隔离",
+        "demo": "rag:l2:rm:4:dm:4:demo-…（按掩码分区，旧的无分区 key 不回落）",
+        "code": "cache/redis_cache.py"
+      },
+      {
+        "step": "Evidence Gate",
+        "demo": "0.812 → pass（≥0.75 生成 / 0.55–0.75 增强 / <0.55 拒答）",
+        "code": "retrieval/evidence_gate.py"
+      },
+      {
+        "step": "Answer Gate",
+        "demo": "答案与核心证据一致，未触发法规类矛盾拒答",
+        "code": "retrieval/answer_gate.py"
+      },
+      {
+        "step": "结构化审计",
+        "demo": "9 字段核心 schema；越权取源文档记 media.access.denied",
+        "code": "common/audit.py"
+      },
+      {
+        "step": "证据信任边界",
+        "demo": "证据限定在 <retrieved_context> 数据区块、保留标记转义（prompt 层约束，非强隔离）",
+        "code": "models/llm_client.py"
+      }
+    ]
+  },
+  "answer_refusal_markdown": "**拒答**：当前身份没有可访问的相关文档，权限过滤后证据为空，按 Evidence Gate 规则（综合得分 < 0.55）不生成答案。\n\n检索确实执行了，但候选在融合前的文档级权限过滤中被全部丢弃——身份可信不等于有权查看这些文档。建议切换到具备该主题访问权的角色。\n\n*（DEMO：合成数据演示。）*"
+}

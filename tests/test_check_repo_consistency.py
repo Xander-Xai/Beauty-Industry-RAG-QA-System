@@ -2909,3 +2909,763 @@ def test_compound_english_count_is_flagged():
 
     text = "## G\n\nThe guide answers twenty-one questions.\n\n**Q1 · a?**\n**Q2 · b?**\n"
     assert "twenty-one questions" in enumerated_count_errors("README.md", text)[0]
+
+
+# ── the SLO objective count is derived, never restated ──────────────────
+def test_runbook_objective_count_comes_from_the_objective_rows():
+    from scripts.check_repo_consistency import slo_objective_count
+
+    runbook = (
+        "| # | Objective | Definition | Target | Class |\n"
+        "|---|---|---|---|---|\n"
+        "| SLO-1 | Availability | ... | 99.5% | `DESIGN_TARGET` |\n"
+        "| SLO-2 | Error rate | ... | < 1% | `DESIGN_TARGET` |\n"
+        "| SLO-3 | Latency | ... | 2000 ms | `DESIGN_TARGET` |\n"
+    )
+    assert slo_objective_count(runbook) == 3
+
+
+def test_a_prose_reference_to_an_objective_is_not_another_objective():
+    """`SLO-3` mentioned in a sentence must not be counted as a fourth row."""
+    from scripts.check_repo_consistency import slo_objective_count
+
+    runbook = (
+        "| SLO-1 | a | x | y | `DESIGN_TARGET` |\n"
+        "| SLO-2 | b | x | y | `DESIGN_TARGET` |\n"
+        "\nSLO-1 and SLO-2 are the only objectives; see also SLO-99 for the draft.\n"
+    )
+    assert slo_objective_count(runbook) == 2
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "5 个 SLO 目标与告警阈值都是 `DESIGN_TARGET`",
+        "| SLO 目标（5 个） | `REPO_VERIFIED`（文档） |",
+        "5 个 SLO 目标（均为 `DESIGN_TARGET`）+ 8 个处置流程",
+        "There are five SLO objectives.",
+    ],
+)
+def test_every_phrasing_the_repository_uses_is_understood(claim):
+    """Each accepted phrasing must parse to 5, or the guard cannot verify it.
+
+    A guard that reports "cannot verify" on the project's own wording is worse
+    than no guard: it turns a documentation truth into a CI failure nobody can
+    fix without editing the checker.
+    """
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, 5) == []
+
+
+@pytest.mark.parametrize(
+    ("claim", "stated"),
+    [
+        ("十个 SLO 目标与告警阈值", 10),
+        ("| SLO 目标（10 个） | x |", 10),
+        ("There are twelve SLO objectives.", 12),
+    ],
+)
+def test_a_count_that_contradicts_the_runbook_is_flagged(claim, stated):
+    """The regression: the README claimed ten objectives next to two correct
+    fives, inside a section presented as repository-reproducible evidence."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1
+    assert f"states {stated} SLO objectives" in errors[0]
+    assert "defines 5" in errors[0]
+
+
+def test_adding_an_objective_to_the_runbook_does_not_silently_stale_the_summary():
+    """The guard's whole reason to exist: the count is derived, so growing the
+    runbook turns the summary red instead of leaving it quietly wrong."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    summary = "5 个 SLO 目标与告警阈值都是 `DESIGN_TARGET`"
+    assert slo_count_errors("README.md", summary, expected=5) == []
+    assert slo_count_errors("README.md", summary, expected=6)
+
+
+def test_current_documents_state_the_objective_count_the_runbook_defines():
+    from scripts.check_repo_consistency import ROOT, slo_count_errors, slo_objective_count
+
+    runbook = (ROOT / "docs" / "slo-runbook.md").read_text(encoding="utf-8")
+    expected = slo_objective_count(runbook)
+    assert expected > 0, "docs/slo-runbook.md must define at least one SLO objective"
+    for name in ("README.md", "PRD.md"):
+        assert slo_count_errors(name, (ROOT / name).read_text(encoding="utf-8"), expected) == []
+
+
+def test_guard_reports_a_missing_runbook_objective_table(tmp_path, monkeypatch):
+    """Silently skipping a runbook with no objective rows would turn the guard
+    into a no-op the next time the runbook is restructured."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text("# Runbook\n\nNo table here.\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert len(errors) == 1
+    assert "no `| SLO-<n> |` objective rows" in errors[0]
+
+
+def test_guard_fails_end_to_end_when_the_summary_count_drifts(tmp_path, monkeypatch):
+    """Wiring check: `main()` must actually call the guard, or the pure
+    function above is decoration."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text(
+        "| SLO-1 | a | x | y | `DESIGN_TARGET` |\n| SLO-2 | b | x | y | `DESIGN_TARGET` |\n",
+        encoding="utf-8",
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text("5 个 SLO 目标与告警阈值。\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    monkeypatch.setattr("scripts.check_repo_consistency.CANONICAL_DOCS", [readme])
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert len(errors) == 1
+    assert "states 5 SLO objectives but docs/slo-runbook.md defines 2" in errors[0]
+
+
+# ── the English count parser, exercised directly ────────────────────────
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("0", 0),
+        ("5", 5),
+        ("ten", 10),
+        ("nineteen", 19),
+        ("twenty", 20),
+        # Tens are values, not positions: "thirty" is the 22nd word in the list
+        # but the number 30. An index here silently reported 21.
+        ("thirty", 30),
+        ("forty", 40),
+        ("ninety", 90),
+        ("hundred", 100),
+        ("thousand", 1000),
+        # Compounds add ...
+        ("twenty-one", 21),
+        ("twenty one", 21),
+        ("forty-five", 45),
+        ("ninety-nine", 99),
+        # Unhyphenated British spelling of the same compound.
+        ("forty five", 45),
+        ("twenty-two", 22),
+        ("thirty-three", 33),
+        ("ninety-nine", 99),
+        # A unit never precedes another unit additively, so neither the spaced
+        # "one two" nor the hyphenated "two-three" is a number.
+        ("two three", None),
+        ("two-three", None),
+        ("one-two", None),
+        # An additive compound is a tens word plus a unit 1..9. Each of these
+        # used to compute to a plausible number — 20, 31, 50, 101 — which is
+        # exactly how a typo could be certified as a verified count.
+        ("twenty-zero", None),
+        ("twenty-eleven", None),
+        ("twenty-thirty", None),
+        ("hundred-one", None),
+        ("thirty-zero", None),
+        ("ninety-ten", None),
+        # ... except a scale word, which multiplies.
+        ("five hundred", 500),
+        ("two hundred", 200),
+        # Hyphenated spelling of the same thing; the separator loop tries "-" first.
+        ("one-hundred", 100),
+        ("twelve thousand", 12_000),
+    ],
+)
+def test_english_count_tokens_parse_to_the_number_they_spell(token, expected):
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) == expected
+
+
+@pytest.mark.parametrize("token", ["", "forty five hundred", "many", "SLO"])
+def test_an_unparseable_token_returns_none_rather_than_a_guess(token):
+    """`None` makes the guard say "cannot verify"; a wrong int makes it
+    confidently reject a correct document."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+def test_every_regex_count_word_is_parseable():
+    """The regex and the parser were separate lists, so "thirty" was matchable
+    but unparseable. One tuple now feeds both; this asserts they agree."""
+    from scripts.check_repo_consistency import _COUNT_WORD_LIST, _EN_COUNT_WORDS
+
+    assert set(_COUNT_WORD_LIST) == set(_EN_COUNT_WORDS)
+    for word in _COUNT_WORD_LIST:
+        assert _EN_COUNT_WORDS[word] > 0 or word == "zero"
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        ("There are twenty-one SLO objectives.", 21),
+        ("Forty-five SLO objectives.", 45),
+        ("Thirty SLO objectives.", 30),
+        ("Five hundred SLO objectives.", 500),
+        ("twelve thousand SLO objectives", 12_000),
+    ],
+)
+def test_a_correct_english_compound_count_is_not_flagged(claim, expected):
+    """The regression: the `english` group captured only the first word, so
+    "twenty-one SLO objectives" read as 20 and the guard rejected a runbook
+    that had exactly 21 objectives."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, expected) == []
+
+
+def test_a_compound_count_that_drifts_is_still_flagged():
+    """Parsing the whole compound must not weaken detection."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", "twenty-one SLO objectives", expected=5)
+    assert len(errors) == 1
+    assert "states 21 SLO objectives but docs/slo-runbook.md defines 5" in errors[0]
+
+
+def test_the_match_cannot_start_inside_a_compound():
+    """`-` is a word boundary as far as `re` is concerned, so without a guard
+    "twenty-one" matched as "one" and the guard reported 1."""
+    from scripts.check_repo_consistency import _SLO_COUNT_RE
+
+    matches = [match.group("english") for match in _SLO_COUNT_RE.finditer("twenty-one SLO objectives")]
+    assert matches == ["twenty-one"], matches
+
+
+def test_prose_without_a_number_before_slo_is_not_a_count_claim():
+    """The guard looks for a number the document chose to state. "five
+    objectives" and a bare "SLO objectives" are not claims about how many."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for prose in ("The system has five objectives.", "SLO objectives are documented.", "See SLO objectives."):
+        assert slo_count_errors("README.md", prose, expected=5) == []
+
+
+def test_readme_recheck_commands_avoid_undeclared_system_packages():
+    """The README's own reproduction commands must not need a package the
+    repository never installs. `bc` was the one that broke it."""
+    from scripts.check_repo_consistency import ROOT
+
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if "def test_" in line and "git ls-files" in line:
+            assert "| bc" not in line, line
+            assert "awk" in line, line
+
+
+# ── objective identifiers must be unique and contiguous ────────────────
+def _runbook(*numbers: int) -> str:
+    return "".join(f"| SLO-{n} | objective {n} | x | y | `DESIGN_TARGET` |\n" for n in numbers)
+
+
+def test_the_identifier_list_is_not_deduplicated():
+    """The regression: counting distinct ids hid the duplicate row. Six rows
+    where two share `SLO-5` must count as six rows *and* be rejected, not
+    quietly collapse to five and let every "5 个 SLO 目标" keep passing."""
+    from scripts.check_repo_consistency import slo_objective_count, slo_objective_rows
+
+    text = _runbook(1, 2, 3, 4, 5, 5)
+    assert slo_objective_rows(text) == [1, 2, 3, 4, 5, 5]
+    assert slo_objective_count(text) == 6
+
+
+def test_a_duplicate_identifier_is_rejected():
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    errors = slo_objective_id_errors("runbook.md", _runbook(1, 2, 3, 4, 5, 5))
+    assert any("duplicate objective identifiers [5]" in error for error in errors), errors
+
+
+def test_a_gap_in_the_identifiers_is_rejected():
+    """Contiguity is what makes `SLO-6` mean the sixth objective. A gap means a
+    row was inserted or deleted and every stated count is now ambiguous."""
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    errors = slo_objective_id_errors("runbook.md", _runbook(1, 2, 4, 5))
+    assert any("instead of a contiguous 1..4" in error for error in errors), errors
+
+
+def test_a_reordered_runbook_is_rejected():
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    assert slo_objective_id_errors("runbook.md", _runbook(2, 1, 3))
+
+
+def test_a_clean_runbook_has_no_identifier_errors():
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    assert slo_objective_id_errors("runbook.md", _runbook(1, 2, 3, 4, 5)) == []
+
+
+def test_a_runbook_without_objectives_is_left_to_the_count_guard():
+    """No rows means no ids to validate; reporting "duplicate []" here would be
+    noise on top of the count guard's own message."""
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    assert slo_objective_id_errors("runbook.md", "# Runbook\n\nNo table.\n") == []
+
+
+def test_the_guard_reports_a_duplicate_even_when_the_summary_agrees(tmp_path, monkeypatch):
+    """End-to-end: a runbook with a duplicated id plus a matching "6" summary
+    must still fail, because the duplication is the defect."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text(_runbook(1, 2, 3, 4, 5, 5), encoding="utf-8")
+    readme = tmp_path / "README.md"
+    readme.write_text("6 个 SLO 目标与告警阈值。\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    monkeypatch.setattr("scripts.check_repo_consistency.CANONICAL_DOCS", [readme])
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert any("duplicate objective identifiers [5]" in error for error in errors), errors
+    assert not any("states 6 SLO objectives" in error for error in errors), errors
+
+
+def test_the_current_runbook_has_unique_contiguous_identifiers():
+    from scripts.check_repo_consistency import ROOT, slo_objective_id_errors
+
+    text = (ROOT / "docs/slo-runbook.md").read_text(encoding="utf-8")
+    assert slo_objective_id_errors("docs/slo-runbook.md", text) == []
+
+
+# ── Chinese numerals are words, not characters ──────────────────────────
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("一", 1),
+        ("两", 2),
+        ("九", 9),
+        # 十 is structural: an omitted leading 一 means one ten.
+        ("十", 10),
+        ("十一", 11),
+        ("十二", 12),
+        ("十九", 19),
+        ("二十", 20),
+        ("二十一", 21),
+        ("三十", 30),
+        ("九十九", 99),
+    ],
+)
+def test_chinese_count_tokens_parse_to_the_number_they_spell(token, expected):
+    """The regression: the character class matched one character, so
+    `十二个 SLO 目标` matched `二个` and read as 2 — rejecting a correct
+    document — and `SLO 目标（十二个）` did not match at all."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) == expected
+
+
+@pytest.mark.parametrize("token", ["一百", "二百一十", "一千", "十十", "零"])
+def test_a_chinese_numeral_beyond_the_supported_range_is_unverifiable(token):
+    """Past 99 the notation stops being compositional, so guessing would be
+    worse than declining: `None` makes the guard say "cannot verify"."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize(
+    ("claim", "stated"),
+    [
+        ("十二个 SLO 目标与告警阈值", 12),
+        ("| SLO 目标（十二个） | `DESIGN_TARGET` |", 12),
+        ("十一个 SLO 目标", 11),
+        ("二十一个 SLO 目标", 21),
+    ],
+)
+def test_a_multi_character_chinese_count_is_not_flagged_when_correct(claim, stated):
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, stated) == []
+
+
+def test_a_multi_character_chinese_count_that_drifts_is_flagged():
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", "十二个 SLO 目标", expected=5)
+    assert len(errors) == 1
+    assert "states 12 SLO objectives but docs/slo-runbook.md defines 5" in errors[0]
+
+
+def test_a_count_the_parser_cannot_read_is_reported_not_ignored():
+    """百/千 are matched on purpose so the claim surfaces as unverifiable
+    rather than slipping past the guard entirely."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for claim in ("一百个 SLO 目标", "| SLO 目标（一千个） |"):
+        errors = slo_count_errors("README.md", claim, expected=100)
+        assert len(errors) == 1, (claim, errors)
+        assert "cannot verify" in errors[0], (claim, errors)
+
+
+def test_digit_counts_still_win_over_the_character_class():
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", "12 个 SLO 目标", expected=12) == []
+    assert slo_count_errors("README.md", "5 个 SLO 目标", expected=5) == []
+
+
+# ── the count parsers must be total ─────────────────────────────────────
+@pytest.mark.parametrize(
+    "token",
+    ["二一十个", "十一二个", "十十", "一一十", "二十一十一", "二二", "", "十百"],
+)
+def test_a_malformed_chinese_numeral_returns_none_and_never_raises(token):
+    """The regression: indexing the digit map with a multi-character side raised
+    KeyError, so a documentation typo aborted the whole consistency check with a
+    traceback — hiding every other problem with the repository along with it.
+    This function runs in CI, so it has to be total."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "   ", "abc", "5x", "SLO", "-", "forty five hundred", "1-2-3", "one two", "two-three"],
+)
+def test_unparseable_count_tokens_return_none_rather_than_a_guess(token):
+    """`None` makes the guard say "cannot verify". A wrong int would make it
+    confidently reject a correct document."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize("claim", ["二一十个 SLO 目标", "十一二个 SLO 目标", "十十个 SLO 目标"])
+def test_a_malformed_chinese_count_in_a_document_is_reported_not_crashed(claim):
+    """The end-to-end shape of the finding: the guard emits its intended
+    'cannot verify' error instead of taking the process down."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1, (claim, errors)
+    assert "cannot verify" in errors[0], (claim, errors)
+
+
+def test_the_consistency_script_still_runs_with_a_malformed_count_in_a_document(tmp_path, monkeypatch):
+    """The reason totality matters: one typo must not stop the other checks."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text(
+        "| SLO-1 | a | x | y | `DESIGN_TARGET` |\n| SLO-2 | b | x | y | `DESIGN_TARGET` |\n",
+        encoding="utf-8",
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text("二一十个 SLO 目标。\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    monkeypatch.setattr("scripts.check_repo_consistency.CANONICAL_DOCS", [readme])
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert any("cannot verify" in error for error in errors), errors
+
+
+# ── the count token must be matched whole, not by its tail ──────────────
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        # Chinese numerals are contiguous ideographs, so the class could match
+        # `五个` inside `一百零五个` — reading a claim of 105 as 5, which passes
+        # when the runbook has five objectives.
+        ("一百零五个 SLO 目标", 5),
+        ("| SLO 目标（一百零五个） |", 5),
+        ("零五个 SLO 目标", 5),
+        ("一百零五个 SLO 目标", 100),
+    ],
+)
+def test_a_chinese_count_is_not_read_as_its_trailing_digits(claim, expected):
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=expected)
+    assert len(errors) == 1, (claim, errors)
+    assert "cannot verify" in errors[0], (claim, errors)
+
+
+@pytest.mark.parametrize("claim", ["十二个 SLO 目标", "| SLO 目标（十二个） |", "5 个 SLO 目标", "十一个 SLO 目标"])
+def test_the_whole_token_guard_does_not_break_the_counts_it_should_accept(claim):
+    """Anchoring the match must not cost the cases that genuinely work."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    stated = 11 if "十一" in claim else (12 if "十二" in claim else 5)
+    assert slo_count_errors("README.md", claim, stated) == []
+
+
+def test_a_hyphenated_unit_pair_is_a_typo_not_a_sum():
+    """`two-three` must not parse as 5, or a documentation typo passes as a
+    verified count — which is the opposite of what this parser is for."""
+    from scripts.check_repo_consistency import _parse_stated_count, slo_count_errors
+
+    assert _parse_stated_count("two-three") is None
+    assert _parse_stated_count("one-two") is None
+
+    errors = slo_count_errors("README.md", "two-three SLO objectives", expected=5)
+    assert len(errors) == 1
+    assert "cannot verify" in errors[0], errors
+
+
+@pytest.mark.parametrize("token", ["二十", "二十一", "二十二", "三十", "九十"])
+def test_the_tens_head_rule_still_accepts_every_real_compound(token):
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is not None
+
+
+def test_a_numeral_with_unrecognised_characters_is_never_read_as_its_tail():
+    """Pins the CJK lookbehind specifically.
+
+    `零` in the character class is what makes 一百零五 parse as one token. The
+    lookbehind is the other half: without it, any numeral whose leading
+    characters fall outside the class would still match its tail, so a claim of
+    105 could be certified as a statement of 5. With it the claim is not matched
+    at all — unchecked, which is the honest outcome, rather than wrong.
+    """
+    from scripts.check_repo_consistency import _SLO_COUNT_RE
+
+    claim = "贰佰零五个 SLO 目标"
+    matches = [match.group("lead") for match in _SLO_COUNT_RE.finditer(claim)]
+
+    assert matches == [], f"the tail of an unrecognised numeral was matched as a count: {matches}"
+
+
+def test_a_malformed_compound_is_never_certified_as_the_real_count():
+    """The shape of the finding: a typo whose computed value coincides with the
+    runbook's count must not be reported as verified. Each token here computes
+    to 5 under a naive additive rule, against a five-objective runbook."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for token in ("twenty-zero", "two-three", "one-two", "hundred-one"):
+        errors = slo_count_errors("README.md", f"{token} SLO objectives", expected=5)
+        assert len(errors) == 1, (token, errors)
+        assert "cannot verify" in errors[0], (token, errors)
+
+
+# ── a numeric count is captured whole, punctuation included ──────────────
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [("5", 5), ("1005", 1005), ("1,005", 1005), ("1,234,567", 1_234_567)],
+)
+def test_grouped_and_plain_integers_parse_to_the_same_number(token, expected):
+    """`1,005` and `1005` are one number; the separator is not a place to start
+    reading."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) == expected
+
+
+@pytest.mark.parametrize("token", ["1,00", "105.5", "1,00,5", ",5", "5,", "1,005.5", "5.0"])
+def test_a_malformed_or_fractional_numeric_count_is_unverifiable(token):
+    """A count of objectives is an integer written in valid grouping. Anything
+    else declines rather than rounding to something plausible."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "1,005 SLO objectives",
+        "There are 1,005 SLO objectives.",
+        "1,005 个 SLO 目标",
+        "| SLO 目标（1,005 个） |",
+    ],
+)
+def test_a_grouped_count_that_drifts_is_flagged_not_read_as_its_suffix(claim):
+    """The regression: `\\d+` started after the comma, so `1,005` was read as
+    `005` = 5 — a false pass against a five-objective runbook, which is the one
+    outcome worse than not checking at all."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1, (claim, errors)
+    assert "states 1005 SLO objectives" in errors[0], (claim, errors)
+
+
+def test_a_fractional_count_is_reported_as_unverifiable():
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", "105.5 SLO objectives", expected=5)
+    assert len(errors) == 1
+    assert "cannot verify" in errors[0], errors
+
+
+def test_a_correct_grouped_count_is_accepted():
+    """The fix must not turn a legitimate formatted count into a finding."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", "1,005 SLO objectives", expected=1005) == []
+    assert slo_count_errors("README.md", "1,005 个 SLO 目标", expected=1005) == []
+
+
+@pytest.mark.parametrize("token", ["-5", "-1,005", "+0"])
+def test_a_signed_count_is_judged_whole_and_refused(token):
+    """The regression the sweep found: a bare `\\d+` starts after the sign, so
+    `-5` matched `5` and was certified as a statement of five objectives. The
+    sign is captured instead, so the parser sees `-5`, declines it, and the
+    guard says "cannot verify" — unchecked is safe, wrong is not."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for claim in (f"{token} SLO objectives", f"{token} 个 SLO 目标", f"SLO 目标（{token} 个）"):
+        errors = slo_count_errors("README.md", claim, expected=5)
+        assert errors, (claim, "a signed count was accepted as a bare number")
+        assert "cannot verify" in errors[0], (claim, errors)
+
+
+@pytest.mark.parametrize("token", ["5", "05", "1005"])
+def test_a_plain_integer_count_is_still_read_correctly(token):
+    """The sign fix must not cost the ordinary readings."""
+    from scripts.check_repo_consistency import _parse_stated_count, slo_count_errors
+
+    assert _parse_stated_count(token) == int(token)
+    assert slo_count_errors("README.md", f"{token} SLO objectives", expected=int(token)) == []
+
+
+def test_no_numeric_token_shape_is_certified_as_the_wrong_count():
+    """A sweep in place of another hand-written case.
+
+    Two digits plus punctuation across every combination, three-digit sequences
+    with grouping, and every ordered pair of CJK numeral characters — checked in
+    all four claim formats the guard recognises. A token denoting five must be
+    accepted, and a token denoting anything else must never pass unnoticed —
+    a false pass is the whole reason this guard exists. Rejecting a wrong count is
+    the guard working, so that is expected rather than a failure.
+    """
+    import itertools
+
+    from scripts.check_repo_consistency import _parse_stated_count, slo_count_errors
+
+    numerals = "一二两三四五六七八九十百千零"
+    punctuation = "0123456789,.+-"
+
+    tokens = {t for t in punctuation}
+    tokens |= {"".join(pair) for pair in itertools.product(punctuation, repeat=2)}
+    tokens |= {"".join(triple) for triple in itertools.product("0123456789", ",.", ",.")}
+    tokens |= {"".join(pair) for pair in itertools.product(numerals, repeat=2)}
+
+    # Multi-word numerals, which are where a match can start mid-phrase: the
+    # engine reaches the final word and reads it as the whole count.
+    words = ("one", "five", "twenty", "twenty-one", "hundred", "thousand", "and")
+    tokens |= {f"{a} {b}" for a, b in itertools.product(words, repeat=2)}
+    tokens |= {f"{a} and {b}" for a in words for b in words}
+
+    # A silent pass means the guard read the token as five. That is only correct if
+    # the token really does denote five, so the invariant is: if a claim passes
+    # and the token is parseable at all, the parsed value must be exactly five.
+    # Rejecting a wrong count is the guard working, not failing — "0 SLO
+    # objectives" being flagged is the desired outcome, not a defect.
+    false_passes: list[str] = []
+    wrongly_rejected: list[str] = []
+    for token in sorted(tokens):
+        parsed = _parse_stated_count(token)
+        # A Chinese numeral is only a claim in the Chinese claim forms; the guard
+        # does not read `一十 SLO objectives` as English, and an unchecked claim
+        # is the safe outcome. Mixing them here would be asserting coverage the
+        # guard never claimed.
+        if not token.isascii():
+            forms = [f"{token} 个 SLO 目标", f"SLO 目标（{token} 个）"]
+        elif " " in token:
+            # Multi-word tokens are English numerals; pairing them with the
+            # Chinese claim forms would only assert coverage the guard never
+            # claimed, since that branch matches CJK and would leave them
+            # unchecked.
+            forms = [f"{token} SLO objectives", f"There are {token} SLO objectives."]
+        else:
+            forms = [
+                f"{token} SLO objectives",
+                f"There are {token} SLO objectives.",
+                f"{token} 个 SLO 目标",
+                f"SLO 目标（{token} 个）",
+            ]
+        for claim in forms:
+            errors = slo_count_errors("README.md", claim, expected=5)
+            if not errors:
+                if parsed is not None and parsed != 5:
+                    false_passes.append(f"{token!r} parses as {parsed} but passed as five, in {claim!r}")
+            elif parsed == 5 and "cannot verify" not in errors[0]:
+                wrongly_rejected.append(f"{token!r} is five but was rejected: {errors[0]}")
+
+    assert false_passes == [], false_passes[:20]
+    assert wrongly_rejected == [], wrongly_rejected[:20]
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "There are one hundred and five SLO objectives.",
+        "one hundred and five SLO objectives",
+        "five hundred and five SLO objectives",
+        "one thousand and twenty SLO objectives",
+    ],
+)
+def test_a_match_may_not_start_inside_a_longer_numeral(claim):
+    """The regression: the lookbehind permits whitespace, so the engine reached
+    the final `five` of `one hundred and five` and read it as a statement of
+    five — which passes against a five-objective runbook.
+
+    `re` cannot express "not preceded by an arbitrarily long numeral phrase", so
+    the preceding context is walked in Python. A claim that continues a larger
+    numeral is unverifiable rather than silently wrong.
+    """
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1, (claim, errors)
+    assert "continues a longer numeral" in errors[0], (claim, errors)
+
+
+@pytest.mark.parametrize(
+    ("claim", "stated"),
+    [
+        ("Five SLO objectives", 5),
+        ("There are five SLO objectives.", 5),
+        ("five SLO objectives", 5),
+        ("twenty-one SLO objectives", 21),
+        ("There are twenty-one SLO objectives.", 21),
+        ("Five hundred SLO objectives", 500),
+        ("1,005 SLO objectives", 1005),
+        ("There are five SLO objectives and more", 5),
+        # A conjunction with no numeral behind it introduces a count.
+        ("and five SLO objectives", 5),
+    ],
+)
+def test_the_continuation_check_does_not_swallow_ordinary_claims(claim, stated):
+    """The guard has to tell "five" in "one hundred and five" from "five" in
+    "There are five". A check that flagged both would be useless."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, expected=stated) == []
+
+
+def test_a_conjunction_after_a_numeral_continues_it_but_on_its_own_does_not():
+    """The distinction the check turns on, named so the intent is legible."""
+    from scripts.check_repo_consistency import _continues_a_larger_numeral
+
+    def _at(text: str, word: str) -> int:
+        """Start offset of `word` within `text`."""
+        return text.index(word)
+
+    assert _continues_a_larger_numeral("one hundred and five", _at("one hundred and five", "five"))
+    assert _continues_a_larger_numeral("twenty and five", _at("twenty and five", "five"))
+    assert not _continues_a_larger_numeral("and five", _at("and five", "five"))
+    assert not _continues_a_larger_numeral("There are five", _at("There are five", "five"))
+    assert not _continues_a_larger_numeral("five", 0)
+    assert not _continues_a_larger_numeral("SLO objectives are five", _at("SLO objectives are five", "five"))
