@@ -31,7 +31,20 @@ metadata:
     app.kubernetes.io/name: beauty-industry-rag-qa
     app.kubernetes.io/component: api
 spec:
-  replicas: 2
+  # replicas: 1 is deliberate, not an oversight.
+  #
+  # The user store is SQLite at ./data/users.db (auth/user_store.py, overridable
+  # only by DATABASE_URL) and this contract declares no shared storage and no
+  # external database backend. With replicas > 1 the replicas hold divergent
+  # user rows: a user created through one pod can fail to log in through the
+  # other, stale role masks persist, and every user on a replaced pod
+  # disappears.
+  #
+  # Raising this count requires a shared user store first. That is real work
+  # this minimal contract does not do, and it is NOT a production-readiness
+  # claim. maxUnavailable: 0 below also keeps the rollout from dropping the
+  # single replica's traffic.
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: beauty-industry-rag-qa
@@ -102,13 +115,36 @@ spec:
             capabilities:
               drop:
                 - ALL
-      # No volume mount is declared on purpose. docker-compose.yml bind-mounts
+          volumeMounts:
+            # RS256 key material for the primary auth path (see configmap.yaml).
+            # Create it out of band:
+            #   kubectl -n beauty-rag create secret generic rag-jwt-keys \
+            #     --from-file=jwt-private.pem --from-file=jwt-public.pem
+            # File names must match JWT_PRIVATE_KEY_PATH / JWT_PUBLIC_KEY_PATH.
+            # Absent this mount, /api/auth/login reports the RS256 path as
+            # unconfigured and protected endpoints return 401; it never falls
+            # open to an unauthenticated mode.
+            - name: jwt-keys
+              mountPath: /etc/rag-auth
+              readOnly: true
+      volumes:
+        - name: jwt-keys
+          secret:
+            secretName: rag-jwt-keys
+            defaultMode: 0400
+
+      # No models volume is declared on purpose. docker-compose.yml bind-mounts
       # ./models into the container, but this repository ships no model weights:
       # every real weight is PENDING (see issues #8 and #12). Declaring a
       # PersistentVolumeClaim here would reference storage that this contract
       # does not define, and a Pod whose PVC is missing never schedules.
       # When real weights are provisioned, add the mount together with the
       # storage that backs it.
+      #
+      # For the same reason there is no data volume for ./data/users.db: with
+      # replicas: 1 the store lives and dies with the pod. That is a real
+      # limitation, stated rather than hidden, and it is why this contract does
+      # not claim production readiness.
 ---
 apiVersion: v1
 kind: Service

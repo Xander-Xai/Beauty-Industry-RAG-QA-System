@@ -336,3 +336,91 @@ def test_rolling_update_strategy_is_declared() -> None:
 
 def test_replicas_are_declared() -> None:
     assert _by_kind("Deployment")[0]["spec"].get("replicas", 0) >= 1
+
+
+def test_multiple_replicas_require_a_shared_user_store() -> None:
+    """The user store is SQLite at ./data/users.db, so replicas must stay at 1.
+
+    auth/user_store.py resolves its path from DATABASE_URL with a
+    `sqlite:///./data/users.db` default. This contract declares no external
+    database backend and no shared volume for that path, so a second replica
+    would hold divergent user rows and silently break login and role updates.
+    If someone raises the replica count, this fails with the reason.
+    """
+    deployment = _by_kind("Deployment")[0]
+    replicas = deployment["spec"]["replicas"]
+    config_data = _by_kind("ConfigMap")[0].get("data", {})
+    uses_shared_db = bool(config_data.get("DATABASE_URL"))
+    if replicas > 1:
+        assert uses_shared_db, (
+            f"replicas={replicas} but no shared user store is configured; "
+            "set DATABASE_URL to a supported shared backend first"
+        )
+
+
+def test_rs256_primary_auth_is_configured() -> None:
+    """config.json ships auth.dev_mode=false, so RS256 is the only login path.
+
+    auth/jwt_auth.get_jwt_config() enables login only when JWT_ALGORITHM is set,
+    and then requires both key paths. If the ConfigMap omits these, login is
+    disabled while protected endpoints return 401.
+    """
+    config_data = _by_kind("ConfigMap")[0].get("data", {})
+    assert config_data.get("JWT_ALGORITHM") == "RS256", (
+        "JWT_ALGORITHM must be set: config.json ships auth.dev_mode=false, so an "
+        "unset value leaves /api/auth/login disabled"
+    )
+    for key in ("JWT_PRIVATE_KEY_PATH", "JWT_PUBLIC_KEY_PATH"):
+        assert config_data.get(key), f"{key} must be declared for the RS256 path"
+
+
+def test_rs256_key_material_is_mounted_from_a_secret() -> None:
+    """The key paths in the ConfigMap must resolve to a mounted Secret volume."""
+    deployment = _by_kind("Deployment")[0]
+    container = _container(deployment)
+    config_data = _by_kind("ConfigMap")[0].get("data", {})
+    volumes = {v["name"]: v for v in deployment["spec"]["template"]["spec"].get("volumes", [])}
+    mounts = {m["name"]: m for m in container.get("volumeMounts", [])}
+
+    for key in ("JWT_PRIVATE_KEY_PATH", "JWT_PUBLIC_KEY_PATH"):
+        path = config_data[key]
+        mounted = next(
+            (m for m in mounts.values() if path.startswith(m["mountPath"])),
+            None,
+        )
+        assert mounted is not None, f"{key}={path!r} is not inside any volumeMount"
+        volume = volumes.get(mounted["name"])
+        assert volume is not None, f"volumeMount {mounted['name']!r} has no matching volume"
+        assert "secret" in volume, f"{key} must be backed by a secret volume, got {sorted(volume)}"
+
+
+def test_inference_service_urls_are_configured() -> None:
+    """Routers fall back to localhost without these, which self-loops the API pod.
+
+    api-gateway routers default REWRITE_SERVICE_URL to http://rewrite-service:8101
+    and GENERATION_SERVICE_URL to http://generation-service:8100 via
+    os.environ.get. Pointing them at an unset or absent Service degrades every
+    query, because the API pod would otherwise call back into itself.
+    """
+    config_data = _by_kind("ConfigMap")[0].get("data", {})
+    for key in ("REWRITE_SERVICE_URL", "GENERATION_SERVICE_URL"):
+        url = config_data.get(key)
+        assert url, f"{key} must be set explicitly; the default is not a valid in-cluster target"
+        assert "localhost" not in url and "127.0.0.1" not in url, f"{key}={url!r} points back at the pod itself"
+
+
+def test_elasticsearch_username_is_configured_beside_its_password() -> None:
+    """BM25 basic_auth needs username AND password.
+
+    retrieval/bm25_retriever.py only sets basic_auth when both values are
+    non-empty. A password without a username makes the initial anonymous info()
+    call fail with 401, and the BM25 path is then disabled for the process.
+    """
+    config_data = _by_kind("ConfigMap")[0].get("data", {})
+    secret_data = _by_kind("Secret")[0].get("stringData", {})
+    assert config_data.get("ELASTICSEARCH_USERNAME"), (
+        "ELASTICSEARCH_USERNAME must be set; config.json ships it empty and BM25 basic_auth stays disabled without it"
+    )
+    assert secret_data.get("ELASTICSEARCH_PASSWORD"), (
+        "the Elasticsearch password must be supplied alongside the username"
+    )

@@ -1,8 +1,8 @@
 # Non-secret runtime configuration for the API gateway.
 #
 # Only variables that the application actually reads are set here. The list was
-# verified against `os.environ.get(...)` call sites in api/, core/, common/ and
-# retrieval/; nothing is listed speculatively.
+# verified against `os.environ.get(...)` call sites in api/, core/, common/,
+# retrieval/ and router/; nothing is listed speculatively.
 #
 # Secrets are never placed in this file. See secret.example.yaml.
 #
@@ -17,23 +17,47 @@ metadata:
     app.kubernetes.io/name: beauty-industry-rag-qa
     app.kubernetes.io/component: api
 data:
-  # Dependency addresses. Values mirror the docker-compose service names so the
-  # two deployment forms stay comparable.
+  # ── Inference service routing ────────────────────────────────────────────
+  # Without these the routers fall back to http://localhost:8101 / :8100, so
+  # generation and query rewriting would call back into the API pod itself and
+  # degrade every query. These are the same variables docker-compose sets for
+  # the microservices topology; adjust the host names to match the Services you
+  # actually create.
+  REWRITE_SERVICE_URL: "http://rewrite-service:8101"
+  GENERATION_SERVICE_URL: "http://generation-service:8100"
+
+  # ── Datastores ───────────────────────────────────────────────────────────
+  # Dependency addresses, mirroring the docker-compose service names.
   QDRANT_HOST: "qdrant"
   REDIS_CACHE_HOST: "redis"
   REDIS_CACHE_PORT: "6379"
-  # Cache database index; matches the compose default.
   REDIS_CACHE_DB: "0"
-  # Same value as docker-compose.cpu.yml. Production overrides this explicitly.
+
+  # Elasticsearch username. NOT optional: BM25Retriever only enables basic_auth
+  # when username AND password are both non-empty, so omitting this makes the
+  # anonymous `info()` call fail with 401 and permanently disables BM25 for the
+  # process. The password lives in the Secret.
+  ELASTICSEARCH_USERNAME: "elastic"
+
+  # ── Auth ─────────────────────────────────────────────────────────────────
+  # config.json ships auth.dev_mode=false, so the RS256 path is the only one
+  # that enables /api/auth/login: auth/jwt_auth.get_jwt_config() gates on
+  # JWT_ALGORITHM being set and then requires both key paths to exist.
+  # The key files themselves are operator-provided and are NOT shipped here -
+  # see the authentication section of the deployment guide. Until they are
+  # mounted, protected endpoints correctly return 401 rather than falling open.
+  JWT_ALGORITHM: "RS256"
+  JWT_PRIVATE_KEY_PATH: "/etc/rag-auth/jwt-private.pem"
+  JWT_PUBLIC_KEY_PATH: "/etc/rag-auth/jwt-public.pem"
+
+  # Same value as docker-compose.cpu.yml; production overrides this explicitly.
   DEPLOYMENT_MODE: "development"
-  # Elasticsearch has no dedicated env override in the application; its host and
-  # index come from config.json (`elasticsearch.host` / `elasticsearch.index`),
-  # which already points at the in-cluster service name. It is therefore NOT
-  # duplicated here.
-  #
+
   # Not set here on purpose:
   #   CONFIG_PATH      - the image already ships the canonical config.json
   #   CORS_ORIGINS     - a wildcard default is a development-only posture and
   #                      must be set explicitly per environment
   #   TRUSTED_PROXIES  - only meaningful behind a load balancer that sets
   #                      X-Forwarded-For; empty means do not trust it
+  #   DATABASE_URL     - see api-deployment.yaml; the user store is not yet
+  #                      shareable across replicas
