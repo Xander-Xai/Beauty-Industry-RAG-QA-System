@@ -3514,3 +3514,83 @@ def test_a_correct_grouped_count_is_accepted():
 
     assert slo_count_errors("README.md", "1,005 SLO objectives", expected=1005) == []
     assert slo_count_errors("README.md", "1,005 个 SLO 目标", expected=1005) == []
+
+
+@pytest.mark.parametrize("token", ["-5", "-1,005", "+0"])
+def test_a_signed_count_is_judged_whole_and_refused(token):
+    """The regression the sweep found: a bare `\\d+` starts after the sign, so
+    `-5` matched `5` and was certified as a statement of five objectives. The
+    sign is captured instead, so the parser sees `-5`, declines it, and the
+    guard says "cannot verify" — unchecked is safe, wrong is not."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for claim in (f"{token} SLO objectives", f"{token} 个 SLO 目标", f"SLO 目标（{token} 个）"):
+        errors = slo_count_errors("README.md", claim, expected=5)
+        assert errors, (claim, "a signed count was accepted as a bare number")
+        assert "cannot verify" in errors[0], (claim, errors)
+
+
+@pytest.mark.parametrize("token", ["5", "05", "1005"])
+def test_a_plain_integer_count_is_still_read_correctly(token):
+    """The sign fix must not cost the ordinary readings."""
+    from scripts.check_repo_consistency import _parse_stated_count, slo_count_errors
+
+    assert _parse_stated_count(token) == int(token)
+    assert slo_count_errors("README.md", f"{token} SLO objectives", expected=int(token)) == []
+
+
+def test_no_numeric_token_shape_is_certified_as_the_wrong_count():
+    """A sweep in place of another hand-written case.
+
+    Two digits plus punctuation across every combination, three-digit sequences
+    with grouping, and every ordered pair of CJK numeral characters — checked in
+    all four claim formats the guard recognises. A token denoting five must be
+    accepted, and a token denoting anything else must never pass unnoticed —
+    a false pass is the whole reason this guard exists. Rejecting a wrong count is
+    the guard working, so that is expected rather than a failure.
+    """
+    import itertools
+
+    from scripts.check_repo_consistency import _parse_stated_count, slo_count_errors
+
+    numerals = "一二两三四五六七八九十百千零"
+    punctuation = "0123456789,.+-"
+
+    tokens = {t for t in punctuation}
+    tokens |= {"".join(pair) for pair in itertools.product(punctuation, repeat=2)}
+    tokens |= {"".join(triple) for triple in itertools.product("0123456789", ",.", ",.")}
+    tokens |= {"".join(pair) for pair in itertools.product(numerals, repeat=2)}
+
+    # A silent pass means the guard read the token as five. That is only correct if
+    # the token really does denote five, so the invariant is: if a claim passes
+    # and the token is parseable at all, the parsed value must be exactly five.
+    # Rejecting a wrong count is the guard working, not failing — "0 SLO
+    # objectives" being flagged is the desired outcome, not a defect.
+    false_passes: list[str] = []
+    wrongly_rejected: list[str] = []
+    for token in sorted(tokens):
+        parsed = _parse_stated_count(token)
+        # A Chinese numeral is only a claim in the Chinese claim forms; the guard
+        # does not read `一十 SLO objectives` as English, and an unchecked claim
+        # is the safe outcome. Mixing them here would be asserting coverage the
+        # guard never claimed.
+        forms = (
+            [f"{token} 个 SLO 目标", f"SLO 目标（{token} 个）"]
+            if not token.isascii()
+            else [
+                f"{token} SLO objectives",
+                f"There are {token} SLO objectives.",
+                f"{token} 个 SLO 目标",
+                f"SLO 目标（{token} 个）",
+            ]
+        )
+        for claim in forms:
+            errors = slo_count_errors("README.md", claim, expected=5)
+            if not errors:
+                if parsed is not None and parsed != 5:
+                    false_passes.append(f"{token!r} parses as {parsed} but passed as five, in {claim!r}")
+            elif parsed == 5 and "cannot verify" not in errors[0]:
+                wrongly_rejected.append(f"{token!r} is five but was rejected: {errors[0]}")
+
+    assert false_passes == [], false_passes[:20]
+    assert wrongly_rejected == [], wrongly_rejected[:20]

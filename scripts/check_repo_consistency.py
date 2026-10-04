@@ -3102,13 +3102,16 @@ _SLO_COUNT_RE = re.compile(
     # separator to stop the class matching its `五个` tail — without the guard,
     # a claim of 105 would be read as 5 and quietly pass. 零 is what makes that
     # particular tail reachable, so it is in the class.
-    # The numeric token is captured whole, comma grouping and decimal point
-    # included, because `\d+` alone starts *after* the punctuation: "1,005" would
-    # match "005" and read as 5, certifying a claim of 1,005 against a
-    # five-objective runbook. The lookbehind is the belt to that braces — it
-    # stops a match beginning mid-number even if the shape changes.
-    r"(?<![\u4e00-\u9fff])(?P<lead>[一二两三四五六七八九十百千零]+|[\d,.]+)\s*个\s*SLO\s*目标"
-    r"|SLO\s*目标\s*[（(]\s*(?<![\u4e00-\u9fff])(?P<trail>[一二两三四五六七八九十百千零]+|[\d,.]+)\s*个"
+    # The numeric token is captured whole, and comma grouping, decimal point and
+    # sign included, because a bare `\d+` starts *after* the punctuation:
+    # "1,005" would match "005" and read as 5, certifying a claim of 1,005
+    # against a five-objective runbook, and "-5" would match "5" and certify a
+    # claim of -5 as 5. Capturing the sign instead makes the parser see "-5",
+    # decline it, and report "cannot verify" — unchecked is safe, wrong is not.
+    # The lookbehind stops a match beginning mid-number even if the shape
+    # changes later.
+    r"(?<![\u4e00-\u9fff])(?P<lead>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*个\s*SLO\s*目标"
+    r"|SLO\s*目标\s*[（(]\s*(?<![\u4e00-\u9fff])(?P<trail>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*个"
     # The compound has to sit *inside* the group: capturing only the first word
     # made "twenty-one SLO objectives" parse as 20. The lookbehind keeps the
     # match from starting *inside* one instead — "twenty-one" has a word
@@ -3116,7 +3119,7 @@ _SLO_COUNT_RE = re.compile(
     # load-bearing: `_COUNT_WORDS` is an `a|b|c` alternation, so without it the
     # top-level `|` splits the whole pattern and only the final alternative
     # keeps the trailing `\s+SLO` requirement.
-    r"|(?<![\w,.])(?P<english>[\d,.]+|(?:"
+    r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
     + _COUNT_WORDS
     + r")(?:[-\s](?:"
     + _COUNT_WORDS
