@@ -324,3 +324,46 @@ def test_capture_docstring_states_that_only_webp_is_encoded():
     doc = CAPTURE.__doc__ or ""
     assert "Only WebP is encoded" in doc
     assert "--out` must end in `.webp`" in doc
+
+
+# ── the reproduction path is installable from a clean checkout ───────────
+DEMO_REQUIREMENTS = REPO_ROOT / "docs" / "demo" / "requirements.txt"
+DEMO_DIR = REPO_ROOT / "docs" / "demo"
+
+
+def test_playwright_is_declared_for_the_demo():
+    """The regression: `playwright install chromium` was documented, but the
+    Python package was in no requirements file, so on a clean checkout with the
+    documented Python dependencies installed the capture died with
+    `ModuleNotFoundError: No module named 'playwright'`."""
+    assert DEMO_REQUIREMENTS.is_file(), "docs/demo/requirements.txt must exist"
+    text = DEMO_REQUIREMENTS.read_text(encoding="utf-8")
+    assert "playwright" in text, text
+
+
+def test_the_demo_requirements_file_is_named_where_a_reader_looks():
+    """A file nobody is told about fixes nothing."""
+    readme = DEMO_README.read_text(encoding="utf-8")
+    assert "docs/demo/requirements.txt" in readme, "docs/demo/README.md must point at the demo requirements"
+
+
+def test_the_browser_install_step_comes_after_the_package_install():
+    """`playwright install chromium` needs the CLI to exist already. Swapping
+    the two steps is the exact order a reader would guess."""
+    readme = DEMO_README.read_text(encoding="utf-8")
+    install = readme.index("pip install -r docs/demo/requirements.txt")
+    browser = readme.index("playwright install chromium")
+    assert install < browser, "the package must be installed before the browser binaries"
+
+
+def test_playwright_is_not_pulled_into_the_service_requirements():
+    """The service never imports playwright; making every service install carry
+    a browser automation stack would be the wrong fix for a demo-only need."""
+    service_requirements = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "playwright" not in service_requirements.lower()
+
+
+def test_the_capture_script_does_import_playwright():
+    """Confirms the split is real: the dependency belongs to the demo, and the
+    demo is the only thing that needs it."""
+    assert "from playwright.sync_api import" in CAPTURE_PATH.read_text(encoding="utf-8")

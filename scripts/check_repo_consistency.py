@@ -3104,9 +3104,41 @@ _SLO_COUNT_RE = re.compile(
 _CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
+def slo_objective_rows(runbook_text: str) -> list[int]:
+    """The objective identifiers the runbook defines, in document order.
+
+    A list, not a set. Deduplicating here would hide exactly the mistake worth
+    catching: six rows where two share an ``SLO-5`` would count as five, and
+    every "5 个 SLO 目标" in the summaries would keep passing while the runbook
+    described a sixth objective under an id that already existed.
+    """
+    return [int(number) for number in _SLO_ROW_RE.findall(runbook_text)]
+
+
 def slo_objective_count(runbook_text: str) -> int:
     """How many SLO objectives ``docs/slo-runbook.md`` actually defines."""
-    return len({int(number) for number in _SLO_ROW_RE.findall(runbook_text)})
+    return len(slo_objective_rows(runbook_text))
+
+
+def slo_objective_id_errors(runbook_name: str, runbook_text: str) -> list[str]:
+    """Identifiers must be unique and contiguous from 1.
+
+    Contiguity is what makes "SLO-6" mean the sixth objective. A gap or a repeat
+    means a row was inserted or copy-pasted, and every stated count becomes
+    ambiguous — so it is rejected here rather than silently absorbed into a
+    total.
+    """
+    numbers = slo_objective_rows(runbook_text)
+    if not numbers:
+        return []
+    errors: list[str] = []
+    duplicates = sorted({number for number in numbers if numbers.count(number) > 1})
+    if duplicates:
+        errors.append(f"{runbook_name}: duplicate objective identifiers {duplicates}; each SLO-<n> must appear once")
+    expected = list(range(1, len(numbers) + 1))
+    if numbers != expected:
+        errors.append(f"{runbook_name}: objective identifiers are {numbers} instead of a contiguous 1..{len(numbers)}")
+    return errors
 
 
 def _parse_stated_count(token: str) -> int | None:
@@ -3168,12 +3200,17 @@ def check_slo_objective_counts(errors: list[str], root: Path | None = None) -> N
     runbook = base / "docs" / "slo-runbook.md"
     if not runbook.is_file():
         return
-    expected = slo_objective_count(runbook.read_text(encoding="utf-8"))
+    runbook_text = runbook.read_text(encoding="utf-8")
+    expected = slo_objective_count(runbook_text)
     if expected == 0:
         errors.append(
             "docs/slo-runbook.md: no `| SLO-<n> |` objective rows found; the count guard has nothing to compare"
         )
         return
+    # Identifiers first: if two rows share an id then the count above is not a
+    # count of objectives, and comparing summaries against it would bless the
+    # very duplication that produced the wrong number.
+    errors.extend(slo_objective_id_errors("docs/slo-runbook.md", runbook_text))
     for path in CANONICAL_DOCS:
         if not path.exists():
             continue

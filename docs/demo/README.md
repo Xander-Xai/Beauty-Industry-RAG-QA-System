@@ -41,7 +41,14 @@ python3 docs/demo/capture_demo.py --no-font-download   # 完全离线：用系�
 
 依赖：
 
-* `playwright` + Chromium（`playwright install chromium`）
+* `playwright` + Chromium。**`playwright` 不在仓库的 `requirements.txt` 里**——服务端不 import 它，服务安装不该拖一套浏览器自动化栈。只有复现这张图才需要：
+
+  ```bash
+  pip install -r docs/demo/requirements.txt   # 提供 playwright 命令
+  playwright install chromium                 # 再装浏览器二进制（顺序不能反）
+  ```
+
+  只跑 `playwright install chromium` 而没装 Python 包，会得到 `ModuleNotFoundError: No module named 'playwright'`。
 * `node` / `npm`，且 `frontend/node_modules` 已安装（脚本用 Vite dev server 提供真实前端）
 * `pillow`（可选，仅用于转 WebP；缺失时写出同名 `.png`，见下节）
 * 网络：**只有默认模式需要**，且仅首次——用于取一份按本次字符集裁剪的 Noto Sans SC 子集，缓存在 `docs/demo/.build/`（已 gitignore）。

@@ -3143,3 +3143,81 @@ def test_readme_recheck_commands_avoid_undeclared_system_packages():
         if "def test_" in line and "git ls-files" in line:
             assert "| bc" not in line, line
             assert "awk" in line, line
+
+
+# ── objective identifiers must be unique and contiguous ────────────────
+def _runbook(*numbers: int) -> str:
+    return "".join(f"| SLO-{n} | objective {n} | x | y | `DESIGN_TARGET` |\n" for n in numbers)
+
+
+def test_the_identifier_list_is_not_deduplicated():
+    """The regression: counting distinct ids hid the duplicate row. Six rows
+    where two share `SLO-5` must count as six rows *and* be rejected, not
+    quietly collapse to five and let every "5 个 SLO 目标" keep passing."""
+    from scripts.check_repo_consistency import slo_objective_count, slo_objective_rows
+
+    text = _runbook(1, 2, 3, 4, 5, 5)
+    assert slo_objective_rows(text) == [1, 2, 3, 4, 5, 5]
+    assert slo_objective_count(text) == 6
+
+
+def test_a_duplicate_identifier_is_rejected():
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    errors = slo_objective_id_errors("runbook.md", _runbook(1, 2, 3, 4, 5, 5))
+    assert any("duplicate objective identifiers [5]" in error for error in errors), errors
+
+
+def test_a_gap_in_the_identifiers_is_rejected():
+    """Contiguity is what makes `SLO-6` mean the sixth objective. A gap means a
+    row was inserted or deleted and every stated count is now ambiguous."""
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    errors = slo_objective_id_errors("runbook.md", _runbook(1, 2, 4, 5))
+    assert any("instead of a contiguous 1..4" in error for error in errors), errors
+
+
+def test_a_reordered_runbook_is_rejected():
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    assert slo_objective_id_errors("runbook.md", _runbook(2, 1, 3))
+
+
+def test_a_clean_runbook_has_no_identifier_errors():
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    assert slo_objective_id_errors("runbook.md", _runbook(1, 2, 3, 4, 5)) == []
+
+
+def test_a_runbook_without_objectives_is_left_to_the_count_guard():
+    """No rows means no ids to validate; reporting "duplicate []" here would be
+    noise on top of the count guard's own message."""
+    from scripts.check_repo_consistency import slo_objective_id_errors
+
+    assert slo_objective_id_errors("runbook.md", "# Runbook\n\nNo table.\n") == []
+
+
+def test_the_guard_reports_a_duplicate_even_when_the_summary_agrees(tmp_path, monkeypatch):
+    """End-to-end: a runbook with a duplicated id plus a matching "6" summary
+    must still fail, because the duplication is the defect."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text(_runbook(1, 2, 3, 4, 5, 5), encoding="utf-8")
+    readme = tmp_path / "README.md"
+    readme.write_text("6 个 SLO 目标与告警阈值。\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    monkeypatch.setattr("scripts.check_repo_consistency.CANONICAL_DOCS", [readme])
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert any("duplicate objective identifiers [5]" in error for error in errors), errors
+    assert not any("states 6 SLO objectives" in error for error in errors), errors
+
+
+def test_the_current_runbook_has_unique_contiguous_identifiers():
+    from scripts.check_repo_consistency import ROOT, slo_objective_id_errors
+
+    text = (ROOT / "docs/slo-runbook.md").read_text(encoding="utf-8")
+    assert slo_objective_id_errors("docs/slo-runbook.md", text) == []
