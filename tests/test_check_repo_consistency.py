@@ -3033,3 +3033,113 @@ def test_guard_fails_end_to_end_when_the_summary_count_drifts(tmp_path, monkeypa
     check_slo_objective_counts(errors, root=tmp_path)
     assert len(errors) == 1
     assert "states 5 SLO objectives but docs/slo-runbook.md defines 2" in errors[0]
+
+
+# ── the English count parser, exercised directly ────────────────────────
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("0", 0),
+        ("5", 5),
+        ("ten", 10),
+        ("nineteen", 19),
+        ("twenty", 20),
+        # Tens are values, not positions: "thirty" is the 22nd word in the list
+        # but the number 30. An index here silently reported 21.
+        ("thirty", 30),
+        ("forty", 40),
+        ("ninety", 90),
+        ("hundred", 100),
+        ("thousand", 1000),
+        # Compounds add ...
+        ("twenty-one", 21),
+        ("twenty one", 21),
+        ("forty-five", 45),
+        ("ninety-nine", 99),
+        # ... except a scale word, which multiplies.
+        ("five hundred", 500),
+        ("two hundred", 200),
+        ("twelve thousand", 12_000),
+    ],
+)
+def test_english_count_tokens_parse_to_the_number_they_spell(token, expected):
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) == expected
+
+
+@pytest.mark.parametrize("token", ["", "forty five hundred", "many", "SLO"])
+def test_an_unparseable_token_returns_none_rather_than_a_guess(token):
+    """`None` makes the guard say "cannot verify"; a wrong int makes it
+    confidently reject a correct document."""
+    from scripts.check_repo_consistency import _parse_stated_count
+
+    assert _parse_stated_count(token) is None
+
+
+def test_every_regex_count_word_is_parseable():
+    """The regex and the parser were separate lists, so "thirty" was matchable
+    but unparseable. One tuple now feeds both; this asserts they agree."""
+    from scripts.check_repo_consistency import _COUNT_WORD_LIST, _EN_COUNT_WORDS
+
+    assert set(_COUNT_WORD_LIST) == set(_EN_COUNT_WORDS)
+    for word in _COUNT_WORD_LIST:
+        assert _EN_COUNT_WORDS[word] > 0 or word == "zero"
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        ("There are twenty-one SLO objectives.", 21),
+        ("Forty-five SLO objectives.", 45),
+        ("Thirty SLO objectives.", 30),
+        ("Five hundred SLO objectives.", 500),
+        ("twelve thousand SLO objectives", 12_000),
+    ],
+)
+def test_a_correct_english_compound_count_is_not_flagged(claim, expected):
+    """The regression: the `english` group captured only the first word, so
+    "twenty-one SLO objectives" read as 20 and the guard rejected a runbook
+    that had exactly 21 objectives."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, expected) == []
+
+
+def test_a_compound_count_that_drifts_is_still_flagged():
+    """Parsing the whole compound must not weaken detection."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", "twenty-one SLO objectives", expected=5)
+    assert len(errors) == 1
+    assert "states 21 SLO objectives but docs/slo-runbook.md defines 5" in errors[0]
+
+
+def test_the_match_cannot_start_inside_a_compound():
+    """`-` is a word boundary as far as `re` is concerned, so without a guard
+    "twenty-one" matched as "one" and the guard reported 1."""
+    from scripts.check_repo_consistency import _SLO_COUNT_RE
+
+    matches = [match.group("english") for match in _SLO_COUNT_RE.finditer("twenty-one SLO objectives")]
+    assert matches == ["twenty-one"], matches
+
+
+def test_prose_without_a_number_before_slo_is_not_a_count_claim():
+    """The guard looks for a number the document chose to state. "five
+    objectives" and a bare "SLO objectives" are not claims about how many."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    for prose in ("The system has five objectives.", "SLO objectives are documented.", "See SLO objectives."):
+        assert slo_count_errors("README.md", prose, expected=5) == []
+
+
+def test_readme_recheck_commands_avoid_undeclared_system_packages():
+    """The README's own reproduction commands must not need a package the
+    repository never installs. `bc` was the one that broke it."""
+    from scripts.check_repo_consistency import ROOT
+
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if "def test_" in line and "git ls-files" in line:
+            assert "| bc" not in line, line
+            assert "awk" in line, line

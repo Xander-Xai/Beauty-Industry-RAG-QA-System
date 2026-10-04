@@ -3031,11 +3031,38 @@ _ENUMERATED_ITEM_RE = re.compile(r"^\*\*Q(\d+)\s+\S", re.MULTILINE)
 #: English count words that may precede "questions". The list runs well past
 #: "ten" on purpose: the marker syntax accepts any ``Q<n>``, so a list that grows
 #: to twelve or twenty-one items must be guarded exactly like a shorter one.
-_COUNT_WORDS = (
-    "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen"
-    "|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty"
-    "|fifty|sixty|seventy|eighty|ninety|hundred|thousand"
-)
+#: Every English count word the guards accept. Kept as one tuple and turned into
+#: both the regex alternation and the word->value map below, because maintaining
+#: those two lists separately is how "twenty-one" came to parse as 20 and
+#: "thirty" came to be matchable but unparseable.
+_COUNT_WORD_LIST = (
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand"
+).split()
+_COUNT_WORDS = "|".join(_COUNT_WORD_LIST)
+
+
+def _count_word_values() -> dict[str, int]:
+    """``zero``..``nineteen`` count up; the rest are tens, then hundred/thousand.
+
+    Built by position for the first twenty and from an explicit table for the
+    rest, because an index is not a value: ``thirty`` is the 22nd word in the
+    list but the number 30.
+    """
+    values = {word: index for index, word in enumerate(_COUNT_WORD_LIST[:20])}
+    values.update(
+        zip(
+            ("twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"),
+            (20, 30, 40, 50, 60, 70, 80, 90),
+            strict=True,
+        )
+    )
+    values["hundred"] = 100
+    values["thousand"] = 1000
+    return values
+
+
+_EN_COUNT_WORDS = _count_word_values()
 
 #: Prose that restates how many items the list has, in the two languages this
 #: repository documents in. Spacing is optional because both "六个问题" and
@@ -3060,24 +3087,21 @@ _SLO_ROW_RE = re.compile(r"^\|\s*SLO-(\d+)\s*\|", re.MULTILINE)
 _SLO_COUNT_RE = re.compile(
     r"(?P<lead>[一二两三四五六七八九十]|\d+)\s*个\s*SLO\s*目标"
     r"|SLO\s*目标\s*[（(]\s*(?P<trail>[一二两三四五六七八九十]|\d+)\s*个"
-    r"|\b(?P<english>\d+|" + _COUNT_WORDS + r")(?:[-\s](?:" + _COUNT_WORDS + r"))?\s+SLO\s+objectives?\b",
+    # The compound has to sit *inside* the group: capturing only the first word
+    # made "twenty-one SLO objectives" parse as 20. The lookbehind keeps the
+    # match from starting *inside* one instead — "twenty-one" has a word
+    # boundary before "one". The `(?:...)` around the interpolated word list is
+    # load-bearing: `_COUNT_WORDS` is an `a|b|c` alternation, so without it the
+    # top-level `|` splits the whole pattern and only the final alternative
+    # keeps the trailing `\s+SLO` requirement.
+    r"|(?<![\w-])(?P<english>\d+|(?:" + _COUNT_WORDS + r")(?:[-\s](?:" + _COUNT_WORDS + r"))?)\s+SLO\s+objectives?\b",
     re.IGNORECASE,
 )
 
 #: Chinese and English count words, so the guard compares numbers rather than
 #: strings: "十个" must not slip past a check that only understands "10", and
-#: "twelve" must not slip past one that only understands digits.
+#: "twenty-one" must not slip past one that only reads the first word.
 _CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-_EN_COUNT_WORDS = {
-    word: index
-    for index, word in enumerate(
-        (
-            "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
-            "sixteen seventeen eighteen nineteen twenty"
-        ).split(),
-        start=0,
-    )
-}
 
 
 def slo_objective_count(runbook_text: str) -> int:
@@ -3097,9 +3121,15 @@ def _parse_stated_count(token: str) -> int | None:
         return int(token)
     if token in _CN_DIGITS:
         return _CN_DIGITS[token]
-    head, _, tail = token.partition("-")
-    if tail and head in _EN_COUNT_WORDS and tail in _EN_COUNT_WORDS:
-        return _EN_COUNT_WORDS[head] + _EN_COUNT_WORDS[tail]
+    for separator in ("-", " "):
+        head, found, tail = token.partition(separator)
+        if found and head in _EN_COUNT_WORDS and tail in _EN_COUNT_WORDS:
+            # "five hundred" is 500, not 105: a scale word multiplies what
+            # precedes it. Everything else in these lists adds
+            # ("twenty-one" = 21, "forty-five" = 45).
+            if tail in ("hundred", "thousand"):
+                return _EN_COUNT_WORDS[head] * _EN_COUNT_WORDS[tail]
+            return _EN_COUNT_WORDS[head] + _EN_COUNT_WORDS[tail]
     return _EN_COUNT_WORDS.get(token)
 
 

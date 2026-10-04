@@ -95,14 +95,14 @@ Runtime version `2.3.0`（`config.json` → `system.version`）。CI 配置见 `
 
 | 口径 | 事实 |
 |---|---|
-| **仓库规模（可复核）** | 246 个 tracked Python 文件 / 63,240 行；86 个定义了测试的测试文件、1,597 个 `def test_` 函数，`pytest --collect-only` 展开参数化后共 **1,811 个用例**；CI 覆盖 Python 3.10 与 3.11 |
+| **仓库规模（可复核）** | 246 个 tracked Python 文件 / 63,380 行；86 个定义了测试的测试文件、1,605 个 `def test_` 函数，`pytest --collect-only` 展开参数化后共 **1,842 个用例**；CI 覆盖 Python 3.10 与 3.11 |
 | **已实现且有测试覆盖**（`REPO_VERIFIED`） | FastAPI 主链路、离线管线全流程、加权 RRF、两级重排、双 Gate、4B/14B 路由契约、RS256 认证、uint32 RBAC、检索信任边界、指标端点、结构化审计、性能产物**框架**、告警规则、Grafana JSON、SLO/Runbook 文档、OTLP exporter 实现、检索 benchmark **框架** |
 | **框架 ≠ 结果** | 检索 benchmark（Recall@1/3/5/10、HitRate@1/3/5/10、MRR@10、NDCG@10）与性能产物七文件契约都是 `REPO_VERIFIED`（框架）/ `PENDING`（结果）——仓库内**没有任何可复现的真实 benchmark artifact**，因此全仓库不引用任何检索指标数字 |
 | **性能数字** | **本仓库没有可复现的 QPS / 延迟 benchmark 结果。** 仓库中的性能数值仅允许在 `HISTORICAL_PRODUCTION`（历史生产观测，如 10–15 QPS）、`DESIGN_TARGET`（SLO / 告警阈值）或 `SYNTHETIC DEMO`（README 演示夹具中的合成值）三类明确语义下出现，**均不得表述为本仓库实测结果**；5 个 SLO 目标与告警阈值都是 `DESIGN_TARGET`，不是实测 |
 | **本地真实验证**（`LOCAL_REAL_VALIDATION`，只有这 5 项） | Redis 多进程会话持久化 · Redis 跨进程登录限流 · nginx / `TRUSTED_PROXIES` 客户端 IP 解析 · 认证 Elasticsearch 8.11 · 带 Bearer token 的 Prometheus 抓取 |
 | **仍为 `PENDING`** | 真实性能产物 · 真实检索 benchmark 结果 · 真实 RAGAS 分数 · OTLP 运行期闭环尚未跑通 · 告警在生产触发 · Grafana 面板被真实数据填充 · 真实 4B/14B vLLM GPU 部署 · 真实 BGE/CLIP/PaddleOCR smoke · QLoRA 训练产物 · 真实 Airflow DAG 执行（逐项与升级路径见下方 [Evidence Matrix](#evidence-matrix)） |
 
-复核方式：`git ls-files '*.py' | xargs wc -l`、`git ls-files '*.py' | xargs grep -hcE '^\s*(async )?def test_' | paste -sd+ | bc`、`python3 -m pytest --collect-only -q`、`python3 scripts/check_repo_consistency.py`。
+复核方式（只用 `git`、`grep`、`wc`、`awk` 与本仓库的 Python，不依赖 `bc` 等未声明的系统包）：`git ls-files '*.py' | xargs wc -l`、`git ls-files '*.py' | xargs grep -hcE '^\s*(async )?def test_' | awk '{s+=$1} END {print s}'`、`python3 -m pytest --collect-only -q`、`python3 scripts/check_repo_consistency.py`。
 
 **评测的诚实边界**：RAGAS harness / reporter / validator 与 golden set 存在（最初 seed 27 条，现 300+ 条，实际条数以 `validate_golden_set` 输出与 `golden_set.jsonl` 为准），但**格式校验通过 ≠ 领域事实正确**。RAGAS 是隔离的可选 evaluator，不在默认依赖中；库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast**，返回非零状态且不生成 quality report。当前仓库**没有**经过验证的真实 RAGAS quality score。
 
@@ -257,7 +257,7 @@ python3 scripts/check_repo_consistency.py
 
 **Q2 · 系统规模有多大？**
 分两个口径，不能混：
-- **本仓库可复核规模**：246 个 Python 文件 / 63,240 行 / 86 个定义了测试的测试文件 / 1,811 个收集到的测试用例，CI 覆盖 Python 3.10 与 3.11。
+- **本仓库可复核规模**：246 个 Python 文件 / 63,380 行 / 86 个定义了测试的测试文件 / 1,842 个收集到的测试用例，CI 覆盖 Python 3.10 与 3.11。
 - **历史生产规模**（`HISTORICAL_PRODUCTION`，不可由本仓库复现）：3000+ 文档、5000+ 图片、1500+ 产品、2000+ 成分、8 大法规体系、200+ 内部用户、高峰短时 10–15 QPS、日均 1500+ 请求，RTX A5000 ×2 推理，后阶段完成 Qwen2.5 → Qwen3-14B/4B 灰度迁移。
 本仓库**没有任何 benchmark artifact**，所以我不给本仓库报任何 QPS 或延迟数字。
 
