@@ -36,15 +36,44 @@
 ```bash
 python3 docs/demo/capture_demo.py                 # 写出默认路径
 python3 docs/demo/capture_demo.py --quality 68    # 更小体积
-python3 docs/demo/capture_demo.py --no-font-download   # 用系统 CJK 字体
+python3 docs/demo/capture_demo.py --no-font-download   # 完全离线：用系统 CJK 字体
 ```
 
 依赖：
 
 * `playwright` + Chromium（`playwright install chromium`）
 * `node` / `npm`，且 `frontend/node_modules` 已安装（脚本用 Vite dev server 提供真实前端）
-* `pillow`（可选，用于转 WebP；缺失时退化为 PNG 并给出提示）
-* 网络：仅首次需要，用于取一份**按本次字符集裁剪**的 Noto Sans SC 子集，缓存在 `docs/demo/.build/`（已 gitignore）。若容器内已装 CJK 字体，可用 `--no-font-download`。
+* `pillow`（可选，仅用于转 WebP；缺失时写出同名 `.png`，见下节）
+* 网络：**只有默认模式需要**，且仅首次——用于取一份按本次字符集裁剪的 Noto Sans SC 子集，缓存在 `docs/demo/.build/`（已 gitignore）。
+
+## 输出格式：committed 的是 WebP，本地可能是 PNG
+
+| | 装了 `pillow` | 没装 `pillow` |
+|---|---|---|
+| 实际写出的文件 | `--out` 指定的 `.webp` | 同目录的同名 `.png`（`hero.webp` → `hero.png`） |
+| 体积 | 约 150–250 KiB | 约 1 MB |
+| 定位 | 仓库里 committed 的那一张 | 仅供本地核对，不提交 |
+
+README 引用的 hero 图是 **WebP**，仓库里也只有这一张图。没有 `pillow` 时脚本**不做**转码，而是把 PNG 写到 `--out` 的兄弟路径上，并在 stderr 提示一次。它**不会**把 PNG 字节写进 `.webp` 文件名：那样的文件在 git、Markdown 渲染器和下一次复算眼里都是一张“正常”的图，只有真正去解码它的时候才会炸。
+
+脚本按**实际写出的那个文件**回报——体积、路径和格式标签都取自它，而不是取自 `--out`。早期版本固定 `stat --out`，于是在没有 `pillow` 的机器上整轮渲染全部跑完，却在最后一步去 stat 一个从未生成的文件并以 `FileNotFoundError` 退出：一个可选依赖把一条本来能跑通的命令变成了必然失败。
+
+这条契约由 `tests/test_demo_capture_pillow_fallback.py` 固定：它断言缺 `pillow` 时写出的是兄弟 `.png`、`.webp` 不存在、脚本按 PNG 回报，并且 PNG 字节没有被写进 `.webp` 文件名。
+
+## 两种字体策略
+
+| | 默认模式 | `--no-font-download` |
+|---|---|---|
+| 字体来源 | 下载并内联一份按字符集裁剪的 Noto Sans SC 子集 | 只用本机已安装的 CJK 字体 |
+| 需要网络 | 首次需要，之后走缓存 | **完全不需要** |
+| 需要 `.build/` 里的字体缓存 | 首次下载后生成 | **不需要**，也不读它 |
+| 前置条件 | 无 | 本机装有 CJK 字体 |
+
+`--no-font-download` 适用于两种情况：容器/机器没有外网，或者只想复算已经缓存过的那张图。它**不读 `docs/demo/.build/fonts/`**：那份缓存是 gitignore 的，因此在全新 clone 的仓库里该目录根本不存在——早期版本在这里要求缓存必须存在，于是这个 flag 在它唯一的存在理由（离线复算）上必然失败。现在它直接输出一套系统 CJK 字体栈交给 Chromium，按 Linux（`Noto Sans CJK SC`）、macOS（`PingFang SC`）、Windows（`Microsoft YaHei`）各列一个族，末尾保留 `sans-serif` 让 Chromium 自己做逐字回退。
+
+该模式唯一的代价是**依赖本机字体**：机器上一个 CJK 字体都没有时，命令仍然成功，但图里的中文会变成豆腐块。这种情况下要么装 `fonts-noto-cjk`，要么用默认模式。
+
+两条路径的分工由 `tests/test_demo_capture_offline_fonts.py` 固定：它断言离线分支在空的构建目录下即可完成整轮运行、期间零网络请求，且默认模式仍然下载并复用缓存。两者只影响字体，不影响图里的文字——同一份语料、同一套标注，换字体不会改变成图内容。
 
 脚本会自己拉起 `docs/demo/mock_api.py` 与 Vite dev server，结束后一并关闭；中间产物（HTML、PNG、字体子集、日志）都留在 `docs/demo/.build/`，不进版本库。仓库里只保留最终那一张 WebP。
 

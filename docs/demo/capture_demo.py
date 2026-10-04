@@ -19,16 +19,22 @@ How it stays honest
 * The two right-hand cards are labelled demo annotation. Each row points at
   the file that really implements that step, so a reviewer can open it.
 * The image is committed as WebP; nothing else from the capture run is kept.
+  Pillow is optional: without it the PNG lands next to the requested `.webp`
+  under a `.png` name, and the run reports and stats the file it actually wrote
+  rather than the one it was asked for. PNG bytes are never written under the
+  `.webp` name.
 
 Usage
 -----
     python3 docs/demo/capture_demo.py
-    python3 docs/demo/capture_demo.py --quality 70   # smaller file
+    python3 docs/demo/capture_demo.py --quality 70        # smaller file
+    python3 docs/demo/capture_demo.py --no-font-download  # offline: system CJK fonts
 
-Requires: playwright + chromium, node/npm for the Vite dev server, and
-outbound network once to fetch a glyph-subset CJK font (cached under
-docs/demo/.build/). If the font cannot be fetched, install a system CJK font
-instead (`fonts-noto-cjk`) and re-run with `--no-font-download`.
+Requires: playwright + chromium and node/npm for the Vite dev server. The default
+mode additionally needs outbound network once to fetch a glyph-subset CJK font,
+cached under docs/demo/.build/. `--no-font-download` skips that download
+entirely and renders through the CJK fonts already installed on the machine, so
+it works from a fresh checkout with no network and no cached subset.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEMO_DIR = Path(__file__).resolve().parent
@@ -63,12 +70,40 @@ APP_VIEWPORT = {"width": 700, "height": 832}
 
 CHROME_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 FONT_FAMILY = "Noto Sans SC"
+# `--no-font-download` resolves text through fonts the operating system already
+# ships. `Noto Sans CJK SC` is the family `fonts-noto-cjk` registers on Linux;
+# the rest cover macOS (PingFang SC) and Windows (Microsoft YaHei). The trailing
+# generic `sans-serif` is what keeps Chromium's per-glyph fallback alive for any
+# character none of the named families covers, instead of painting tofu.
+SYSTEM_TEXT_STACK = (
+    "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, "
+    "'Noto Sans CJK SC', 'Source Han Sans SC', 'Noto Sans SC', 'PingFang SC', "
+    "'Hiragino Sans GB', 'Microsoft YaHei', 'SimHei', 'WenQuanYi Micro Hei', "
+    "'Droid Sans Fallback', sans-serif"
+)
+# The annotation layer puts file names and masks in monospace, and those cells
+# carry Chinese too, so the mono stack needs its own CJK family rather than
+# falling back to the text stack's.
+SYSTEM_MONO_STACK = "ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace"
 CANONICAL_CHARS = (
     "0123456789"
     "abcdefghijklmnopqrstuvwxyz"
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     " !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~°·—…、。，；：？！（）【】《》“”‘’％✓→↔"
 )
+
+
+class FontPlan(NamedTuple):
+    """Everything the two pages need to paint text, for one font strategy."""
+
+    css: str
+    """Extra `<style>` content injected into the frontend and the walkthrough."""
+    text_stack: str
+    """`font-family` value for body copy."""
+    mono_stack: str
+    """`font-family` value for the `--mono` custom property."""
+    family: str
+    """A family name to wait on before screenshotting."""
 
 
 # ── font subset ────────────────────────────────────────────────────────
@@ -87,18 +122,52 @@ def html_visible_text(markup: str) -> str:
     return html.unescape(markup)
 
 
-def fetch_font_css(chars: str, *, allow_download: bool) -> str:
-    """Return an @font-face CSS string with an inline base64 woff2 subset."""
+def render_charset(corpus: dict) -> str:
+    """Every character the capture can possibly render.
+
+    Glyph coverage has to cover both pages: the real frontend paints whatever
+    the corpus holds, the annotation layer paints whatever the markup holds. The
+    markup is built once with placeholder image/font values so the character set
+    is derived from the actual copy instead of a hand-kept list that can drift.
+    Only the download path needs a subset, so the offline path skips this.
+    """
+    probe = build_walkthrough_html(corpus, "PNG", system_font_plan())
+    return collect_chars(html_visible_text(probe), json.dumps(corpus, ensure_ascii=False))
+
+
+def universal_font_rule(text_stack: str) -> str:
+    """Pin `font-family` on every element, pseudo-elements included.
+
+    The repository stylesheet resolves text through the generic `sans-serif`
+    family, which has no CJK coverage on a bare Linux container. Overriding the
+    universal selector reproduces the real cascade without editing a single line
+    of `frontend/src/index.css`.
+    """
+    return f"\n*,*::before,*::after{{font-family:{text_stack};}}"
+
+
+def system_font_plan() -> FontPlan:
+    """Render through the CJK fonts this machine already has.
+
+    No cache lookup and no network call. `docs/demo/.build/` is gitignored, so
+    demanding a previously downloaded subset here made the documented offline
+    command fail on every fresh checkout — the one case it exists for.
+    """
+    return FontPlan(
+        css=universal_font_rule(SYSTEM_TEXT_STACK),
+        text_stack=SYSTEM_TEXT_STACK,
+        mono_stack=SYSTEM_MONO_STACK,
+        family="Noto Sans CJK SC",
+    )
+
+
+def subset_font_plan(chars: str) -> FontPlan:
+    """Download once, cache under `.build/`, and inline a glyph-subset Noto Sans SC."""
     digest = hashlib.sha256(chars.encode("utf-8")).hexdigest()[:16]
     font_dir = BUILD_DIR / "fonts"
     font_path = font_dir / f"noto-sans-sc-{digest}.woff2"
 
     if not font_path.exists():
-        if not allow_download:
-            raise SystemExit(
-                "CJK font subset missing and --no-font-download was passed.\n"
-                "Install a system CJK font (e.g. fonts-noto-cjk) and re-run."
-            )
         query = urllib.parse.quote(chars, safe="")
         css_url = f"https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&text={query}"
         print("· fetching glyph-subset CJK font (one-off, cached under docs/demo/.build/)")
@@ -120,6 +189,8 @@ def fetch_font_css(chars: str, *, allow_download: bool) -> str:
         font_dir.mkdir(parents=True, exist_ok=True)
         font_path.write_bytes(font_bytes)
         print(f"· cached {len(font_bytes) / 1024:.1f} KiB font subset")
+    else:
+        print(f"· reusing cached font subset docs/demo/.build/fonts/{font_path.name}")
 
     encoded = base64.b64encode(font_path.read_bytes()).decode("ascii")
     faces = "\n".join(
@@ -127,13 +198,12 @@ def fetch_font_css(chars: str, *, allow_download: bool) -> str:
         f"src:url(data:font/woff2;base64,{encoded}) format('woff2');}}"
         for weight in (400, 500, 700)
     )
-    # The repository stylesheet resolves text through the generic `sans-serif`
-    # family, which has no CJK coverage on a bare Linux container. Appending the
-    # subset family to every element reproduces the real cascade without
-    # editing a single line of `frontend/src/index.css`.
-    return (
-        faces + f"\n*,*::before,*::after{{font-family:-apple-system,BlinkMacSystemFont,"
-        f"'Segoe UI',Roboto,'{FONT_FAMILY}',sans-serif;}}"
+    text_stack = f"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'{FONT_FAMILY}',sans-serif"
+    return FontPlan(
+        css=faces + universal_font_rule(text_stack),
+        text_stack=text_stack,
+        mono_stack=f"ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, '{FONT_FAMILY}', monospace",
+        family=FONT_FAMILY,
     )
 
 
@@ -246,7 +316,7 @@ def render_trace_table(rows: list[dict]) -> str:
     )
 
 
-def build_walkthrough_html(corpus: dict, app_png_b64: str, font_css: str) -> str:
+def build_walkthrough_html(corpus: dict, app_png_b64: str, fonts: FontPlan) -> str:
     docs = corpus["documents"]
     trace = corpus["trace"]
     metadata = corpus["auth_metadata"]
@@ -260,17 +330,17 @@ def build_walkthrough_html(corpus: dict, app_png_b64: str, font_css: str) -> str
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <style>
-{font_css}
+{fonts.css}
 :root {{
   --bg: #eef0f4; --surface: #ffffff; --ink: #14161a; --muted: #5b6472;
   --line: #dfe3ea; --primary: #4f46e5; --demo: #b42318; --demo-bg: #fef3f2;
-  --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, '{FONT_FAMILY}', monospace;
+  --mono: {fonts.mono_stack};
 }}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{
   width: {CANVAS_WIDTH}px; background: var(--bg); color: var(--ink);
   padding: 26px 26px 20px;
-  font-family: -apple-system, "Segoe UI", Roboto, '{FONT_FAMILY}', sans-serif;
+  font-family: {fonts.text_stack};
   -webkit-font-smoothing: antialiased;
 }}
 .head {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }}
@@ -380,20 +450,21 @@ mark {{ background: #fef0c7; border-radius: 3px; padding: 0 2px; }}
 
 
 # ── capture ────────────────────────────────────────────────────────────
-def wait_for_fonts(page) -> None:
-    """Block until the injected subset font is actually usable."""
+def wait_for_fonts(page, family: str) -> None:
+    """Block until the chosen font family is actually usable."""
     page.evaluate(
         'async (family) => { await document.fonts.load(`16px "${family}"`); await document.fonts.ready; }',
-        FONT_FAMILY,
+        family,
     )
 
 
-def capture(app_png_b64: str, font_css: str, out_path: Path, quality: int) -> None:
+def capture(app_png_b64: str, fonts: FontPlan, out_path: Path, quality: int) -> Path:
+    """Compose the walkthrough page and return the artifact that was written."""
     from playwright.sync_api import sync_playwright
 
     with CORPUS_PATH.open(encoding="utf-8") as handle:
         corpus = json.load(handle)
-    walkthrough = build_walkthrough_html(corpus, app_png_b64, font_css)
+    walkthrough = build_walkthrough_html(corpus, app_png_b64, fonts)
     walkthrough_path = BUILD_DIR / "walkthrough.html"
     walkthrough_path.write_text(walkthrough, encoding="utf-8")
 
@@ -406,7 +477,7 @@ def capture(app_png_b64: str, font_css: str, out_path: Path, quality: int) -> No
                 device_scale_factor=2,
             )
             page.goto(walkthrough_path.as_uri())
-            wait_for_fonts(page)
+            wait_for_fonts(page, fonts.family)
             page.wait_for_timeout(250)
             png_path.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(png_path), full_page=True)
@@ -414,20 +485,28 @@ def capture(app_png_b64: str, font_css: str, out_path: Path, quality: int) -> No
             browser.close()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    encode_webp(png_path, out_path, quality)
+    return encode_webp(png_path, out_path, quality)
 
 
-def encode_webp(png_path: Path, out_path: Path, quality: int) -> None:
-    """WebP keeps this text-heavy image around 150-250 KiB; PNG would be ~1 MB."""
+def encode_webp(png_path: Path, out_path: Path, quality: int) -> Path:
+    """WebP keeps this text-heavy image around 150-250 KiB; PNG would be ~1 MB.
+
+    Returns the file that was actually written. Pillow is an optional
+    dependency, so without it the capture degrades to PNG next to the requested
+    path — and the caller must report that file, not the WebP that was never
+    created.
+    """
     try:
         from PIL import Image
     except ImportError:
-        shutil.copyfile(png_path, out_path.with_suffix(".png"))
-        print("! Pillow unavailable — wrote PNG instead of WebP", file=sys.stderr)
-        return
+        fallback = out_path.with_suffix(".png")
+        shutil.copyfile(png_path, fallback)
+        print(f"! Pillow unavailable — wrote {fallback.name} instead of WebP", file=sys.stderr)
+        return fallback
 
     with Image.open(png_path) as image:
         image.save(out_path, "WEBP", quality=quality, method=6)
+    return out_path
 
 
 def main() -> None:
@@ -443,21 +522,20 @@ def main() -> None:
     with CORPUS_PATH.open(encoding="utf-8") as handle:
         corpus = json.load(handle)
 
-    # Glyph coverage has to cover both pages: the real frontend paints whatever
-    # the corpus holds, the annotation layer paints whatever the markup holds.
-    # Build the markup once with placeholders so the character set is derived
-    # from the actual copy instead of a hand-kept list that can drift.
-    probe = build_walkthrough_html(corpus, "PNG", "FONT")
-    chars = collect_chars(html_visible_text(probe), json.dumps(corpus, ensure_ascii=False))
-    font_css = fetch_font_css(chars, allow_download=not args.no_font_download)
+    if args.no_font_download:
+        print("· --no-font-download: rendering through the system CJK fonts, no network access")
+        fonts = system_font_plan()
+    else:
+        fonts = subset_font_plan(render_charset(corpus))
 
     mock_api = None
     frontend = None
+    written = args.out
     try:
         mock_api = start_mock_api(args.api_port, BUILD_DIR / "mock_api.log")
         frontend = start_frontend(args.web_port, args.api_port, BUILD_DIR / "vite.log")
-        app_png_b64 = drive_frontend(args.web_port, font_css)
-        capture(app_png_b64, font_css, args.out, args.quality)
+        app_png_b64 = drive_frontend(args.web_port, fonts)
+        written = capture(app_png_b64, fonts, args.out, args.quality)
     finally:
         for process in (frontend, mock_api):
             if process is not None:
@@ -467,15 +545,19 @@ def main() -> None:
                 except subprocess.TimeoutExpired:
                     process.kill()
 
-    size_kib = args.out.stat().st_size / 1024
+    # `written` is the artifact that exists. Pillow is optional, so it can be a
+    # `.png` sitting next to the requested `.webp`; reporting the requested path
+    # would stat a file nobody produced.
+    size_kib = written.stat().st_size / 1024
     try:
-        shown = args.out.resolve().relative_to(REPO_ROOT)
+        shown = written.resolve().relative_to(REPO_ROOT)
     except ValueError:
-        shown = args.out
-    print(f"· wrote {shown} ({size_kib:.0f} KiB, WebP q{args.quality})")
+        shown = written
+    fmt = f"WebP q{args.quality}" if written.suffix == ".webp" else written.suffix.lstrip(".").upper()
+    print(f"· wrote {shown} ({size_kib:.0f} KiB, {fmt})")
 
 
-def drive_frontend(web_port: int, font_css: str) -> str:
+def drive_frontend(web_port: int, fonts: FontPlan) -> str:
     """Drive the real UI twice: the answered turn, then the refused turn."""
     from playwright.sync_api import sync_playwright
 
@@ -493,8 +575,8 @@ def drive_frontend(web_port: int, font_css: str) -> str:
                 device_scale_factor=2,
             )
             page.goto(f"http://127.0.0.1:{web_port}/", wait_until="networkidle")
-            page.add_style_tag(content=font_css)
-            wait_for_fonts(page)
+            page.add_style_tag(content=fonts.css)
+            wait_for_fonts(page, fonts.family)
 
             # Turn 1 — privileged identity, evidence found and cited.
             page.fill(".chat-input", query_text)

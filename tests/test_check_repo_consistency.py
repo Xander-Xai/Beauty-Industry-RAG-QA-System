@@ -2909,3 +2909,127 @@ def test_compound_english_count_is_flagged():
 
     text = "## G\n\nThe guide answers twenty-one questions.\n\n**Q1 · a?**\n**Q2 · b?**\n"
     assert "twenty-one questions" in enumerated_count_errors("README.md", text)[0]
+
+
+# ── the SLO objective count is derived, never restated ──────────────────
+def test_runbook_objective_count_comes_from_the_objective_rows():
+    from scripts.check_repo_consistency import slo_objective_count
+
+    runbook = (
+        "| # | Objective | Definition | Target | Class |\n"
+        "|---|---|---|---|---|\n"
+        "| SLO-1 | Availability | ... | 99.5% | `DESIGN_TARGET` |\n"
+        "| SLO-2 | Error rate | ... | < 1% | `DESIGN_TARGET` |\n"
+        "| SLO-3 | Latency | ... | 2000 ms | `DESIGN_TARGET` |\n"
+    )
+    assert slo_objective_count(runbook) == 3
+
+
+def test_a_prose_reference_to_an_objective_is_not_another_objective():
+    """`SLO-3` mentioned in a sentence must not be counted as a fourth row."""
+    from scripts.check_repo_consistency import slo_objective_count
+
+    runbook = (
+        "| SLO-1 | a | x | y | `DESIGN_TARGET` |\n"
+        "| SLO-2 | b | x | y | `DESIGN_TARGET` |\n"
+        "\nSLO-1 and SLO-2 are the only objectives; see also SLO-99 for the draft.\n"
+    )
+    assert slo_objective_count(runbook) == 2
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "5 个 SLO 目标与告警阈值都是 `DESIGN_TARGET`",
+        "| SLO 目标（5 个） | `REPO_VERIFIED`（文档） |",
+        "5 个 SLO 目标（均为 `DESIGN_TARGET`）+ 8 个处置流程",
+        "There are five SLO objectives.",
+    ],
+)
+def test_every_phrasing_the_repository_uses_is_understood(claim):
+    """Each accepted phrasing must parse to 5, or the guard cannot verify it.
+
+    A guard that reports "cannot verify" on the project's own wording is worse
+    than no guard: it turns a documentation truth into a CI failure nobody can
+    fix without editing the checker.
+    """
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, 5) == []
+
+
+@pytest.mark.parametrize(
+    ("claim", "stated"),
+    [
+        ("十个 SLO 目标与告警阈值", 10),
+        ("| SLO 目标（10 个） | x |", 10),
+        ("There are twelve SLO objectives.", 12),
+    ],
+)
+def test_a_count_that_contradicts_the_runbook_is_flagged(claim, stated):
+    """The regression: the README claimed ten objectives next to two correct
+    fives, inside a section presented as repository-reproducible evidence."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1
+    assert f"states {stated} SLO objectives" in errors[0]
+    assert "defines 5" in errors[0]
+
+
+def test_adding_an_objective_to_the_runbook_does_not_silently_stale_the_summary():
+    """The guard's whole reason to exist: the count is derived, so growing the
+    runbook turns the summary red instead of leaving it quietly wrong."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    summary = "5 个 SLO 目标与告警阈值都是 `DESIGN_TARGET`"
+    assert slo_count_errors("README.md", summary, expected=5) == []
+    assert slo_count_errors("README.md", summary, expected=6)
+
+
+def test_current_documents_state_the_objective_count_the_runbook_defines():
+    from scripts.check_repo_consistency import ROOT, slo_count_errors, slo_objective_count
+
+    runbook = (ROOT / "docs" / "slo-runbook.md").read_text(encoding="utf-8")
+    expected = slo_objective_count(runbook)
+    assert expected > 0, "docs/slo-runbook.md must define at least one SLO objective"
+    for name in ("README.md", "PRD.md"):
+        assert slo_count_errors(name, (ROOT / name).read_text(encoding="utf-8"), expected) == []
+
+
+def test_guard_reports_a_missing_runbook_objective_table(tmp_path, monkeypatch):
+    """Silently skipping a runbook with no objective rows would turn the guard
+    into a no-op the next time the runbook is restructured."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text("# Runbook\n\nNo table here.\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert len(errors) == 1
+    assert "no `| SLO-<n> |` objective rows" in errors[0]
+
+
+def test_guard_fails_end_to_end_when_the_summary_count_drifts(tmp_path, monkeypatch):
+    """Wiring check: `main()` must actually call the guard, or the pure
+    function above is decoration."""
+    from scripts.check_repo_consistency import check_slo_objective_counts
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "slo-runbook.md").write_text(
+        "| SLO-1 | a | x | y | `DESIGN_TARGET` |\n| SLO-2 | b | x | y | `DESIGN_TARGET` |\n",
+        encoding="utf-8",
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text("5 个 SLO 目标与告警阈值。\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    monkeypatch.setattr("scripts.check_repo_consistency.CANONICAL_DOCS", [readme])
+
+    errors: list[str] = []
+    check_slo_objective_counts(errors, root=tmp_path)
+    assert len(errors) == 1
+    assert "states 5 SLO objectives but docs/slo-runbook.md defines 2" in errors[0]

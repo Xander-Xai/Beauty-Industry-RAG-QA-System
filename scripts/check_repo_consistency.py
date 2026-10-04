@@ -3047,6 +3047,108 @@ _RESTATED_COUNT_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: One objective row in the SLO runbook, e.g. ``| SLO-1 | Availability ... |``.
+#: The marker must open the line so a prose reference to ``SLO-3`` is not counted
+#: as a sixth objective.
+_SLO_ROW_RE = re.compile(r"^\|\s*SLO-(\d+)\s*\|", re.MULTILINE)
+
+#: A stated objective count, in either order and either language:
+#: ``5 个 SLO 目标``, ``SLO 目标（5 个）``, ``five SLO objectives``. Every phrasing
+#: the README actually uses is matched, because the point is to catch whichever
+#: one drifts, not to police one canonical sentence. Each alternative names its
+#: own group (``re`` forbids reusing one name), and exactly one is set per match.
+_SLO_COUNT_RE = re.compile(
+    r"(?P<lead>[一二两三四五六七八九十]|\d+)\s*个\s*SLO\s*目标"
+    r"|SLO\s*目标\s*[（(]\s*(?P<trail>[一二两三四五六七八九十]|\d+)\s*个"
+    r"|\b(?P<english>\d+|" + _COUNT_WORDS + r")(?:[-\s](?:" + _COUNT_WORDS + r"))?\s+SLO\s+objectives?\b",
+    re.IGNORECASE,
+)
+
+#: Chinese and English count words, so the guard compares numbers rather than
+#: strings: "十个" must not slip past a check that only understands "10", and
+#: "twelve" must not slip past one that only understands digits.
+_CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_EN_COUNT_WORDS = {
+    word: index
+    for index, word in enumerate(
+        (
+            "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+            "sixteen seventeen eighteen nineteen twenty"
+        ).split(),
+        start=0,
+    )
+}
+
+
+def slo_objective_count(runbook_text: str) -> int:
+    """How many SLO objectives ``docs/slo-runbook.md`` actually defines."""
+    return len({int(number) for number in _SLO_ROW_RE.findall(runbook_text)})
+
+
+def _parse_stated_count(token: str) -> int | None:
+    """Turn one captured count token into an int, or ``None`` if it is not one.
+
+    An unrecognised token returns ``None`` so the guard reports "cannot verify"
+    rather than silently accepting a phrase it failed to parse — a guard that
+    shrugs at what it does not understand is not a guard.
+    """
+    token = token.strip().lower()
+    if token.isdigit():
+        return int(token)
+    if token in _CN_DIGITS:
+        return _CN_DIGITS[token]
+    head, _, tail = token.partition("-")
+    if tail and head in _EN_COUNT_WORDS and tail in _EN_COUNT_WORDS:
+        return _EN_COUNT_WORDS[head] + _EN_COUNT_WORDS[tail]
+    return _EN_COUNT_WORDS.get(token)
+
+
+def slo_count_errors(name: str, text: str, expected: int) -> list[str]:
+    """Return errors for objective counts that contradict the SLO runbook.
+
+    The README states how many SLO objectives there are in three separate places
+    while ``docs/slo-runbook.md`` is the only place that defines them. Nothing
+    tied the two together, so a runbook edit left the summary claiming "十个"
+    next to two correct "5"s in the same file — a self-contradiction inside a
+    section presented as repository-reproducible evidence.
+
+    Deriving the count from the runbook instead of restating it means adding
+    SLO-6 can no longer leave the summary quietly behind.
+    """
+    errors: list[str] = []
+    for match in _SLO_COUNT_RE.finditer(text):
+        token = match.group("lead") or match.group("trail") or match.group("english") or ""
+        stated = _parse_stated_count(token)
+        if stated is None:
+            errors.append(
+                f"{name}: cannot verify the SLO objective count in {match.group(0)!r}; "
+                f"docs/slo-runbook.md defines {expected}"
+            )
+        elif stated != expected:
+            errors.append(
+                f"{name}: states {stated} SLO objectives but docs/slo-runbook.md defines {expected} "
+                f"({match.group(0)!r})"
+            )
+    return errors
+
+
+def check_slo_objective_counts(errors: list[str], root: Path | None = None) -> None:
+    """Every stated SLO objective count must match the runbook that defines them."""
+    base = ROOT if root is None else root
+    runbook = base / "docs" / "slo-runbook.md"
+    if not runbook.is_file():
+        return
+    expected = slo_objective_count(runbook.read_text(encoding="utf-8"))
+    if expected == 0:
+        errors.append(
+            "docs/slo-runbook.md: no `| SLO-<n> |` objective rows found; the count guard has nothing to compare"
+        )
+        return
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        errors.extend(slo_count_errors(_display(path), path.read_text(encoding="utf-8"), expected))
+
 
 def _markdown_sections(text: str) -> list[tuple[str, str]]:
     """Split ``text`` into ``(heading, body)`` pairs on level-2 headings.
@@ -3161,6 +3263,7 @@ def main() -> int:
     check_legacy_jaeger_agent_config_is_absent(errors)
     check_canonical_runtime_is_not_observability_gated(errors)
     check_enumerated_section_counts(errors)
+    check_slo_objective_counts(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
