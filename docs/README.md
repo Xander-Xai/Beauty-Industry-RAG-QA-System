@@ -97,9 +97,19 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
 
 ## Historical / Implementation Plans
 
-- Superseded implementation plans and design specs are **not carried in the working tree**.
-  The former `docs/superpowers/` directory was removed from the current branch; the files
-  remain retrievable from this repository's Git history, which is their only archive.
+Historical documentation lives under [`docs/archive/`](archive/README.md) and nowhere else.
+Every Markdown file under `docs/` is exactly one of two things:
+
+- **current/canonical**, listed in this index above and held to the repository
+  consistency guard, or
+- **historical**, under `docs/archive/`, whose opening lines mark it as
+  historical and state that it is not a source for current capability,
+  architecture, metric or validation claims.
+
+The former `docs/superpowers/` directory was removed from the current branch and
+nothing replaced it; its files remain retrievable from this repository's Git
+history, which is their only archive.
+
 - [Repository truth audit](repository-truth-audit.md) and the canonical guides above are the
   only sources for the current repository state.
 

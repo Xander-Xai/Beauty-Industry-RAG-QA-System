@@ -23,6 +23,17 @@ The truth audit is expected to resolve its candidate from ``HEAD`` and to carry
 an ISO ``YYYY-MM-DD`` verification date. The date is validated for shape only;
 the guard never hardcodes a specific date or depends on the current date, a
 GitHub API, or wall-clock state, so runs stay deterministic.
+
+The recorded reconciliation lineage (completed issues, the current open scope,
+and the external validation trackers) is a **snapshot of GitHub state written
+down by a human after re-querying the GitHub API**, not a live observation. The
+guard reads only the working tree, so it can prove the document and the guard
+agree with each other; it cannot and does not claim to know whether an issue is
+open on GitHub right now. What it does enforce is that a transition nobody
+recorded — closing the current issue, dropping a tracker, describing a completed
+issue as the work happening now — cannot pass silently. It also treats "no open
+reconciliation issue" as a legitimate state that must be stated outright rather
+than a gap to be filled by reviving a closed issue.
 """
 
 from __future__ import annotations
@@ -31,6 +42,7 @@ import argparse
 import ast
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,8 +59,69 @@ CANONICAL_DOCS = [
     # were previously unguarded, which left the most claim-heavy docs free to
     # drift.
     *sorted((ROOT / "docs" / "validation").glob("*.md")),
+    # Nested current docs that are not validation records. The demo-capture
+    # README is operator-facing and claim-heavy in exactly the way the guards
+    # above exist to catch, so it is named here rather than left in a nested
+    # directory where no glob would pick it up.
+    *sorted((ROOT / "docs" / "demo").glob("*.md")),
     ROOT / "artifacts/benchmarks/README.md",
 ]
+
+# --------------------------------------------------------------------------
+# Documentation classification invariant
+# --------------------------------------------------------------------------
+#
+# Every Markdown file under `docs/` must be exactly one of two things:
+#
+#   A. current/canonical documentation, listed in CANONICAL_DOCS and therefore
+#      checked by the guards in this file;
+#   B. historical documentation under `docs/archive/**`, whose opening lines
+#      mark it as historical and refuse it as a current source.
+#
+# The third state — a Markdown file that sits under `docs/`, belongs to neither
+# set, and therefore has no owner and no guard — is what this invariant exists
+# to stop. Such a file drifts freely: nothing checks it, and nothing says it is
+# history, so a stale claim in it is indistinguishable from current truth.
+#
+# The invariant is a statement about *placement*, never about a document's
+# contents. It therefore cannot read a historical sentence inside a current doc
+# as a current claim, and it never inspects `CHANGELOG.md` history at all — that
+# file lives outside `docs/` and its release narration is history by
+# construction.
+
+ARCHIVE_DOC_ROOT = ROOT / "docs" / "archive"
+
+#: The banner belongs in the file's opening lines, not in an appendix a reader
+#: has to go looking for.
+ARCHIVE_BANNER_LINES = 20
+
+#: Word-level marker that the file is history rather than current truth.
+ARCHIVE_HISTORICAL_MARKER_RE = re.compile(
+    r"\bhistor(?:y|ical)\b|\barchiv(?:e|ed|al)\b|\bsuperseded\b|\bobsolete\b|"
+    r"\bdeprecated\b|\bno\s+longer\s+current\b|"
+    r"历史|归档|已废弃|已被取代|不再作为",
+    re.IGNORECASE,
+)
+
+#: The refusal half of the banner. A bare "not" is deliberately *not* enough on
+#: its own: the banner has to say the file must not be used as a source, not
+#: merely contain a negation somewhere.
+ARCHIVE_NON_AUTHORITY_NEGATION_RE = re.compile(
+    r"must\s+not|shall\s+not|may\s+not|do\s+not|does\s+not|don't|doesn't|did\s+not|"
+    r"cannot|can't|never|no\s+longer|not\s+(?:a|an|the|be|used|treated|relied|cited)|"
+    r"不得|不应|禁止|不能|不是当前|不再是|不再作为",
+    re.IGNORECASE,
+)
+
+#: What the file must not be used as a source of: capability, architecture,
+#: metric or validation claims — plus the generic authority words those four
+#: share.
+ARCHIVE_AUTHORITY_NOUN_RE = re.compile(
+    r"\bcapabilit(?:y|ies)\b|\barchitectur(?:e|al)\b|\bmetrics?\b|\bvalidation\b|"
+    r"\bsource(?:s)?\b|\bevidence\b|\bauthorit(?:y|ative)\b|\bcanonical\b|"
+    r"能力|架构|指标|验证|来源|证据",
+    re.IGNORECASE,
+)
 
 # Current operator-facing docs that must not regress to "offline ingestion is
 # missing" claims. Historical docs (CHANGELOG, the audit's history section) and
@@ -324,6 +397,11 @@ REQUIRED_AUDIT_AREAS = {
     # The second, unwired threshold engine. Without its own row the audit cannot
     # state that it is not the canonical alerting contract.
     "In-process AlertingManager",
+    # The frontend carries three separable evidence states (client contract, CI
+    # build, end-to-end runtime) plus deployment. Without a row the audit cannot
+    # keep them apart, which is how "built" came to be filed as pending while CI
+    # was already building it.
+    "Frontend contract",
 }
 
 
@@ -711,8 +789,8 @@ def check_documented_paths(path: Path, errors: list[str]) -> None:
     path_pattern = re.compile(r"`((?:\.?/?[\w.-]+/)+[\w.-]+\.(?:py|md|json|ya?ml|sh|jsx|toml|txt))`")
     for reference in path_pattern.findall(text):
         normalized = reference.removeprefix("./")
-        if normalized.startswith("models/") or normalized.startswith("docs/superpowers/"):
-            continue  # operator-supplied assets or historical plans
+        if normalized.startswith("models/"):
+            continue  # operator-supplied model assets, not tracked in this repository
         if resolve_repository_path(normalized) is None:
             fail(errors, f"{path.relative_to(ROOT)}: referenced local path does not exist: {reference}")
 
@@ -844,10 +922,139 @@ def check_docs_index(errors: list[str]) -> None:
         "interview-architecture-baseline.md",
         "ragas-evaluation-guide.md",
         "repository-truth-audit.md",
+        # The index is where a reader looks to learn where a doc belongs, so it
+        # has to state the two-way split that the classification guard enforces.
+        "docs/archive/",
     ]
     for token in required:
         if token not in text:
             fail(errors, f"docs/README.md must index {token!r}")
+
+
+#: The only two classifications a Markdown file under `docs/` may have.
+CANONICAL = "canonical"
+HISTORICAL = "historical"
+UNCLASSIFIED = "unclassified"
+
+
+def _doc_key(path: Path) -> str:
+    """Return a comparison key that ignores redundant separators and ``./``.
+
+    ``Path.resolve`` is deliberately avoided: it follows symlinks, so the same
+    file would get two different keys depending on which path spelled it.
+    """
+    return os.path.normpath(str(path))
+
+
+def _is_within(key: str, parent_key: str) -> bool:
+    """True when ``key`` is ``parent_key`` itself or lives underneath it."""
+    return key == parent_key or key.startswith(parent_key + os.sep)
+
+
+def archive_banner_errors(name: str, text: str) -> list[str]:
+    """Return errors for an archived document whose banner is missing or too weak.
+
+    A banner has to carry two independent halves, and both are checked inside
+    the file's opening lines:
+
+    1. an explicit historical/superseded marker, so a reader knows the file is
+       not current;
+    2. an explicit refusal to be used as a current capability / architecture /
+       metric / validation source.
+
+    Half 1 alone is the failure this guard exists to catch: the retired
+    dual-4B topology and the missing-RAGAS zero fallback are both *correct*
+    statements about the past, and both become false the moment a reader
+    mistakes them for the present. "Historical" without the refusal still reads
+    as a source.
+    """
+    errors: list[str] = []
+    banner = "\n".join(text.splitlines()[:ARCHIVE_BANNER_LINES])
+
+    if not ARCHIVE_HISTORICAL_MARKER_RE.search(banner):
+        errors.append(
+            f"{name}: archived document has no historical/superseded marker in its first {ARCHIVE_BANNER_LINES} lines"
+        )
+
+    refuses_authority = any(
+        ARCHIVE_NON_AUTHORITY_NEGATION_RE.search(line) and ARCHIVE_AUTHORITY_NOUN_RE.search(line)
+        for line in banner.splitlines()
+    )
+    if not refuses_authority:
+        errors.append(
+            f"{name}: archived document must declare that it is not a current "
+            f"capability / architecture / metric / validation source (no such declaration "
+            f"in its first {ARCHIVE_BANNER_LINES} lines)"
+        )
+    return errors
+
+
+def docs_markdown_files(root: Path) -> list[Path]:
+    """Return every ``docs/**/*.md`` file, sorted, under ``root``.
+
+    Skipped only for paths inside ``.git``; the archive tree is included on
+    purpose, since it is one of the two valid classifications rather than an
+    exception to the rule.
+    """
+    docs_root = root / "docs"
+    if not docs_root.is_dir():
+        return []
+    return sorted(path for path in docs_root.rglob("*.md") if path.is_file())
+
+
+def doc_classification(path: Path, canonical: Iterable[Path], root: Path) -> str:
+    """Classify one Markdown file under ``docs/`` as canonical or historical.
+
+    Canonical is checked first, so the existing guard scope is unchanged for
+    every document already listed in ``CANONICAL_DOCS``.
+    """
+    key = _doc_key(path)
+    if any(key == _doc_key(entry) for entry in canonical):
+        return CANONICAL
+    if _is_within(key, _doc_key(root / "docs" / "archive")):
+        return HISTORICAL
+    return UNCLASSIFIED
+
+
+def docs_classification_errors(root: Path, canonical: Iterable[Path]) -> list[str]:
+    """Return errors for Markdown under ``docs/`` that is neither current nor archived.
+
+    Deterministic and content-blind: it walks the tree, compares placement, and
+    — for archived files only — reads the opening banner. It never inspects
+    claim wording, so a historical sentence in a current doc is not an error,
+    and ``CHANGELOG.md`` is out of scope entirely because it is not under
+    ``docs/``.
+    """
+    errors: list[str] = []
+    canonical_keys = {_doc_key(entry) for entry in canonical}
+    archive_key = _doc_key(root / "docs" / "archive")
+
+    for path in docs_markdown_files(root):
+        key = _doc_key(path)
+        name = os.path.relpath(key, _doc_key(root))
+        if key in canonical_keys and _is_within(key, archive_key):
+            errors.append(
+                f"{name}: is classified as both canonical and historical; a document under "
+                "docs/archive/ must be historical only"
+            )
+            continue
+
+        classification = doc_classification(path, canonical_keys, root)
+        if classification == UNCLASSIFIED:
+            errors.append(
+                f"{name}: unclassified documentation; a Markdown file under docs/ must be "
+                "either current (listed in CANONICAL_DOCS, so the consistency guards check it) "
+                "or historical (moved under docs/archive/ with an explicit historical banner)"
+            )
+        elif classification == HISTORICAL:
+            errors.extend(archive_banner_errors(name, path.read_text(encoding="utf-8")))
+    return errors
+
+
+def check_docs_classification(errors: list[str], root: Path | None = None) -> None:
+    """No Markdown under ``docs/`` may be neither canonical nor archived."""
+    base = ROOT if root is None else root
+    errors.extend(docs_classification_errors(base, CANONICAL_DOCS))
 
 
 _RAGAS_CLAUSE_BOUNDARY_RE = re.compile(r"[；;。，,：:]")
@@ -2007,9 +2214,15 @@ def evidence_classification_errors(name: str, text: str, legal: set[str]) -> lis
     return errors
 
 
-#: Current, interview-facing and repository-truth documentation. Historical plans
-#: under `docs/superpowers/` are deliberately absent: a superseded plan is not
-#: evidence and is not held to the current taxonomy.
+#: Current, interview-facing and repository-truth documentation.
+#:
+#: The superseded plans formerly stored under `docs/superpowers/` — a *historical
+#: path*, removed from the current branch and preserved only in Git history — are
+#: deliberately absent here. The rationale still holds: a superseded plan is not
+#: evidence and is not held to the current taxonomy. It is recorded as a
+#: historical path rather than a live one so that no reader of this file expects
+#: to open that directory, and so a reference to it cannot pass for a current
+#: document. See `check_removed_plan_path_is_historical`.
 EVIDENCE_VOCABULARY_DOCS = (
     "docs/interview-evidence-map.md",
     "docs/interview-architecture-baseline.md",
@@ -2405,6 +2618,16 @@ def check_operational_metric_references(errors: list[str]) -> None:
 # The tracker map is a human-facing snapshot, so it must keep completed
 # implementation work and still-open external validation distinguishable without
 # being pinned to a GitHub query at CI time.
+#
+# Read this before trusting a number below. Everything in this section is a
+# *recorded snapshot of GitHub state*, re-verified by a human against the GitHub
+# API and written down in ``docs/repository-truth-audit.md``. It is governance
+# audit, not an observation: this guard runs offline, reads only the working
+# tree, and has no way to know whether an issue is open on GitHub right now. It
+# can therefore prove only that the document and this file agree with each other,
+# never that either matches live GitHub. Re-query GitHub before relying on a row;
+# the deterministic check below exists to make an *unrecorded* transition fail
+# loudly, not to detect one automatically.
 
 #: Areas whose implementation is delivered. Each row must carry an explicit
 #: classification so "implemented" can never be read as "result achieved".
@@ -2426,7 +2649,7 @@ _CLASSIFICATION_SOURCE = "docs/interview-evidence-map.md → Classification voca
 #: None of this repository's own changes can close them, so the audit must keep
 #: recording them as open. The numbers are stable by construction: a closed tracker
 #: is deleted from this list in the same commit that closes it.
-OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
+OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18, 32)
 
 #: Reconciliation lineage, anchored on the tracking issue and never on the PR
 #: number. A PR number is narration that ages out: the next PR exists long
@@ -2438,11 +2661,20 @@ OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18)
 #: ``docs/repository-truth-audit.md``, exactly like
 #: ``OPEN_EXTERNAL_VALIDATION_TRACKERS`` above. A new reconciliation issue
 #: supersedes the previous one; it does not extend it.
-COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22)
+COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22, 24)
 
-#: The single reconciliation issue the audit describes as the current open
-#: scope. At most one is active at a time.
-CURRENT_RECONCILIATION_ISSUE = 24
+#: The single reconciliation issue the audit describes as the current open scope,
+#: or ``None`` when no reconciliation issue is open.
+#:
+#: ``None`` is a real, legitimate state and not a gap to be papered over. A
+#: repository between reconciliations has no open scope, and forcing one of the
+#: closed issues above back into this slot to satisfy an "exactly one current
+#: issue" invariant would reintroduce the exact drift the invariant exists to
+#: catch: a completed reconciliation presented as the work happening now. So the
+#: model allows the empty case, the audit must then say so explicitly, and
+#: :func:`reconciliation_model_errors` rejects pointing this at an issue that is
+#: also listed as completed.
+CURRENT_RECONCILIATION_ISSUE: int | None = None
 
 _BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
 
@@ -2452,8 +2684,63 @@ _BULLET_SPLIT_RE = re.compile(r"(?m)^(?=\s*[-*]\s)")
 _COMPLETED_MARKER_RE = re.compile(r"\b(closed|completed|merged|resolved)\b", re.IGNORECASE)
 
 #: Present-tense "this is the reconciliation happening now" phrasing. Deliberately
-#: about *scope*, never about a PR number.
-_CURRENT_SCOPE_RE = re.compile(r"\bthe\s+current\s+(one|scope|reconciliation|truth\b)", re.IGNORECASE)
+#: about *scope*, never about a PR number. Up to three intervening words are allowed
+#: so the ordinary shapes are covered too: a bare ``the current one`` is not the only
+#: way to drift, and "the current open scope" slipped through a stricter matcher that
+#: demanded the noun immediately after "current".
+_CURRENT_SCOPE_RE = re.compile(
+    r"\bthe\s+current\s+(?:\w+[\s-]+){0,3}?(?:one|scope|reconciliation|truth|issue|pass|step|work)\b",
+    re.IGNORECASE,
+)
+
+#: The audit's explicit declaration that there is *no* open reconciliation issue.
+#: This is what makes the empty case reviewable rather than silent: a reader has to
+#: find the sentence, and the guard refuses an audit that simply omits the topic.
+#: It is deliberately worded so a row cannot satisfy it by accident, and the
+#: declaration must name no issue number — otherwise the per-issue lookups below
+#: would bind to this sentence instead of to the row they mean to check.
+#:
+#: The free-standing alternative is clause-final on purpose. Without that anchor,
+#: ordinary prose such as "no new reconciliation issue has been opened" — which
+#: *describes* the absence inside a sentence rather than declaring it — would
+#: satisfy the guard and let the real declaration be deleted undetected.
+_NO_CURRENT_RECONCILIATION_RE = re.compile(
+    r"current\s+reconciliation\s+scope\s*(?:\:|：)?\s*[*_`]*\s*"
+    r"(?:none|no\b|none\s+open|none\s+active|not\s+open)|"
+    r"no\s+(?:open|new|current)\s+reconciliation\s+(?:issue|scope)\s*"
+    r"(?:[.;。；!?！？]|[*_`]*\s*$)|"
+    r"当前(?:没有|无)(?:进行中|开放)(?:的)?(?:对账|核对|治理)?(?:议题|范围)",
+    re.IGNORECASE,
+)
+
+
+def reconciliation_model_errors() -> list[str]:
+    """Return self-consistency errors in the recorded reconciliation model itself.
+
+    These are checks on this module's own constants, independent of any document,
+    so a bad model fails even when no audit file is present to contradict it.
+    """
+    errors: list[str] = []
+    if CURRENT_RECONCILIATION_ISSUE is None:
+        return errors
+    if CURRENT_RECONCILIATION_ISSUE in COMPLETED_RECONCILIATION_ISSUES:
+        errors.append(
+            f"CURRENT_RECONCILIATION_ISSUE = {CURRENT_RECONCILIATION_ISSUE} is also listed in "
+            "COMPLETED_RECONCILIATION_ISSUES; an issue cannot be both completed and the current open "
+            "scope. Use CURRENT_RECONCILIATION_ISSUE = None to record that no reconciliation issue is open"
+        )
+    if CURRENT_RECONCILIATION_ISSUE in OPEN_EXTERNAL_VALIDATION_TRACKERS:
+        errors.append(
+            f"CURRENT_RECONCILIATION_ISSUE = {CURRENT_RECONCILIATION_ISSUE} is also listed in "
+            "OPEN_EXTERNAL_VALIDATION_TRACKERS; an external validation tracker is not a reconciliation scope"
+        )
+    overlap = sorted(set(COMPLETED_RECONCILIATION_ISSUES) & set(OPEN_EXTERNAL_VALIDATION_TRACKERS))
+    if overlap:
+        errors.append(
+            f"issues {overlap} are recorded as both completed reconciliations and open external validation "
+            "trackers; the two lineages are independent and an issue belongs to exactly one of them"
+        )
+    return errors
 
 
 def _issue_reference(number: int) -> re.Pattern[str]:
@@ -2486,7 +2773,7 @@ def _tracker_bullets(tracker: str) -> list[str]:
 
 def audit_tracker_errors(audit_text: str) -> list[str]:
     """Require the audit to separate delivered scope from open external validation."""
-    errors: list[str] = []
+    errors: list[str] = reconciliation_model_errors()
 
     tracker = _tracker_section(audit_text)
     if tracker is None:
@@ -2528,8 +2815,35 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
                 "exists to prevent"
             )
 
-    current = next((item for item in bullets if _issue_reference(CURRENT_RECONCILIATION_ISSUE).search(item)), None)
-    if current is None:
+    current = None
+    if CURRENT_RECONCILIATION_ISSUE is not None:
+        current = next(
+            (item for item in bullets if _issue_reference(CURRENT_RECONCILIATION_ISSUE).search(item)),
+            None,
+        )
+    none_bullet = next((item for item in bullets if _NO_CURRENT_RECONCILIATION_RE.search(item)), None)
+
+    if CURRENT_RECONCILIATION_ISSUE is None:
+        # No open reconciliation issue is a legal state, but it has to be stated.
+        # Silence would leave a reader unable to tell "no scope" from "scope not
+        # recorded", which is the ambiguity this whole section exists to remove.
+        if none_bullet is None:
+            errors.append(
+                "repository truth audit: CURRENT_RECONCILIATION_ISSUE is None, so the tracker map must state "
+                "explicitly that there is no current reconciliation scope; set "
+                "CURRENT_RECONCILIATION_ISSUE in scripts/check_repo_consistency.py if one is actually open"
+            )
+        # ...and it must be the whole story. A single surviving 'the current one'
+        # row beside a 'none' declaration is the same drift as the reverse.
+        for bullet in bullets:
+            if bullet is none_bullet:
+                continue
+            if _CURRENT_SCOPE_RE.search(bullet):
+                errors.append(
+                    "repository truth audit: the tracker map declares no current reconciliation scope, but "
+                    f"another row still claims to be it: {bullet.strip()!r}"
+                )
+    elif current is None:
         errors.append(
             f"repository truth audit: current reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is not "
             "recorded in the tracker map; record it as the open scope, or move it to "
@@ -2540,6 +2854,15 @@ def audit_tracker_errors(audit_text: str) -> list[str]:
             f"repository truth audit: reconciliation issue #{CURRENT_RECONCILIATION_ISSUE} is recorded as "
             "completed but is still the current scope; move it to COMPLETED_RECONCILIATION_ISSUES in the "
             "same commit that closes it"
+        )
+
+    # Checked outside the branches above: a model pointing at an issue number and an
+    # audit declaring 'none' contradict each other whichever one is wrong, so the
+    # contradiction must be reported even when the pointed-at row is itself missing.
+    if CURRENT_RECONCILIATION_ISSUE is not None and none_bullet is not None:
+        errors.append(
+            f"repository truth audit: the tracker map declares no current reconciliation scope, but "
+            f"#{CURRENT_RECONCILIATION_ISSUE} is recorded as the current scope; record exactly one of the two"
         )
 
     for area in DELIVERED_AUDIT_AREAS:
@@ -2872,6 +3195,456 @@ def check_rbac_mask_contract(errors: list[str]) -> None:
         fail(errors, "PRD.md must document the uint32 RBAC mask contract")
     if re.search(r"\bint32\b", text):
         fail(errors, "PRD.md must not describe RBAC masks as int32")
+
+
+# --------------------------------------------------------------------------
+# Frontend evidence: CI build != end-to-end runtime != production deployment
+# --------------------------------------------------------------------------
+#
+# These are three separate claims and the repository has evidence for exactly
+# one of them:
+#
+#   (A) the React client and its API metadata contract  -> REPO_VERIFIED
+#   (B) `npm ci` + `npm run build` in GitHub Actions    -> REPO_VERIFIED
+#   (C) frontend + real backend end-to-end runtime      -> PENDING
+#   (D) production deployment                          -> deployment-specific, PENDING
+#
+# A green `frontend-build` proves the bundle compiles. It observes no browser,
+# no real backend and no deployed environment, so it can never promote (C) or
+# (D). `.github/workflows/ci.yml` is the source of truth for (B) and is read
+# from disk rather than hardcoded, so removing the job turns the (B) sentence
+# into drift instead of leaving a stale claim behind an unenforced guard.
+FRONTEND_CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+
+#: A committed browser run of the frontend against the real backend. Follows the
+#: benchmark/performance idiom: generated runs are git-ignored, so the absence of
+#: a match is what keeps (C) `PENDING`.
+FRONTEND_E2E_ARTIFACT_GLOB = "artifacts/frontend-e2e/*/report.json"
+
+#: Docs that state what CI proves about the frontend. All are canonical, so all
+#: are in scope for the denial and escalation scanners.
+FRONTEND_EVIDENCE_DOCS = [
+    "README.md",
+    "docs/README.md",
+    "docs/interview-evidence-map.md",
+    "docs/interview-architecture-baseline.md",
+    "docs/repository-truth-audit.md",
+    "docs/main-branch-governance.md",
+    "docs/pre-launch-checklist.md",
+    "docs/deployment-guide.md",
+]
+
+# Denials of (B). These are only drift while the workflow builds the frontend.
+_FRONTEND_BUILD_DENIAL_PATTERNS = [
+    r"CI\s+(?:does\s+not|doesn't|do\s+not|never)\s+(?:build|compile)\w*\s*(?:the\s+)?frontend",
+    r"CI\s*(?:不|未|没有|不会)\s*(?:构建|编译|打包)\s*前端",
+    r"frontend\s+build\s+is\s+separate",
+    r"(?:没有|无)\s*前端构建\s*(?:校验|job|任务|门禁)",
+]
+
+# Overclaims of (C) or (D) from a CI build. Deliberately narrow: each pattern has
+# to name the frontend *and* the escalated outcome, so ordinary prose about the
+# pending states cannot match. Negation-aware via _PROHIBITION_FRAME_RE and
+# _NO_EVIDENCE_NEGATION_RE, so "never say the frontend is validated end-to-end"
+# and "end-to-end runtime integration is PENDING" both stay allowed.
+# Runtime claims, gated on a committed artifact: a browser run against the real
+# backend can establish end-to-end integration (C), so these relax once such an
+# artifact exists.
+_FRONTEND_RUNTIME_ESCALATION_PATTERNS = [
+    r"(?:frontend|前端)[^\n]{0,40}?(?:build|构建|编译)[^\n]{0,40}?(?:end[-\s]to[-\s]end|e2e|端到端)\s*"
+    r"(?:validat|verif|tested|验证|测试|通过)",
+    r"(?:end[-\s]to[-\s]end|e2e|端到端)[^\n]{0,30}?(?:validat|verif|验证)[^\n]{0,40}?(?:frontend|前端)",
+    r"(?:frontend|前端)[^\n]{0,30}?(?:browser|浏览器)[^\n]{0,30}?"
+    r"(?:real\s+backend|真实\s*后端|monolith)",
+    r"(?:browser|浏览器)[^\n]{0,30}?(?:frontend|前端)[^\n]{0,30}?"
+    r"(?:real\s+backend|真实\s*后端|monolith)",
+    # Chinese and English both allow "real backend" to sit on either side of the
+    # frontend subject ("browser verified against the real backend for the
+    # frontend" and "the real backend validated the frontend" are the same claim).
+    r"(?:browser|浏览器)[^\n]{0,40}?(?:real\s+backend|真实\s*后端|monolith)"
+    r"[^\n]{0,20}?(?:validat|verif|验证)[^\n]{0,20}?(?:frontend|前端)",
+    r"(?:real\s+backend|真实\s*后端|monolith)[^\n]{0,40}?(?:validat|verif|验证)"
+    r"[^\n]{0,20}?(?:frontend|前端)",
+    r"(?:CI|ci)\s*(?:frontend\s*|前端\s*)?(?:构建|build)[^\n]{0,30}?(?:等于|即为|proves?|means)\s*[^\n]{0,20}?"
+    r"(?:端到端\s*验证|end[-\s]to[-\s]end\s+(?:validat|verif))",
+]
+
+# Deployment claims, never gated on any artifact. No run recorded in a
+# repository can establish that a system is deployed to production, so these
+# checks stay active unconditionally. Gating them on the E2E artifact would let
+# a single browser-run report switch off the production-deployment overclaim
+# check, which is precisely the framework/result conflation this guard exists to
+# prevent: (C) and (D) are separate claims and an artifact for (C) is not
+# evidence for (D).
+_FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS = [
+    r"(?:frontend|前端)[^\n]{0,20}?(?:is\s+|已)?(?:deployed|deployed\s+to|部署)[^\n]{0,20}?"
+    r"(?:production|生产)",
+    r"(?:frontend|前端)[^\n]{0,20}?(?:production|生产)[^\n]{0,10}?(?:deployed|部署)",
+    r"(?:CI|ci)\s*(?:frontend\s*|前端\s*)?(?:构建|build)[^\n]{0,30}?(?:等于|即为|proves?|means)\s*[^\n]{0,20}?"
+    r"(?:production\s+validated|生产\s*验证)",
+]
+
+# The one committed browser-driven frontend run is the demo capture, and it is
+# mock-backed by construction. Presenting it as real-backend E2E conflates a
+# demo fixture with runtime evidence.
+_FRONTEND_MOCK_AS_E2E_PATTERNS = [
+    r"(?:capture_demo|demo\s+capture|演示\s*(?:截图|录制))[^\n]{0,60}?"
+    r"(?:end[-\s]to[-\s]end|e2e|端到端)",
+    r"(?:end[-\s]to[-\s]end|e2e|端到端)[^\n]{0,60}?(?:capture_demo|demo\s+capture|演示\s*(?:截图|录制))",
+]
+
+
+# Order-independent companion to the patterns above. "Browser verified against
+# the real backend for the frontend" states the same escalation as "the frontend
+# build is end-to-end validated", but no single regex covers every word order,
+# so the rule is stated as a token co-occurrence instead: a line that names a
+# browser, the frontend *and* a real backend in one breath is making a runtime
+# claim, and must therefore be negated or pending to be allowed.
+_FRONTEND_BROWSER_TOKEN_RE = re.compile(r"browser|浏览器|playwright", re.IGNORECASE)
+_FRONTEND_SUBJECT_TOKEN_RE = re.compile(r"frontend|前端", re.IGNORECASE)
+_FRONTEND_REAL_BACKEND_TOKEN_RE = re.compile(
+    r"real\s+backend|真实\s*后端|real\s+monolith|真实\s*单体|real\s+FastAPI|真实\s*FastAPI",
+    re.IGNORECASE,
+)
+
+#: Negations that make a frontend runtime paragraph a denial rather than a claim.
+#: Separate from _NO_EVIDENCE_NEGATION_RE because that one is deliberately tuned
+#: for single-line table cells and omits the "no committed artifact" /
+#: "never been recorded" phrasings these wrapped bullets actually use.
+_FRONTEND_RUNTIME_NEGATION_RE = re.compile(
+    r"PENDING|never|not\s+(?:yet\s+)?(?:established|validated|verified|recorded|claimed)|"
+    r"no\s+(?:committed\s+)?(?:such\s+)?(?:artifact|evidence|run|result)|no\s+browser\s+run|"
+    r"未(?:有|能|执行|验证|产生|记录)|尚未|没有|无可|不(?:会|能|得|是)|不能|不等于|不代表",
+    re.IGNORECASE,
+)
+
+
+def _check_frontend_runtime_cooccurrence(name: str, text: str, errors: list[str]) -> None:
+    """Flag a frontend browser/runtime claim about a real backend with no artifact.
+
+    Negation is searched across the whole *paragraph* rather than the single
+    physical line, because these are wrapped markdown bullets: the denial
+    ("No committed artifact shows a browser-rendered frontend/ against the real
+    monolith...") routinely sits on a different line from the claim it denies.
+    A per-line window would read that bullet as an overclaim.
+    """
+    for paragraph, offset in _markdown_paragraphs(text):
+        if not (
+            _FRONTEND_BROWSER_TOKEN_RE.search(paragraph)
+            and _FRONTEND_SUBJECT_TOKEN_RE.search(paragraph)
+            and _FRONTEND_REAL_BACKEND_TOKEN_RE.search(paragraph)
+        ):
+            continue
+        if _PROHIBITION_FRAME_RE.search(paragraph) or _FRONTEND_RUNTIME_NEGATION_RE.search(paragraph):
+            continue
+        if HISTORICAL_MARKERS.search(paragraph):
+            continue
+        fail(
+            errors,
+            f"{name}:{offset}: asserts a frontend browser runtime against a real backend, but no "
+            f"committed artifact matching {FRONTEND_E2E_ARTIFACT_GLOB} exists; end-to-end runtime "
+            f"integration is PENDING and must be stated as such",
+        )
+
+
+def _markdown_paragraphs(text: str) -> list[tuple[str, int]]:
+    """Yield (paragraph, first 1-based line number) for each blank-line-delimited block."""
+    paragraphs: list[tuple[str, int]] = []
+    current: list[str] = []
+    start = 1
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.strip():
+            if not current:
+                start = number
+            current.append(line)
+            continue
+        if current:
+            paragraphs.append(("\n".join(current), start))
+            current = []
+    if current:
+        paragraphs.append(("\n".join(current), start))
+    return paragraphs
+
+
+def ci_builds_frontend(workflow_text: str) -> bool:
+    """Whether any CI job installs from the lockfile and builds the frontend."""
+    try:
+        import yaml
+
+        workflow = yaml.safe_load(workflow_text) or {}
+    except Exception:
+        # A workflow this script cannot parse is a separate failure; treating it
+        # as "no frontend build" would let the denial scanner pass silently.
+        return True
+
+    for job in (workflow.get("jobs") or {}).values():
+        if not isinstance(job, dict):
+            continue
+        runs = "\n".join(str(step.get("run", "")) for step in (job.get("steps") or []) if isinstance(step, dict))
+        if re.search(r"npm\s+ci\b", runs) and re.search(r"npm\s+run\s+build\b", runs):
+            return True
+    return False
+
+
+def frontend_e2e_artifact_exists() -> bool:
+    return any(ROOT.glob(FRONTEND_E2E_ARTIFACT_GLOB))
+
+
+def _scanned_frontend_lines(text: str) -> list[tuple[int, str]]:
+    return [(n, line) for n, line in enumerate(text.splitlines(), start=1)]
+
+
+def _scan_frontend_patterns(
+    name: str,
+    text: str,
+    patterns: list[str],
+    message: str,
+    errors: list[str],
+    *,
+    mode: str,
+) -> None:
+    """Scan `text` for frontend patterns, skipping legitimately negated lines.
+
+    ``mode`` selects what excuses a match, because the two pattern families need
+    opposite treatment:
+
+    - ``"denial"``. A denial is itself a negation, so the generic no-evidence
+      negation window cannot apply: it would let an unrelated ``PENDING`` later
+      in the same table row excuse it, and every audit row ends in a status cell,
+      so the guard would never fire. The coarse ``HISTORICAL_MARKERS`` set is
+      excluded too — it matches ordinary prose such as "there is no separate
+      pytest target" — because a denial is a claim about the *current* CI
+      configuration, which this guard reads from disk. Only a "do not claim
+      this" frame excuses it.
+    - ``"escalation"``. Here all three exemptions apply: the no-evidence window
+      is what lets "end-to-end runtime integration is PENDING" and "never say
+      the frontend is validated end-to-end" stay allowed, and a line marked
+      historical may narrate a former state.
+    """
+    for number, line in _scanned_frontend_lines(text):
+        for pattern in patterns:
+            for match in re.finditer(pattern, line, re.IGNORECASE):
+                prefix = line[max(0, match.start() - 60) : match.start()]
+                if _PROHIBITION_FRAME_RE.search(prefix):
+                    continue
+                if mode == "escalation":
+                    window = line[max(0, match.start() - 50) :]
+                    if _NO_EVIDENCE_NEGATION_RE.search(window):
+                        continue
+                    if HISTORICAL_MARKERS.search(line):
+                        continue
+                fail(
+                    errors,
+                    f"{name}:{number}: {message} matched {pattern!r}: {match.group(0)!r}",
+                )
+                break
+
+
+def check_frontend_evidence_classification(errors: list[str]) -> None:
+    """Keep CI build, end-to-end runtime and deployment as three separate claims."""
+    if not FRONTEND_CI_WORKFLOW.exists():
+        return
+    builds = ci_builds_frontend(FRONTEND_CI_WORKFLOW.read_text(encoding="utf-8"))
+    has_e2e_artifact = frontend_e2e_artifact_exists()
+
+    for name in FRONTEND_EVIDENCE_DOCS:
+        path = ROOT / name
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+
+        if builds:
+            _scan_frontend_patterns(
+                name,
+                text,
+                _FRONTEND_BUILD_DENIAL_PATTERNS,
+                "denies the CI frontend build that .github/workflows/ci.yml performs",
+                errors,
+                mode="denial",
+            )
+
+        # Deployment overclaim is checked unconditionally: no repository artifact
+        # can establish a production deployment, so this never relaxes.
+        _scan_frontend_patterns(
+            name,
+            text,
+            _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+            "presents the frontend as deployed to production; deployment state lives outside this "
+            "repository and no committed artifact can establish it",
+            errors,
+            mode="escalation",
+        )
+
+        if not has_e2e_artifact:
+            _scan_frontend_patterns(
+                name,
+                text,
+                _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
+                f"presents frontend CI build evidence as end-to-end runtime evidence, but no "
+                f"committed artifact matching {FRONTEND_E2E_ARTIFACT_GLOB} exists",
+                errors,
+                mode="escalation",
+            )
+            _scan_frontend_patterns(
+                name,
+                text,
+                _FRONTEND_MOCK_AS_E2E_PATTERNS,
+                "presents the mock-backed demo capture as real-backend end-to-end evidence",
+                errors,
+                mode="escalation",
+            )
+            _check_frontend_runtime_cooccurrence(name, text, errors)
+
+    _check_frontend_audit_row(builds, has_e2e_artifact, errors)
+
+
+#: A level together with the claim it qualifies, e.g.
+#: ``REPO_VERIFIED`` (B CI build gate). The qualifier is what makes a compound
+#: status cell meaningful: without reading it, "the row contains REPO_VERIFIED"
+#: cannot tell the CI build apart from the client contract, so deleting the
+#: build's level would leave the row looking correct.
+_FRONTEND_LEVEL_QUALIFIER_RE = re.compile(r"`([A-Z][A-Z0-9_]+)`\s*(?:\(([^)]*)\))?")
+
+#: Qualifier wording that names the CI build claim, in either language.
+_FRONTEND_BUILD_QUALIFIER_RE = re.compile(r"\bbuild\b|\bci\b|构建", re.IGNORECASE)
+
+#: Qualifier wording that names the runtime-integration claim.
+_FRONTEND_RUNTIME_QUALIFIER_RE = re.compile(
+    r"end[-\s]to[-\s]end|\be2e\b|runtime|integration|端到端|运行", re.IGNORECASE
+)
+
+#: Qualifier wording that names the deployment claim. Kept separate from the
+#: runtime qualifier because deployment is gated differently: an E2E artifact can
+#: close (C) but never (D).
+_FRONTEND_DEPLOYMENT_QUALIFIER_RE = re.compile(r"deploy|部署", re.IGNORECASE)
+
+
+def _frontend_level_qualifiers(status: str, level: str) -> list[str]:
+    return [
+        (qualifier or "").lower() for found, qualifier in _FRONTEND_LEVEL_QUALIFIER_RE.findall(status) if found == level
+    ]
+
+
+def frontend_audit_classification_errors(status: str, *, builds: bool, has_e2e_artifact: bool) -> list[str]:
+    """Classify the `Frontend contract` status cell against what CI can prove.
+
+    Split out from the file walk so the rule is testable without a temp tree,
+    mirroring `benchmark_classification_errors`.
+    """
+    problems: list[str] = []
+
+    if builds:
+        verified = _frontend_level_qualifiers(status, "REPO_VERIFIED")
+        if not any(_FRONTEND_BUILD_QUALIFIER_RE.search(q) for q in verified):
+            problems.append(
+                "the CI frontend build (npm ci + npm run build) must be classified "
+                f"REPO_VERIFIED with a qualifier naming the build; got {status!r}"
+            )
+
+    if not has_e2e_artifact:
+        pending = _frontend_level_qualifiers(status, "PENDING")
+        if not any(_FRONTEND_RUNTIME_QUALIFIER_RE.search(q) for q in pending):
+            problems.append(
+                "end-to-end runtime integration must stay PENDING, with a qualifier naming it, while no "
+                f"artifact matching {FRONTEND_E2E_ARTIFACT_GLOB} is committed; got {status!r}"
+            )
+
+    # Deployment is required to stay PENDING unconditionally. It is *not* gated on
+    # the E2E artifact: a browser-against-backend run establishes runtime
+    # integration, never a production deployment, so letting an artifact close
+    # this would silently merge claims (C) and (D).
+    pending = _frontend_level_qualifiers(status, "PENDING")
+    if not any(_FRONTEND_DEPLOYMENT_QUALIFIER_RE.search(q) for q in pending):
+        problems.append(
+            f"production deployment must stay PENDING with a qualifier naming it; no committed artifact "
+            f"can establish a deployment, so this does not relax with {FRONTEND_E2E_ARTIFACT_GLOB}; "
+            f"got {status!r}"
+        )
+    return problems
+
+
+def _check_frontend_audit_row(builds: bool, has_e2e_artifact: bool, errors: list[str]) -> None:
+    """The audit must classify the frontend states the repository can support."""
+    audit = ROOT / "docs" / "repository-truth-audit.md"
+    if not audit.exists():
+        return
+
+    status = None
+    for line in audit.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|"):
+            continue
+        columns = [part.strip() for part in line.strip("|").split("|")]
+        if columns and columns[0] == "Frontend contract":
+            status = columns[6] if len(columns) > 6 else None
+            break
+
+    # Presence itself is enforced by REQUIRED_AUDIT_AREAS; there is nothing to
+    # classify if the row is absent, and that check reports it legibly.
+    if status is None:
+        return
+
+    for problem in frontend_audit_classification_errors(status, builds=builds, has_e2e_artifact=has_e2e_artifact):
+        fail(errors, f"repository truth audit 'Frontend contract' row: {problem}")
+
+
+# --------------------------------------------------------------------------
+# Removed plan path: docs/superpowers/ is a historical path, not a directory
+# --------------------------------------------------------------------------
+#
+# PR #33 deleted `docs/superpowers/` from the branch. Nothing was relocated: the
+# plans survive only in Git history. A canonical document that still names that
+# path in the present tense therefore sends a reader to open a directory that
+# does not exist, and nothing in the tree contradicts them.
+#
+# The check is a *positive* requirement rather than a pattern exemption: every
+# surviving mention must carry a historical frame. An unrelated "PENDING" or
+# "not verified" elsewhere in the paragraph cannot excuse it, which is the
+# failure mode a shared negation window would reintroduce.
+REMOVED_PLAN_PATH = "docs/superpowers/"
+
+#: Framing that marks a mention as historical. Deliberately narrower than
+#: HISTORICAL_MARKERS: that set matches ordinary current-state prose such as
+#: "removed" or "no longer", so it would wave through a present-tense sentence.
+_REMOVED_PLAN_HISTORICAL_FRAME_RE = re.compile(
+    r"former(?:ly)?|previous(?:ly)?|used\s+to\b|no\s+longer|"
+    r"\bremoved\b|\bdeleted\b|\bpreserved\b|retrievable|"
+    r"git\s+history|"
+    r"曾经|原先|原目录|已删除|已移除|不在当前|历史",
+    re.IGNORECASE,
+)
+
+#: Sentence boundaries, so a frame in one sentence cannot vouch for a path
+#: mentioned in another.
+_REMOVED_PLAN_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.;!?。；])\s+|\n")
+
+
+def check_removed_plan_path_is_historical(errors: list[str]) -> None:
+    """A removed plan path may only be named as history."""
+    if (ROOT / REMOVED_PLAN_PATH).exists():
+        # The directory is back. Whether it is canonical, archived or untracked
+        # is a placement decision the documentation guard already owns, so this
+        # rule stands down rather than ruling on it.
+        return
+
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        # Sentence scope, not line or paragraph scope: these references sit inside
+        # wrapped prose, and a coarser scope lets one sentence's historical frame
+        # vouch for a present-tense mention in the next.
+        for paragraph, offset in _markdown_paragraphs(path.read_text(encoding="utf-8")):
+            for sentence in _REMOVED_PLAN_SENTENCE_SPLIT_RE.split(paragraph):
+                if REMOVED_PLAN_PATH not in sentence:
+                    continue
+                if _REMOVED_PLAN_HISTORICAL_FRAME_RE.search(sentence):
+                    continue
+                fail(
+                    errors,
+                    f"{path.relative_to(ROOT)}:{offset}: names {REMOVED_PLAN_PATH!r} without marking "
+                    "it as a removed path. The directory is not in the current tree and its plans live "
+                    'only in Git history; say so (e.g. "formerly stored under docs/superpowers/, '
+                    'preserved in Git history") so no reader expects to open it',
+                )
 
 
 def check_stale_offline_claims(path: Path, errors: list[str]) -> None:
@@ -3420,6 +4193,7 @@ def main() -> int:
     check_metrics_auth_contract(errors)
     check_rbac_mask_contract(errors)
     check_docs_index(errors)
+    check_docs_classification(errors)
     check_ragas_failure_contract(errors)
     check_local_runtime_validation_contract(errors)
     check_uvicorn_proxy_headers_disabled(errors)
@@ -3440,6 +4214,8 @@ def main() -> int:
     check_observability_is_optional(errors)
     check_legacy_jaeger_agent_config_is_absent(errors)
     check_canonical_runtime_is_not_observability_gated(errors)
+    check_frontend_evidence_classification(errors)
+    check_removed_plan_path_is_historical(errors)
     check_enumerated_section_counts(errors)
     check_slo_objective_counts(errors)
 

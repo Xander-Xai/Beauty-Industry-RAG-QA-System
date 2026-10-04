@@ -68,6 +68,16 @@ def make_feedback_id(query: str, request_id: str = "") -> str:
     return hashlib.sha256(f"{request_id}:{query}".encode()).hexdigest()
 
 
+def is_negative(record: FeedbackRecord) -> bool:
+    """True when a record carries an explicit negative user signal.
+
+    Public because "this record was rejected by the user" is a property of the
+    feedback gate itself, so downstream consumers (regression candidates) must
+    not re-implement the threshold.
+    """
+    return record.rating is not None and record.rating <= 0
+
+
 class FeedbackStore:
     def __init__(self, path: str | Path):
         self.path = str(path)
@@ -190,7 +200,7 @@ class FeedbackLoop:
         accepted = self.store.list_records(status=ACCEPTED)
         outputs = {
             "hard_negatives": self._export(
-                [_hard_negative(record) for record in accepted if _is_negative(record)],
+                [_hard_negative(record) for record in accepted if is_negative(record)],
                 "retrieval_hard_negatives.jsonl",
             ),
             "rewrite_corrections": self._export(
@@ -227,10 +237,6 @@ class FeedbackLoop:
             for row in rows:
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
         return str(path)
-
-
-def _is_negative(record: FeedbackRecord) -> bool:
-    return record.rating is not None and record.rating <= 0
 
 
 def _hard_negative(record: FeedbackRecord) -> dict:

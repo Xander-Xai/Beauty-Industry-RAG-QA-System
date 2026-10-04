@@ -223,6 +223,8 @@ python3 run_offline.py incremental-build --from-epoch phase_1 --to-epoch phase_2
 
 `seal-epoch` 默认先做完整快照校验（Qdrant text/image + Elasticsearch）再封存；`--skip-validation` 是明确的危险逃生口。封存后需要操作者**手动**把 `config.json` 的 `knowledge_version_epoch` 切到新 epoch 并重启在线服务。操作细节见 [数据管理手册](docs/data-admin-guide.md)。
 
+`export-regression-candidates` 把已审核的负向反馈变成待人工审批的回归候选，只有人工接受后才进入回归数据集，详见 [RAGAS 评估指南 §9](docs/ragas-evaluation-guide.md)。
+
 ### 检索 benchmark 框架
 
 ```bash
@@ -322,6 +324,9 @@ FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE �
 | Airflow 调度 | `REPO_VERIFIED`（DAG 注册） | `PENDING` | 真实 Airflow DAG 执行 |
 | Qdrant 真实服务 | `REPO_VERIFIED`（当前回归覆盖 = 进程内 `QdrantClient(":memory:")`） | `PENDING`（真实服务 artifact） | 一次新的真实服务运行并提交产物。**开发沿革中确有 PR #6/#7 的真实本地 Qdrant + ES 集成运行记录，但那不是可复现 artifact**——两个方向都不能说错，详见 [Qdrant evidence: two states, kept apart](docs/interview-evidence-map.md#qdrant-evidence-two-states-kept-apart) |
 | 微服务（`api-gateway/` 等） | `REPO_VERIFIED`（组件） | `PENDING`（集成部署） | 与当前前端的端到端生产验证 |
+| 前端 CI 构建（`frontend-build`：lockfile 安装 + `npm run build`） | `REPO_VERIFIED` | —（构建产物不发布） | 无需升级：这是门禁，不是结果。**但构建成功只证明 bundle 能编译** |
+| 前端 + 真实后端端到端运行 | `REPO_VERIFIED`（客户端与 API metadata 契约） | `PENDING` | 一次真实浏览器运行：`frontend/` 对真实单体 + 真实 ES/Qdrant + 真实模型，并提交可复现 artifact。演示截图用 Playwright 驱动**真实 UI**，但后端是 `docs/demo/mock_api.py` 这个合成 mock，因此**不算**端到端证据 |
+| 前端生产部署 | —（部署态在本仓库之外） | `PENDING` | 一次真实部署并记录环境。这是 deployment-specific 状态，本仓库不断言 |
 
 ### `LOCAL_REAL_VALIDATION` 完整清单（只有这五项）
 

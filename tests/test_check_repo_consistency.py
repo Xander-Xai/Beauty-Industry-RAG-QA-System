@@ -9,12 +9,18 @@ from pathlib import Path
 import pytest
 
 from scripts.check_repo_consistency import (
+    CANONICAL,
+    HISTORICAL,
     REQUIRED_AUDIT_AREAS,
+    UNCLASSIFIED,
+    archive_banner_errors,
     benchmark_artifact_exists,
     benchmark_classification_errors,
+    check_docs_classification,
     check_docs_index,
     check_documented_offline_commands,
     check_forbidden_current_claims,
+    check_frontend_evidence_classification,
     check_local_runtime_validation_contract,
     check_metrics_auth_contract,
     check_metrics_route_contract,
@@ -25,6 +31,9 @@ from scripts.check_repo_consistency import (
     check_stale_offline_claims,
     check_truth_audit,
     check_version_label_semantics,
+    ci_builds_frontend,
+    doc_classification,
+    docs_classification_errors,
     forbidden_evidence_claims,
     post_merge_phase_drift_claims,
     retired_topology_claims,
@@ -1555,49 +1564,190 @@ def test_interview_baseline_must_split_exporter_implementation_from_closed_loop(
 
 
 def test_audit_tracker_requires_open_external_validation():
-    from scripts.check_repo_consistency import audit_tracker_errors
+    from scripts.check_repo_consistency import (
+        OPEN_EXTERNAL_VALIDATION_TRACKERS,
+        _issue_reference,
+        _tracker_bullets,
+        _tracker_section,
+        audit_tracker_errors,
+    )
 
     audit = (Path("docs/repository-truth-audit.md")).read_text(encoding="utf-8")
     assert audit_tracker_errors(audit) == []
 
-    closed = audit.replace(
-        "[#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval\n"
-        "  benchmark execution: open.",
-        "[#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval\n"
-        "  benchmark execution: closed.",
-    )
-    assert closed != audit, "fixture must actually change the tracker state"
-    assert audit_tracker_errors(closed)
+    # Derived from the parsed tracker rows rather than hardcoded prose, so adding a
+    # tracker or rewording a row cannot silently turn this into a no-op fixture. Every
+    # standalone 'open' in the row is flipped, because a row that still says 'open'
+    # anywhere has not stopped recording the tracker as open.
+    tracker = _tracker_section(audit)
+    assert tracker is not None
+    bullets = _tracker_bullets(tracker)
+    for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
+        bullet = next(item for item in bullets if _issue_reference(number).search(item))
+        assert re.search(r"\bopen\b", bullet, re.IGNORECASE), f"#{number} must be recorded as open"
+
+        closed = audit.replace(bullet, re.sub(r"\bopen\b", "closed", bullet))
+        assert closed != audit, f"fixture must actually change the state of tracker #{number}"
+        assert any(f"#{number}" in error for error in audit_tracker_errors(closed)), (
+            f"recording open tracker #{number} as closed must fail the guard"
+        )
 
 
 def test_audit_tracker_keeps_completed_reconciliation_off_the_current_scope():
-    """#22 completed while a doc still called it "the current one" is the drift to prevent."""
-    from scripts.check_repo_consistency import audit_tracker_errors
+    """A completed issue described as "the current one" is the drift to prevent."""
+    from scripts.check_repo_consistency import (
+        COMPLETED_RECONCILIATION_ISSUES,
+        _issue_reference,
+        _tracker_bullets,
+        _tracker_section,
+        audit_tracker_errors,
+    )
 
     audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
     assert audit_tracker_errors(audit) == []
 
-    stale = audit.replace(
-        "reconciliation: completed, delivered by PR #23.",
-        "reconciliation: the current one.",
-    )
-    assert stale != audit, "fixture must actually re-open the completed scope"
-    assert any("#22" in error for error in audit_tracker_errors(stale))
+    tracker = _tracker_section(audit)
+    assert tracker is not None
+    bullets = _tracker_bullets(tracker)
+
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        bullet = next(item for item in bullets if _issue_reference(number).search(item))
+        for phrasing in (
+            " This is the current one.",
+            " This is the current open scope.",
+            " This is the current reconciliation scope.",
+        ):
+            stale = audit.replace(bullet, bullet + phrasing)
+            assert stale != audit, f"fixture must actually re-open the completed scope of #{number}"
+            assert any(f"#{number}" in error for error in audit_tracker_errors(stale)), (
+                f"#{number} is completed and must not also be described as the current scope ({phrasing!r})"
+            )
 
 
-def test_audit_tracker_requires_the_current_reconciliation_issue_to_be_recorded():
+def test_current_scope_matcher_does_not_flag_ordinary_current_wording():
+    """The broadened matcher must not swallow 'the current PR' or 'the current implementation'."""
+    from scripts.check_repo_consistency import _CURRENT_SCOPE_RE
+
+    assert _CURRENT_SCOPE_RE.search("awaiting the current PR.") is None
+    assert _CURRENT_SCOPE_RE.search("the current implementation is fine.") is None
+    assert _CURRENT_SCOPE_RE.search("the current evidence map.") is None
+    # The adjective between "current" and the scope noun is what the old, stricter
+    # pattern missed, so this case is the regression that matters.
+    assert _CURRENT_SCOPE_RE.search("described as the current open scope.") is not None
+    assert _CURRENT_SCOPE_RE.search("described as the current one.") is not None
+
+
+def test_no_current_reconciliation_issue_is_a_legal_state():
+    """Between reconciliations there is no open scope, and that needs no invented issue."""
     from scripts.check_repo_consistency import CURRENT_RECONCILIATION_ISSUE, audit_tracker_errors
 
     audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
-    reference = f"issues/{CURRENT_RECONCILIATION_ISSUE}) — final"
+    assert CURRENT_RECONCILIATION_ISSUE is None, (
+        "the reconciliation model must be able to express 'no open reconciliation issue'"
+    )
+    assert audit_tracker_errors(audit) == [], (
+        "an audit that states no current reconciliation issue must pass without an issue number"
+    )
 
-    missing = audit.replace(f"[#{CURRENT_RECONCILIATION_ISSUE}]", "[#9999]").replace(reference, "issues/9999) — final")
-    assert missing != audit, "fixture must actually drop the current scope row"
-    assert any(str(CURRENT_RECONCILIATION_ISSUE) in error for error in audit_tracker_errors(missing))
 
-    closed = audit.replace("reconciliation: the current open scope", "reconciliation: completed")
-    assert closed != audit, "fixture must actually close the current scope"
-    assert any(str(CURRENT_RECONCILIATION_ISSUE) in error for error in audit_tracker_errors(closed))
+def test_audit_must_state_the_absent_reconciliation_scope_explicitly():
+    """Silence is not a legal way to say 'none': the declaration has to be findable."""
+    from scripts.check_repo_consistency import (
+        _NO_CURRENT_RECONCILIATION_RE,
+        CURRENT_RECONCILIATION_ISSUE,
+        _tracker_bullets,
+        _tracker_section,
+        audit_tracker_errors,
+    )
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert CURRENT_RECONCILIATION_ISSUE is None
+
+    tracker = _tracker_section(audit)
+    assert tracker is not None
+    declaration = next(item for item in _tracker_bullets(tracker) if _NO_CURRENT_RECONCILIATION_RE.search(item))
+
+    without = audit.replace(declaration, "", 1)
+    assert without != audit, "fixture must actually drop the 'none' declaration"
+    assert not _NO_CURRENT_RECONCILIATION_RE.search(_tracker_section(without) or "")
+    assert any("no current reconciliation scope" in error for error in audit_tracker_errors(without)), (
+        "an audit with no reconciliation scope must say so, not omit the topic"
+    )
+
+
+def test_audit_cannot_declare_none_while_another_row_claims_the_current_scope():
+    from scripts.check_repo_consistency import CURRENT_RECONCILIATION_ISSUE, audit_tracker_errors
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert CURRENT_RECONCILIATION_ISSUE is None
+
+    contradictory = audit.replace(
+        "\n## Reconciliation lineage invariants",
+        "\n- PR #26 — a later reconciliation: this is the current one.\n\n## Reconciliation lineage invariants",
+        1,
+    )
+    assert contradictory != audit, "fixture must actually add a contradictory current-scope row"
+    assert any("declares no current reconciliation scope" in error for error in audit_tracker_errors(contradictory))
+
+
+def _real_audit_text() -> str:
+    return Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+
+
+def test_reconciliation_model_rejects_a_completed_issue_as_the_current_scope(monkeypatch):
+    """The invariant must not be maintained by reviving a closed issue."""
+    import scripts.check_repo_consistency as guard
+
+    monkeypatch.setattr(guard, "CURRENT_RECONCILIATION_ISSUE", 24)
+    monkeypatch.setattr(guard, "COMPLETED_RECONCILIATION_ISSUES", (16, 20, 22, 24))
+
+    errors = guard.reconciliation_model_errors()
+    model_errors = [error for error in errors if error.startswith("CURRENT_RECONCILIATION_ISSUE")]
+    assert model_errors, "pointing the current scope at a completed issue must be rejected outright"
+    assert any("24" in error for error in model_errors), f"the offending issue number must be named: {model_errors}"
+    assert any("None" in error for error in model_errors), "the error must point at the legal alternative"
+    assert any("#24" in error for error in guard.audit_tracker_errors(_real_audit_text()))
+
+
+def test_reconciliation_model_keeps_the_two_lineages_disjoint():
+    import scripts.check_repo_consistency as guard
+
+    assert guard.reconciliation_model_errors() == [], "the recorded model must be internally consistent"
+
+    completed = set(guard.COMPLETED_RECONCILIATION_ISSUES)
+    trackers = set(guard.OPEN_EXTERNAL_VALIDATION_TRACKERS)
+    assert not completed & trackers, "an issue cannot be a completed reconciliation and an open tracker"
+    assert guard.CURRENT_RECONCILIATION_ISSUE not in completed
+
+
+def test_recorded_reconciliation_state_matches_the_audit_snapshot():
+    """The recorded numbers are the ones the audit actually states."""
+    from scripts.check_repo_consistency import (
+        COMPLETED_RECONCILIATION_ISSUES,
+        OPEN_EXTERNAL_VALIDATION_TRACKERS,
+    )
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    for number in COMPLETED_RECONCILIATION_ISSUES:
+        assert f"issues/{number})" in audit, f"completed issue #{number} must stay recorded in the tracker map"
+    for number in OPEN_EXTERNAL_VALIDATION_TRACKERS:
+        assert f"issues/{number})" in audit, f"open tracker #{number} must stay recorded in the tracker map"
+
+
+def test_audit_tracker_requires_the_current_reconciliation_issue_to_be_recorded(monkeypatch):
+    """While an issue really is open, the audit must record it as the current scope."""
+    import scripts.check_repo_consistency as guard
+
+    audit = Path("docs/repository-truth-audit.md").read_text(encoding="utf-8")
+    assert guard.CURRENT_RECONCILIATION_ISSUE is None
+
+    monkeypatch.setattr(guard, "CURRENT_RECONCILIATION_ISSUE", 34)
+    monkeypatch.setattr(guard, "COMPLETED_RECONCILIATION_ISSUES", (16, 20, 22, 24))
+
+    errors = guard.audit_tracker_errors(audit)
+    assert any("#34" in error for error in errors), "an unrecorded current scope must fail the guard"
+    # ...and the audit's 'none' declaration must then contradict it, not be ignored.
+    assert any("declares no current reconciliation scope" in error for error in errors)
 
 
 def test_reconciliation_lineage_is_not_pinned_to_a_pr_number():
@@ -3669,3 +3819,798 @@ def test_a_conjunction_after_a_numeral_continues_it_but_on_its_own_does_not():
     assert not _continues_a_larger_numeral("There are five", _at("There are five", "five"))
     assert not _continues_a_larger_numeral("five", 0)
     assert not _continues_a_larger_numeral("SLO objectives are five", _at("SLO objectives are five", "five"))
+
+
+# ── documentation classification invariant ────────────────────────────────
+# A Markdown file under `docs/` has exactly two legal states: current/canonical
+# (listed in CANONICAL_DOCS, so the consistency guards actually check it) or
+# historical (under `docs/archive/`, behind a banner that refuses it as a
+# current source). The unguarded third state is what these tests pin down.
+
+#: A banner satisfying both halves of the contract: the historical marker and
+#: the refusal to be used as a current capability / architecture / metric /
+#: validation source.
+ARCHIVE_BANNER = (
+    "> **HISTORICAL — ARCHIVED. SUPERSEDED BY THE CURRENT DOCUMENTATION.**\n"
+    "> This file is kept for lineage only. It must not be used as a source for\n"
+    "> current capability, architecture, metric or validation claims.\n"
+)
+
+
+def _write(root: Path, relative: str, text: str) -> Path:
+    """Write `text` to `root/<relative>`, creating parents, and return the path."""
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_unclassified_nested_markdown_fails(tmp_path):
+    """1. A Markdown file under docs/ that is neither canonical nor archived.
+
+    This is the failure the invariant exists for: `docs/notes/draft.md` sits
+    among the guides, is not listed in CANONICAL_DOCS, and is not in the
+    archive, so no guard reads it and nothing declares it history. Its claims
+    would then be indistinguishable from current truth.
+    """
+    draft = _write(tmp_path, "docs/notes/draft.md", "# Draft\n\nNotes kept while working.\n")
+    canonical = [_write(tmp_path, "docs/guide.md", "# Guide\n")]
+
+    assert doc_classification(draft, canonical, tmp_path) == UNCLASSIFIED
+
+    errors = docs_classification_errors(tmp_path, canonical)
+    assert len(errors) == 1, errors
+    assert "docs/notes/draft.md: unclassified documentation" in errors[0]
+    # The message has to name both legal homes, or it cannot be acted on.
+    assert "listed in CANONICAL_DOCS" in errors[0]
+    assert "docs/archive/" in errors[0]
+
+
+def test_archive_doc_without_banner_fails(tmp_path):
+    """2. An archived doc with no banner at all."""
+    plan = _write(tmp_path, "docs/archive/old-plan.md", "# Old plan\n\nIt ran two 4B instances.\n")
+
+    assert doc_classification(plan, [], tmp_path) == HISTORICAL
+
+    errors = docs_classification_errors(tmp_path, [])
+    assert len(errors) == 2, errors
+    assert "no historical/superseded marker in its first 20 lines" in errors[0]
+    assert "must declare that it is not a current capability / architecture / metric / validation source" in errors[1]
+
+
+def test_archive_doc_with_banner_passes(tmp_path):
+    """3. The same archived doc, behind a complete banner."""
+    _write(tmp_path, "docs/archive/old-plan.md", f"{ARCHIVE_BANNER}\n# Old plan\n\nIt ran two 4B instances.\n")
+
+    assert docs_classification_errors(tmp_path, []) == []
+
+
+def test_canonical_doc_passes(tmp_path):
+    """4. A current doc is owned by the existing guards and is left alone."""
+    guide = _write(tmp_path, "docs/guide.md", "# Guide\n")
+
+    assert doc_classification(guide, [guide], tmp_path) == CANONICAL
+    assert docs_classification_errors(tmp_path, [guide]) == []
+
+
+def test_validation_doc_passes(tmp_path):
+    """5. A validation record is current documentation, not history.
+
+    `docs/validation/` is enumerated in CANONICAL_DOCS precisely because these
+    records make the same evidence claims as the guides. Filing one under the
+    archive would exempt exactly the docs most able to drift.
+    """
+    record = _write(tmp_path, "docs/validation/real-ragas-evaluation.md", "# Validation record\n")
+
+    assert doc_classification(record, [record], tmp_path) == CANONICAL
+    assert docs_classification_errors(tmp_path, [record]) == []
+
+
+def test_nested_archive_subdirectory_is_still_classified_as_historical(tmp_path):
+    """Depth does not change the rule: docs/archive/<anything>/ is historical."""
+    plan = _write(tmp_path, "docs/archive/2024/old-plan.md", f"{ARCHIVE_BANNER}\n# Old plan\n")
+
+    assert doc_classification(plan, [], tmp_path) == HISTORICAL
+    assert docs_classification_errors(tmp_path, []) == []
+
+
+def test_a_historical_marker_alone_is_not_a_banner(tmp_path):
+    """`Historical` without the refusal still reads as a source.
+
+    The retired dual-4B topology and the missing-RAGAS zero fallback are both
+    accurate about the past, which is exactly why a marker on its own is
+    insufficient: it labels the file without telling the reader to stop
+    trusting it.
+    """
+    _write(
+        tmp_path,
+        "docs/archive/old-plan.md",
+        "# Old plan\n\nHistorical. It ran two 4B instances.\n",
+    )
+
+    errors = docs_classification_errors(tmp_path, [])
+    assert len(errors) == 1, errors
+    assert "must declare that it is not a current capability" in errors[0]
+
+
+def test_a_refusal_without_a_historical_marker_is_not_a_banner(tmp_path):
+    """The other half alone is equally insufficient."""
+    _write(
+        tmp_path,
+        "docs/archive/old-plan.md",
+        "# Old plan\n\nThis must not be used as a source for capability claims.\n",
+    )
+
+    errors = docs_classification_errors(tmp_path, [])
+    assert len(errors) == 1, errors
+    assert "no historical/superseded marker" in errors[0]
+
+
+def test_a_banner_below_the_opening_lines_does_not_count(tmp_path):
+    """The banner has to be met before the claims it qualifies.
+
+    A reader who scrolls into the body first has already read `It ran two 4B
+    instances` as present tense by the time the disclaimer appears.
+    """
+    padding = "\n".join(f"Body line {index}." for index in range(30))
+    _write(tmp_path, "docs/archive/old-plan.md", f"{padding}\n\n{ARCHIVE_BANNER}\n")
+
+    errors = docs_classification_errors(tmp_path, [])
+    assert len(errors) == 2, errors
+
+
+def test_the_archive_banner_is_written_in_chinese_too(tmp_path):
+    """The contract is wording-agnostic, not English-only."""
+    _write(
+        tmp_path,
+        "docs/archive/old-plan.md",
+        "> **历史文档 — 已归档，已被取代。**\n"
+        "> 本文件仅用于追溯，不得作为当前能力、架构、指标或验证结论的依据。\n\n"
+        "# 旧方案\n",
+    )
+
+    assert docs_classification_errors(tmp_path, []) == []
+
+
+def test_an_archived_doc_may_not_also_be_listed_as_canonical(tmp_path):
+    """Claiming a file is both states is a contradiction, not a third option.
+
+    Listing it in CANONICAL_DOCS would put it under the current-claim guards
+    while its own banner refuses to be a current source.
+    """
+    plan = _write(tmp_path, "docs/archive/old-plan.md", f"{ARCHIVE_BANNER}\n# Old plan\n")
+
+    errors = docs_classification_errors(tmp_path, [plan])
+    assert len(errors) == 1, errors
+    assert "both canonical and historical" in errors[0]
+
+
+def test_the_invariant_never_reads_the_contents_of_a_canonical_doc(tmp_path):
+    """A current doc may quote history; the guard must not call that drift.
+
+    This is what keeps the invariant from duplicating the claim scanners: the
+    existing guards already decide which current sentences are stale, and they
+    exempt lines carrying an explicit historical marker. Classification only
+    asks where a file lives.
+    """
+    guide = _write(
+        tmp_path,
+        "docs/guide.md",
+        "# Guide\n\n"
+        "Historical: the runtime used to run two 4B instances.\n"
+        "历史：运行时过去部署两个 4B 实例。\n"
+        "Removed, superseded, retired, obsolete, deprecated, no longer current.\n",
+    )
+
+    assert docs_classification_errors(tmp_path, [guide]) == []
+
+
+def test_the_invariant_never_scans_changelog_history(tmp_path):
+    """`CHANGELOG.md` records releases and is history by construction.
+
+    Its release narration describes claims that were true then and are not now,
+    so treating it as a current source would produce a permanent false failure.
+    It is also outside `docs/`, and the invariant's scope is `docs/**/*.md`.
+    """
+    changelog = _write(
+        tmp_path,
+        "CHANGELOG.md",
+        "# Changelog\n\n## [2.3.0]\n\n- ran two 4B instances\n- RAGAS returned zero\n",
+    )
+    _write(tmp_path, "docs/guide.md", "# Guide\n")
+
+    assert changelog.exists()
+    assert docs_classification_errors(tmp_path, [tmp_path / "docs/guide.md"]) == []
+
+
+def test_check_docs_classification_is_wired_into_main():
+    """Wiring check: a pure function nobody calls is decoration.
+
+    `main()` is expected to return 0 because the repository is currently
+    consistent; the sentinel records that the classification check actually
+    ran, which is the part that regresses silently.
+    """
+    from scripts import check_repo_consistency as guard
+
+    calls: list[int] = []
+    original = guard.check_docs_classification
+
+    def _record(errors, root=None):
+        calls.append(1)
+        return original(errors, root=root)
+
+    guard.check_docs_classification = _record
+    try:
+        assert guard.main() == 0
+    finally:
+        guard.check_docs_classification = original
+    assert calls == [1]
+
+
+def test_every_markdown_file_in_docs_is_classified():
+    """The repository itself has no third-category file.
+
+    This is the check that would have caught `docs/demo/README.md` sitting in a
+    nested directory that no glob in CANONICAL_DOCS covered. It runs the real
+    entry point, so it also covers the default ROOT / CANONICAL_DOCS wiring.
+    """
+    errors: list[str] = []
+    check_docs_classification(errors)
+    assert errors == [], errors
+
+
+def test_the_archive_is_itself_classified_and_documents_the_banner():
+    """docs/archive/ exists to hold history, so it carries the banner too."""
+    from scripts.check_repo_consistency import ROOT
+
+    index = ROOT / "docs/archive/README.md"
+    assert index.is_file()
+    assert archive_banner_errors("docs/archive/README.md", index.read_text(encoding="utf-8")) == []
+
+
+def test_the_docs_index_states_the_two_way_split():
+    """The index is where a reader learns where a doc belongs."""
+    from scripts.check_repo_consistency import ROOT
+
+    text = (ROOT / "docs/README.md").read_text(encoding="utf-8")
+    errors: list[str] = []
+    check_docs_index(errors)
+    assert errors == [], errors
+    assert "docs/archive/" in text
+
+
+# ── Frontend evidence: CI build != end-to-end runtime != deployment ──────────
+#
+# `.github/workflows/ci.yml` has carried a `frontend-build` job (`npm ci` then
+# `npm run build`) since PR #19, while the truth audit still said "CI does not
+# build the frontend here" and filed the built frontend as PENDING. The tests
+# below pin both halves of the correction: the CI build is REPO_VERIFIED, and it
+# still cannot be read as end-to-end runtime or deployment evidence.
+
+
+def test_ci_workflow_really_does_build_the_frontend():
+    """The guard's premise, asserted against the workflow rather than assumed.
+
+    If the job is ever removed or renamed, this fails and the classification
+    decision gets revisited deliberately instead of silently going stale.
+    """
+    from scripts.check_repo_consistency import FRONTEND_CI_WORKFLOW
+
+    workflow = FRONTEND_CI_WORKFLOW.read_text(encoding="utf-8")
+    assert ci_builds_frontend(workflow), "ci.yml no longer installs+builds the frontend"
+    assert "npm ci" in workflow
+    assert "npm run build" in workflow
+
+
+def test_ci_build_detection_requires_both_lockfile_install_and_build():
+    """`npm ci` alone, or a build with no lockfile install, is not the gate."""
+    only_install = "jobs:\n  a:\n    steps:\n      - run: npm ci\n"
+    only_build = "jobs:\n  a:\n    steps:\n      - run: npm run build\n"
+    neither = "jobs:\n  a:\n    steps:\n      - run: pytest\n"
+    assert ci_builds_frontend(only_install) is False
+    assert ci_builds_frontend(only_build) is False
+    assert ci_builds_frontend(neither) is False
+
+
+def test_ci_build_detection_treats_an_unparseable_workflow_as_building():
+    """Fail closed: an unreadable workflow must not silence the denial scanner."""
+    assert ci_builds_frontend("jobs: [this is not: valid: yaml") is True
+
+
+#: The retired sentence, assembled from fragments. Spelling it out literally here
+#: would leave the phrase in the tree and defeat the repo-wide check that asks
+#: for it to be gone, so the tests match the real text without storing it.
+_RETIRED_FRONTEND_CI_DENIAL = "does not " + "build the frontend"
+
+
+def test_repository_does_not_deny_the_ci_frontend_build():
+    """The exact drift sentence, across every canonical frontend-evidence doc."""
+    from scripts.check_repo_consistency import FRONTEND_EVIDENCE_DOCS, ROOT
+
+    errors: list[str] = []
+    check_frontend_evidence_classification(errors)
+    assert errors == [], errors
+
+    offenders = [
+        name
+        for name in FRONTEND_EVIDENCE_DOCS
+        if _RETIRED_FRONTEND_CI_DENIAL in (ROOT / name).read_text(encoding="utf-8").lower()
+    ]
+    assert offenders == [], offenders
+
+
+def test_no_canonical_document_still_denies_the_ci_frontend_build():
+    """Repo-wide, not just the docs the guard scans."""
+    from scripts.check_repo_consistency import CANONICAL_DOCS, ROOT
+
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in CANONICAL_DOCS
+        if _RETIRED_FRONTEND_CI_DENIAL in path.read_text(encoding="utf-8").lower()
+    ]
+    assert offenders == [], offenders
+
+
+def test_the_denial_survives_an_unrelated_pending_elsewhere_in_the_row():
+    """A `PENDING` status cell must not excuse a denial of the CI build.
+
+    This is the false negative that let the drift sit in the tree: the audit
+    table row is a single physical line, so a negation window that runs to the
+    end of the line reads the row's own `PENDING` classification as a denial of
+    the sentence before it.
+    """
+    from scripts.check_repo_consistency import _FRONTEND_BUILD_DENIAL_PATTERNS, _scan_frontend_patterns
+
+    row = (
+        "| Frontend contract | client | app.py | tests | config.json | "
+        f"CI {_RETIRED_FRONTEND_CI_DENIAL} here | "
+        "`REPO_VERIFIED` (client) / `PENDING` (runtime) | keep apart |"
+    )
+    errors: list[str] = []
+    _scan_frontend_patterns(
+        "audit.md",
+        row,
+        _FRONTEND_BUILD_DENIAL_PATTERNS,
+        "denies the CI frontend build",
+        errors,
+        mode="denial",
+    )
+    assert errors, "a PENDING status cell must not excuse denying the CI frontend build"
+
+
+def test_frontend_ci_build_is_classified_repo_verified_and_runtime_stays_pending():
+    """The audit row must keep all four states apart, in both directions."""
+    from scripts.check_repo_consistency import ROOT
+
+    audit = (ROOT / "docs" / "repository-truth-audit.md").read_text(encoding="utf-8")
+    row = next(line for line in audit.splitlines() if line.startswith("| Frontend contract |"))
+    status = [part.strip() for part in row.strip("|").split("|")][6]
+
+    # (B) the CI build is verified; (C)/(D) are not.
+    assert "REPO_VERIFIED" in status
+    assert "PENDING" in status
+    # And the row must not collapse them into a single claim.
+    assert "built, integrated frontend" not in row
+    assert "frontend build is separate" not in row
+
+
+def test_demoting_the_ci_build_to_pending_is_rejected():
+    """Filing the CI build as PENDING is the original drift in the other direction."""
+    from scripts.check_repo_consistency import frontend_audit_classification_errors as classify
+
+    assert (
+        classify(
+            "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
+            "`PENDING` (C end-to-end runtime integration) / `PENDING` (D production deployment)",
+            builds=True,
+            has_e2e_artifact=False,
+        )
+        == []
+    )
+
+    # Demoting the CI build back to PENDING is rejected...
+    demoted = classify("`PENDING` (built frontend)", builds=True, has_e2e_artifact=False)
+    assert demoted, "demoting the CI build to PENDING must be rejected"
+
+    # ...and so is upgrading runtime integration while no artifact is committed.
+    upgraded = classify("`REPO_VERIFIED` (A, C, D)", builds=True, has_e2e_artifact=False)
+    assert upgraded, "runtime integration must stay PENDING without a committed artifact"
+
+
+def test_end_to_end_runtime_upgrade_requires_a_committed_artifact():
+    """Runtime may upgrade with an artifact; deployment never may.
+
+    The second half is the correction for the review finding: an earlier version
+    of this test asserted that *both* claims could upgrade together once an
+    artifact existed, which is exactly the (C)/(D) conflation the guard exists
+    to prevent.
+    """
+    from scripts.check_repo_consistency import frontend_audit_classification_errors as classify
+
+    without_artifact = classify(
+        "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
+        "`REPO_VERIFIED` (C end-to-end runtime integration) / `PENDING` (D production deployment)",
+        builds=True,
+        has_e2e_artifact=False,
+    )
+    assert without_artifact, "runtime integration must stay PENDING without a committed artifact"
+
+    assert (
+        classify(
+            "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
+            "`REPO_VERIFIED` (C end-to-end runtime integration) / `PENDING` (D production deployment)",
+            builds=True,
+            has_e2e_artifact=True,
+        )
+        == []
+    ), "a committed artifact is what would license the runtime claim"
+
+
+def test_the_level_must_be_attached_to_the_claim_it_describes():
+    """A bare `REPO_VERIFIED` elsewhere in the row does not cover the CI build.
+
+    This is the false negative that survived the first version of the guard: the
+    row already said `REPO_VERIFIED` for the client contract, so deleting the
+    build's own level left a row that still "contained REPO_VERIFIED" and read
+    as correct to anything that did not parse the qualifiers.
+    """
+    from scripts.check_repo_consistency import frontend_audit_classification_errors as classify
+
+    client_only = (
+        "`REPO_VERIFIED` (A client + metadata contract) / "
+        "`PENDING` (C end-to-end runtime integration) / `PENDING` (D production deployment)"
+    )
+    assert classify(client_only, builds=True, has_e2e_artifact=False), (
+        "the client contract's REPO_VERIFIED must not stand in for the CI build"
+    )
+
+    # Same for PENDING: an unqualified or unrelated pending claim does not cover
+    # end-to-end runtime integration.
+    vague = "`REPO_VERIFIED` (B CI build gate) / `PENDING` (later)"
+    assert classify(vague, builds=True, has_e2e_artifact=False), (
+        "PENDING must be qualified by the runtime/deployment claim it covers"
+    )
+
+
+def test_the_corrected_row_classifies_cleanly():
+    """The real audit row satisfies both halves of the rule."""
+    from scripts.check_repo_consistency import ROOT
+    from scripts.check_repo_consistency import frontend_audit_classification_errors as classify
+
+    audit = (ROOT / "docs" / "repository-truth-audit.md").read_text(encoding="utf-8")
+    row = next(line for line in audit.splitlines() if line.startswith("| Frontend contract |"))
+    status = [part.strip() for part in row.strip("|").split("|")][6]
+    assert classify(status, builds=True, has_e2e_artifact=False) == []
+
+
+def test_ci_build_is_never_escalated_to_e2e_or_deployment():
+    """The overclaims requirement 5 forbids, in both languages."""
+    from scripts.check_repo_consistency import (
+        _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+        _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
+        _check_frontend_runtime_cooccurrence,
+        _scan_frontend_patterns,
+    )
+
+    def flag(text: str) -> list[str]:
+        errors: list[str] = []
+        for patterns in (_FRONTEND_RUNTIME_ESCALATION_PATTERNS, _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS):
+            _scan_frontend_patterns(
+                "doc.md",
+                text,
+                patterns,
+                "escalates a CI build to end-to-end or deployment evidence",
+                errors,
+                mode="escalation",
+            )
+        _check_frontend_runtime_cooccurrence("doc.md", text, errors)
+        return errors
+
+    overclaims = [
+        "The frontend build is end-to-end validated against the real backend.",
+        "CI build proves end-to-end validation.",
+        "CI frontend build proves production validated deployment.",
+        "The frontend is deployed to production.",
+        "Browser runtime verified against the real backend for the frontend.",
+        "Playwright drove the frontend against the real backend.",
+        "前端构建是端到端验证通过的。",
+        "前端已在生产部署。",
+        "浏览器运行时已针对真实后端验证前端。",
+    ]
+    for line in overclaims:
+        assert flag(line), f"not flagged: {line}"
+
+
+def test_states_that_runtime_and_deployment_are_pending_are_allowed():
+    """The guard must not fire on the corrected, honest documentation."""
+    from scripts.check_repo_consistency import _FRONTEND_RUNTIME_ESCALATION_PATTERNS, _scan_frontend_patterns
+
+    allowed = [
+        "End-to-end runtime integration is PENDING; no browser run against the real backend exists.",
+        "Never say the frontend is validated end-to-end or browser-verified.",
+        "A green `frontend-build` proves the bundle compiles and nothing more.",
+        "The frontend builds in CI; production deployment stays deployment-specific.",
+        "Frontend + real backend end-to-end runtime integration — the CI gate compiles the bundle and nothing more.",
+    ]
+    for line in allowed:
+        errors: list[str] = []
+        _scan_frontend_patterns(
+            "doc.md",
+            line,
+            _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
+            "escalates a CI build to end-to-end or deployment evidence",
+            errors,
+            mode="escalation",
+        )
+        assert errors == [], f"false positive on: {line}"
+
+
+def test_mock_backed_demo_capture_is_not_end_to_end_evidence():
+    """The committed browser run drives the real UI against `mock_api.py`."""
+    from scripts.check_repo_consistency import _FRONTEND_MOCK_AS_E2E_PATTERNS, _scan_frontend_patterns
+
+    errors: list[str] = []
+    _scan_frontend_patterns(
+        "doc.md",
+        "The demo capture is end-to-end evidence for the real backend.",
+        _FRONTEND_MOCK_AS_E2E_PATTERNS,
+        "presents the demo capture as end-to-end evidence",
+        errors,
+        mode="escalation",
+    )
+    assert errors
+
+
+def test_readme_and_evidence_map_agree_with_the_audit_on_the_ci_frontend_build():
+    """README / evidence map / truth audit must not disagree about the CI build."""
+    from scripts.check_repo_consistency import ROOT
+
+    audit = (ROOT / "docs" / "repository-truth-audit.md").read_text(encoding="utf-8")
+    assert "`REPO_VERIFIED` (B CI build gate)" in audit
+
+    # None of the three may imply the frontend is deployed or end-to-end validated.
+    for name in ("README.md", "docs/interview-evidence-map.md", "docs/repository-truth-audit.md"):
+        text = (ROOT / name).read_text(encoding="utf-8").lower()
+        for phrase in (
+            "frontend is deployed",
+            "frontend was deployed",
+            "frontend e2e validated",
+            "frontend is production validated",
+            "frontend is production-validated",
+        ):
+            assert phrase not in text, f"{name} states {phrase!r}"
+
+
+# ── Removed plan path: docs/superpowers/ is history, not a directory ────────
+#
+# PR #33 deleted `docs/superpowers/` from the branch; nothing was relocated, so
+# the plans survive only in Git history. The failure these tests pin is a
+# canonical doc naming that path in the present tense, which tells a reader to
+# open a directory that is not there.
+
+
+def test_the_removed_plan_directory_is_not_in_the_working_tree():
+    """The premise. If the directory returns, the rule below stands down."""
+    from scripts.check_repo_consistency import REMOVED_PLAN_PATH, ROOT
+
+    assert not (ROOT / REMOVED_PLAN_PATH).exists()
+    # ...and it was not relocated into a substitute the reader could open either.
+    assert not (ROOT / "docs/superpowers").exists()
+
+
+def test_no_canonical_document_names_the_removed_plan_path_in_the_present_tense():
+    from scripts.check_repo_consistency import check_removed_plan_path_is_historical
+
+    errors: list[str] = []
+    check_removed_plan_path_is_historical(errors)
+    assert errors == [], errors
+
+
+def test_a_present_tense_reference_to_the_removed_path_is_flagged():
+    from scripts.check_repo_consistency import _REMOVED_PLAN_HISTORICAL_FRAME_RE, REMOVED_PLAN_PATH
+
+    def framed(sentence: str) -> bool:
+        return bool(REMOVED_PLAN_PATH in sentence and _REMOVED_PLAN_HISTORICAL_FRAME_RE.search(sentence))
+
+    drift = [
+        "Historical plans under `docs/superpowers/` are not evidence.",
+        "Superseded implementation plans under `docs/superpowers/` are not current evidence.",
+        "Implementation plans are documented in `docs/superpowers/`.",
+        "The plan of record lives in `docs/superpowers/`.",
+        "Plans in `docs/superpowers/` describe the current architecture.",
+        "计划见 `docs/superpowers/`。",
+    ]
+    for sentence in drift:
+        assert not framed(sentence), f"not flagged as drift: {sentence}"
+
+    allowed = [
+        "Superseded plans, formerly stored under `docs/superpowers/`, are not evidence.",
+        "The former `docs/superpowers/` directory was removed; its files live in Git history.",
+        "Plans under `docs/superpowers/` were deleted and are preserved in Git history.",
+        "原先存储在 `docs/superpowers/` 的计划已被删除，仅保留在 Git 历史中。",
+    ]
+    for sentence in allowed:
+        assert framed(sentence), f"false positive on legitimate history: {sentence}"
+
+
+def test_a_historical_frame_does_not_carry_to_the_next_sentence():
+    """Sentence scope is the point: a paragraph-wide frame waves through drift."""
+    from scripts.check_repo_consistency import _REMOVED_PLAN_HISTORICAL_FRAME_RE, REMOVED_PLAN_PATH
+
+    first = "Plans, formerly stored under `docs/superpowers/`, were removed from the branch."
+    second = "Plans under `docs/superpowers/` are current."
+    assert _REMOVED_PLAN_HISTORICAL_FRAME_RE.search(first)
+    assert REMOVED_PLAN_PATH in second
+    assert not _REMOVED_PLAN_HISTORICAL_FRAME_RE.search(second)
+
+
+def test_a_deleted_plan_file_reference_now_fails_the_path_check():
+    """The dead `docs/superpowers/` exclusion used to mask exactly this.
+
+    `check_documented_paths` used to skip any `docs/superpowers/...` reference, so
+    a document could point at a plan file that had been deleted for months and
+    the guard stayed silent. The exclusion is gone; the reference now fails.
+    """
+    from scripts.check_repo_consistency import ROOT, check_documented_paths
+
+    # `check_documented_paths` reports via `path.relative_to(ROOT)`, so the probe
+    # document has to live in the tree rather than in tmp_path. It is removed in
+    # the finally block, and only this one check is invoked, so no other guard
+    # observes the file.
+    probe = ROOT / "_removed_plan_path_probe.md"
+    assert not probe.exists()
+    probe.write_text("See `docs/superpowers/plans/retrieval.md` for the design.\n", encoding="utf-8")
+    errors: list[str] = []
+    try:
+        check_documented_paths(probe, errors)
+    finally:
+        probe.unlink()
+
+    assert any("does not exist" in error for error in errors), errors
+    assert not probe.exists()
+
+
+# ── Review findings on PR #34 ────────────────────────────────────────────────
+#
+# An automated reviewer raised three findings against this PR. Two were real
+# defects in code the PR itself introduced; the tests below pin both so they
+# cannot regress.
+
+
+def test_a_candidate_cannot_be_inserted_pre_approved():
+    """P1: `add()` accepted a terminal status, bypassing the review gate.
+
+    `export_regression_dataset` publishes every `accepted` row, so inserting one
+    with `review_status="accepted"` reached the dataset without ever calling
+    `set_review_status` — the only place the human gate and its expectation
+    check live. That is exactly the guarantee the pipeline claims to provide.
+    """
+    from offline.regression_candidates import (
+        ACCEPTED,
+        PENDING_REVIEW,
+        REJECTED,
+        RegressionCandidate,
+        RegressionCandidateStore,
+    )
+
+    store = RegressionCandidateStore(":memory:")
+    try:
+        for status in (ACCEPTED, REJECTED):
+            candidate = RegressionCandidate(
+                case_id=f"c-{status}",
+                source_feedback_id="f1",
+                question="q",
+                expected_behaviour="must cite the ingredient list",
+                expected_evidence=("doc-1",),
+                review_status=status,
+            )
+            with pytest.raises(ValueError, match="set_review_status"):
+                store.add(candidate)
+            # And nothing reached the store, so nothing can be exported.
+            assert store.count(status) == 0
+
+        # The legitimate path still works.
+        ok = RegressionCandidate(
+            case_id="c-ok",
+            source_feedback_id="f1",
+            question="q",
+            expected_behaviour="must cite the ingredient list",
+            expected_evidence=("doc-1",),
+            review_status=PENDING_REVIEW,
+        )
+        assert store.add(ok) is True
+    finally:
+        store.close()
+
+
+def test_each_review_transition_records_its_own_timestamp():
+    """P2: `reviewed_at or now` preserved the first decision's time.
+
+    A candidate rejected and later accepted would attribute the approval to the
+    rejection, corrupting the review audit trail.
+    """
+    from offline.regression_candidates import ACCEPTED, REJECTED, RegressionCandidate, RegressionCandidateStore
+
+    store = RegressionCandidateStore(":memory:")
+    try:
+        store.add(
+            RegressionCandidate(
+                case_id="c1",
+                source_feedback_id="f1",
+                question="q",
+                expected_behaviour="must cite the ingredient list",
+                expected_evidence=("doc-1",),
+            )
+        )
+        first = store.set_review_status("c1", REJECTED, note="too vague")
+        rejected_at = first.reviewed_at
+        assert rejected_at
+
+        second = store.set_review_status("c1", ACCEPTED, reviewer="alice")
+        assert second.reviewed_at != rejected_at, "acceptance must not reuse the rejection timestamp"
+        assert second.reviewed_by == "alice"
+        assert second.review_status == ACCEPTED
+    finally:
+        store.close()
+
+
+def test_deployment_overclaim_checks_do_not_relax_with_an_e2e_artifact():
+    """P2: gating deployment checks on the E2E artifact merged claims (C) and (D).
+
+    A browser-against-real-backend run can establish runtime integration. It can
+    never establish a production deployment. So the deployment patterns must
+    stay active even when an artifact exists.
+    """
+    from scripts.check_repo_consistency import (
+        _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+        _FRONTEND_RUNTIME_ESCALATION_PATTERNS,
+        _scan_frontend_patterns,
+    )
+
+    deployment = [
+        "The frontend is deployed to production.",
+        "CI frontend build proves production validated deployment.",
+        "前端已在生产部署。",
+    ]
+    for line in deployment:
+        errors: list[str] = []
+        _scan_frontend_patterns(
+            "doc.md",
+            line,
+            _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS,
+            "presents the frontend as deployed to production",
+            errors,
+            mode="escalation",
+        )
+        assert errors, f"deployment overclaim not flagged: {line}"
+
+    # The runtime patterns are a separate set, so an artifact can relax them
+    # without touching deployment.
+    assert _FRONTEND_RUNTIME_ESCALATION_PATTERNS is not _FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS
+    assert not set(_FRONTEND_RUNTIME_ESCALATION_PATTERNS) & set(_FRONTEND_DEPLOYMENT_ESCALATION_PATTERNS)
+
+
+def test_audit_row_must_keep_deployment_pending_even_with_an_artifact():
+    """The classifier had the same conflation as the scanner."""
+    from scripts.check_repo_consistency import frontend_audit_classification_errors as classify
+
+    full = (
+        "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
+        "`PENDING` (C end-to-end runtime integration) / `PENDING` (D production deployment)"
+    )
+    assert classify(full, builds=True, has_e2e_artifact=False) == []
+
+    # Runtime may upgrade once an artifact exists...
+    artifact_backed = (
+        "`REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / "
+        "`REPO_VERIFIED` (C end-to-end runtime integration) / `PENDING` (D production deployment)"
+    )
+    assert classify(artifact_backed, builds=True, has_e2e_artifact=True) == []
+
+    # ...but deployment may not, even with an artifact.
+    assert classify(
+        "`REPO_VERIFIED` (A client) / `REPO_VERIFIED` (B CI build gate) / "
+        "`REPO_VERIFIED` (C end-to-end runtime integration) / `REPO_VERIFIED` (D production deployment)",
+        builds=True,
+        has_e2e_artifact=True,
+    ), "an E2E artifact must never license a production-deployment claim"

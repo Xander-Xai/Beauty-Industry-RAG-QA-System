@@ -38,7 +38,10 @@ Rules:
    latency/QPS or model-quality evidence.
 3. Deterministic fake embedders, fake OCR providers and mocked Redis clients are
    not real-model or real-infrastructure validation.
-4. Historical plans under `docs/superpowers/` are not evidence.
+4. Superseded plans, formerly stored under `docs/superpowers/` and removed from
+   the current branch, are not evidence. They survive only in Git history, so a
+   reader cannot open them as a current source — and their absence from the tree
+   is itself the record, not a gap.
 5. `HISTORICAL` and `HISTORICAL_PRODUCTION` are not interchangeable.
    `HISTORICAL` is about this repository's own superseded code/config/design;
    `HISTORICAL_PRODUCTION` is about a former employer's real production system.
@@ -52,6 +55,23 @@ Rules:
    the record of it. `HISTORICAL` keeps the lineage visible while withholding the
    claim, and it must never be promoted to `REPO_VERIFIED` or `HISTORICAL_PRODUCTION`
    because the code is still readable in the tree.
+8. **A successful CI build is not runtime evidence.** For the frontend this splits
+   into four claims that are graded separately and must never be merged:
+
+   | Claim | Level | Evidence |
+   |---|---|---|
+   | (A) React client + API metadata contract | `REPO_VERIFIED` | `frontend/src/App.jsx`, `tests/test_auth_metadata.py` |
+   | (B) `npm ci` + `npm run build` in GitHub Actions | `REPO_VERIFIED` | `.github/workflows/ci.yml` job `frontend-build` |
+   | (C) frontend + real backend end-to-end runtime | `PENDING` | no committed browser artifact against the real monolith |
+   | (D) production deployment | `PENDING` | deployment-specific state, outside this repository |
+
+   (B) compiles a bundle. It observes no browser, no real backend and no deployed
+   environment, so a green `frontend-build` may never be stated as "end-to-end
+   validated", "browser-verified against the real backend" or "deployed". The
+   committed Playwright demo capture runs the **real UI** against the synthetic
+   `docs/demo/mock_api.py`, which makes it a demo capture and explicitly not (C).
+   `scripts/check_repo_consistency.py` enforces all four rows and rejects a
+   document that denies (B) or inflates it into (C)/(D).
 
 ## Run outcomes that are not evidence levels
 

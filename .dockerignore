@@ -20,6 +20,10 @@ keys
 *.key
 *.p12
 *.pfx
+# Bearer token for the authenticated /api/metrics scrape. The Dockerfile ends
+# with `COPY . .`, so an unminted-but-present file would be baked into the
+# published image layer.
+deploy/prometheus-token
 
 # Model caches and weights: supplied by config.json model_path at runtime,
 # never vendored into the image

@@ -24,7 +24,7 @@
 | OpenTelemetry export | Exporter implemented and test-covered; disabled by default; runtime closed loop pending | `monitoring/otel_exporter.py` adds an opt-in OTLP path with non-fatal failure semantics and a span-attribute allow-list; with `OTEL_EXPORT_ENABLED=false` no span processor is attached, and the exporter package is an optional dependency in `requirements-otel.txt`. Application -> exporter -> collector -> backend -> queried span is `PENDING` |
 | In-process alert engine | Legacy; not wired into the canonical request path | `monitoring/otel_tracer.py` contains an older in-process `AlertingManager` that no module under `app.py`, `api/` or `core/` constructs. It is not the Prometheus rule set and must not be described as the alert contract; the unconsumed `config.json` -> `alerting.rules` block that fed it was removed |
 
-All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Historical implementation plans under `docs/superpowers/` are not current implementation evidence.
+All performance figures below are **design targets or model estimates**, not verified production measurements, unless linked to a reproducible benchmark artifact. Superseded implementation plans, formerly stored under `docs/superpowers/`, were removed from this branch and are preserved only in Git history; they are not current implementation evidence.
 
 化妆品企业级多模态 RAG 智能问答系统（双卡版）
 

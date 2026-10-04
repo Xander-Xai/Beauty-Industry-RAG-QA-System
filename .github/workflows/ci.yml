@@ -33,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f .dockerignore
-          for pattern in .git .env models blip-image-captioning-large frontend/node_modules logs data; do
+          for pattern in .git .env models blip-image-captioning-large frontend/node_modules logs data deploy/prometheus-token; do
             grep -qxF "$pattern" .dockerignore || grep -qxF "$pattern/**" .dockerignore || {
               echo "::error file=.dockerignore::missing required exclude: $pattern"
               exit 1

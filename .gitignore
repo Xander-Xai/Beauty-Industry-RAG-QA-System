@@ -51,6 +51,10 @@ Thumbs.db
 .env
 *.env
 config_local.json
+# Bearer token for the authenticated /api/metrics scrape. deploy/prometheus.yml
+# tells operators to mint it into this path and keep it out of version control;
+# without an ignore rule `git add -A` would commit a live credential.
+deploy/prometheus-token
 
 # Logs
 *.log
