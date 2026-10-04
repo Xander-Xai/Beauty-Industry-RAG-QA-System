@@ -3561,6 +3561,12 @@ def test_no_numeric_token_shape_is_certified_as_the_wrong_count():
     tokens |= {"".join(triple) for triple in itertools.product("0123456789", ",.", ",.")}
     tokens |= {"".join(pair) for pair in itertools.product(numerals, repeat=2)}
 
+    # Multi-word numerals, which are where a match can start mid-phrase: the
+    # engine reaches the final word and reads it as the whole count.
+    words = ("one", "five", "twenty", "twenty-one", "hundred", "thousand", "and")
+    tokens |= {f"{a} {b}" for a, b in itertools.product(words, repeat=2)}
+    tokens |= {f"{a} and {b}" for a in words for b in words}
+
     # A silent pass means the guard read the token as five. That is only correct if
     # the token really does denote five, so the invariant is: if a claim passes
     # and the token is parseable at all, the parsed value must be exactly five.
@@ -3574,16 +3580,21 @@ def test_no_numeric_token_shape_is_certified_as_the_wrong_count():
         # does not read `一十 SLO objectives` as English, and an unchecked claim
         # is the safe outcome. Mixing them here would be asserting coverage the
         # guard never claimed.
-        forms = (
-            [f"{token} 个 SLO 目标", f"SLO 目标（{token} 个）"]
-            if not token.isascii()
-            else [
+        if not token.isascii():
+            forms = [f"{token} 个 SLO 目标", f"SLO 目标（{token} 个）"]
+        elif " " in token:
+            # Multi-word tokens are English numerals; pairing them with the
+            # Chinese claim forms would only assert coverage the guard never
+            # claimed, since that branch matches CJK and would leave them
+            # unchecked.
+            forms = [f"{token} SLO objectives", f"There are {token} SLO objectives."]
+        else:
+            forms = [
                 f"{token} SLO objectives",
                 f"There are {token} SLO objectives.",
                 f"{token} 个 SLO 目标",
                 f"SLO 目标（{token} 个）",
             ]
-        )
         for claim in forms:
             errors = slo_count_errors("README.md", claim, expected=5)
             if not errors:
@@ -3594,3 +3605,67 @@ def test_no_numeric_token_shape_is_certified_as_the_wrong_count():
 
     assert false_passes == [], false_passes[:20]
     assert wrongly_rejected == [], wrongly_rejected[:20]
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "There are one hundred and five SLO objectives.",
+        "one hundred and five SLO objectives",
+        "five hundred and five SLO objectives",
+        "one thousand and twenty SLO objectives",
+    ],
+)
+def test_a_match_may_not_start_inside_a_longer_numeral(claim):
+    """The regression: the lookbehind permits whitespace, so the engine reached
+    the final `five` of `one hundred and five` and read it as a statement of
+    five — which passes against a five-objective runbook.
+
+    `re` cannot express "not preceded by an arbitrarily long numeral phrase", so
+    the preceding context is walked in Python. A claim that continues a larger
+    numeral is unverifiable rather than silently wrong.
+    """
+    from scripts.check_repo_consistency import slo_count_errors
+
+    errors = slo_count_errors("README.md", claim, expected=5)
+    assert len(errors) == 1, (claim, errors)
+    assert "continues a longer numeral" in errors[0], (claim, errors)
+
+
+@pytest.mark.parametrize(
+    ("claim", "stated"),
+    [
+        ("Five SLO objectives", 5),
+        ("There are five SLO objectives.", 5),
+        ("five SLO objectives", 5),
+        ("twenty-one SLO objectives", 21),
+        ("There are twenty-one SLO objectives.", 21),
+        ("Five hundred SLO objectives", 500),
+        ("1,005 SLO objectives", 1005),
+        ("There are five SLO objectives and more", 5),
+        # A conjunction with no numeral behind it introduces a count.
+        ("and five SLO objectives", 5),
+    ],
+)
+def test_the_continuation_check_does_not_swallow_ordinary_claims(claim, stated):
+    """The guard has to tell "five" in "one hundred and five" from "five" in
+    "There are five". A check that flagged both would be useless."""
+    from scripts.check_repo_consistency import slo_count_errors
+
+    assert slo_count_errors("README.md", claim, expected=stated) == []
+
+
+def test_a_conjunction_after_a_numeral_continues_it_but_on_its_own_does_not():
+    """The distinction the check turns on, named so the intent is legible."""
+    from scripts.check_repo_consistency import _continues_a_larger_numeral
+
+    def _at(text: str, word: str) -> int:
+        """Start offset of `word` within `text`."""
+        return text.index(word)
+
+    assert _continues_a_larger_numeral("one hundred and five", _at("one hundred and five", "five"))
+    assert _continues_a_larger_numeral("twenty and five", _at("twenty and five", "five"))
+    assert not _continues_a_larger_numeral("and five", _at("and five", "five"))
+    assert not _continues_a_larger_numeral("There are five", _at("There are five", "five"))
+    assert not _continues_a_larger_numeral("five", 0)
+    assert not _continues_a_larger_numeral("SLO objectives are five", _at("SLO objectives are five", "five"))

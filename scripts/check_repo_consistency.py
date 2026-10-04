@@ -3239,6 +3239,37 @@ def _parse_stated_count(token: str) -> int | None:
     return _EN_COUNT_WORDS.get(token)
 
 
+#: Words that can precede a count token as part of a *larger* numeral, rather than
+#: starting one: "one hundred and five" continues into "five", and "twenty one"
+#: is one numeral rather than two. `re` cannot express "not preceded by an
+#: arbitrarily long number phrase" with a lookbehind, so the preceding context is
+#: inspected in Python instead.
+_NUMERAL_CONTINUATION_WORDS = frozenset(_COUNT_WORD_LIST) | {"and"}
+
+
+def _continues_a_larger_numeral(text: str, start: int) -> bool:
+    """Whether the match at ``start`` is the tail of a longer numeral.
+
+    True for "five" in "one hundred and five SLO objectives", which would
+    otherwise be read as a statement of five when the runbook defines five — a
+    false pass, and the reason the regex alone cannot be trusted here.
+    """
+    prefix = text[:start].rstrip(" \t\u3000-")
+    numerals = 0
+    while prefix:
+        head, _separator, last = prefix.rpartition(" ")
+        candidate = last.strip(" \t\u3000-,").lower()
+        if not candidate or candidate not in _NUMERAL_CONTINUATION_WORDS:
+            break
+        # "and" alone introduces a numeral; "and" after a numeral continues one.
+        # Counting only the numeral words is what tells those two apart. The walk
+        # ends by itself: the final token leaves an empty `head`.
+        if candidate != "and":
+            numerals += 1
+        prefix = head.rstrip(" \t\u3000-")
+    return numerals > 0
+
+
 def slo_count_errors(name: str, text: str, expected: int) -> list[str]:
     """Return errors for objective counts that contradict the SLO runbook.
 
@@ -3253,6 +3284,12 @@ def slo_count_errors(name: str, text: str, expected: int) -> list[str]:
     """
     errors: list[str] = []
     for match in _SLO_COUNT_RE.finditer(text):
+        if _continues_a_larger_numeral(text, match.start()):
+            errors.append(
+                f"{name}: cannot verify the SLO objective count in {match.group(0)!r}; "
+                f"it continues a longer numeral, and docs/slo-runbook.md defines {expected}"
+            )
+            continue
         token = match.group("lead") or match.group("trail") or match.group("english") or ""
         stated = _parse_stated_count(token)
         if stated is None:
