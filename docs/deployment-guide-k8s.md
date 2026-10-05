@@ -12,7 +12,7 @@
 
 **本仓库没有 Kubernetes 集群，也没有 `kubectl` 上下文。** 下面每一条命令都是给人看的执行指引，不是本仓库跑过的记录。任何「已在 Kubernetes 生产环境稳定运行」的说法都不成立。
 
-静态检查指`tests/deploy/test_k8s_manifests.py`（26 项，全部离线、无网络、无集群）。它证明的是 YAML 结构与契约，不是运行时行为。
+静态检查指`tests/deploy/test_k8s_manifests.py`（31 项，全部离线、无网络、无集群）。它证明的是 YAML 结构与契约，不是运行时行为。`/api/ready` 的判定逻辑与 HTTP 契约另由 `tests/test_readiness_contract.py` 与 `tests/test_readiness_endpoint.py` 覆盖，同样只到 `REPO_VERIFIED`。
 
 ## 1. 范围：只有一个 workload
 
@@ -27,7 +27,8 @@
 以下三条决定了探针与配置形态，全部对运行中的应用验证过：
 
 ```text
-GET /api/health   -> 200   （公开，无需认证）
+GET /api/health   -> 200   （公开，无需认证；诊断语义，依赖全挂仍返回 200）
+GET /api/ready    -> 200 / 503（公开，无需认证；流量准入语义，依赖不足返回 503）
 GET /api/metrics  -> 401   （需认证）
 ```
 
@@ -39,23 +40,78 @@ GET /api/metrics  -> 401   （需认证）
 
 推论（见 §3）：把 `httpGet /api/health` 当 liveness 探针，**这个探针永远不会失败**。
 
+`GET /api/ready` 是为流量准入新增的独立端点，在依赖不满足最低服务能力时返回 **503**（判定表见 §3.2）。`/api/health` 的契约未因此改变。
+
 ## 3. 探针契约
 
 | 探针 | 形态 | 端点 | 理由 |
 |---|---|---|---|
 | `startupProbe` | `httpGet` | `/api/health` | **API 进程的启动宽限期**（30 × 5s），**不等待依赖** |
 | `livenessProbe` | `tcpSocket` | `:8000` | `/api/health` 恒返回 200，无liveness 信号；依赖抖动不应触发网关重启 |
-| `readinessProbe` | `httpGet` | `/api/health` | **只是存活级别的闸门**，不反映依赖状态 |
+| `readinessProbe` | `httpGet` | `/api/ready` | **唯一的依赖感知探针**：不满足最低服务能力时返回 503 |
 
-**readinessProbe 的诚实边界**：依赖健康由 `status` 字段、`/api/metrics`（需认证）与 Prometheus 告警承担，**不由探针退出码承担**。当前 `readinessProbe` 在 Qdrant 宕机时仍会判定 Pod ready —— 这是 `/api/health` 的语义决定的，不是配置疏漏。
+### 3.1 `/api/health` 与 `/api/ready` 的语义区别
 
-若你需要真正的依赖级就绪判定，正确做法是让应用在依赖不可用时返回非200，或用 `exec` 探针解析 `status` 字段。**两者都超出这份最小契约的范围**，此处仅记录为已知边界。
+这两个端点回答的是**不同的问题**，不能互相替代：
+
+| | `GET /api/health` | `GET /api/ready` |
+|---|---|---|
+| 用途 | **诊断** | **流量准入** |
+| 依赖全挂时 | HTTP **200** + `status: degraded` | HTTP **503** + `status: not_ready` |
+| 回答的问题 | 「我观察到了什么」 | 「现在把请求路由到这个 Pod，它能不能服务」 |
+| 认证 | 不需要 | 不需要（探针无法携带凭据） |
+| 泄露面 | 仅依赖名 + 布尔值 | 仅依赖名 + 布尔值 |
+
+`/api/health` 的契约**未被修改**：依赖降级时它仍然返回 200 + `healthy|degraded`。本次改动是**新增**一个准入端点，而不是把 health 改造成 readiness。
+
+### 3.2 Readiness 判定表
+
+判定不是 `all(dependencies)`。下表每一行都对应代码里真实存在的降级路径：
+
+| 依赖 | 单独故障时的真实降级行为 | 是否阻断 readiness |
+|---|---|---|
+| Redis | `RedisCache` 保留 L1 进程内缓存并停用 L2；登录限流回退到进程内内存计数器 | **否** → `degraded` |
+| Elasticsearch（BM25） | Qdrant 稠密召回仍能返回候选 | **否** → `degraded` |
+| Qdrant（稠密） | BM25 召回仍能返回候选 | **否** → `degraded` |
+| **Qdrant + Elasticsearch 同时不可用** | 召回为空 → Evidence Gate 拒绝 → 每个 query 都返回结构化拒答，**无服务能力** | **是** → `blockers: ["retrieval"]` |
+| MinIO | 仅 `/api/media/{doc_id}` 返回 503；query/chat 不受影响 | **否** → `degraded` |
+| gen_4b | `simple` 与 `rewrite` 两个 tier 在任何部署下都路由到它 | **是** |
+| gen_14b | `complex` tier 在**生产模式**下路由到它，且**没有运行期回退到 4B** | **是**（仅生产模式） |
+
+**检索是 OR 语义**：Qdrant 与 Elasticsearch 任一可用即可服务；两者同时不可用才失去服务能力。
+
+**生成端点按部署自身的路由配置判定**，而不是硬编码生产拓扑：非生产模式下 `resolve_model_endpoint` 会把 `complex` tier 改写为 `simple`，因此只有 `gen_4b` 是必需的；生产模式下 `gen_14b` 也是必需的 —— `LLMClient.generate` 在失败时是 `raise` 而非回退，所以一个连不上 `gen_14b` 的 Pod 确实无法服务它会被路由过去的请求，称之为 ready 是不诚实的。
+
+**为什么不能因为「怕探测模型」就假装生成不关键**：一个「检索健康但模型完全不可用」的 Pod 会通过 `all(qdrant, elasticsearch)` 这类判定，然后接收请求并全部失败。探针使用 OpenAI 兼容的 `GET /v1/models`，不发送任何真实生成请求。
+
+响应示例：
+
+```json
+// HTTP 200
+{"status":"ready","dependencies":{"redis":false,"qdrant":true,"elasticsearch":true,"minio":false,"gen_4b":true,"gen_14b":true},"degraded":["redis","minio"],"blockers":[]}
+
+// HTTP 503
+{"status":"not_ready","dependencies":{"redis":true,"qdrant":false,"elasticsearch":false,"minio":true,"gen_4b":true,"gen_14b":true},"degraded":[],"blockers":["retrieval"]}
+```
+
+**startupProbe 为什么仍留在 `/api/health`**：它回答的是「进程是否启动完成」。若改成 `/api/ready`，启动就会与依赖可用性耦合 —— 发布期间一次依赖抖动可能让探针持续失败直到 `failureThreshold`，进而触发重启循环，正是 liveness 设计要避免的结果。
 
 **startupProbe 的诚实边界**：由于 `/api/health` 在依赖不可用时同样返回 200，这个 `30 × 5s` 宽限**只覆盖 API 进程自身的启动**，**不会**把流量挡到 Elasticsearch / Qdrant 冷启动完成之后。它不是依赖就绪闸门。
 
 `/api/metrics` **不作为探针端点**：无凭据时返回 401，探针会持续失败。
 
-`test_liveness_probe_does_not_depend_on_backing_services` 与 `test_liveness_probe_would_reject_an_http_get_on_health` 把上述理由钉在测试里：日后有人把 liveness 改回 `httpGet`，测试会带原因失败。
+以下测试把上述理由钉在测试里：日后有人把 liveness 改回 `httpGet`，或把 readiness 改回 `/api/health`，测试会带原因失败。
+
+| 测试 | 钉住的契约 |
+|---|---|
+| `test_liveness_probe_does_not_depend_on_backing_services` | liveness 保持 `tcpSocket`，依赖抖动不触发重启 |
+| `test_liveness_probe_ignores_dependency_outage_while_readiness_does_not` | 依赖全挂时 `/api/ready` 返回 503，而 liveness 不受影响 |
+| `test_liveness_probe_would_reject_an_http_get_on_health` | 若 `/api/health` 不再恒返回 200，tcpSocket 的理由必须重新评估 |
+| `test_readiness_probe_targets_the_readiness_endpoint` | readiness 不得退回 `/api/health`（那样它永远无法失败） |
+| `test_startup_probe_remains_process_liveness_only` | startup 不与依赖可用性耦合 |
+| `test_probe_endpoints_are_registered_and_unauthenticated` | 探针指向的端点必须真实存在且不需要用户 JWT |
+
+端点语义由 `tests/test_readiness_contract.py`（判定逻辑）与 `tests/test_readiness_endpoint.py`（HTTP 契约）覆盖：ready / not-ready、Qdrant 与 ES 的 OR 语义、Redis 与 MinIO 降级不阻断、生产与非生产下不同的生成端点要求、探测异常归一化为结构化响应而非 500、以及响应体不含任何 URL / 密码 / token。
 
 ## 4. 部署步骤（需要你自己的集群）
 

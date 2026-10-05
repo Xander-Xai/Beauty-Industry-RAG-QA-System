@@ -6,15 +6,36 @@
 # services, matching the docker-compose topology.
 #
 # Probe design note (verified against the running application):
-#   GET /api/health returns HTTP 200 even when Redis, Qdrant and Elasticsearch
-#   are ALL unreachable, with body {"status": "degraded", ...}. A readiness
-#   httpGet probe on /api/health therefore cannot fail on dependency loss.
-#   Consequences, both intentional:
+#   Two endpoints, two different questions. They are not interchangeable.
+#
+#   GET /api/health - DIAGNOSTIC. Returns HTTP 200 even when Redis, Qdrant and
+#     Elasticsearch are ALL unreachable, with body
+#     {"status": "degraded", ...}. It reports what it observed; it does not
+#     decide whether this Pod can take traffic.
+#
+#   GET /api/ready - TRAFFIC ADMISSION. Fails closed with HTTP 503 when the
+#     minimum serving contract is unmet, so Kubernetes removes the Pod from
+#     Endpoints. Ready requires:
+#       (a) at least one retrieval path: Qdrant OR Elasticsearch (either alone
+#           still returns candidates);
+#       (b) every generation endpoint this deployment's routing selects
+#           reachable - gen_4b always, plus gen_14b in production, where the
+#           complex tier routes to it and there is no runtime fallback to 4B.
+#     Redis and MinIO failures are reported as degraded and do NOT fail
+#     readiness: RedisCache keeps an L1 process-local cache and login rate
+#     limiting falls back in-memory; MinIO only serves /api/media/{doc_id}.
+#
+#   Consequence for the probes:
 #     - livenessProbe uses tcpSocket so a dependency outage can never trigger a
 #       restart loop of the gateway itself;
-#     - readinessProbe uses httpGet /api/health as a liveness-level gate only.
-#       Dependency health is surfaced through the `status` field, /api/metrics
-#       and the Prometheus alert rules - not through the probe exit code.
+#     - readinessProbe targets /api/ready and is therefore dependency-aware;
+#     - startupProbe stays on /api/health (process-started question), so a
+#       dependency outage during a rollout cannot delay startup into a restart.
+#
+#   /api/ready requires no user JWT (a probe cannot carry credentials) and its
+#   payload contains only dependency names and booleans - no hosts, URLs, DSNs
+#   or secrets.
+#
 #   GET /api/metrics requires authentication (401 without a token), so it is
 #   NOT used as a probe endpoint.
 #
@@ -88,21 +109,38 @@ spec:
             # Secret values are referenced, never inlined.
             - secretRef:
                 name: rag-api-secrets
+          # startupProbe stays on /api/health deliberately. It answers a
+          # different question from readiness: "has the process finished
+          # starting", which /api/health answers as soon as the app serves HTTP.
+          # Switching it to /api/ready would couple startup to dependency
+          # availability, so a dependency outage during a rollout could delay
+          # startup past failureThreshold and trigger a restart loop - exactly
+          # the failure mode liveness is designed to avoid.
           startupProbe:
             httpGet:
               path: /api/health
               port: http
             periodSeconds: 5
             failureThreshold: 30
+          # livenessProbe remains tcpSocket and dependency-independent. GET
+          # /api/health returns 200 even when every dependency is unreachable,
+          # so an httpGet liveness probe here could never fail and would be
+          # actively misleading about whether this process is alive.
           livenessProbe:
             tcpSocket:
               port: http
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
+          # readinessProbe is the only dependency-aware probe. /api/ready fails
+          # closed (HTTP 503) when the minimum serving contract fails:
+          # no retrieval path (Qdrant AND Elasticsearch both unavailable) or a
+          # generation endpoint this deployment routes to being unreachable.
+          # Redis and MinIO outages do NOT fail readiness - their code paths
+          # degrade, so removing a serving Pod would be wrong.
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/ready
               port: http
             periodSeconds: 10
             timeoutSeconds: 5
