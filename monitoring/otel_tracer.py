@@ -379,6 +379,47 @@ class MetricsCollector:
         """PRD §12: Redis 降级模式"""
         self.increment("redis.degraded_events")
 
+    def record_vllm_generation_attempt(self, *, succeeded: bool, failure_class: str | None) -> None:
+        """Record exactly one vLLM generation HTTP attempt.
+
+        Emitted for every attempt on the canonical generation path, including the
+        first one, so ``rag_vllm_generation_attempts`` equals the attempt count and
+        ``rag_vllm_generation_attempt_success`` + ``..._attempt_failed`` equals it
+        as well. ``failure_class`` is the token from
+        :class:`router.vllm_resilience.FailureClass`; it is only read when the
+        attempt failed, so a success never produces a failure-class series.
+
+        The classification is stored as a name suffix rather than a label because
+        ``to_prometheus_text`` has no label plumbing: a runtime-assembled name is
+        the one shape this exporter can actually emit.
+        """
+        self.increment("vllm.generation.attempts")
+        if succeeded:
+            self.increment("vllm.generation.attempt.success")
+            return
+        self.increment("vllm.generation.attempt.failed")
+        if failure_class:
+            self.increment(f"vllm.generation.attempt.failure_class.{failure_class}")
+
+    def record_vllm_generation_request(self, *, outcome: str, retries: int, elapsed_ms: float) -> None:
+        """Record the terminal outcome of exactly one ``route_chat`` call.
+
+        ``outcome`` is one of ``success`` / ``failed`` / ``budget_exhausted``, so
+        the three outcome series always sum to ``rag_vllm_generation_requests``.
+        ``retries`` is added rather than incremented once per retry, which keeps
+        the retry counter equal to the number of extra attempts actually issued.
+
+        Recording the request outcome even for an unresolvable endpoint key is
+        deliberate: it failed before any HTTP attempt existed, and omitting it
+        would make the request counter disagree with the outcome series.
+        """
+        self.increment("vllm.generation.requests")
+        self.increment(f"vllm.generation.outcome.{outcome}")
+        if retries > 0:
+            self.increment("vllm.generation.retries", retries)
+        if elapsed_ms >= 0:
+            self.observe_histogram("vllm.generation.duration", elapsed_ms)
+
     def get_stats(self) -> dict:
         """获取统计摘要"""
 

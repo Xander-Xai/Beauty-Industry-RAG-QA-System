@@ -6,6 +6,44 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Added
 
+- Bounded vLLM generation resilience contract for the canonical generation path
+  (`route_chat`), with the policy isolated in `router/vllm_resilience.py`:
+  - Closed failure taxonomy (`timeout`, `connection`, `http_transient`,
+    `http_permanent`, `malformed_response`, `configuration`, `budget_exhausted`,
+    `unknown`). Retry is a property of the class, and an unrecognised failure is
+    never retried.
+  - Hard attempt cap: `VLLM_MAX_ATTEMPTS` is clamped to `[1, 3]` in code, so no
+    configuration value can turn the path into a retry storm. Default is 2 total
+    attempts (1 retry); the structural ceiling is 3 total attempts (at most 2
+    retries).
+  - Total request deadline (`VLLM_GENERATION_DEADLINE_SECONDS`) that spans every
+    attempt *and* every backoff sleep; each attempt's timeout is additionally
+    clamped to the budget still remaining, so raising the per-attempt timeout
+    cannot extend the request past the deadline.
+  - Only HTTP 408/429/502/503/504 are transient. Every ordinary 4xx is permanent
+    and is never retried. 500 is also excluded, on an evidence basis rather than a
+    causal claim: HTTP 500 semantics are heterogeneous and this repository has no
+    endpoint-specific evidence that replaying a 500 is safe, so the transient set
+    stays an explicit allow-list and unproven statuses fail closed.
+  - Deterministic, injectable backoff (no random jitter) plus `Retry-After`
+    handling that refuses to retry sooner than the server asked.
+  - Retries reuse the caller-resolved endpoint, so a failing 14B request can
+    never be silently answered by 4B. Model-routing semantics are unchanged.
+  - Failures surface as a sanitised `VLLMGenerationError` carrying only the
+    failure class, the endpoint config key, the HTTP status and the attempt
+    count — no endpoint URL, credential, token or response body, and the raw
+    transport exception is kept out of the exception chain.
+  - Counters published onto the existing canonical collector
+    (`monitoring/otel_tracer.py::MetricsCollector`, already served by
+    `/api/metrics`): `rag_vllm_generation_attempts`, `..._attempt_success` /
+    `..._attempt_failed`, `..._attempt_failure_class_*`, `..._requests`,
+    `..._outcome_*`, `..._retries` and `..._duration_seconds`. Exactly-once
+    invariants (`attempts == success + failed`, `requests == sum(outcomes)`) are
+    asserted in tests. No new registry, exporter or endpoint was introduced.
+  - Evidence level is `REPO_VERIFIED` for the contract and its deterministic
+    tests only; no real vLLM server, GPU or benchmark was involved, and real
+    runtime behaviour stays `PENDING`. `route_completion` (the rewrite path) is
+    explicitly outside this contract.
 - Full offline ingestion pipeline under `offline/` (reintroduced after the 2.3.0
   capability correction below):
   - Multi-format `DocumentProcessor` for TXT/PDF/DOCX/XLSX with scanned-page OCR routing.
