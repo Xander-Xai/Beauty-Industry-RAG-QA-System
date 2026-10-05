@@ -94,8 +94,12 @@ rag_cache_total      counter   参与缓存判定的请求总数
 
 三点值得单独记住：
 
-- **500 不在 transient 列表里，这是决定不是遗漏。** vLLM 的 500 通常是确定性拒绝（adapter 不可加载、
-  引擎拒绝的请求、无法卸载的 OOM），重试它恰好在端点已经不健康时放大负载。
+- **500 不在 transient 列表里，这是决定不是遗漏。** 理由不是「vLLM 的 500 通常是确定性拒绝」这类
+  本仓库没有验证过的因果判断：HTTP 500 的语义本身是异质的（同一个状态既可能是单个请求被拒，也可能
+  是服务级故障），而本仓库没有针对 vLLM 端点的实测证据能证明重放 500 是安全的。所以 transient 是
+  一份 **allow-list**——只有 408 / 429 / 502 / 503 / 504 会重试，500 与其它未被证明的状态一律
+  fail closed，不重试。这与「无法识别的失败不重试」是同一条规则：重试要靠证据挣到，不靠推断。
+  只有在拿到真实运行时证据之后才允许扩大这个列表。
 - **无法识别的失败一律不重试。** 重试是失败必须"挣到"的，不是默认行为。
 - **`budget_exhausted` 与 `http_transient` 是不同结论。** 前者是本进程预算用尽，后者是对端返回了
   可重试状态。排障时不要把二者混为一谈：`http_transient` 看端点，`budget_exhausted` 看
@@ -104,15 +108,18 @@ rag_cache_total      counter   参与缓存判定的请求总数
 ### 重试策略（有界 / 有 deadline）
 
 ```text
-VLLM_MAX_ATTEMPTS=2                  # 总 attempt 数（含首次），硬上限 3
+VLLM_MAX_ATTEMPTS=2                  # 总 attempt 数（含首次）：默认 2，代码硬上限 3
 VLLM_TIMEOUT_SECONDS=10.0            # 单次 attempt 超时
 VLLM_GENERATION_DEADLINE_SECONDS=15.0 # 整个请求的总预算（含所有退避 sleep）
 VLLM_RETRY_BASE_DELAY_SECONDS=0.2    # 确定性指数退避起点
 VLLM_RETRY_MAX_DELAY_SECONDS=2.0     # 退避上限
 ```
 
-- **次数上限是结构性的。** `VLLM_MAX_ATTEMPTS` 会被 clamp 到 `[1, 3]`，即使误配成 `500` 也只生效 3。
-  这条上限不是约定，是代码里的 clamp，所以配置无法把它变成 retry storm。
+- **次数上限是结构性的，不变式分两层。** 默认 `VLLM_MAX_ATTEMPTS=2`，即**最多 2 个总 attempt**
+  （首次 + 1 次 retry）；代码里的硬上限是 `HARD_MAX_ATTEMPTS=3`，即**任何配置下最多 3 个总 attempt**
+  （首次 + 最多 2 次 retry）。`VLLM_MAX_ATTEMPTS` 会被 clamp 到 `[1, 3]`，即使误配成 `500` 也只生效 3。
+  「最多 2 个 attempt」只是默认取值下的行为，**不是**契约的不变式；把它当成不变式会低估最坏情况的
+  负载。这条上限不是约定，是代码里的 clamp，所以配置无法把它变成 retry storm。
 - **deadline 约束的是工作量，不只是计数。** 每次 attempt 的 timeout 会被进一步 clamp 到"剩余预算"，
   因此调大 `VLLM_TIMEOUT_SECONDS` 不会让请求突破 deadline。退避 sleep 同样必须在预算内；装不下就终止
   而不是压缩退避。
@@ -164,8 +171,10 @@ endpoint URL、credential、token、响应体都不会进入消息。endpoint ke
 查这两个比率（PromQL，不是 exporter 直接吐出的 series）：
 
 ```promql
-# 重试放大系数：额外 attempt 占全部 attempt 的比例。持续接近 1 说明端点长期在抖，
-# 而这份契约最多只会把它放大到 2 倍，不会更糟。
+# 重试比例：额外 attempt 占全部 attempt 的比例，持续偏高说明端点长期在抖。
+# 上限由代码结构而不是配置决定：默认 VLLM_MAX_ATTEMPTS=2 时单请求最多 1 次额外
+# attempt（比值 ≤ 0.5）；即使配到硬上限 3，也最多 2 次额外 attempt（比值 ≤ 0.67）。
+# 因此不存在「任何配置下都不会更糟」这种保证，只有「配置无法突破硬上限 3」。
 rate(rag_vllm_generation_retries[5m]) / clamp_min(rate(rag_vllm_generation_attempts[5m]), 0.000001)
 # 预算耗尽占比
 rate(rag_vllm_generation_outcome_budget_exhausted[5m]) / clamp_min(rate(rag_vllm_generation_requests[5m]), 0.000001)

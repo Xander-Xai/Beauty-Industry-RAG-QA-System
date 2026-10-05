@@ -13,16 +13,19 @@ What the contract guarantees, and why each bound exists:
   property of the class, so "should this be retried" is answered in one place
   instead of at each call site.
 * **A hard attempt cap.** ``max_attempts`` is clamped to
-  :data:`HARD_MAX_ATTEMPTS`. An operator cannot turn this into a retry storm by
-  setting an environment variable, because the clamp is structural rather than
-  a convention.
+  :data:`HARD_MAX_ATTEMPTS` (3 total attempts, i.e. at most 2 extra retries);
+  the shipped default is :data:`DEFAULT_MAX_ATTEMPTS` (2 total attempts). An
+  operator cannot turn this into a retry storm by setting an environment
+  variable, because the clamp is structural rather than a convention.
 * **A total request deadline.** The deadline covers *all* attempts plus every
   backoff sleep, and each attempt's timeout is additionally clamped to the
   budget still remaining. A deadline that only counts attempts would let a
   single slow retry extend the request indefinitely.
-* **Ordinary 4xx never retried.** Only an explicit status allow-list is
-  transient. Every other non-2xx status — including every ordinary 4xx — is
-  permanent, because retrying a deterministic rejection is pure added load.
+* **Only an explicit allow-list is retried.** 408/429/502/503/504 are transient.
+  Every other non-2xx status — every ordinary 4xx and 500 included — is permanent,
+  because this repository holds no endpoint-specific evidence that replaying them
+  is safe. Not being named is a fail-closed default, not a claim about what the
+  peer would have done.
 * **Fail closed on the unrecognised.** An exception this module does not
   recognise is classified :data:`FailureClass.UNKNOWN` and is *not* retried.
   Retry is something a failure has to earn.
@@ -100,21 +103,28 @@ RETRYABLE_FAILURE_CLASSES = frozenset(
 
 #: HTTP statuses whose semantics are explicitly "the request may be repeated".
 #:
-#: 408 Request Timeout and 429 Too Many Requests are transient by definition.
-#: 502/503/504 are the gateway/unavailable/timeout statuses vLLM emits while a
-#: server is starting, reloading, or shedding load. This mirrors the transient
-#: set already used by ``common/http_client.py`` so the two service-to-service
-#: paths cannot drift apart silently.
+#: This is an allow-list, not a denial-list: a status is retried only because it is
+#: named here. 408 Request Timeout and 429 Too Many Requests are transient by
+#: definition. 502/503/504 are the gateway/unavailable/timeout statuses a vLLM
+#: server emits while starting, reloading, or shedding load. This mirrors the
+#: transient set already used by ``common/http_client.py`` so the two
+#: service-to-service paths cannot drift apart silently.
 #:
-#: 500 is deliberately **absent**. A vLLM 500 is normally a deterministic
-#: rejection (an unloadable adapter, a request the engine refuses, an OOM it
-#: could not shed) rather than a blip, and retrying it multiplies offered load
-#: exactly when the endpoint is already unhealthy. Absence is a decision, not an
-#: oversight.
+#: 500 is deliberately **absent**, and the reason is an absence of evidence rather
+#: than a claim about the peer. HTTP 500 semantics are heterogeneous — the same
+#: status can carry a single rejected request or a server-wide fault — and this
+#: repository contains no endpoint-specific observation showing that replaying a
+#: 500 is safe against a vLLM endpoint. So 500 stays fail-closed, under the same
+#: rule that governs :data:`FailureClass.UNKNOWN`: unknown or unproven semantics
+#: are not retried. Widening this allow-list requires real runtime evidence, not
+#: a stronger guess. Absence is a decision, not an oversight.
 TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 502, 503, 504})
 
 #: Upper bound on total attempts (first try included) that no environment
-#: variable may raise. This is the structural anti-storm bound.
+#: variable may raise. This is the structural anti-storm bound. The invariant is
+#: two-part: the default is :data:`DEFAULT_MAX_ATTEMPTS` (2) total attempts, i.e.
+#: at most 1 extra retry, and no configuration can exceed :data:`HARD_MAX_ATTEMPTS`
+#: (3) total attempts, i.e. at most 2 extra retries.
 HARD_MAX_ATTEMPTS = 3
 
 DEFAULT_MAX_ATTEMPTS = 2

@@ -13,13 +13,18 @@ Changes present on `main` after the 2.3.0 release entry:
     `unknown`). Retry is a property of the class, and an unrecognised failure is
     never retried.
   - Hard attempt cap: `VLLM_MAX_ATTEMPTS` is clamped to `[1, 3]` in code, so no
-    configuration value can turn the path into a retry storm.
+    configuration value can turn the path into a retry storm. Default is 2 total
+    attempts (1 retry); the structural ceiling is 3 total attempts (at most 2
+    retries).
   - Total request deadline (`VLLM_GENERATION_DEADLINE_SECONDS`) that spans every
     attempt *and* every backoff sleep; each attempt's timeout is additionally
     clamped to the budget still remaining, so raising the per-attempt timeout
     cannot extend the request past the deadline.
   - Only HTTP 408/429/502/503/504 are transient. Every ordinary 4xx is permanent
-    and is never retried; 500 is deliberately excluded.
+    and is never retried. 500 is also excluded, on an evidence basis rather than a
+    causal claim: HTTP 500 semantics are heterogeneous and this repository has no
+    endpoint-specific evidence that replaying a 500 is safe, so the transient set
+    stays an explicit allow-list and unproven statuses fail closed.
   - Deterministic, injectable backoff (no random jitter) plus `Retry-After`
     handling that refuses to retry sooner than the server asked.
   - Retries reuse the caller-resolved endpoint, so a failing 14B request can

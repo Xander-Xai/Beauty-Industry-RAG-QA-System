@@ -137,10 +137,12 @@ class StatelessRouter:
         """
         调用 vLLM OpenAI-compatible Chat Completions API
 
-        有界重试契约（见 :mod:`router.vllm_resilience`）：transient 失败最多重试到
-        ``retry_policy.max_attempts`` 次，且总耗时（含退避 sleep）不超过
-        ``retry_policy.total_deadline_seconds``。ordinary 4xx 与 malformed 响应
-        不重试。端点在整次调用内固定，重试不会切换模型。
+        有界重试契约（见 :mod:`router.vllm_resilience`）：单次调用的总 attempt 数（含首次）
+        最多为 ``retry_policy.max_attempts``——默认 2（1 次额外 retry），代码硬上限
+        ``HARD_MAX_ATTEMPTS`` 为 3（最多 2 次额外 retry），任何配置都不能超过 3。总耗时
+        （含退避 sleep）不超过 ``retry_policy.total_deadline_seconds``。只有 allow-list 里的
+        408/429/502/503/504 会重试；ordinary 4xx、500 与 malformed 响应不重试。端点在整次
+        调用内固定，重试不会切换模型。
 
         Args:
             endpoint_key: "gen_4b" / "gen_14b"（Rewrite 和简单 Gen 共用 gen_4b 端点）
