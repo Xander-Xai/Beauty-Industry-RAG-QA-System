@@ -32,6 +32,14 @@
   [Reconciliation lineage invariants](#reconciliation-lineage-invariants).
 - Runtime validation: see [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md)
   (local real Redis + multi-process, real nginx, authenticated Elasticsearch, real Prometheus scrape).
+- Runtime-exposed metadata audit (tracked in [#45](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/45)):
+  the FastAPI `description`, which ships to integrators through Swagger UI and the generated
+  OpenAPI `info` block, claimed a "基于双 GPU" topology. Runtime-facing metadata is read as a
+  claim about this repository, so it may only state `REPO_VERIFIED` capability; the 4B/14B vLLM
+  topology stays `PENDING` and RTX A5000 ×2 stays `HISTORICAL_PRODUCTION`. The claim was removed,
+  `info.title` / `info.version` still come from `config.json`, and
+  `tests/test_runtime_api_metadata.py` fails if the topology claim returns. No architecture,
+  model routing, config or historical production record changed.
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
 a commit cannot embed its own SHA without making the value stale).
 Post-reconciliation verification date: 2026-10-03.
