@@ -115,14 +115,12 @@ class ParallelRecallManager:
         """
         from auth.bitmask_rbac import build_qdrant_filter, build_qdrant_image_filter
 
-        default_paths = config["retrieval"]["parallel_paths"]
+        # None means "use the canonical full topology".  A caller-supplied
+        # mapping is instead the topology for *this request*: omitted paths are
+        # intentionally disabled (the online pipeline uses this to route simple
+        # queries through BGE + BM25 only).
         if top_k_per_path is None:
-            top_k_per_path = default_paths
-        else:
-            # Partial caller overrides are supported: preserve the canonical
-            # configuration for omitted paths instead of mixing optional
-            # `.get(...)` guards with required `[...] ` indexing later.
-            top_k_per_path = {**default_paths, **top_k_per_path}
+            top_k_per_path = config["retrieval"]["parallel_paths"]
 
         active_epoch = config.get("knowledge_version_epoch", "default")
         qdrant_filter = build_qdrant_filter(user_role_mask, user_dept_mask, active_epoch)
@@ -141,38 +139,42 @@ class ParallelRecallManager:
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # ① Dense 语义路 (BGE → Qdrant)
-            if top_k_per_path.get("dense_bge", {}).get("enabled", True):
+            dense_cfg = top_k_per_path.get("dense_bge")
+            if dense_cfg is not None and dense_cfg.get("enabled", True):
                 futures[
                     executor.submit(
-                        self._recall_dense, query_embedding, qdrant_filter, top_k_per_path["dense_bge"].get("top_k", 50)
+                        self._recall_dense, query_embedding, qdrant_filter, dense_cfg.get("top_k", 50)
                     )
                 ] = "dense_bge"
 
             # ② BM25 关键词精确路 (ES)
-            if top_k_per_path.get("bm25_es", {}).get("enabled", True):
+            bm25_cfg = top_k_per_path.get("bm25_es")
+            if bm25_cfg is not None and bm25_cfg.get("enabled", True):
                 futures[
                     executor.submit(
                         self._recall_bm25,
                         query,
                         user_role_mask,
                         user_dept_mask,
-                        top_k_per_path["bm25_es"].get("top_k", 50),
+                        bm25_cfg.get("top_k", 50),
                     )
                 ] = "bm25_es"
 
             # ③ CLIP 视觉语义路
-            if use_clip and top_k_per_path.get("clip_visual", {}).get("enabled", True):
+            clip_cfg = top_k_per_path.get("clip_visual")
+            if use_clip and clip_cfg is not None and clip_cfg.get("enabled", True):
                 futures[executor.submit(self._recall_clip, query, image_qdrant_filter, clip_top_k)] = "clip_visual"
 
             # ④ 改写泛化路（Query Rewrite 变体）
-            if top_k_per_path.get("rewrite_variants", {}).get("enabled", True):
+            rewrite_cfg = top_k_per_path.get("rewrite_variants")
+            if rewrite_cfg is not None and rewrite_cfg.get("enabled", True):
                 futures[
                     executor.submit(
                         self._recall_rewrite_variants,
                         query,
                         query_embedding,
                         qdrant_filter,
-                        top_k_per_path["rewrite_variants"].get("top_k", 30),
+                        rewrite_cfg.get("top_k", 30),
                     )
                 ] = "rewrite_variant"
 
