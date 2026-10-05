@@ -207,28 +207,30 @@ def test_dockerfile_does_not_vendor_minio_source():
     )
 
 
-def test_dockerfile_base_images_are_not_floating():
-    """Base images must carry an explicit, non-moving tag.
+def test_dockerfile_base_images_are_pinned_by_digest():
+    """Every base image must be an immutable digest, not merely a non-moving tag.
 
-    They are literals rather than build ARGs on purpose: a literal cannot be
-    overridden from the Compose file or a CI flag, so there is no path by which
-    the builder or runtime base silently changes under the same Git commit.
-
-    Two acceptable pin forms are recognised, both naming a concrete Alpine
-    release: ``golang:1.24-alpine3.22`` (Go series + Alpine minor) and
-    ``alpine:3.22.6`` (Alpine patch). A bare ``golang:1.24-alpine`` or
-    ``alpine:3.22`` would both move.
+    A version tag is not enough for this contract. ``golang:1.24-alpine3.22``
+    still moves: the Go patch level and the Alpine manifest are both rebuilt
+    upstream under the same tag, so the compiler can change while the Compose
+    image tag and the recorded MinIO commit stay identical. That is exactly the
+    drift this issue exists to remove, one layer down.
     """
     base_images = re.findall(r"^FROM\s+(\S+)", _instructions(MINIO_DOCKERFILE), re.MULTILINE)
     assert base_images, "expected at least one FROM instruction"
     for image in base_images:
-        assert ":" in image, f"base image {image!r} has no tag and would resolve to a moving default"
-        tag = image.rsplit(":", 1)[1]
-        assert tag != "latest", f"floating base image: {image}"
-        pinned_to_alpine = re.search(r"alpine3\.\d+", tag) or re.search(r"\d+\.\d+\.\d+", tag)
-        assert pinned_to_alpine, (
-            f"base image {image!r} must pin a concrete Alpine release (e.g. alpine3.22 or 3.22.6); {tag!r} still moves"
+        assert "@sha256:" in image, (
+            f"base image {image!r} is not digest-pinned; a version tag can still be rebuilt "
+            "upstream and change the artifact without changing the Git commit"
         )
+        digest = image.rsplit("@", 1)[1]
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), f"malformed digest in {image!r}"
+        assert ":latest" not in image, f"floating base image: {image}"
+
+    # The digest must accompany a human-readable tag, so the pin is auditable
+    # and an operator can see what they are updating away from.
+    for image in base_images:
+        assert image.split("@", 1)[0].count(":"), f"base image {image!r} should keep a readable tag next to its digest"
 
 
 # ── 6/7/8. the MinIO runtime contract is preserved ──────────────────────────
@@ -285,6 +287,30 @@ def test_runtime_image_ships_curl_for_the_healthcheck():
     )
     assert "ENTRYPOINT" not in _instructions(MINIO_DOCKERFILE), (
         "an ENTRYPOINT would prefix Compose's `command` argv and turn `minio minio server ...` into a broken invocation"
+    )
+
+
+def test_runtime_image_drops_root_privileges():
+    """The storage service must not run as UID 0.
+
+    The previous public image ran as root. This image creates an unprivileged
+    `minio` user, so it must actually select it: creating the account and then
+    leaving `USER` unset would be hardening theatre that grants root and implies
+    otherwise.
+    """
+    instructions = _instructions(MINIO_DOCKERFILE)
+    runtime_stage = instructions.split("AS builder", 1)[1]
+    user_directives = re.findall(r"^USER\s+(\S+)", runtime_stage, re.MULTILINE)
+    assert user_directives, (
+        "the runtime stage must set USER; MinIO is network-facing storage and does not need container root"
+    )
+    assert user_directives[-1] not in ("root", "0"), "the runtime stage must not run as root"
+    assert "adduser" in runtime_stage, "the unprivileged account the USER directive selects must exist"
+    # The data mount must be writable by that account, otherwise the switch
+    # trades a privilege problem for a broken volume.
+    assert "chown minio:minio /minio_data" in runtime_stage, (
+        "/minio_data must be owned by the unprivileged user; a fresh named volume inherits "
+        "this ownership and an unwritable data directory would break /api/media"
     )
 
 

@@ -37,11 +37,20 @@
 # build time and is not relicensed, redistributed or vendored by this
 # repository. Operators are responsible for their own AGPLv3 obligations.
 
-# `golang:1.24-alpine3.22` is pinned to a specific Alpine base on purpose:
-# the moving `golang:1.24-alpine` tag would change its base underneath the
-# same Git commit. The Go version follows upstream's own go.mod at the pinned
-# commit (`go 1.24.0`, `toolchain go1.24.8`).
-FROM golang:1.24-alpine3.22 AS builder
+# `golang:1.24-alpine3.22` is pinned to a specific Alpine base, and then pinned
+# by digest: a moving tag such as `golang:1.24-alpine` would let the Go patch
+# level and the Alpine manifest change underneath the same Git commit, which
+# would change the compiler while the Compose image tag and the recorded
+# upstream commit stayed identical. The digest below is the multi-arch OCI
+# index digest, so the pin stays portable across architectures.
+#
+# The Go version follows upstream's own go.mod at the pinned commit
+# (`go 1.24.0`, `toolchain go1.24.8`).
+#
+# To update the base deliberately:
+#   docker buildx imagetools inspect golang:1.24-alpine3.22
+# and replace both the tag and the digest in one commit, noting the reason.
+FROM golang:1.24-alpine3.22@sha256:3641e0d9b931dc4f2f185dcd669c4679670e9277c8166a838ddb98a2d4389cb5 AS builder
 
 # Overridable only so the guard test can prove the build reads the upstream
 # remote that is documented above; the commit itself is always an argument.
@@ -94,8 +103,13 @@ RUN make build \
     && /build/minio --version
 
 
-# `alpine:3.22.6` is pinned to a patch version rather than `3.22`/`latest`.
-FROM alpine:3.22.6
+# `alpine:3.22.6` is pinned to a patch version and then pinned by digest, for
+# the same reason as the builder above: the runtime base must not move under the
+# same Git commit. Multi-arch OCI index digest.
+#
+# To update deliberately:
+#   docker buildx imagetools inspect alpine:3.22.6
+FROM alpine:3.22.6@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 
 # ca-certificates: TLS trust store for outbound S3/HTTPS calls.
 # curl: the canonical Compose healthcheck probes the server with
@@ -129,7 +143,19 @@ VOLUME ["/minio_data"]
 # S3 API port. The console port (9001) stays declared in Compose.
 EXPOSE 9000
 
+# Drop privileges before serving. The previous public image ran as UID 0; this
+# one runs as an unprivileged user, so a container escape does not start as
+# root. The uid/gid (1000) match the root Dockerfile's application user.
+#
+# UPGRADE NOTE: a *freshly created* `minio-data` volume inherits this directory's
+# ownership, so new deployments need nothing extra. A volume created by an older
+# root-running image is owned by root and must be handed over once:
+#   docker run --rm -v <project>_minio-data:/minio_data alpine:3.22.6 \
+#     chown -R 1000:1000 /minio_data
 WORKDIR /minio_data
+RUN chown minio:minio /minio_data
+
+USER minio
 
 # No ENTRYPOINT on purpose. The canonical Compose service sets
 # `command: ["minio", "server", "/minio_data", "--console-address", ":9001"]`,
