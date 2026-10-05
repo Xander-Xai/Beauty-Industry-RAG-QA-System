@@ -92,6 +92,14 @@ docker compose up -d
 
 Compose 需要 `REDIS_PASSWORD`、`ELASTICSEARCH_PASSWORD`、`MINIO_*`、`SERVICE_AUTH_TOKEN`；缺失时 compose 会直接报错退出（fail-fast，这是有意设计，不是 bug）。
 
+MinIO 镜像来源：canonical Compose 不再拉取公共 `minio/minio` 镜像，而是通过 `deploy/minio/Dockerfile` 从官方 upstream `github.com/minio/minio` 的**固定 commit**（`7aac2a2c5b7c882e68c1ce017d8256be2feea27f`，`master` 最后一个 commit）源码构建。原因是 MinIO 社区版已改为**仅源码分发**（upstream README「Source-Only Distribution」），官方 Docker Hub `minio/minio` 仓库已被删除，任何 `minio/minio:<tag>` 都无法拉取；旧的 `minio/minio:latest` 因此既不可复现也不可用。
+
+- **license / provenance 边界**：MinIO 是 **external AGPLv3 依赖**，源码在构建时从官方 upstream 拉取；本仓库**不 vendor、不复制、不重新授权** MinIO 代码，也不改写其许可证。本节仅记录依赖来源，不构成任何许可证结论；具体的 AGPLv3 义务由使用者自行评估。
+- 本地镜像名为 `beauty-rag-minio:7aac2a2c`（tag 即 pinned commit 前 8 位），构建产物带 OCI label 记录 upstream commit，便于审计。
+- 构建需要 Go module 下载（`proxy.golang.org`）与 git 可达性；首次构建耗时较长属正常。
+- 端口、卷（`minio-data:/minio_data`）、`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`、healthcheck 与 server command 均未改动。
+- 证据等级：契约与 guard 测试为 `REPO_VERIFIED`。本仓库曾在本机单次执行 `docker compose build minio` 与一次临时容器 smoke（healthcheck 变 healthy、S3 SigV4 `ListBuckets` 返回 200、未认证请求 403），这**只是单次本地运行记录，不是 CI 保证**；`/api/media` 预签名链路、生产环境与 HA 均未验证，仍为 `PENDING`。
+
 在线会话（`SessionState`）与登录限流在配置了 Redis 时跨 worker 共享，Redis 不可用时降级为进程内内存（此时不跨 worker）。
 
 L2 答案缓存按 role/dept 分区存储，物理 key 形如 `rag:l2:rm:<role_mask>:dm:<dept_mask>:<hash>`。旧的未分区 key 不再被读取、也没有回落或迁移路径，只按既有 TTL 过期。**部署后出现一次性缓存 miss 属预期**，不要为此编写 key 迁移脚本，也不要批量清理 `rag:l2:*`。
