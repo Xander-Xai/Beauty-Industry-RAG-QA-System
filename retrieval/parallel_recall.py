@@ -115,7 +115,14 @@ class ParallelRecallManager:
         """
         from auth.bitmask_rbac import build_qdrant_filter, build_qdrant_image_filter
 
-        top_k_per_path = top_k_per_path or config["retrieval"]["parallel_paths"]
+        default_paths = config["retrieval"]["parallel_paths"]
+        if top_k_per_path is None:
+            top_k_per_path = default_paths
+        else:
+            # Partial caller overrides are supported: preserve the canonical
+            # configuration for omitted paths instead of mixing optional
+            # `.get(...)` guards with required `[...] ` indexing later.
+            top_k_per_path = {**default_paths, **top_k_per_path}
 
         active_epoch = config.get("knowledge_version_epoch", "default")
         qdrant_filter = build_qdrant_filter(user_role_mask, user_dept_mask, active_epoch)
