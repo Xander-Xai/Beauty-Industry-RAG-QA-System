@@ -116,6 +116,17 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Fixed
 
+- The FastAPI `description` (runtime-exposed through Swagger UI and the generated
+  OpenAPI `info` block) advertised the product as "基于双 GPU". No code, config, test or
+  artifact in this repository evidences that topology: the 4B/14B vLLM deployment is
+  `PENDING` (weights absent, `vllm` not installed) and the RTX A5000 ×2 serving host is
+  `HISTORICAL_PRODUCTION`. The runtime-facing description is now
+  "多模态检索增强生成（RAG）的企业级知识问答 API", which matches what this repository
+  does verify (multimodal recall, RBAC, audit, metrics). `info.title` and `info.version`
+  remain sourced from `config.json`. `tests/test_runtime_api_metadata.py` now generates the
+  OpenAPI schema and rejects any re-assertion of an unverified dual-GPU production
+  topology. Architecture, model routing, config and the historical production record are
+  unchanged.
 - `monitoring-service/metrics_collector.py` emitted every latency quantile as
   `rag_{quantile="0.5"}`: the metric name was computed and then never used. That is not
   valid Prometheus exposition format, so those quantiles were silently unscrapeable and any

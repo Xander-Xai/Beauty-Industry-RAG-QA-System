@@ -124,7 +124,12 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=_get_sys_config().system.name,
-        description=f"基于双 GPU、多模态检索增强生成（RAG）的企业级知识问答 API — {_get_sys_config().system.name}",
+        # Runtime-facing metadata must stay inside the repository's evidence
+        # boundary. The 4B/14B vLLM GPU topology is PENDING (weights absent,
+        # vllm not installed) and the RTX A5000 x2 serving host is
+        # HISTORICAL_PRODUCTION, so neither may be advertised here. Multimodal
+        # RAG, RBAC, audit and metrics are REPO_VERIFIED.
+        description=f"多模态检索增强生成（RAG）的企业级知识问答 API — {_get_sys_config().system.name}",
         version=_APP_VERSION,
         lifespan=lifespan,
         # H-9: 生产模式下禁用 Swagger/ReDoc，避免暴露 API schema
