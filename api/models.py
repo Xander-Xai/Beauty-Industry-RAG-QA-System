@@ -81,6 +81,33 @@ class HealthResponse(BaseModel):
     )
 
 
+class ReadinessResponse(BaseModel):
+    """就绪检查响应（流量准入契约）
+
+    与 ``HealthResponse`` 语义不同，不要互相替代：
+
+    - ``/api/health`` 是**诊断**端点，依赖降级时仍返回 HTTP 200 + ``degraded``；
+    - ``/api/ready`` 是**流量准入**端点，不满足最低服务能力时返回 HTTP 503。
+
+    ``blockers`` 中的依赖是「不可用即无法服务」的那些；``degraded`` 中的依赖
+    虽然不可用，但当前代码存在可用降级路径，因此不会把 Pod 摘出流量。
+    """
+
+    status: str = Field(..., description="整体状态: ready / not_ready")
+    dependencies: dict[str, bool] = Field(
+        default_factory=dict,
+        description="各依赖服务连通状态（仅布尔值，不含地址与凭据）",
+    )
+    degraded: list[str] = Field(
+        default_factory=list,
+        description="已降级但仍可服务的依赖名",
+    )
+    blockers: list[str] = Field(
+        default_factory=list,
+        description="导致 not_ready 的依赖名或能力名",
+    )
+
+
 class LatencyPercentiles(BaseModel):
     """延迟百分位数"""
 

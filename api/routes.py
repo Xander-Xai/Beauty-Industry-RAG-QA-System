@@ -3,8 +3,9 @@ FastAPI 路由处理器
 
 POST /query  - 单轮 RAG 查询
 POST /chat   - 多轮对话（带会话管理）
-GET  /health - 健康检查（Redis/Qdrant/ES 连通性）
-GET  /stats  - 系统指标
+GET  /health - 健康检查（诊断语义，依赖降级仍返回 200）
+GET  /ready  - 就绪检查（流量准入语义，不满足服务能力返回 503）
+GET  /stats - 系统指标
 GET  /media/{doc_id} - 文档媒体预签名 URL（权限二次校验）
 GET  /metrics - Prometheus 文本格式指标
 """
@@ -15,7 +16,7 @@ import logging
 import os
 import threading
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import PlainTextResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
@@ -31,6 +32,7 @@ from api.models import (
     LatencyPercentiles,
     QueryRequest,
     QueryResponse,
+    ReadinessResponse,
     StatsResponse,
 )
 from common.audit import audit_media_denied
@@ -328,6 +330,60 @@ def health_handler():
         version=_config.get("system", {}).get("version", "2.0.0"),
         dependencies=checks,
     )
+
+
+# ─── GET /api/ready ─────────────────────────────────────────
+
+
+@router.get(
+    "/ready",
+    response_model=ReadinessResponse,
+    summary="就绪检查（流量准入）",
+)
+def ready_handler(response: Response):
+    """
+    就绪检查端点 —— Kubernetes readinessProbe / 流量准入使用。
+
+    与 ``GET /api/health`` 的语义区别（两者不可互相替代）：
+
+    - ``/api/health`` 是**诊断**端点。任何依赖连接失败时它仍然返回 HTTP 200，
+      用 ``status: degraded`` 表达「我看到了什么」。它的契约在本 PR 中不变。
+    - ``/api/ready`` 是**准入**端点。它回答的是「现在把请求路由到这个 Pod，
+      它能不能服务」。不具备最低服务能力时返回 HTTP 503，让 Kubernetes 把它
+      从 Endpoints 摘除。
+
+    判定不是 ``all(dependencies)``。Redis 与 MinIO 存在真实降级路径
+    （L1 进程内缓存 / 内存限流；仅影响 media 路由），因此单独故障只记入
+    ``degraded``，不阻止流量。检索满足 **OR** 语义：Qdrant 与 Elasticsearch
+    任一可用即可服务。生成端点则按**当前部署自己的路由配置**判定 —— 生产模式
+    下 complex tier 指向 gen_14b 且代码没有运行期回退，因此 gen_14b 不可用必须
+    not_ready。
+
+    该端点不要求用户 JWT：Kubernetes 探针无法携带凭据，而把探针指向需要认证的
+    端点会让探针永远 401。响应只包含依赖名与布尔值，不含地址、DSN、token 或
+    任何内部凭据。
+
+    依赖探测本身失败不会抛成 500：探测异常会被归一化为该依赖不可用。
+    """
+    from api.readiness import evaluate_readiness
+
+    try:
+        report = evaluate_readiness()
+    except Exception as e:
+        # 评估器整体不可用时必须 fail closed（not_ready），而不是因为探针本身
+        # 出错就返回一个看起来健康的 200。异常文本不进入响应体。
+        logger.warning(f"Readiness evaluation failed: {e}")
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return ReadinessResponse(
+            status="not_ready",
+            dependencies={},
+            degraded=[],
+            blockers=["readiness_evaluator"],
+        )
+
+    if not report.ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return ReadinessResponse(**report.to_payload())
 
 
 # ─── GET /api/stats ─────────────────────────────────────────
