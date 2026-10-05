@@ -40,9 +40,20 @@
   `info.title` / `info.version` still come from `config.json`, and
   `tests/test_runtime_api_metadata.py` fails if the topology claim returns. No architecture,
   model routing, config or historical production record changed.
+- Recruiter-facing landing and interview walkthrough (PR #55): merged as `424f43f`. It reworked
+  the README top fold, added `docs/interview-walkthrough.md` and `docs/repository-metadata.md`,
+  and reconciled the top-fold evidence strip with the canonical six-level taxonomy (the strip had
+  rendered five rows under a three-level heading and omitted `HISTORICAL`). Documentation only.
+- Bounded vLLM generation resilience contract (PR #56): merged as `0c99724`. The contract and its
+  124 deterministic tests are `REPO_VERIFIED`; real vLLM runtime behaviour stays `PENDING` and is
+  recorded in [External validation pending](#external-validation-pending).
+- Final canonical-runtime consistency audit ([#47](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/47)):
+  completed; see [docs/final-canonical-runtime-audit.md](final-canonical-runtime-audit.md). It
+  re-verified the canonical surfaces against the code and config on the post-#55/#56 tree and
+  produced no evidence promotion.
 Reconciled candidate: `HEAD` (resolved by `scripts/check_repo_consistency.py` at verification time;
 a commit cannot embed its own SHA without making the value stale).
-Post-reconciliation verification date: 2026-10-03.
+Post-reconciliation verification date: 2026-10-06.
 - Runtime version: `config.json` → `system.version` (`2.3.0`); release history is recorded in
   `CHANGELOG.md`. The repository has no GitHub Release and no tag at audit time.
 - Version labelling: the string `v2.5` appears in current docs and in the filename
@@ -170,8 +181,9 @@ enforces is that a transition nobody recorded cannot pass silently.
   code and config on the post-#55/#56 tree, and produced no evidence promotion.
 - [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54) — real Kubernetes
   deployment and readiness smoke (`deploy/k8s/` manifests applied to a real cluster, `/api/ready`
-  observed flipping under a real dependency outage): open. The manifests and their 26 static checks
-  are `REPO_VERIFIED`; no cluster has ever applied them, so the row above stays `PENDING`.
+  observed flipping under a real dependency outage): open. The manifests and their 31 static checks
+  (`tests/deploy/test_k8s_manifests.py`, all offline) are `REPO_VERIFIED`; no cluster has ever
+  applied them, so the Kubernetes deployment row stays `PENDING`.
 - [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) — umbrella external
   validation (real BGE / CLIP / PaddleOCR / Airflow / benchmark artifact): open.
 - [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) — runtime / security
