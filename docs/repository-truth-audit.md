@@ -163,6 +163,15 @@ enforces is that a transition nobody recorded cannot pass silently.
   and no new reconciliation issue has been opened, so there is no open reconciliation scope
   at this audit point. No issue number is invented to fill this slot — a repository between
   reconciliations legitimately has none.
+- [#47](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/47) — final
+  canonical-runtime consistency audit before applications: completed (closed by this audit), delivered
+  by the audit recorded in [docs/final-canonical-runtime-audit.md](final-canonical-runtime-audit.md).
+  It re-verified the architecture, topology, taxonomy, scale and evidence-boundary claims against the
+  code and config on the post-#55/#56 tree, and produced no evidence promotion.
+- [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54) — real Kubernetes
+  deployment and readiness smoke (`deploy/k8s/` manifests applied to a real cluster, `/api/ready`
+  observed flipping under a real dependency outage): open. The manifests and their 26 static checks
+  are `REPO_VERIFIED`; no cluster has ever applied them, so the row above stays `PENDING`.
 - [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) — umbrella external
   validation (real BGE / CLIP / PaddleOCR / Airflow / benchmark artifact): open.
 - [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) — runtime / security
