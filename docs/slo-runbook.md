@@ -113,6 +113,11 @@ mode → Rollback → Evidence to collect → Recovery verification.
 **Alert** — `RagRedisDegraded` (`rag_redis_degraded_mode == 1`), or
 `RagDependencyDown` with `redis=false` from `GET /api/health`.
 
+**Traffic admission** — Redis is **not** readiness-critical. `GET /api/ready`
+reports `degraded: ["redis"]` and still returns 200, because the serving paths
+that keep queries working survive without it. Pulling a pod that can still serve
+queries would turn a degraded cache into an outage.
+
 **User impact** — Sessions are not shared across workers, so a user can appear
 logged out when their next request lands on a different worker. Login rate
 limiting degrades from a shared counter to per-process counting, which makes the
@@ -122,6 +127,7 @@ process memory until Redis returns.
 **Diagnosis**
 
 ```bash
+curl -s http://localhost:8000/api/ready | python3 -m json.tool    # redis must appear in degraded, not blockers
 curl -s http://localhost:8000/api/health | python3 -m json.tool   # check dependencies.redis
 docker compose ps redis
 docker compose logs --tail=200 redis
@@ -170,6 +176,12 @@ was changed, revert the change and restart.
 
 **Alert** — `RagDependencyDown` with `elasticsearch=false`.
 
+**Traffic admission** — Elasticsearch alone is **not** readiness-critical.
+`GET /api/ready` reports `degraded: ["elasticsearch"]` and still returns 200,
+because Qdrant dense recall alone can still return candidates. It becomes
+readiness-critical only when Qdrant is unavailable **at the same time**; then
+`blockers` contains `retrieval` and the endpoint answers 503.
+
 **User impact** — BM25 recall path degrades to an empty result. The RAG answer
 loses its lexical retrieval leg; dense retrieval and the gates still run, so
 answers become narrower and more likely to hit the Evidence Gate's reject branch.
@@ -178,6 +190,7 @@ Users see refusals or low-evidence answers rather than errors.
 **Diagnosis**
 
 ```bash
+curl -s http://localhost:8000/api/ready | python3 -m json.tool    # is ES a blocker or only degraded?
 curl -s http://localhost:8000/api/health | python3 -m json.tool
 docker compose ps elasticsearch
 docker compose logs --tail=200 elasticsearch
@@ -213,6 +226,13 @@ authenticated BM25 query returns hits.
 
 **Alert** — `RagDependencyDown` with `qdrant=false`.
 
+**Traffic admission** — Qdrant alone is **not** readiness-critical for
+query/chat: BM25 recall alone still serves. `GET /api/ready` reports
+`degraded: ["qdrant"]` and returns 200. Combined with an Elasticsearch outage it
+becomes readiness-critical and the endpoint answers 503 with
+`blockers: ["retrieval"]`. `/api/media/{doc_id}` degrades either way, since it
+needs Qdrant metadata for the RBAC check.
+
 **User impact** — Dense and image recall paths degrade. `/api/media/{doc_id}`
 returns `503`, because the route reads document metadata from Qdrant to perform
 the RBAC check and cannot substitute an "allow" when metadata is unavailable.
@@ -220,6 +240,7 @@ the RBAC check and cannot substitute an "allow" when metadata is unavailable.
 **Diagnosis**
 
 ```bash
+curl -s http://localhost:8000/api/ready | python3 -m json.tool    # qdrant alone should be degraded, not a blocker
 curl -s http://localhost:8000/api/health | python3 -m json.tool
 docker compose ps qdrant
 curl http://localhost:6333/collections
@@ -264,14 +285,32 @@ degrades. In non-production `deployment_mode` a complex request may be routed
 down to the 4B endpoint. Generation may fail outright, producing a 5xx or an
 Evidence Gate rejection.
 
+**Traffic admission** — `GET /api/ready` treats generation as **readiness-critical**,
+because a pod that cannot reach the endpoint its own routing selects cannot serve
+the request. Which endpoint is required depends on `deployment_mode`: `gen_4b`
+always (both the `simple` and `rewrite` tiers route there), and `gen_14b`
+additionally in production, where the `complex` tier routes to it and
+`LLMClient.generate` re-raises rather than falling back. In non-production the
+`complex` tier is rewritten to `simple` **before** the request is sent, so an
+absent `gen_14b` is reported as degraded rather than blocking.
+
+```bash
+curl -s http://localhost:8000/api/ready | python3 -m json.tool   # blockers[] names the endpoint
+```
+
 **Diagnosis**
 
 ```bash
 curl -s http://localhost:8000/api/metrics -H "Authorization: Bearer $TOKEN" | grep rag_
+curl -s http://localhost:8000/api/ready | python3 -m json.tool  # which endpoint blocks admission
 curl -s "$VLLM_4B_URL/v1/models"        # single shared 4B endpoint, port 8101
 curl -s "$VLLM_14B_URL/v1/models"       # 14B complex-generation endpoint, port 8100
 nvidia-smi                                 # GPU present and busy?
 ```
+
+The same `GET /v1/models` call is what the readiness probe performs, so
+`/api/ready` reflects real endpoint reachability rather than a liveness guess.
+It never issues a generation request, so probing costs no GPU time.
 
 **Immediate mitigation**
 

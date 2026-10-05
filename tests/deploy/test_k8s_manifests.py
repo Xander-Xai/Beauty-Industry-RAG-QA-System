@@ -150,11 +150,17 @@ def test_service_targets_the_declared_container_port() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_probes_target_real_unauthenticated_endpoints() -> None:
-    """`/api/health` is live and unauthenticated; `/api/metrics` returns 401.
+#: The two probe endpoints this contract is allowed to target. Both are live and
+#: unauthenticated; `/api/metrics` returns 401 and is therefore not a probe.
+VERIFIED_PROBE_PATHS = {"/api/health", "/api/ready"}
 
-    Verified against the application, not assumed: GET /api/health -> 200,
-    GET /api/metrics -> 401 without credentials.
+
+def test_probes_target_real_unauthenticated_endpoints() -> None:
+    """`/api/health` and `/api/ready` are live and unauthenticated.
+
+    Verified against the application, not assumed: GET /api/health -> 200 and
+    GET /api/ready -> 200/503 without credentials, while GET /api/metrics ->
+    401 without a token.
     """
     deployment = _by_kind("Deployment")[0]
     container = _container(deployment)
@@ -176,11 +182,91 @@ def test_probes_target_real_unauthenticated_endpoints() -> None:
             )
             continue
 
-        assert http_get["path"] == "/api/health", f"{probe_name} path {http_get['path']!r} is not a verified endpoint"
+        assert http_get["path"] in VERIFIED_PROBE_PATHS, (
+            f"{probe_name} path {http_get['path']!r} is not a verified probe endpoint"
+        )
         assert http_get["path"] != "/api/metrics", f"{probe_name} must not use /api/metrics: it requires authentication"
         assert http_get["port"] in named_ports, (
             f"{probe_name} port {http_get['port']!r} is not a declared named container port"
         )
+
+
+def test_probe_endpoints_are_registered_and_unauthenticated() -> None:
+    """Every path a probe targets must exist on the app and need no user JWT.
+
+    A probe cannot carry credentials, so a probe pointing at an endpoint that
+    requires a user token fails forever and the Pod never becomes ready.
+    """
+    from fastapi.testclient import TestClient
+
+    # The probes are stubbed to avoid contacting real dependencies from a static
+    # manifest test; what is asserted here is routing and auth, not dependency
+    # state.
+    import api.readiness as readiness_module
+    import app as application
+
+    original = readiness_module._default_probes
+    readiness_module._default_probes = lambda ctx: {}
+    try:
+        client = TestClient(application.app)
+        registered = client.get("/openapi.json").json()["paths"]
+        container = _container(_by_kind("Deployment")[0])
+        for probe_name in ("startupProbe", "readinessProbe"):
+            path = container[probe_name]["httpGet"]["path"]
+            assert path in registered, f"{probe_name} targets {path!r}, which is not a registered route"
+            response = client.get(path)
+            assert response.status_code != 401, f"{path} must not require a JWT"
+            assert response.status_code != 403, f"{path} must not require a JWT"
+            assert "security" not in response.json(), f"{path} must not require a JWT"
+    finally:
+        readiness_module._default_probes = original
+
+
+def test_readiness_probe_targets_the_readiness_endpoint() -> None:
+    """readinessProbe must be dependency-aware, not a liveness-level gate.
+
+    `/api/health` returns 200 even with every dependency unreachable, so a
+    readinessProbe on it can never remove an unserving Pod from the Service.
+    """
+    container = _container(_by_kind("Deployment")[0])
+    readiness = container["readinessProbe"]
+    assert "httpGet" in readiness, "readinessProbe must use httpGet so it can observe the status code"
+    assert readiness["httpGet"]["path"] == "/api/ready", (
+        "readinessProbe must target /api/ready; /api/health cannot express not-ready"
+    )
+
+
+def test_readiness_probe_allows_a_503_to_be_observed() -> None:
+    """The probe must actually be able to see the not-ready status code.
+
+    The endpoint answers 503 when the serving contract fails, and that non-2xx
+    response is what removes the Pod from Endpoints.
+    """
+    import api.models as api_models
+
+    schema = api_models.ReadinessResponse.model_json_schema()
+    properties = schema["properties"]
+    assert properties["blockers"]["type"] == "array"
+    assert properties["degraded"]["type"] == "array"
+    assert properties["dependencies"]["type"] == "object"
+    # Only booleans may appear per dependency: the probe payload is returned to
+    # an unauthenticated caller, so a richer value would be a leak channel.
+    assert properties["dependencies"]["additionalProperties"] == {"type": "boolean"}
+    assert {properties["status"]["type"]} == {"string"}
+
+
+def test_startup_probe_remains_process_liveness_only() -> None:
+    """startupProbe answers "has the process started", not "can it serve".
+
+    Pointing it at the dependency-aware endpoint would couple startup to
+    dependency availability: an outage during a rollout could keep the probe
+    failing until failureThreshold is reached and trigger a restart loop.
+    """
+    container = _container(_by_kind("Deployment")[0])
+    startup = container["startupProbe"]
+    assert startup["httpGet"]["path"] == "/api/health", (
+        "startupProbe must stay on /api/health: readiness failure is not a startup failure"
+    )
 
 
 def test_liveness_probe_does_not_depend_on_backing_services() -> None:
@@ -197,9 +283,47 @@ def test_liveness_probe_does_not_depend_on_backing_services() -> None:
         "dependencies are down, so it carries no liveness signal"
     )
     assert "httpGet" not in liveness
-    named_ports = {p["name"] for p in _container(_by_kind("Deployment")[0])["ports"]}
+    named_ports = {p["name"] for p in container["ports"]}
     assert liveness["tcpSocket"]["port"] in named_ports, (
         "livenessProbe tcpSocket port must be a declared named container port"
+    )
+    # Stated explicitly because it is the invariant most likely to be broken by
+    # a well-meaning "make liveness accurate too" change: a dependency outage
+    # must remove the Pod from rotation, never restart it.
+    assert liveness.get("httpGet") is None, (
+        "livenessProbe must stay dependency-independent; it may not target /api/ready"
+    )
+
+
+def test_liveness_probe_ignores_dependency_outage_while_readiness_does_not() -> None:
+    """The two probes must disagree under a dependency outage. That is the point.
+
+    With every dependency down, `/api/ready` answers 503 and `/api/health`
+    answers 200. So the readinessProbe must fail while the livenessProbe, being
+    tcpSocket, is unaffected.
+    """
+    from fastapi.testclient import TestClient
+
+    import api.readiness as readiness_module
+    import app as application
+    from api.readiness import DEPENDENCY_KEYS, ProbeContext
+
+    client = TestClient(application.app)
+    original_probes = readiness_module._default_probes
+    original_context = readiness_module._build_context
+    try:
+        readiness_module._default_probes = lambda ctx: {key: (lambda _c: False) for key in DEPENDENCY_KEYS}
+        readiness_module._build_context = lambda: ProbeContext(is_production=True)
+        ready = client.get("/api/ready")
+    finally:
+        readiness_module._default_probes = original_probes
+        readiness_module._build_context = original_context
+
+    assert ready.status_code == 503, "readiness must fail closed when nothing is reachable"
+
+    container = _container(_by_kind("Deployment")[0])
+    assert container["livenessProbe"]["tcpSocket"]["port"] in {p["name"] for p in container["ports"]}, (
+        "liveness stays a tcpSocket check, so it cannot observe the 503 at all"
     )
 
 
