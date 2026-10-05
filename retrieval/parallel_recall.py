@@ -142,9 +142,7 @@ class ParallelRecallManager:
             dense_cfg = top_k_per_path.get("dense_bge")
             if dense_cfg is not None and dense_cfg.get("enabled", True):
                 futures[
-                    executor.submit(
-                        self._recall_dense, query_embedding, qdrant_filter, dense_cfg.get("top_k", 50)
-                    )
+                    executor.submit(self._recall_dense, query_embedding, qdrant_filter, dense_cfg.get("top_k", 50))
                 ] = "dense_bge"
 
             # ② BM25 关键词精确路 (ES)
