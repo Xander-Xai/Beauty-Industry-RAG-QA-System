@@ -1,8 +1,8 @@
-"""Regression coverage for partial parallel-recall path configuration.
+"""Regression coverage for request-scoped parallel-recall path configuration.
 
-A caller may override only one path.  The execute() guards already treat missing
-entries as optional; this test pins the matching runtime contract so later direct
-indexing cannot turn an omitted path into a KeyError.
+The online pipeline deliberately passes a reduced mapping for simple queries. An
+omitted path therefore means "disabled for this request", while None means
+"use the canonical full topology".
 """
 
 from __future__ import annotations
@@ -22,25 +22,26 @@ def _manager():
     return manager
 
 
-def test_partial_path_config_is_merged_with_canonical_defaults():
+def test_reduced_path_mapping_preserves_simple_query_topology():
+    """A BGE+BM25 request must not silently restore rewrite or CLIP."""
     manager = _manager()
+    called: list[str] = []
     observed: dict[str, int] = {}
 
     def dense(_embedding, _filter, top_k):
+        called.append("dense_bge")
         observed["dense_bge"] = top_k
         return []
 
     def bm25(_query, _role, _dept, top_k):
+        called.append("bm25_es")
         observed["bm25_es"] = top_k
-        return []
-
-    def rewrite(_query, _embedding, _filter, top_k):
-        observed["rewrite_variants"] = top_k
         return []
 
     manager._recall_dense = dense
     manager._recall_bm25 = bm25
-    manager._recall_rewrite_variants = rewrite
+    manager._recall_clip = lambda *args, **kwargs: called.append("clip_visual") or []
+    manager._recall_rewrite_variants = lambda *args, **kwargs: called.append("rewrite_variants") or []
     manager._recall_es_fallback = lambda *args, **kwargs: []
 
     results, agreement = manager.execute(
@@ -48,25 +49,33 @@ def test_partial_path_config_is_merged_with_canonical_defaults():
         query_embedding=np.array([0.1]),
         user_role_mask=0,
         user_dept_mask=0,
-        use_clip=False,
-        top_k_per_path={"dense_bge": {"enabled": True, "top_k": 7}},
+        use_clip=True,
+        clip_top_k=20,
+        top_k_per_path={
+            "dense_bge": {"enabled": True, "top_k": 7},
+            "bm25_es": {"enabled": True, "top_k": 11},
+        },
     )
 
     assert results == []
     assert isinstance(agreement, float)
-    assert observed["dense_bge"] == 7
-    # Missing paths inherit the canonical config instead of raising KeyError.
-    assert observed["bm25_es"] == 50
-    assert observed["rewrite_variants"] == 30
+    assert called.count("dense_bge") == 1
+    assert called.count("bm25_es") == 1
+    assert "clip_visual" not in called
+    assert "rewrite_variants" not in called
+    assert observed == {"dense_bge": 7, "bm25_es": 11}
 
 
-def test_partial_override_can_disable_one_path_without_removing_others():
+def test_present_empty_path_config_uses_path_default_top_k():
+    """Presence enables a path by default; only omission disables it."""
     manager = _manager()
-    called: list[str] = []
+    observed: dict[str, int] = {}
 
-    manager._recall_dense = lambda *args, **kwargs: called.append("dense_bge") or []
-    manager._recall_bm25 = lambda *args, **kwargs: called.append("bm25_es") or []
-    manager._recall_rewrite_variants = lambda *args, **kwargs: called.append("rewrite_variants") or []
+    def dense(_embedding, _filter, top_k):
+        observed["dense_bge"] = top_k
+        return []
+
+    manager._recall_dense = dense
     manager._recall_es_fallback = lambda *args, **kwargs: []
 
     manager.execute(
@@ -75,9 +84,31 @@ def test_partial_override_can_disable_one_path_without_removing_others():
         user_role_mask=0,
         user_dept_mask=0,
         use_clip=False,
-        top_k_per_path={"bm25_es": {"enabled": False}},
+        top_k_per_path={"dense_bge": {}},
     )
 
-    assert "bm25_es" not in called
+    assert observed["dense_bge"] == 50
+
+
+def test_explicit_disabled_path_is_not_called():
+    manager = _manager()
+    called: list[str] = []
+
+    manager._recall_dense = lambda *args, **kwargs: called.append("dense_bge") or []
+    manager._recall_bm25 = lambda *args, **kwargs: called.append("bm25_es") or []
+    manager._recall_es_fallback = lambda *args, **kwargs: []
+
+    manager.execute(
+        query="产品成分查询",
+        query_embedding=np.array([0.1]),
+        user_role_mask=0,
+        user_dept_mask=0,
+        use_clip=False,
+        top_k_per_path={
+            "dense_bge": {"enabled": True, "top_k": 5},
+            "bm25_es": {"enabled": False, "top_k": 50},
+        },
+    )
+
     assert "dense_bge" in called
-    assert "rewrite_variants" in called
+    assert "bm25_es" not in called
