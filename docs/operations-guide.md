@@ -70,6 +70,119 @@ rag_cache_total      counter   参与缓存判定的请求总数
 不要把它的规则当成 Prometheus 规则。判定依据见
 [Repository Truth Audit](repository-truth-audit.md#two-alerting-mechanisms-and-which-one-is-canonical)。
 
+## 1.3 vLLM 生成路径的有界韧性契约
+
+`route_chat`（`router/stateless_router.py`）是 canonical vLLM 生成路径。它的重试决策全部来自
+`router/vllm_resilience.py`：失败分类、次数上限、总 deadline、退避节奏都在那里，路由器只负责
+传输与解析。契约代码与确定性测试状态为 `REPO_VERIFIED`；**没有任何真实 vLLM 服务、GPU 或压测
+跑过这条路径**，运行时结果仍是外部验证项，本仓库不宣称已验证。
+
+### 失败分类（taxonomy）
+
+每一次失败的 attempt 恰好归入一类，重试与否是该类的属性，而不是每个调用点各自判断：
+
+| failure class | 触发条件 | 会重试 | 观测 series |
+|---|---|---|---|
+| `timeout` | attempt 超时（含 connect / read / write / pool timeout） | 是 | `rag_vllm_generation_attempt_failure_class_timeout` |
+| `connection` | 连接被拒 / 重置 / 对端未响应即断开 | 是 | `rag_vllm_generation_attempt_failure_class_connection` |
+| `http_transient` | HTTP 408 / 429 / 502 / 503 / 504 | 是 | `rag_vllm_generation_attempt_failure_class_http_transient` |
+| `http_permanent` | 其他所有非 2xx，**包括全部 ordinary 4xx**（400/401/403/404/422…） | 否 | `rag_vllm_generation_attempt_failure_class_http_permanent` |
+| `malformed_response` | 2xx 但响应体不是可用 completion | 否 | `rag_vllm_generation_attempt_failure_class_malformed_response` |
+| `configuration` | endpoint key 在本部署未配置 | 否 | 无 attempt（未发出 HTTP 请求） |
+| `budget_exhausted` | 本进程的总 deadline 或次数上限用尽 | 否（已终止） | `rag_vllm_generation_outcome_budget_exhausted` |
+| `unknown` | 本层不认识的异常 | 否 | `rag_vllm_generation_attempt_failure_class_unknown` |
+
+三点值得单独记住：
+
+- **500 不在 transient 列表里，这是决定不是遗漏。** vLLM 的 500 通常是确定性拒绝（adapter 不可加载、
+  引擎拒绝的请求、无法卸载的 OOM），重试它恰好在端点已经不健康时放大负载。
+- **无法识别的失败一律不重试。** 重试是失败必须"挣到"的，不是默认行为。
+- **`budget_exhausted` 与 `http_transient` 是不同结论。** 前者是本进程预算用尽，后者是对端返回了
+  可重试状态。排障时不要把二者混为一谈：`http_transient` 看端点，`budget_exhausted` 看
+  `rag_vllm_generation_duration_seconds` 与 deadline 配置。
+
+### 重试策略（有界 / 有 deadline）
+
+```text
+VLLM_MAX_ATTEMPTS=2                  # 总 attempt 数（含首次），硬上限 3
+VLLM_TIMEOUT_SECONDS=10.0            # 单次 attempt 超时
+VLLM_GENERATION_DEADLINE_SECONDS=15.0 # 整个请求的总预算（含所有退避 sleep）
+VLLM_RETRY_BASE_DELAY_SECONDS=0.2    # 确定性指数退避起点
+VLLM_RETRY_MAX_DELAY_SECONDS=2.0     # 退避上限
+```
+
+- **次数上限是结构性的。** `VLLM_MAX_ATTEMPTS` 会被 clamp 到 `[1, 3]`，即使误配成 `500` 也只生效 3。
+  这条上限不是约定，是代码里的 clamp，所以配置无法把它变成 retry storm。
+- **deadline 约束的是工作量，不只是计数。** 每次 attempt 的 timeout 会被进一步 clamp 到"剩余预算"，
+  因此调大 `VLLM_TIMEOUT_SECONDS` 不会让请求突破 deadline。退避 sleep 同样必须在预算内；装不下就终止
+  而不是压缩退避。
+- **没有随机 jitter。** 退避表是契约的一部分，需要可确定性测试。防 storm 靠上面三个确定性边界
+  （次数上限、退避上限、deadline），不靠随机性。
+- **`Retry-After` 会被尊重。** 当它比本地退避短时抬高退避；比 `VLLM_RETRY_MAX_DELAY_SECONDS` 更长时
+  **不重试**（按原 transient 失败上抛，而不是记成预算耗尽）。提前于服务端要求重试正是 storm 的成因。
+
+### 不会悄悄换模型
+
+endpoint 由调用方（`models/llm_client.py::_resolve_endpoint`）解析一次，之后整次调用的所有 attempt
+复用同一个 endpoint key。因此：
+
+- 重试**不可能**把 14B 请求交给 4B 回答；14B 持续失败就是失败并上抛。
+- 非 production 模式下 14B → 4B 的降级是既有的部署行为，不由本次契约引入，也不在重试路径上。
+- 判断依据是 attempt 实际命中的 base URL 一致，而不是读代码推断。
+
+排障时不要为了"让请求过去"而改 endpoint 映射或临时降级：那会改变回答的模型语义。
+
+### 错误信息不会泄露凭据
+
+`VLLMGenerationError` 的消息是固定模板，只填入 failure class、endpoint **config key**、HTTP status
+和 attempt 次数：
+
+```text
+vLLM generation failed: class=http_permanent endpoint=gen_14b status=403 attempts=1
+```
+
+endpoint URL、credential、token、响应体都不会进入消息。endpoint key 本身若不像合法标识符
+（例如调用方传入了一个 URL），会被替换为 `redacted`。原始 transport 异常不进异常链
+（`raise ... from None`），所以任何遍历 `__cause__` 的格式化逻辑都无法把带凭据的 URL 变成 API 响应；
+原始异常只在 DEBUG 日志里，供本地排障使用。
+
+### 相关指标（全部来自既有 collector）
+
+`monitoring/otel_tracer.py::MetricsCollector` 就是 `GET /api/metrics` 已经导出的那个 collector，
+本次没有新增 registry、没有第二个 exporter、没有新的暴露端点。
+
+| series | 含义 |
+|---|---|
+| `rag_vllm_generation_attempts` | 累计 HTTP attempt 数（含首次） |
+| `rag_vllm_generation_attempt_success` / `..._attempt_failed` | attempt 结果，两者之和等于上一行 |
+| `rag_vllm_generation_attempt_failure_class_*` | 按上文分类拆分的失败 attempt 数 |
+| `rag_vllm_generation_requests` | 累计 `route_chat` 调用数 |
+| `rag_vllm_generation_outcome_success` / `..._failed` / `..._budget_exhausted` | 请求终态，三者之和等于上一行 |
+| `rag_vllm_generation_retries` | 实际发生的额外 attempt 数 |
+| `rag_vllm_generation_duration_seconds` / `..._count` | 请求耗时分布（summary 形式，含 p50/p95/p99） |
+
+查这两个比率（PromQL，不是 exporter 直接吐出的 series）：
+
+```promql
+# 重试放大系数：额外 attempt 占全部 attempt 的比例。持续接近 1 说明端点长期在抖，
+# 而这份契约最多只会把它放大到 2 倍，不会更糟。
+rate(rag_vllm_generation_retries[5m]) / clamp_min(rate(rag_vllm_generation_attempts[5m]), 0.000001)
+# 预算耗尽占比
+rate(rag_vllm_generation_outcome_budget_exhausted[5m]) / clamp_min(rate(rag_vllm_generation_requests[5m]), 0.000001)
+```
+
+`clamp_min` 不是可选的：分母为 0 时该表达式返回 `NaN`，而不是 0。
+
+指标本身**没有**对应的告警规则。`monitoring/prometheus/alerts.yml` 仍是 6 条规则，新增指标尚未接入
+告警契约；本仓库也没有任何告警在生产触发过的证据。
+
+### 这条契约不覆盖的范围
+
+- `route_completion`（`rewrite/query_rewriter.py` 使用的 rewrite 路径）**没有**纳入：仍是单次 attempt、
+  不分类、不重试，异常类型也仍是原始 httpx 异常。把它一并改造会改变 rewrite 的重试语义，属于另一次改动。
+- 不提供熔断器、跨实例状态或排队。它是单进程内的有界重试，不是分布式韧性框架。
+- 不改变模型路由语义，也不引入任何新的模型或依赖。
+
 ## 1.2 审计与追踪查询
 
 - 审计事件查询：`tail -n 200 logs/audit/$(date +%F).jsonl`
@@ -206,6 +319,23 @@ rag_cache_total      counter   参与缓存判定的请求总数
 - 先确认注入内容是否只出现在检索证据里，而没有落在应用自己的定界区块之外
 - 确认三条 system prompt 路径都带了检索安全策略，没有某一支绕过
 - **不要**把「策略已注入 system prompt」当作闭环证据：这是纵深防御，prompt 层文字指令可被模型忽略，更强边界需要检索侧检测、文档隔离与输出侧校验
+
+### 问答报「系统服务暂时不可用」/ 生成路径报错
+
+先按失败分类定位，不要先调超时：
+
+1. 看 `rag_vllm_generation_attempt_failure_class_*` 哪一类在涨
+2. `http_permanent`（尤其 401/403）→ vLLM 服务本身在拒绝请求，属于配置或鉴权问题，**重试不会好转**
+3. `connection` / `timeout` → 端点不可达或过载。先用 `GET /api/health` 确认依赖，再看
+   `rag_vllm_generation_duration_seconds` 是否顶到 deadline
+4. `malformed_response` → 端点返回了 2xx 但 body 不是合法 completion。查该端点的服务日志；
+   不要靠调大 `VLLM_TIMEOUT_SECONDS` 掩盖，它不会被重试
+5. `rag_vllm_generation_outcome_budget_exhausted` 上涨 → 请求总预算不够。判断是端点变慢还是预算太小；
+   **优先**确认端点健康，再考虑 `VLLM_GENERATION_DEADLINE_SECONDS`
+6. **不要**通过改 endpoint 映射把 14B 悄悄指向 4B 来"解决"故障：那会改变回答的模型语义，
+   且重试路径本身不会、也不允许这么做
+7. `unknown` 上涨说明出现了本层尚未分类的失败形态。先取 DEBUG 日志里的原始异常再决定是否补分类，
+   不要为了让指标好看而把它归进 transient
 
 ### 离线构建失败或 `seal-epoch` 被拒绝
 
