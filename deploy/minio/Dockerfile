@@ -69,19 +69,24 @@ ARG MINIO_COMMIT
 # different image. Pinning the base digest while leaving the package index
 # floating would contradict the reproducibility contract this image claims.
 #
-# Two mechanisms, both of which fail the build closed:
+# Both stages install through deploy/minio/apk-pin-install.sh, which fetches the
+# index, verifies its SHA-256 against the pin below, replaces
+# /etc/apk/repositories so the live network indexes are removed, resolves the
+# full transitive closure from the verified bytes, stages the matching `.apk`
+# payloads and installs with `--no-network`.
 #
-#   1. Every requested package is pinned to an exact `name=version-rN`.
-#   2. The package index is itself pinned by SHA-256, per repository and per
-#      architecture, and is then handed to apk through a local `file://`
-#      snapshot directory. apk therefore resolves the entire transitive
-#      closure -- not just the packages named below -- from exactly the bytes
-#      that were verified, and there is no remote index left to drift or race.
+# Pinning only the named packages is NOT sufficient -- their dependencies would
+# still resolve from a live index. Nor is verifying the index and passing it to
+# `--repository`: apk expects `$repository/$arch/APKINDEX.tar.gz` with payloads
+# beside it, and `--repository` supplements rather than replaces
+# /etc/apk/repositories, so the build would appear to succeed while resolving
+# from the network. The script exists because of that trap; read it before
+# simplifying.
 #
 # A consequence worth stating plainly: a security update published into the
 # v3.22 branch now *fails this build* rather than silently changing the
-# artifact. That is the intended trade, and it makes each refresh a
-# reviewable act rather than an accident. To refresh deliberately:
+# artifact. That is the intended trade, and it makes each refresh a reviewable
+# act rather than an accident. To refresh deliberately:
 #   curl -fsSLo /tmp/APKINDEX.tar.gz \
 #     "${APK_REPOSITORY}/<repo>/$(uname -m)/APKINDEX.tar.gz"
 #   sha256sum /tmp/APKINDEX.tar.gz
@@ -93,31 +98,42 @@ ARG APK_INDEX_MAIN_AARCH64=143698d71235afff74d1308c71b2821224bac56e002570315d86d
 ARG APK_INDEX_COMMUNITY_X86_64=548777f7e692b45462a846780d559035d1613633b431cda3ce1fd4602e96f921
 ARG APK_INDEX_COMMUNITY_AARCH64=58e2b190e6889394b8e35600cabb70e36aa85e42e3b17817961ac72a989770d1
 
+COPY deploy/minio/apk-pin-install.sh /usr/local/bin/apk-pin-install.sh
+
 # `bash`/`perl`/`git` are required by the pinned commit's
 # `buildscripts/checkdeps.sh`, which its `make build` target runs first.
-RUN set -eu; \
-    arch="$(uname -m)"; \
-    case "${arch}" in \
-        x86_64)  pinned_main="${APK_INDEX_MAIN_X86_64}"; pinned_community="${APK_INDEX_COMMUNITY_X86_64}" ;; \
-        aarch64) pinned_main="${APK_INDEX_MAIN_AARCH64}"; pinned_community="${APK_INDEX_COMMUNITY_AARCH64}" ;; \
-        *) echo "architecture '${arch}' has no recorded APK index pin; record one deliberately" >&2; exit 1 ;; \
-    esac; \
-    mkdir -p /apk-snapshot/main /apk-snapshot/community; \
-    for repo in main community; do \
-        if [ "${repo}" = "main" ]; then expected="${pinned_main}"; else expected="${pinned_community}"; fi; \
-        wget -q -O "/apk-snapshot/${repo}/APKINDEX.tar.gz" \
-            "${APK_REPOSITORY}/${repo}/${arch}/APKINDEX.tar.gz"; \
-        actual="$(sha256sum "/apk-snapshot/${repo}/APKINDEX.tar.gz" | cut -d' ' -f1)"; \
-        if [ "${actual}" != "${expected}" ]; then \
-            echo "apk index ${repo}/${arch} is not the pinned snapshot: expected ${expected}, got ${actual}" >&2; \
-            exit 1; \
-        fi; \
-    done; \
-    apk add --no-cache \
-        --repository file:///apk-snapshot/main \
-        --repository file:///apk-snapshot/community \
-        bash=5.2.37-r0 ca-certificates=20260909-r0 git=2.49.1-r0 make=4.4.1-r3 perl=5.40.4-r0; \
-    rm -rf /apk-snapshot
+#
+# The complete transitive closure is listed, every package pinned to an exact
+# version. `bash`/`perl`/`git`/`make` are the direct requirements of
+# checkdeps.sh; the rest are their dependencies plus curl's, which
+# `buildscripts/gen-ldflags.go` needs to fetch release metadata. Listing the
+# closure here is what lets the install run offline -- see
+# apk-pin-install.sh for why resolving it at build time is not safe.
+RUN apk-pin-install.sh /apk-snapshot \
+        bash=5.2.37-r0 \
+        ca-certificates=20260909-r0 \
+        git=2.49.1-r0 \
+        make=4.4.1-r3 \
+        perl=5.40.4-r0 \
+        brotli-libs=1.1.0-r2 \
+        c-ares=1.34.8-r0 \
+        git-init-template=2.49.1-r0 \
+        git-perl=2.49.1-r0 \
+        libbz2=1.0.8-r6 \
+        libcurl=8.14.1-r3 \
+        libexpat=2.8.5-r0 \
+        libidn2=2.3.7-r0 \
+        libncursesw=6.5_p20250503-r0 \
+        libpsl=0.21.5-r3 \
+        libunistring=1.3-r0 \
+        ncurses-terminfo-base=6.5_p20250503-r0 \
+        nghttp2-libs=1.69.0-r0 \
+        pcre2=10.46-r0 \
+        perl-error=0.17030-r0 \
+        perl-git=2.49.1-r0 \
+        readline=8.2.13-r1 \
+        zstd-libs=1.5.7-r0 \
+    && rm -rf /apk-snapshot
 
 WORKDIR /build
 
@@ -166,44 +182,39 @@ RUN make build \
 #   docker buildx imagetools inspect alpine:3.22.6
 FROM alpine:3.22.6@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 
-# Same APK snapshot contract as the builder stage above; ARG scope is per
-# stage, so the pins are restated here rather than inherited.
+# Same snapshot contract as the builder stage above; ARG scope is per stage, so
+# the pins are restated here rather than inherited. See apk-pin-install.sh.
 ARG APK_REPOSITORY=https://dl-cdn.alpinelinux.org/alpine/v3.22
 ARG APK_INDEX_MAIN_X86_64=9bc67ddd45f47be8508b6e4aa54302685bdb6d968efe8d1f86639f4bffa8aa6a
 ARG APK_INDEX_MAIN_AARCH64=143698d71235afff74d1308c71b2821224bac56e002570315d86dae161fe6ce5
 ARG APK_INDEX_COMMUNITY_X86_64=548777f7e692b45462a846780d559035d1613633b431cda3ce1fd4602e96f921
 ARG APK_INDEX_COMMUNITY_AARCH64=58e2b190e6889394b8e35600cabb70e36aa85e42e3b17817961ac72a989770d1
 
+COPY deploy/minio/apk-pin-install.sh /usr/local/bin/apk-pin-install.sh
+
 # ca-certificates: TLS trust store for outbound S3/HTTPS calls.
 # curl: the canonical Compose healthcheck probes the server with
 #      `curl -f http://localhost:9000/minio/health/live`, so the runtime image
 #      must still ship curl for that contract to keep working.
 # tzdata: MinIO resolves bucket/object timestamps through the local zoneinfo.
-RUN set -eu; \
-    arch="$(uname -m)"; \
-    case "${arch}" in \
-        x86_64)  pinned_main="${APK_INDEX_MAIN_X86_64}"; pinned_community="${APK_INDEX_COMMUNITY_X86_64}" ;; \
-        aarch64) pinned_main="${APK_INDEX_MAIN_AARCH64}"; pinned_community="${APK_INDEX_COMMUNITY_AARCH64}" ;; \
-        *) echo "architecture '${arch}' has no recorded APK index pin; record one deliberately" >&2; exit 1 ;; \
-    esac; \
-    mkdir -p /apk-snapshot/main /apk-snapshot/community; \
-    for repo in main community; do \
-        if [ "${repo}" = "main" ]; then expected="${pinned_main}"; else expected="${pinned_community}"; fi; \
-        wget -q -O "/apk-snapshot/${repo}/APKINDEX.tar.gz" \
-            "${APK_REPOSITORY}/${repo}/${arch}/APKINDEX.tar.gz"; \
-        actual="$(sha256sum "/apk-snapshot/${repo}/APKINDEX.tar.gz" | cut -d' ' -f1)"; \
-        if [ "${actual}" != "${expected}" ]; then \
-            echo "apk index ${repo}/${arch} is not the pinned snapshot: expected ${expected}, got ${actual}" >&2; \
-            exit 1; \
-        fi; \
-    done; \
-    apk add --no-cache \
-        --repository file:///apk-snapshot/main \
-        --repository file:///apk-snapshot/community \
-        ca-certificates=20260909-r0 curl=8.14.1-r3 tzdata=2026d-r0; \
-    rm -rf /apk-snapshot; \
-    addgroup -S -g 1000 minio; \
-    adduser -S -u 1000 -G minio minio
+#
+# The remaining entries are curl's dependency closure; all of it is pinned so
+# the install can run offline.
+RUN apk-pin-install.sh /apk-snapshot \
+        ca-certificates=20260909-r0 \
+        curl=8.14.1-r3 \
+        tzdata=2026d-r0 \
+        brotli-libs=1.1.0-r2 \
+        c-ares=1.34.8-r0 \
+        libcurl=8.14.1-r3 \
+        libidn2=2.3.7-r0 \
+        libpsl=0.21.5-r3 \
+        libunistring=1.3-r0 \
+        nghttp2-libs=1.69.0-r0 \
+        zstd-libs=1.5.7-r0 \
+    && rm -rf /apk-snapshot \
+    && addgroup -S -g 1000 minio \
+    && adduser -S -u 1000 -G minio minio
 
 COPY --from=builder /build/minio /usr/local/bin/minio
 

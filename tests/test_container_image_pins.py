@@ -39,6 +39,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CANONICAL_COMPOSE = os.path.join(REPO_ROOT, "docker-compose.yml")
 MINIO_DOCKERFILE = os.path.join(REPO_ROOT, "deploy", "minio", "Dockerfile")
+APK_PIN_SCRIPT = os.path.join(REPO_ROOT, "deploy", "minio", "apk-pin-install.sh")
 
 #: The upstream commit the canonical deployment is pinned to. Recorded here as
 #: well as in Compose so that changing one without the other fails a test.
@@ -56,37 +57,37 @@ PINNED_APK_PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]*=[0-9][^\s;]*$")
 #: Options whose value is the following token rather than a package name.
 APK_OPTIONS_WITH_VALUE = ("--repository", "--repositories-file", "--cache-dir")
 
+#: Repositories whose package index is pinned.
+PINNED_APK_REPOSITORIES = ("main", "community")
+
 #: Architectures the APK index digests are recorded for. The base images are
 #: multi-arch OCI index digests, so the image builds on any of these and the
 #: package snapshot has to be pinned for each of them.
 PINNED_ARCHITECTURES = ("x86_64", "aarch64")
 
-#: Repositories whose package index is pinned.
-PINNED_APK_REPOSITORIES = ("main", "community")
 
+def _apk_pin_install_invocations() -> list[list[str]]:
+    """Package arguments of every ``apk-pin-install.sh`` call in the Dockerfile.
 
-def _stages() -> list[tuple[str, str]]:
-    """(stage-name, unfolded-instruction-text) for every Dockerfile stage."""
-    text = _joined_instructions(MINIO_DOCKERFILE)
-    marker = "AS builder"
-    return [("builder", text.split(marker, 1)[0]), ("runtime", text.split(marker, 1)[1])]
-
-
-def _apk_add_invocations(stage: str) -> list[str]:
-    """The argument list of each ``apk add`` command in a stage.
-
-    The `apk add` prefix itself is dropped so callers see only packages and
-    options.
+    Matching is line-anchored: the helper's path also appears in ``COPY``
+    instructions and in the guard test's own docstring, and neither is an
+    install site. Arguments are cut at the first shell operator so a trailing
+    ``&& rm -rf`` cleanup is not mistaken for a package.
     """
     invocations = []
-    for fragment in re.split(r";|&&", stage):
-        if "apk add" in fragment:
-            invocations.append(fragment.split("apk add", 1)[1])
+    for line in _joined_instructions(MINIO_DOCKERFILE).splitlines():
+        match = re.match(r"^\s*RUN\s+apk-pin-install\.sh\s+\S+(.*)$", line)
+        if match:
+            arguments = re.split(r"&&|\|\||;", match.group(1), maxsplit=1)[0]
+            invocations.append(_apk_packages(arguments))
     return invocations
 
 
 def _apk_packages(invocation: str) -> list[str]:
-    """Package names in an ``apk add`` command, with options and values removed."""
+    """Package names in an apk install command, with options and values removed.
+
+    The first argument is the snapshot directory, not a package.
+    """
     packages: list[str] = []
     expecting_value = False
     for token in invocation.split():
@@ -96,8 +97,10 @@ def _apk_packages(invocation: str) -> list[str]:
         if token.startswith("-"):
             expecting_value = token in APK_OPTIONS_WITH_VALUE
             continue
-        packages.append(token)
-    return packages
+        if token.startswith("/"):
+            continue
+        packages.append(token.rstrip("&;"))
+    return [package for package in packages if package]
 
 
 def _read(path: str) -> str:
@@ -304,52 +307,83 @@ def test_dockerfile_base_images_are_pinned_by_digest():
 
 # ── apk inputs are pinned too, not only the base images ────────────────────
 def test_apk_packages_are_pinned_to_exact_versions():
-    """Every `apk add` package must carry an exact `=version-rN`.
+    """Every installed apk package must carry an exact `=version-rN`.
 
     Digest-pinning `FROM` does not pin what the build installs. An unversioned
     `apk add` resolves the newest available package from the live Alpine
     repositories, so rebuilding this same commit on a later day could produce a
     different image -- the same drift one layer down.
     """
-    found_any = False
-    for stage_name, stage in _stages():
-        for invocation in _apk_add_invocations(stage):
-            packages = _apk_packages(invocation)
-            assert packages, f"{stage_name} has an `apk add` with no packages: {invocation!r}"
-            for package in packages:
-                assert PINNED_APK_PACKAGE_RE.match(package), (
-                    f"{stage_name} installs unpinned apk package {package!r}; a version tag can be "
-                    "superseded upstream and change the artifact without changing the Git commit"
-                )
-            found_any = True
-    assert found_any, "expected at least one `apk add` to check"
-
-
-def test_apk_resolution_uses_a_verified_local_snapshot():
-    """The package *index* must be pinned, or the transitive closure still floats.
-
-    Pinning only the directly requested packages still leaves every dependency
-    they pull in resolving from a live index. The guard therefore requires that
-    the index is verified by digest and then served to apk over `file://`, so
-    apk resolves the whole closure from bytes that were checked.
-    """
-    for stage_name, stage in _stages():
-        invocations = _apk_add_invocations(stage)
-        if not invocations:
-            continue
-        for invocation in invocations:
-            repositories = re.findall(r"--repository\s+(\S+)", invocation)
-            assert repositories, (
-                f"{stage_name} resolves packages from apk's default repositories; pass "
-                "--repository explicitly so the index in use is the pinned one"
+    invocations = _apk_pin_install_invocations()
+    assert invocations, "expected at least one pinned apk install to check"
+    for invocation in invocations:
+        for package in invocation:
+            assert PINNED_APK_PACKAGE_RE.match(package), (
+                f"unpinned apk package {package!r}; a version can be superseded upstream and change "
+                "the artifact without changing the Git commit"
             )
-            for repository in repositories:
-                assert repository.startswith("file://"), (
-                    f"{stage_name} resolves from {repository!r}, which is not the verified local "
-                    "snapshot; a network index can move between the digest check and the install"
-                )
-        assert "sha256sum" in stage, f"{stage_name} must verify the index digest before installing"
-        assert "exit 1" in stage, f"{stage_name} must fail closed on an unpinned index"
+
+
+def test_apk_install_is_isolated_from_the_network():
+    """The install must not be able to fall back to the live Alpine indexes.
+
+    This is the check that the previous implementation failed. Verifying the
+    index digest and then passing it via `--repository` looks equivalent but is
+    not: apk expects `$repository/$arch/APKINDEX.tar.gz` with `.apk` payloads
+    beside it, and `--repository` *supplements* rather than replaces
+    `/etc/apk/repositories`. The base image's live repositories therefore stay
+    enabled, the local repository is unusable, and the build resolves its
+    dependencies from the network while appearing to honour the pin.
+
+    The install must instead rewrite `/etc/apk/repositories` so no network
+    repository remains, and must run apk with `--no-network` so a missing or
+    corrupt payload fails the build instead of being fetched.
+    """
+    script = _read(APK_PIN_SCRIPT)
+
+    assert "> /etc/apk/repositories" in script, (
+        "the snapshot must replace /etc/apk/repositories; --repository alone leaves the base "
+        "image's live Alpine repositories enabled, so the verified digests would not pin anything"
+    )
+    # Every executable apk invocation must be offline, not just some of them:
+    # a single networked `apk add` reopens the exact hole this guards against.
+    add_commands = re.findall(r"^\s*apk\s+(add|upgrade|fix)\b(.*)$", script, re.MULTILINE)
+    assert add_commands, "the helper must install through apk"
+    for command, arguments in add_commands:
+        assert "--no-network" in arguments, (
+            f"`apk {command}` runs without --no-network; if a payload is missing it would be "
+            "fetched from the mutable network index and the verified digest would pin nothing"
+        )
+
+    # The payloads have to be staged, or an offline install cannot succeed and
+    # the isolation above would only ever produce a failed build.
+    assert ".apk" in script, "the snapshot must stage the .apk payloads the index references"
+
+    # The transitive closure is supplied by the caller, not parsed out of apk.
+    # `apk add --simulate` was tried and is not safe to parse: an upgrade prints
+    # a `breaks:` block for the *installed* version instead of an
+    # `Installing`/`Upgrading` line for the target, so the payload was silently
+    # never staged and the build failed with "package mentioned in index not
+    # found". Rejecting --simulate here keeps that trap from coming back.
+    assert "--simulate" not in script, (
+        "the closure must be declared by the caller, not parsed from `apk add --simulate`; that "
+        "output omits packages being upgraded, which silently under-stages the snapshot"
+    )
+
+    # Every package handed to the helper must be pinned, and must actually be
+    # present afterwards; an unpinned spec would resolve from the network.
+    assert "is not pinned to an exact version" in script, (
+        "the helper must reject a package specification that carries no exact version"
+    )
+    assert "apk info -e" in script, (
+        "the helper must verify each pin landed, so a silently different resolution cannot pass"
+    )
+
+    # And the Dockerfile must not reintroduce a bare network install.
+    instructions = _joined_instructions(MINIO_DOCKERFILE)
+    assert "--repository" not in instructions, (
+        "--repository supplements the system repositories; it cannot be used to isolate the build"
+    )
 
 
 def test_apk_index_digests_are_recorded_for_every_supported_architecture():
@@ -375,16 +409,80 @@ def test_apk_index_digests_are_recorded_for_every_supported_architecture():
     for name, digest in recorded.items():
         assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{name} is not a well-formed sha256: {digest!r}"
 
-    # An architecture the pins do not cover must not fall through to a live
-    # index: the `case` in the RUN bodies has to refuse it instead.
-    for stage_name, stage in _stages():
-        if not _apk_add_invocations(stage):
-            continue
-        assert "uname -m" in stage, f"{stage_name} must select the pinned digest by architecture"
-        for architecture in PINNED_ARCHITECTURES:
-            assert f"APK_INDEX_MAIN_{architecture.upper()}" in stage, (
-                f"{stage_name} does not read the x86_64/aarch64 pins it declares"
-            )
+    # Every stage that installs packages must pass the pins through, and the
+    # helper must refuse an architecture that has none.
+    script = _read(APK_PIN_SCRIPT)
+    assert "uname -m" in script, "the helper must select the pinned digest by architecture"
+    for architecture in PINNED_ARCHITECTURES:
+        assert f"APK_INDEX_MAIN_{architecture.upper()}" in script, (
+            f"the helper does not read the {architecture} pin it declares"
+        )
+    assert "exit 1" in script, "an architecture with no recorded pin must fail the build"
+
+
+def test_apk_install_pins_the_whole_transitive_closure():
+    """The declared package set must include the transitive dependencies.
+
+    Listing only the directly requested packages is what leaves the build
+    resolving dependencies from a live index, so each stage has to carry its
+    full closure. These are the dependencies of the direct requirements in each
+    stage; trimming the list back to the direct three/five would break the
+    offline install, which is exactly the signal we want a guard to give.
+    """
+    invocations = _apk_pin_install_invocations()
+    assert len(invocations) == 2, "expected one pinned install per stage"
+
+    # Identify each stage by its direct requirements rather than by position.
+    stages = {frozenset(package.split("=", 1)[0] for package in invocation) for invocation in invocations}
+    runtime = next((names for names in stages if "curl" in names), None)
+    builder = next((names for names in stages if "checkdeps" not in names and {"bash", "perl", "git"} <= names), None)
+    assert runtime is not None, "could not identify the runtime stage's pinned package set"
+    assert builder is not None, "could not identify the builder stage's pinned package set"
+
+    assert {"curl", "ca-certificates", "tzdata"} <= runtime, "the runtime stage lost a direct package"
+    assert {"libcurl", "libpsl", "zstd-libs", "nghttp2-libs", "c-ares"} <= runtime, (
+        "the runtime stage no longer pins curl's dependency closure; it would resolve from the "
+        "network index at build time"
+    )
+
+    assert {"bash", "perl", "git", "make"} <= builder, "the builder stage lost one of the checkdeps.sh requirements"
+    assert {"perl-git", "git-perl", "pcre2", "libncursesw"} <= builder, (
+        "the builder stage no longer pins its dependency closure; it would resolve from the network index at build time"
+    )
+
+
+def test_apk_install_goes_through_the_verified_snapshot_helper():
+    """Both stages must install through the shared, auditable helper.
+
+    The verification logic is security-relevant: a copy pasted into each
+    Dockerfile could drift so that one stage silently stops honouring the pin.
+    """
+    assert os.path.isfile(APK_PIN_SCRIPT), "deploy/minio/apk-pin-install.sh must exist"
+    assert os.access(APK_PIN_SCRIPT, os.X_OK), (
+        "the snapshot helper must be executable; the Dockerfile invokes it directly"
+    )
+
+    # A syntax error here only surfaces when someone builds the image, which is
+    # not a CI gate (the Dockerfile check is deliberately validity-only). The
+    # shell parses the same way in the base images, so this is cheap and exact.
+    import subprocess
+
+    for shell in ("sh", "dash"):
+        result = subprocess.run([shell, "-n", APK_PIN_SCRIPT], capture_output=True, text=True, check=False)
+        if result.returncode != 0 and result.stderr:
+            # dash may be absent; sh is always present on the runners.
+            assert shell == "sh", f"unexpected {shell} failure: {result.stderr}"
+            pytest.fail(f"the snapshot helper is not valid shell: {result.stderr}")
+
+    content = _instructions(MINIO_DOCKERFILE)
+    copies = len(re.findall(r"^COPY\s+deploy/minio/apk-pin-install\.sh\b", content, re.MULTILINE))
+    assert copies == 2, (
+        f"expected the helper to be copied into both stages, found {copies}; a stage that "
+        "installs packages without it is not pinned"
+    )
+
+    invocations = re.findall(r"^RUN\s+apk-pin-install\.sh\s+\S+((?:.|\s)*?)(?:&&|\\$)", content, re.MULTILINE)
+    assert len(invocations) == 2, "each stage must invoke the helper exactly once"
 
 
 def test_apk_repository_is_pinned_to_a_named_release():
