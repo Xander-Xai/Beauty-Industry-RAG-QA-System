@@ -80,6 +80,12 @@ services:
   # MINIO_COMMIT is the final commit on master of the archived upstream
   # repository (7aac2a2c5b7c882e68c1ce017d8256be2feea27f, 2026-02-12) and is
   # verified by tests/test_container_image_pins.py.
+  #
+  # `pull_policy: build` is load-bearing. The image tag encodes only the
+  # upstream MinIO commit, so it does not change when this Dockerfile changes;
+  # without an explicit build policy a host that already has the tag would
+  # silently reuse the cached image and skip digest pins, the non-root
+  # runtime, or any later deliberate base-image refresh.
   minio:
     build:
       context: .
@@ -87,6 +93,7 @@ services:
       args:
         MINIO_COMMIT: 7aac2a2c5b7c882e68c1ce017d8256be2feea27f
     image: beauty-rag-minio:7aac2a2c
+    pull_policy: build
     expose:
       - "9001"
     environment:

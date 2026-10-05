@@ -50,6 +50,55 @@ FLOATING_SOURCE_REFS = ("master", "main", "latest", "HEAD")
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
+#: An apk package pinned to an exact Alpine version, e.g. ``curl=8.14.1-r3``.
+PINNED_APK_PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]*=[0-9][^\s;]*$")
+
+#: Options whose value is the following token rather than a package name.
+APK_OPTIONS_WITH_VALUE = ("--repository", "--repositories-file", "--cache-dir")
+
+#: Architectures the APK index digests are recorded for. The base images are
+#: multi-arch OCI index digests, so the image builds on any of these and the
+#: package snapshot has to be pinned for each of them.
+PINNED_ARCHITECTURES = ("x86_64", "aarch64")
+
+#: Repositories whose package index is pinned.
+PINNED_APK_REPOSITORIES = ("main", "community")
+
+
+def _stages() -> list[tuple[str, str]]:
+    """(stage-name, unfolded-instruction-text) for every Dockerfile stage."""
+    text = _joined_instructions(MINIO_DOCKERFILE)
+    marker = "AS builder"
+    return [("builder", text.split(marker, 1)[0]), ("runtime", text.split(marker, 1)[1])]
+
+
+def _apk_add_invocations(stage: str) -> list[str]:
+    """The argument list of each ``apk add`` command in a stage.
+
+    The `apk add` prefix itself is dropped so callers see only packages and
+    options.
+    """
+    invocations = []
+    for fragment in re.split(r";|&&", stage):
+        if "apk add" in fragment:
+            invocations.append(fragment.split("apk add", 1)[1])
+    return invocations
+
+
+def _apk_packages(invocation: str) -> list[str]:
+    """Package names in an ``apk add`` command, with options and values removed."""
+    packages: list[str] = []
+    expecting_value = False
+    for token in invocation.split():
+        if expecting_value:
+            expecting_value = False
+            continue
+        if token.startswith("-"):
+            expecting_value = token in APK_OPTIONS_WITH_VALUE
+            continue
+        packages.append(token)
+    return packages
+
 
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as handle:
@@ -64,6 +113,26 @@ def _instructions(path: str) -> str:
     an ENTRYPOINT check.
     """
     return "\n".join(line for line in _read(path).splitlines() if not line.lstrip().startswith("#"))
+
+
+def _joined_instructions(path: str) -> str:
+    """Instructions with ``\\`` line continuations folded onto one line.
+
+    The apk installs are multi-line ``RUN`` bodies, so any guard that has to
+    reason about a whole command has to see it unfolded.
+    """
+    folded: list[str] = []
+    buffer = ""
+    for line in _instructions(path).splitlines():
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1] + " "
+            continue
+        folded.append(buffer + stripped)
+        buffer = ""
+    if buffer:
+        folded.append(buffer)
+    return "\n".join(folded)
 
 
 def _compose() -> dict:
@@ -231,6 +300,142 @@ def test_dockerfile_base_images_are_pinned_by_digest():
     # and an operator can see what they are updating away from.
     for image in base_images:
         assert image.split("@", 1)[0].count(":"), f"base image {image!r} should keep a readable tag next to its digest"
+
+
+# ── apk inputs are pinned too, not only the base images ────────────────────
+def test_apk_packages_are_pinned_to_exact_versions():
+    """Every `apk add` package must carry an exact `=version-rN`.
+
+    Digest-pinning `FROM` does not pin what the build installs. An unversioned
+    `apk add` resolves the newest available package from the live Alpine
+    repositories, so rebuilding this same commit on a later day could produce a
+    different image -- the same drift one layer down.
+    """
+    found_any = False
+    for stage_name, stage in _stages():
+        for invocation in _apk_add_invocations(stage):
+            packages = _apk_packages(invocation)
+            assert packages, f"{stage_name} has an `apk add` with no packages: {invocation!r}"
+            for package in packages:
+                assert PINNED_APK_PACKAGE_RE.match(package), (
+                    f"{stage_name} installs unpinned apk package {package!r}; a version tag can be "
+                    "superseded upstream and change the artifact without changing the Git commit"
+                )
+            found_any = True
+    assert found_any, "expected at least one `apk add` to check"
+
+
+def test_apk_resolution_uses_a_verified_local_snapshot():
+    """The package *index* must be pinned, or the transitive closure still floats.
+
+    Pinning only the directly requested packages still leaves every dependency
+    they pull in resolving from a live index. The guard therefore requires that
+    the index is verified by digest and then served to apk over `file://`, so
+    apk resolves the whole closure from bytes that were checked.
+    """
+    for stage_name, stage in _stages():
+        invocations = _apk_add_invocations(stage)
+        if not invocations:
+            continue
+        for invocation in invocations:
+            repositories = re.findall(r"--repository\s+(\S+)", invocation)
+            assert repositories, (
+                f"{stage_name} resolves packages from apk's default repositories; pass "
+                "--repository explicitly so the index in use is the pinned one"
+            )
+            for repository in repositories:
+                assert repository.startswith("file://"), (
+                    f"{stage_name} resolves from {repository!r}, which is not the verified local "
+                    "snapshot; a network index can move between the digest check and the install"
+                )
+        assert "sha256sum" in stage, f"{stage_name} must verify the index digest before installing"
+        assert "exit 1" in stage, f"{stage_name} must fail closed on an unpinned index"
+
+
+def test_apk_index_digests_are_recorded_for_every_supported_architecture():
+    """Both stages pin an index digest per repository and architecture.
+
+    The base images are multi-arch OCI index digests, so the image builds on
+    more than one architecture. A pin recorded for only the build host's
+    architecture would leave the others silently unpinned.
+    """
+    content = _instructions(MINIO_DOCKERFILE)
+    declared = re.findall(r"^ARG\s+(APK_INDEX_\w+)=(\S+)", content, re.MULTILINE)
+    assert declared, "the Dockerfile must record the APK index digests as build args"
+
+    recorded = {name: digest for name, digest in declared}
+    expected_names = {
+        f"APK_INDEX_{repository.upper()}_{architecture.upper()}"
+        for repository in PINNED_APK_REPOSITORIES
+        for architecture in PINNED_ARCHITECTURES
+    }
+    missing = expected_names - set(recorded)
+    assert not missing, f"APK inputs are not pinned for every repository/architecture: {sorted(missing)}"
+
+    for name, digest in recorded.items():
+        assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{name} is not a well-formed sha256: {digest!r}"
+
+    # An architecture the pins do not cover must not fall through to a live
+    # index: the `case` in the RUN bodies has to refuse it instead.
+    for stage_name, stage in _stages():
+        if not _apk_add_invocations(stage):
+            continue
+        assert "uname -m" in stage, f"{stage_name} must select the pinned digest by architecture"
+        for architecture in PINNED_ARCHITECTURES:
+            assert f"APK_INDEX_MAIN_{architecture.upper()}" in stage, (
+                f"{stage_name} does not read the x86_64/aarch64 pins it declares"
+            )
+
+
+def test_apk_repository_is_pinned_to_a_named_release():
+    """The repository URL must name a release branch, not a floating path.
+
+    `dl-cdn.alpinelinux.org/alpine/latest` is a moving target; the digest check
+    is only meaningful against a named release.
+    """
+    content = _instructions(MINIO_DOCKERFILE)
+    urls = re.findall(r"^ARG\s+APK_REPOSITORY=(\S+)", content, re.MULTILINE)
+    assert urls, "the Dockerfile must record the Alpine repository URL as a build arg"
+    for url in urls:
+        assert re.fullmatch(r"https://[\w.-]+/alpine/v\d+\.\d+", url), (
+            f"APK_REPOSITORY {url!r} must be a named Alpine release (…/alpine/vMAJOR.MINOR)"
+        )
+
+
+# ── data directory ownership must survive both builders ────────────────────
+def test_data_directory_is_owned_before_the_volume_is_declared():
+    """`mkdir` + `chown` must precede `VOLUME`.
+
+    Docker's legacy builder discards filesystem changes made after a VOLUME
+    instruction, so a chown placed after VOLUME is silently dropped when the
+    image is built with `DOCKER_BUILDKIT=0`. A fresh named volume then inherits
+    root ownership and the UID 1000 process cannot initialise it.
+    """
+    instructions = _instructions(MINIO_DOCKERFILE)
+    volume_positions = [m.start() for m in re.finditer(r"^VOLUME\b", instructions, re.MULTILINE)]
+    assert volume_positions, "the runtime stage must still declare the /minio_data volume"
+
+    for match in re.finditer(r"chown\s+minio:minio\s+/minio_data", instructions):
+        assert match.start() < min(volume_positions), (
+            "chown minio:minio /minio_data must come before VOLUME; the legacy builder discards "
+            "changes made after VOLUME, leaving /minio_data root-owned"
+        )
+
+
+# ── the local image must actually be rebuilt when the recipe changes ───────
+def test_minio_service_rebuilds_when_the_dockerfile_changes(minio_service):
+    """`docker compose up -d` must not silently reuse a stale local tag.
+
+    The image tag encodes only the upstream MinIO commit, so it does not change
+    when the Dockerfile does. Without an explicit build policy a host that
+    already has `beauty-rag-minio:<tag>` reuses the cached image and skips the
+    digest pins, the non-root runtime, and any later deliberate refresh.
+    """
+    assert minio_service.get("pull_policy") == "build", (
+        "the MinIO service must set `pull_policy: build`; the image tag is derived from the "
+        "upstream commit, so `docker compose up -d` would otherwise reuse a cached image and "
+        "silently skip the current recipe"
+    )
 
 
 # ── 6/7/8. the MinIO runtime contract is preserved ──────────────────────────

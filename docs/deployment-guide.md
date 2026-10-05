@@ -97,7 +97,9 @@ MinIO 镜像来源：canonical Compose 不再拉取公共 `minio/minio` 镜像�
 - **license / provenance 边界**：MinIO 是 **external AGPLv3 依赖**，源码在构建时从官方 upstream 拉取；本仓库**不 vendor、不复制、不重新授权** MinIO 代码，也不改写其许可证。本节仅记录依赖来源，不构成任何许可证结论；具体的 AGPLv3 义务由使用者自行评估。
 - 本地镜像名为 `beauty-rag-minio:7aac2a2c`（tag 即 pinned commit 前 8 位），构建产物带 OCI label 记录 upstream commit，便于审计。
 - builder / runtime 基础镜像按 **digest** 固定（`golang:1.24-alpine3.22@sha256:3641e0d9…`、`alpine:3.22.6@sha256:5291449c…`）。仅固定版本 tag 不够：同一 tag 下 Go patch 与 Alpine manifest 仍可能被重建，从而在同一 Git commit 下产出不同二进制。升级基础镜像时请用 `docker buildx imagetools inspect <image>` 取新 digest 并在同一个 commit 里同时更新 tag 与 digest、写明原因。
-- 容器以非 root 身份（uid/gid `1000`，用户 `minio`）运行；旧的公共镜像以 root 运行。**新建**的 `minio-data` 卷会自动继承该属主，无需额外操作；若你的卷是旧 root 镜像创建的，需要一次性移交：
+- **apk 输入同样被固定**，否则仅固定基础镜像仍不够：`apk add` 未写版本时会从可变的 Alpine 仓库解析到最新包（Alpine 明确说明安装会选最新可用包）。构建同时做到两点——每个包都写成 `name=version-rN`，并且**按仓库 × 架构记录 `APKINDEX.tar.gz` 的 sha256**，校验通过后以 `file://` 本地快照目录交给 apk 解析，因此**整个传递依赖闭包**都来自已校验的字节，而不是只固定直接依赖。代价是：v3.22 分支一旦发布安全更新，**构建会直接失败**而不是悄悄换掉产物；刷新时按 Dockerfile 注释里的 `curl` + `sha256sum` 取新 digest，在同一个 commit 里同时更新 4 个 `APK_INDEX_*`、包版本与基础镜像 digest。仓库固定为 `https://dl-cdn.alpinelinux.org/alpine/v3.22`，不使用 `latest`；未记录的架构会直接拒绝构建。
+- MinIO 服务设置了 `pull_policy: build`。镜像 tag 只编码上游 MinIO commit，**不会**随 Dockerfile 变化而变化；如果不加这条策略，已持有该 tag 的主机在 `docker compose up -d` 时会直接复用缓存镜像，从而静默跳过 digest 固定、非 root 运行时以及后续任何一次有意的升级。
+- 容器以非 root 身份（uid/gid `1000`，用户 `minio`）运行；旧的公共镜像以 root 运行。`/minio_data` 的 `mkdir` + `chown` 放在 `VOLUME` **之前**：legacy builder 会丢弃 `VOLUME` 之后的文件系统改动，顺序反了会让新建卷继承 root 属主、非 root 进程无法初始化。**新建**的 `minio-data` 卷会自动继承该属主，无需额外操作；若你的卷是旧 root 镜像创建的，需要一次性移交：
   `docker run --rm -v <project>_minio-data:/minio_data alpine:3.22.6 chown -R 1000:1000 /minio_data`
 - 构建需要 Go module 下载（`proxy.golang.org`）与 git 可达性；首次构建耗时较长属正常。
 - 端口、卷（`minio-data:/minio_data`）、`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`、healthcheck 与 server command 均未改动。
