@@ -12,6 +12,7 @@ GET  /metrics - Prometheus 文本格式指标
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -246,6 +247,31 @@ def dialog_history_handler(
 # ─── GET /api/health ────────────────────────────────────────
 
 
+def _elasticsearch_client_kwargs(es_cfg: dict) -> dict:
+    """构造 Elasticsearch 客户端 kwargs，凭据契约与 BM25Retriever 保持一致。
+
+    canonical Compose 启用了 ``xpack.security.enabled=true``，因此健康检查必须
+    和真实运行时客户端用同一套凭据，否则一个完全可用的认证 ES 会被误报为 degraded。
+
+    契约（与 ``retrieval/bm25_retriever.py`` 的 ``es_client`` 一致）：
+    - 环境变量优先，``config.json`` 回退；
+    - username **与** password 均非空时才设置 ``basic_auth``（缺一即匿名）；
+    - 凭据缺失时保持匿名调用，兼容未开启 security 的部署。
+
+    Args:
+        es_cfg: ``config.json`` 中的 ``elasticsearch`` 段。
+
+    Returns:
+        传给 ``Elasticsearch(...)`` 的 kwargs。
+    """
+    kwargs: dict = {"hosts": [es_cfg.get("host", "http://localhost:9200")]}
+    username = os.environ.get("ELASTICSEARCH_USERNAME") or es_cfg.get("username", "")
+    password = os.environ.get("ELASTICSEARCH_PASSWORD") or es_cfg.get("password", "")
+    if username and password:
+        kwargs["basic_auth"] = (username, password)
+    return kwargs
+
+
 @router.get(
     "/health",
     response_model=HealthResponse,
@@ -290,8 +316,8 @@ def health_handler():
     try:
         from elasticsearch import Elasticsearch
 
-        es = Elasticsearch([_config["elasticsearch"]["host"]])
-        checks["elasticsearch"] = es.ping()
+        es = Elasticsearch(**_elasticsearch_client_kwargs(_config.get("elasticsearch", {})))
+        checks["elasticsearch"] = bool(es.ping())
     except Exception as e:
         logger.debug(f"Elasticsearch health check failed: {e}")
 
