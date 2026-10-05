@@ -38,6 +38,10 @@ levels; see [Run outcomes that are not evidence levels](interview-evidence-map.m
 - [Operations guide](operations-guide.md)
 - [Data administration guide](data-admin-guide.md)
 - [Repository truth audit](repository-truth-audit.md)
+- [Repository metadata packet](repository-metadata.md): the intended GitHub About configuration
+  (description, 20 topics, homepage policy, social preview) and the rules it must obey — no
+  homepage that points at a deployment that does not exist, and nothing in the metadata that
+  outruns the evidence.
 - [Security regression coverage](security-regression-coverage.md): the fixed threat list
   (retrieved-chunk injection, poisoned documents, forged boundary markers, cross-role
   retrieval and L2 cache leakage, malformed JWT claims, deletion/stale chunks), the control
@@ -87,6 +91,12 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
 
 - [Interview architecture baseline](interview-architecture-baseline.md): the current
   end-to-end retrieval/generation contract an interviewer can hold the code to.
+- [Interview walkthrough](interview-walkthrough.md): a 5-minute screen-share script that walks
+  the questions an interviewer actually asks — business context, architecture, one query end to
+  end, hybrid retrieval, rerank, the two gates, multimodal ingestion, RBAC, cache, model routing,
+  observability, evaluation, Docker/Kubernetes, degradation and the unvalidated boundary. Each
+  section names the files to open. It is navigation only: the baseline, the evidence map and the
+  truth audit remain the sole sources of truth.
 - [Interview evidence map](interview-evidence-map.md): the canonical evidence vocabulary
   and the classification of every claim. This map owns the taxonomy; the truth audit's
   `Status` column and the validation records' `Evidence level` columns use the same
