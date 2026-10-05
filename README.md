@@ -4,7 +4,7 @@
 >
 > **技术含量在哪**：不是"接了个向量库"。在线链路是**动态 2–4 路召回 → 两级重排 → Evidence/Answer 双 Gate 拦截幻觉 → RBAC 纵深防御 → 4B/14B 模型路由**，离线侧是**多模态解析 + 知识版本封存 / 人工激活**的分发布纪律。
 >
-> **最想展示的能力是证据治理**：每条能力都带证据等级，`scripts/check_repo_consistency.py` 在 CI 中强制这些标注不得漂移——文档说谎会被机器拦住。
+> **最想展示的能力是证据治理**：每条能力都带 canonical 证据等级，`scripts/check_repo_consistency.py` 在 CI 中拦截该守卫覆盖的口径漂移——证据等级越界、文档链接与路径失效、枚举与 SLO 计数对不上、引用不存在的指标 series。它只校验这些可机械判定的契约，**不判断任意自然语言陈述的真实性**。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python 3.10 | 3.11](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)
@@ -38,17 +38,20 @@
 | 7 | **哪些还没有真实验证** | `PENDING`：真实 QPS/延迟产物、真实检索 benchmark 结果、真实 RAGAS 分数、OTLP 运行期闭环尚未跑通、告警在生产触发、真实 4B/14B vLLM GPU 部署、真实 BGE/CLIP/PaddleOCR smoke | [Repository-Reproducible Evidence](#repository-reproducible-evidence) |
 | 8 | **怎么进入架构 / 代码 / demo** | 架构：本页 Architecture 图 · 代码：`core/pipeline.py` + `retrieval/parallel_recall.py` · Demo：下方演示图与复现命令 · 5 分钟面试脚本：[docs/interview-walkthrough.md](docs/interview-walkthrough.md) | [Quick Start](#quick-start) |
 
-### 三层证据，只用这一套词
+### 六级证据，只用这一套词
+
+仓库的 canonical taxonomy 只有下面**六级**，与 [docs/interview-evidence-map.md → Classification vocabulary](docs/interview-evidence-map.md#classification-vocabulary) 完全一致；本表是它的完整呈现，不是子集，也不存在第二套证据词汇。
 
 | 等级 | 一句话 | 在本仓库对应什么 |
 |---|---|---|
 | `HISTORICAL_PRODUCTION` | 前雇主生产环境事实 | 业务规模与流量背景，**不是**本仓库测量结果 |
+| `HISTORICAL` | 本仓库内已被取代、只为追溯保留的实现 / 配置 / 设计 | 保留的旧阈值引擎 `monitoring/otel_tracer.py` 里的进程内 `AlertingManager`（未接入主链路）；**不是**当前能力，也**不是**前雇主生产事实 |
 | `REPO_VERIFIED` | 这里实现了，且有测试覆盖 | 绝大部分主链路能力 |
 | `LOCAL_REAL_VALIDATION` | 本地对真实依赖跑过 | **只有 5 项**（Redis 会话/限流、nginx 代理信任、认证 ES、认证 Prometheus 抓取） |
-| `PENDING` | 代码在，验证所需的真实资产/运行时/凭据拿不到 | 所有"跑过才知道"的结论 |
 | `DESIGN_TARGET` | 写进文档的目标值 | 5 个 SLO 目标与全部告警阈值 |
+| `PENDING` | 代码在，验证所需的真实资产/运行时/凭据拿不到 | 所有"跑过才知道"的结论 |
 
-完整定义只有一处：[docs/interview-evidence-map.md → Classification vocabulary](docs/interview-evidence-map.md#classification-vocabulary)。
+`HISTORICAL` 与 `HISTORICAL_PRODUCTION` 不可互换：前者说的是本仓库自己的历史代码，后者说的是前雇主的真实生产系统，两者都不是当前能力。
 
 ---
 
@@ -177,7 +180,7 @@ flowchart TB
 
 ### 5 · 仓库自身的证据治理——这是本项目最想展示的能力
 
-一套 canonical 证据等级（`HISTORICAL_PRODUCTION` / `HISTORICAL` / `REPO_VERIFIED` / `LOCAL_REAL_VALIDATION` / `DESIGN_TARGET` / `PENDING`）把"设计目标 / 已实现 / 本地真实验证 / 历史生产"四种话术在文档层面隔离，并由 `scripts/check_repo_consistency.py` 在 CI 里强制：不得把设计目标写成实测、不得引用不存在的指标 series、不得把 RAGAS 缺失写成零分、不得把未测量写成 `0`。文档漂移会被机器拦住。
+一套 canonical 证据等级（`HISTORICAL_PRODUCTION` / `HISTORICAL` / `REPO_VERIFIED` / `LOCAL_REAL_VALIDATION` / `DESIGN_TARGET` / `PENDING`）把"设计目标 / 已实现 / 本地真实验证 / 历史生产"四种话术在文档层面隔离，并由 `scripts/check_repo_consistency.py` 在 CI 里强制：不得把设计目标写成实测、不得引用不存在的指标 series、不得把 RAGAS 缺失写成零分、不得把未测量写成 `0`。上述被守卫覆盖的漂移会在 CI 里被拦截；守卫校验的是这些可机械判定的契约，不判断任意自然语言陈述的真实性。
 
 运维侧同样只认真实存在的东西：`/api/metrics`（需认证）、6 条只引用真实 emit 指标的 Prometheus 告警规则、10 面板 Grafana JSON、9 字段结构化业务动作审计（Redis Stream + 每日 JSONL）、按代码中真实存在的降级路径编写的 SLO + 故障 Runbook，以及**已实现但默认关闭**的 OTLP exporter。
 
@@ -308,7 +311,7 @@ python3 scripts/check_repo_consistency.py
 FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE 文本向量 / CLIP 图像向量写入 Qdrant、文本写入 Elasticsearch。在线侧：身份解析 → 带知识版本与权限指纹的 L1/L2 缓存 → Query Rewrite 与复杂度判断并行 → 动态 2–4 路召回 → 文档级 RBAC 二次过滤 + 加权 RRF → BiEncoder 宽保留 + 双 CrossEncoder 精排 → Evidence Gate → 4B/14B 路由生成 → Answer Gate。生成拓扑是**单一共享 4B 端点**承担 rewrite 与简单生成，复杂请求走 14B。
 
 **Q4 · 你想展示的核心工程能力是什么？**
-- **证据分级与文档治理**：仓库自带一套 canonical 证据等级，并用 `scripts/check_repo_consistency.py` 在 CI 里强制"不得把设计目标写成实测""不得引用不存在的指标 series""不得把 RAGAS 缺失写成零分"。文档漂移会被机器拦住。
+- **证据分级与文档治理**：仓库自带一套 canonical 证据等级，并用 `scripts/check_repo_consistency.py` 在 CI 里强制"不得把设计目标写成实测""不得引用不存在的指标 series""不得把 RAGAS 缺失写成零分"。这些被守卫覆盖的漂移会被 CI 拦住。
 - **降级路径是真的**：Redis→进程内会话、ES→空结果走 dense、Qdrant→BM25-only、rewrite→简单档位，SLO Runbook 按这些真实降级路径编写，不是通用模板。
 - **权限纵深防御**：存储下推 + 融合前位掩码二次过滤 + L2 缓存物理分区，旧 key 不回落（宁可 miss）。
 - **发布纪律**：知识版本 seal 后不可变，激活是显式人工步骤；schema 变更 fail closed 而非静默回退。
