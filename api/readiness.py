@@ -82,10 +82,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: Per-probe timeout. The Kubernetes readinessProbe allows 5s
+#: Per-probe network timeout. The Kubernetes readinessProbe allows 5s
 #: (``timeoutSeconds: 5``), and all probes run concurrently, so the total wall
 #: time stays bounded by roughly this value rather than by their sum.
 PROBE_TIMEOUT_SECONDS = 2.0
+
+#: Slack added on top of the per-probe timeout when collecting results, covering
+#: client construction, DNS and interpreter overhead. It keeps the total budget
+#: comfortably inside the probe's own ``timeoutSeconds``.
+_PROBE_GRACE_SECONDS = 1.0
 
 #: Dependency keys, in a stable order. Used for response determinism and by the
 #: manifest/endpoint tests.
@@ -229,14 +234,20 @@ def probe_redis(ctx: ProbeContext) -> bool:
 
 
 def probe_qdrant(ctx: ProbeContext) -> bool:
-    """True when the dense vector store answers.
+    """True when the dense retrieval path can actually return candidates.
 
-    Uses a real API call. ``QdrantClient.healthcheck()`` is deliberately not
-    used: it does not exist on ``qdrant-client`` 1.18.0, so calling it raises
-    ``AttributeError`` and would report every deployment as Qdrant-down.
-    ``get_collections()`` is the lightest call that genuinely proves the
-    server is reachable.
+    Reachability alone is not enough. ``DenseRetriever.search`` wraps its call in
+    a bare ``except`` that returns ``[]``, so a reachable Qdrant whose configured
+    text collection is missing (a fresh or incomplete deployment) yields no
+    candidates while every reachability check still passes. Reporting that as an
+    available retrieval path would let readiness admit a Pod that cannot serve a
+    single result, so the configured collection must be present.
+
+    ``QdrantClient.healthcheck()`` is deliberately not used: it does not exist on
+    ``qdrant-client`` 1.18.0, so calling it raises ``AttributeError`` and would
+    report every deployment as Qdrant-down.
     """
+    collection = _configured_text_collection()
     try:
         from qdrant_client import QdrantClient
 
@@ -245,25 +256,55 @@ def probe_qdrant(ctx: ProbeContext) -> bool:
             port=ctx.qdrant.get("port", 6333),
             timeout=PROBE_TIMEOUT_SECONDS,
         )
-        client.get_collections()
-        return True
+        return bool(client.collection_exists(collection))
     except Exception:
         logger.debug("readiness: qdrant probe failed")
         return False
 
 
+def _configured_text_collection() -> str:
+    """The collection ``search_qdrant_text`` reads, resolved the same way.
+
+    ``EmbeddingService.search_qdrant_text`` falls back to
+    ``config["embedding"]["text"]["collection"]``; readiness must check the same
+    collection, or it could validate one the runtime never queries.
+    """
+    try:
+        from common.config import get_config_dict
+
+        return get_config_dict()["embedding"]["text"]["collection"]
+    except Exception:
+        logger.debug("readiness: could not resolve the configured text collection")
+        return "rag_text_768"
+
+
 def probe_elasticsearch(ctx: ProbeContext) -> bool:
-    """True when Elasticsearch answers an authenticated ping.
+    """True when Elasticsearch answers an authenticated ping **and is enabled**.
 
     Credential resolution must match ``BM25Retriever.es_client`` and the
     ``/api/health`` sub-check (Issue #43), otherwise readiness would inherit the
     same anonymous-client false negative that fix removed.
+
+    ``elasticsearch.enabled=false`` is treated as unavailable on purpose.
+    ``BM25Retriever.__init__`` reads that flag and ``fallback_search`` returns
+    ``[]`` when it is false, so the runtime never issues a search. A live server
+    behind a disabled flag is not a retrieval path: counting it would satisfy the
+    ``qdrant OR elasticsearch`` rule and admit a Pod whose only working retrieval
+    path is the one that is switched off.
     """
+    es_cfg = ctx.elasticsearch
+    if not es_cfg.get("enabled", True):
+        logger.debug("readiness: elasticsearch is disabled in config")
+        return False
     try:
         from elasticsearch import Elasticsearch
 
-        es_cfg = ctx.elasticsearch
-        kwargs: dict[str, Any] = {"hosts": [es_cfg.get("host", "http://localhost:9200")]}
+        kwargs: dict[str, Any] = {
+            "hosts": [es_cfg.get("host", "http://localhost:9200")],
+            # Bound every request so a stalled server cannot make the probe
+            # outlive the readinessProbe timeoutSeconds budget.
+            "request_timeout": PROBE_TIMEOUT_SECONDS,
+        }
         username = os.environ.get("ELASTICSEARCH_USERNAME") or es_cfg.get("username", "")
         password = os.environ.get("ELASTICSEARCH_PASSWORD") or es_cfg.get("password", "")
         if username and password:
@@ -275,14 +316,18 @@ def probe_elasticsearch(ctx: ProbeContext) -> bool:
 
 
 def probe_minio(ctx: ProbeContext) -> bool:
-    """True when the object store initializes.
+    """True when the object store answers a bucket check.
 
-    Never a blocker: only ``/api/media/{doc_id}`` depends on it.
+    Never a blocker: only ``/api/media/{doc_id}`` depends on it. That is exactly
+    why it must still be bounded — ``MinioClient._try_init`` calls
+    ``bucket_exists()``, and the SDK's default HTTP timeout is unbounded, so a
+    stalled object store could otherwise hold the readiness response open.
     """
     try:
         from common.minio_client import get_minio_client
 
-        return bool(get_minio_client().is_available)
+        client = get_minio_client()
+        return bool(client.is_available)
     except Exception:
         logger.debug("readiness: minio probe failed")
         return False
@@ -361,13 +406,22 @@ def evaluate_readiness(
     Redis and MinIO failures land in ``degraded``: their code paths degrade, so
     they must not remove a serving Pod from rotation.
 
-    All probes run concurrently, so the wall time is bounded by the slowest
-    probe rather than their sum.
+    Every probe is bounded twice. Each one is given its own network timeout (see
+    :data:`PROBE_TIMEOUT_SECONDS`), and this function additionally caps the total
+    wait. A single stalled dependency — including a *degradable* one — must never
+    hold the response past the readinessProbe's ``timeoutSeconds``, because a
+    probe that never answers makes Kubernetes time out every request and drops an
+    otherwise serving Pod.
     """
     context = ctx if ctx is not None else _build_context()
     active = probes if probes is not None else _default_probes(context)
 
-    with ThreadPoolExecutor(max_workers=max(len(DEPENDENCY_KEYS), 1)) as executor:
+    # The `with` block below waits for every worker on exit, which would defeat
+    # the deadline: an overrunning thread keeps the executor alive. So shutdown is
+    # explicit and non-blocking, and `cancel_futures` drops work that has not
+    # started yet. Already-running probes are bounded by their own timeouts.
+    executor = ThreadPoolExecutor(max_workers=max(len(DEPENDENCY_KEYS), 1))
+    try:
         futures = {key: executor.submit(active[key], context) for key in DEPENDENCY_KEYS if key in active}
         dependencies: dict[str, bool] = {}
         for key in DEPENDENCY_KEYS:
@@ -376,12 +430,20 @@ def evaluate_readiness(
                 dependencies[key] = False
                 continue
             try:
-                dependencies[key] = bool(futures[key].result())
+                dependencies[key] = bool(futures[key].result(timeout=PROBE_TIMEOUT_SECONDS + _PROBE_GRACE_SECONDS))
+            except TimeoutError:
+                # Treat an overrunning probe as unavailable rather than waiting
+                # for it: the answer we need is "can it serve right now", and a
+                # probe that cannot answer inside the budget has failed that.
+                logger.debug("readiness: probe %s exceeded its deadline", key)
+                dependencies[key] = False
             except Exception:
                 # evaluate_readiness must not propagate: a broken probe becomes
                 # an unhealthy dependency, not a 500 from the probe endpoint.
                 logger.debug("readiness: probe %s raised", key)
                 dependencies[key] = False
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     required_generation = required_generation_endpoints(context)
 

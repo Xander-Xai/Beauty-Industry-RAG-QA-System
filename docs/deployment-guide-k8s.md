@@ -73,8 +73,10 @@ GET /api/metrics  -> 401   （需认证）
 | Redis | `RedisCache` 保留 L1 进程内缓存并停用 L2；登录限流回退到进程内内存计数器 | **否** → `degraded` |
 | Elasticsearch（BM25） | Qdrant 稠密召回仍能返回候选 | **否** → `degraded` |
 | Qdrant（稠密） | BM25 召回仍能返回候选 | **否** → `degraded` |
+| Qdrant 可达但缺少配置的 text collection | `DenseRetriever.search` 吞掉异常并返回 `[]`，实际上无候选可召回 | **否** → 与 `Qdrant + ES` 同结论 |
 | **Qdrant + Elasticsearch 同时不可用** | 召回为空 → Evidence Gate 拒绝 → 每个 query 都返回结构化拒答，**无服务能力** | **是** → `blockers: ["retrieval"]` |
 | MinIO | 仅 `/api/media/{doc_id}` 返回 503；query/chat 不受影响 | **否** → `degraded` |
+| `elasticsearch.enabled=false` | `BM25Retriever` 不发起检索，`fallback_search` 直接返回 `[]`；存活但不启用不算检索通路 | **否** → 同 `Qdrant + ES` 结论 |
 | gen_4b | `simple` 与 `rewrite` 两个 tier 在任何部署下都路由到它 | **是** |
 | gen_14b | `complex` tier 在**生产模式**下路由到它，且**没有运行期回退到 4B** | **是**（仅生产模式） |
 
@@ -82,7 +84,11 @@ GET /api/metrics  -> 401   （需认证）
 
 **生成端点按部署自身的路由配置判定**，而不是硬编码生产拓扑：非生产模式下 `resolve_model_endpoint` 会把 `complex` tier 改写为 `simple`，因此只有 `gen_4b` 是必需的；生产模式下 `gen_14b` 也是必需的 —— `LLMClient.generate` 在失败时是 `raise` 而非回退，所以一个连不上 `gen_14b` 的 Pod 确实无法服务它会被路由过去的请求，称之为 ready 是不诚实的。
 
-**为什么不能因为「怕探测模型」就假装生成不关键**：一个「检索健康但模型完全不可用」的 Pod 会通过 `all(qdrant, elasticsearch)` 这类判定，然后接收请求并全部失败。探针使用 OpenAI 兼容的 `GET /v1/models`，不发送任何真实生成请求。
+**为什么不能因为「怕探测模型」就假装生成不关键**：一个「检索健康但模型完全可用性为零」的 Pod 会通过 `all(qdrant, elasticsearch)` 这类判定，然后接收请求并全部失败。探针使用 OpenAI 兼容的 `GET /v1/models`，不发送任何真实生成请求。
+
+**探测自身必须有界**：每个探针都有自己的网络超时（Elasticsearch 用 `request_timeout`，vLLM 与 Qdrant 用客户端 timeout），评估器另外对整体等待设了上限并以非阻塞方式关闭线程池。原因是 `readinessProbe` 只有 5s（`timeoutSeconds: 5`）——**一个卡住的探针会让端点永不返回，Kubernetes 于是把一个本可服务的 Pod 摘出流量**，即使卡住的是 Redis 或 MinIO 这种本该只是 `degraded` 的依赖。超过预算的探针一律记为不可用。
+
+**「可达」不等于「可用」**：Qdrant 探针会校验配置的 text collection（`embedding.text.collection`）确实存在，而不是只看 `get_collections()` 成功；`DenseRetriever.search` 把异常吞成 `[]`，因此一个空 collection 实际上召不回任何东西。同理，`elasticsearch.enabled=false` 时 BM25 根本不发起检索，存活但不启用不能算检索通路。
 
 响应示例：
 
@@ -111,7 +117,7 @@ GET /api/metrics  -> 401   （需认证）
 | `test_startup_probe_remains_process_liveness_only` | startup 不与依赖可用性耦合 |
 | `test_probe_endpoints_are_registered_and_unauthenticated` | 探针指向的端点必须真实存在且不需要用户 JWT |
 
-端点语义由 `tests/test_readiness_contract.py`（判定逻辑）与 `tests/test_readiness_endpoint.py`（HTTP 契约）覆盖：ready / not-ready、Qdrant 与 ES 的 OR 语义、Redis 与 MinIO 降级不阻断、生产与非生产下不同的生成端点要求、探测异常归一化为结构化响应而非 500、以及响应体不含任何 URL / 密码 / token。
+端点语义由 `tests/test_readiness_contract.py`（判定逻辑）与 `tests/test_readiness_endpoint.py`（HTTP 契约）覆盖：ready / not-ready、Qdrant 与 ES 的 OR 语义、Redis 与 MinIO 降级不阻断、生产与非生产下不同的生成端点要求、探测异常归一化为结构化响应而非 500、探测超时不得挂起端点（含可降级依赖）、Qdrant 必须校验配置的 collection、`elasticsearch.enabled=false` 不算检索通路、以及响应体不含任何 URL / 密码 / token。
 
 ## 4. 部署步骤（需要你自己的集群）
 

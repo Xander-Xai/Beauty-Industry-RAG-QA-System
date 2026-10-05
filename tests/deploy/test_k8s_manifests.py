@@ -199,15 +199,27 @@ def test_probe_endpoints_are_registered_and_unauthenticated() -> None:
     """
     from fastapi.testclient import TestClient
 
+    # The probes are stubbed to avoid contacting real dependencies from a static
+    # manifest test; what is asserted here is routing and auth, not dependency
+    # state.
+    import api.readiness as readiness_module
     import app as application
 
-    client = TestClient(application.app)
-    registered = client.get("/openapi.json").json()["paths"]
-    container = _container(_by_kind("Deployment")[0])
-    for probe_name in ("startupProbe", "readinessProbe"):
-        path = container[probe_name]["httpGet"]["path"]
-        assert path in registered, f"{probe_name} targets {path!r}, which is not a registered route"
-        assert "security" not in client.get(path).json(), f"{path} must not require a JWT"
+    original = readiness_module._default_probes
+    readiness_module._default_probes = lambda ctx: {}
+    try:
+        client = TestClient(application.app)
+        registered = client.get("/openapi.json").json()["paths"]
+        container = _container(_by_kind("Deployment")[0])
+        for probe_name in ("startupProbe", "readinessProbe"):
+            path = container[probe_name]["httpGet"]["path"]
+            assert path in registered, f"{probe_name} targets {path!r}, which is not a registered route"
+            response = client.get(path)
+            assert response.status_code != 401, f"{path} must not require a JWT"
+            assert response.status_code != 403, f"{path} must not require a JWT"
+            assert "security" not in response.json(), f"{path} must not require a JWT"
+    finally:
+        readiness_module._default_probes = original
 
 
 def test_readiness_probe_targets_the_readiness_endpoint() -> None:

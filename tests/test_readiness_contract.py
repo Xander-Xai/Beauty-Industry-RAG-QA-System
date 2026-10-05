@@ -375,6 +375,214 @@ def test_generation_probe_without_a_url_is_unavailable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 16. A stalled probe must not hold the response past the probe budget.
+# ---------------------------------------------------------------------------
+
+
+def test_overrunning_probe_is_treated_as_unavailable() -> None:
+    """A hung dependency must not make the readiness call hang.
+
+    Kubernetes gives readinessProbe 5s. If a probe blocks forever the endpoint
+    never answers, every probe times out, and an otherwise serving Pod is dropped
+    from the Service. The evaluator therefore caps its own wait.
+    """
+    import time
+
+    from api import readiness as readiness_module
+
+    def stall(_ctx):
+        time.sleep(30)
+        return True
+
+    probes = _probes(ALL_UP)
+    probes["redis"] = stall  # a degradable dependency is the dangerous case
+    original = readiness_module.PROBE_TIMEOUT_SECONDS
+    readiness_module.PROBE_TIMEOUT_SECONDS = 0.05
+    readiness_module._PROBE_GRACE_SECONDS = 0.05
+    try:
+        started = time.monotonic()
+        report = evaluate_readiness(ProbeContext(is_production=True), probes)
+        elapsed = time.monotonic() - started
+    finally:
+        readiness_module.PROBE_TIMEOUT_SECONDS = original
+        readiness_module._PROBE_GRACE_SECONDS = 1.0
+
+    assert elapsed < 5, f"readiness took {elapsed:.1f}s; it must return within the probe budget"
+    # The stalled degradable dependency is unavailable, but Qdrant and generation
+    # are up, so the pod is still serving.
+    assert report.dependencies["redis"] is False
+    assert report.ready is True
+    assert "redis" in report.degraded
+
+
+def test_overrunning_probe_on_a_required_path_makes_it_not_ready() -> None:
+    import time
+
+    from api import readiness as readiness_module
+
+    def stall(_ctx):
+        time.sleep(30)
+        return True
+
+    probes = _probes(ALL_UP)
+    probes["gen_4b"] = stall
+    original = readiness_module.PROBE_TIMEOUT_SECONDS
+    readiness_module.PROBE_TIMEOUT_SECONDS = 0.05
+    readiness_module._PROBE_GRACE_SECONDS = 0.05
+    try:
+        report = evaluate_readiness(ProbeContext(is_production=True), probes)
+    finally:
+        readiness_module.PROBE_TIMEOUT_SECONDS = original
+        readiness_module._PROBE_GRACE_SECONDS = 1.0
+
+    assert report.ready is False
+    assert "gen_4b" in report.blockers
+
+
+# ---------------------------------------------------------------------------
+# 17. Disabled / unconfigured Elasticsearch is not a retrieval path.
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_elasticsearch_is_not_an_available_retrieval_path() -> None:
+    """`elasticsearch.enabled=false` means the runtime never issues a search.
+
+    `BM25Retriever.__init__` reads the flag and `fallback_search` returns `[]`
+    when it is false. Counting a live-but-disabled server as available would
+    satisfy `qdrant OR elasticsearch` and admit a Pod whose only working
+    retrieval path is switched off.
+    """
+    from api.readiness import probe_elasticsearch
+
+    ctx = ProbeContext(is_production=True, elasticsearch={"host": "http://es.invalid:9200", "enabled": False})
+
+    called = []
+
+    class _FakeES:
+        def __init__(self, **kwargs):
+            called.append(kwargs)
+
+        def ping(self):
+            return True  # the server is alive; the flag is what disqualifies it
+
+    import elasticsearch as es_module
+
+    original = es_module.Elasticsearch
+    es_module.Elasticsearch = _FakeES
+    try:
+        assert probe_elasticsearch(ctx) is False
+    finally:
+        es_module.Elasticsearch = original
+    assert called == [], "a disabled Elasticsearch must not even be contacted"
+
+
+def test_enabled_elasticsearch_still_probes_with_bounded_timeout() -> None:
+    """The credential contract from #43 is kept, and the request is bounded."""
+    from api.readiness import PROBE_TIMEOUT_SECONDS, probe_elasticsearch
+
+    seen = {}
+
+    class _FakeES:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def ping(self):
+            return True
+
+    import elasticsearch as es_module
+
+    original = es_module.Elasticsearch
+    es_module.Elasticsearch = _FakeES
+    try:
+        ctx = ProbeContext(
+            is_production=True,
+            elasticsearch={"host": "http://es:9200", "enabled": True, "username": "", "password": ""},
+        )
+        assert probe_elasticsearch(ctx) is True
+    finally:
+        es_module.Elasticsearch = original
+
+    assert seen["hosts"] == ["http://es:9200"]
+    assert "basic_auth" not in seen, "no credentials configured means an anonymous client"
+    assert seen["request_timeout"] == PROBE_TIMEOUT_SECONDS, (
+        "every Elasticsearch request must be bounded or a stalled server can hang readiness"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 18. A reachable Qdrant without the configured collection is not a path.
+# ---------------------------------------------------------------------------
+
+
+def test_qdrant_probe_requires_the_configured_text_collection() -> None:
+    """`DenseRetriever.search` swallows errors and returns [], so reachability
+    alone would claim a dense path that returns nothing.
+
+    A fresh or incomplete deployment has a running Qdrant with no
+    `rag_text_768`; readiness must not call that an available retrieval path.
+    """
+    from api.readiness import _configured_text_collection, probe_qdrant
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.collection_exists_calls = []
+
+        def collection_exists(self, name):
+            self.collection_exists_calls.append(name)
+            return False
+
+    created = {}
+
+    import qdrant_client as qc
+
+    original = qc.QdrantClient
+
+    def _factory(**kwargs):
+        client = _FakeClient(**kwargs)
+        created["client"] = client
+        return client
+
+    qc.QdrantClient = _factory
+    try:
+        ctx = ProbeContext(is_production=True, qdrant={"host": "qdrant", "port": 6333})
+        assert probe_qdrant(ctx) is False, "a missing collection must not read as an available path"
+    finally:
+        qc.QdrantClient = original
+
+    assert created["client"].collection_exists_calls == [_configured_text_collection()]
+
+
+def test_configured_text_collection_matches_the_retrieval_runtime() -> None:
+    """Readiness must validate the collection the runtime actually queries."""
+    from api.readiness import _configured_text_collection
+    from common.config import get_config_dict
+
+    # EmbeddingService.search_qdrant_text resolves collection_name from here.
+    assert _configured_text_collection() == get_config_dict()["embedding"]["text"]["collection"]
+
+
+def test_qdrant_probe_returns_true_when_the_collection_exists() -> None:
+    from api.readiness import probe_qdrant
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def collection_exists(self, name):
+            return True
+
+    import qdrant_client as qc
+
+    original = qc.QdrantClient
+    qc.QdrantClient = _FakeClient
+    try:
+        assert probe_qdrant(ProbeContext(is_production=True, qdrant={"host": "qdrant"})) is True
+    finally:
+        qc.QdrantClient = original
+
+
+# ---------------------------------------------------------------------------
 # 15. Payload order is stable (byte-stable responses).
 # ---------------------------------------------------------------------------
 
