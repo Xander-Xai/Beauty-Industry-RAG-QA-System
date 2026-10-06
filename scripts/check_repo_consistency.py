@@ -4156,12 +4156,20 @@ def k8s_static_check_count(module_path: Path) -> int:
 
 
 #: A stated count in either language: ``26 项``, ``31 项``, ``31 static checks``.
-#: Each alternative names its own group, and exactly one is set per match. Matched
+#: Each alternative names its own groups, and exactly one is set per match. Matched
 #: against a whitespace-normalised clause, so a soft wrap cannot split a claim.
 #: The Chinese numeral class includes 百/千/零 so the parser *sees* a count it cannot
 #: read and reports "cannot verify" instead of silently ignoring the claim, and the
 #: numeric token is captured whole — sign, grouping and decimal point included —
 #: so ``-5`` is never read as ``5``.
+#:
+#: ``N 项`` on its own is not a static-check count. Chinese counts items of every
+#: kind, so in ``Kubernetes 清单的 5 项资源由 31 项静态检查覆盖。`` the 5 counts
+#: resources. The Chinese count therefore has to be bound to ``静态检查``: either it
+#: modifies the phrase (``31 项静态检查``), or it is the nearest count after it
+#: (``静态检查指…（31 项，…）``) with no other count and no clause separator in
+#: between. This mirrors the English alternative, which already requires the phrase
+#: to follow the number.
 #:
 #: The lookbehind refuses only a match that would begin *inside* a numeral, not
 #: every start that follows a Chinese character. Chinese numerals are contiguous
@@ -4170,15 +4178,30 @@ def k8s_static_check_count(module_path: Path) -> int:
 #: still matching ``契约与二十六项``, where ``与`` is ordinary prose. Blocking on all
 #: CJK would silently skip any count written without a space after a Chinese word,
 #: which is exactly the guard ignoring the claim it was added to catch.
+#:
+#: The characters a bound count may not be separated from the phrase by: clause
+#: punctuation (the claim has moved on) and ``项`` itself (another count is in
+#: between, so the nearest one is no longer the one the phrase modifies).
+_CN_UNBOUND = "；;。、！？!?,，项"
+
 _K8S_STATIC_CHECK_COUNT_RE = re.compile(
-    r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项"
-    r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
+    r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项\s*静态检查"
+    + r"|静态检查(?P<cn_trail_gap>[^"
+    + _CN_UNBOUND
+    + r"]{0,60}?)(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<cn_trail>"
+    + r"[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项"
+    + r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
     + _COUNT_WORDS
     + r")(?:[-\s](?:"
     + _COUNT_WORDS
     + r"))?)\s+static\s+checks?\b",
     re.IGNORECASE,
 )
+
+#: The count groups, in the order they appear in the alternatives above. Named
+#: rather than indexed so adding an alternative cannot silently shift which token a
+#: parse reads; the count's own span is used for the numeral-continuation check.
+_K8S_COUNT_GROUPS = ("chinese", "cn_trail", "english")
 
 #: What makes a number a *Kubernetes* static-check count. Deliberately an explicit
 #: subject list rather than "the word static checks": a repository can and does write
@@ -4205,6 +4228,14 @@ _K8S_BLOCK_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
 _K8S_BLOCK_TABLE_RE = re.compile(r"^\s{0,3}\|")
 _K8S_BLOCK_LIST_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,3}[.)])\s+")
 
+#: The block kinds, longest-ambiguity first, so a heading is not read as a list
+#: item and a row is not read as either. Order is load-bearing.
+_K8S_BLOCK_KINDS = (
+    ("heading", _K8S_BLOCK_HEADING_RE),
+    ("table", _K8S_BLOCK_TABLE_RE),
+    ("list", _K8S_BLOCK_LIST_RE),
+)
+
 #: A blockquote line, and the marker to strip off it. Standard Markdown prefixes
 #: *every* source line of a paragraph with ``>``, so the marker repeats per line and
 #: says nothing about where a claim ends: treating each marked line as its own block
@@ -4223,17 +4254,24 @@ _K8S_QUOTE_MARKER_RE = re.compile(r"^\s{0,3}(?:>\s*)+")
 #: Two English shapes have to be separated without being over-split:
 #:
 #: * A sentence-ending period. Two sentences in one paragraph are two claims, and
-#:   leaving them joined lets the second borrow the first's subject. It is only a
-#:   sentence boundary when whitespace or the end of the window follows it, and not
-#:   after a digit, so ``...covered here. The frontend...`` splits while
-#:   ``1. The``, ``1.5`` and ``README.md`` do not.
+#:   leaving them joined lets the second borrow the first's subject. It is a boundary
+#:   only when whitespace or the end of the window follows it, so a period inside a
+#:   token is left alone: ``1.5``, ``README.md`` and ``api-deployment.yaml`` keep
+#:   their periods, while ``schema 1.5. The frontend...`` splits. Nothing excludes a
+#:   preceding digit — a sentence that ends in a number ends in a number as often as
+#:   not, and refusing to split there is exactly the leak being closed.
 #: * A digit-grouping comma. Splitting there would read ``1,031 static checks`` as
 #:   ``031``, certifying a claim of 1,031 as the expected count. The grouping shape
 #:   is the whole check rather than "a digit on each side": ``26, static`` is a
 #:   sentence boundary, and ``1,00`` is a typo, not a group.
 #:
 #: Every other comma, Chinese or not, still separates.
-_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))|(?<!\d)\.(?=\s|$)")
+_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))|\.(?=\s|$)")
+
+#: A Setext heading underline: a paragraph line made only of ``=`` or ``-``. The
+#: line carries no claim, but it *is* the heading mark — the text above it is a
+#: heading, so the window closes there instead of absorbing the paragraph below.
+_K8S_SETEXT_UNDERLINE_RE = re.compile(r"^\s{0,3}(?:=+|-+)\s*$")
 
 #: A separator-only line: ``|---|``, ``---``, ``:::``. It opens a table block but
 #: carries no claim, so it starts a window and contributes nothing to it.
@@ -4244,72 +4282,81 @@ def _markdown_claim_windows(text: str) -> list[str]:
     """Split ``text`` into bounded Markdown windows for claim scoping.
 
     A window is one block element — a paragraph, a single table row, one list item
-    with its wrapped continuation lines, one blockquote paragraph. Windows are
-    bounded on purpose: the whole document is never concatenated, because doing so
-    would let a number hundreds of lines away from a ``static checks`` phrase be read
-    as its count.
+    with its wrapped continuation lines, one blockquote paragraph, a Setext
+    heading's text line. Windows are bounded on purpose: the whole document is
+    never concatenated, because doing so would let a number hundreds of lines away
+    from a ``static checks`` phrase be read as its count.
 
-    Two block shapes decide whether the *next* ordinary line joins the window or
-    starts a new one, because CommonMark treats them differently:
+    Windows are bounded per *block*, and what decides whether the next ordinary
+    line joins the current window is the kind of block already open, because
+    CommonMark treats the shapes differently:
 
-    * A blockquote paragraph absorbs an unmarked following line. That is the
-      *lazy continuation* form, and it is how most people wrap a quoted claim, so an
-      unconditional flush on leaving the quote would drop the count out of the
-      subject's window and let a rewrap hide it. A blank line, a ``>``-only line, or
-      a new block element still ends the quote.
-    * A heading does the opposite: it is a single line, and the line after it —
-      blank line or not — is the start of a new paragraph. Attaching the paragraph to
-      the heading would let the heading's subject authorise the paragraph's count.
-      Table rows are single lines for the same reason. A list item is not: its
-      continuation lines are part of it.
+    * A paragraph absorbs the unmarked line that follows it — that is ordinary
+      wrapping, and inside a quote it is the *lazy continuation* form that most
+      people use to wrap a quoted claim. An unconditional flush there would drop
+      the count out of the subject's window and let a rewrap hide it.
+    * A heading or a table row is a single line, so the line after it is the
+      start of a new paragraph. Attaching that paragraph to the heading would let
+      the heading's subject authorise the paragraph's count. A Setext heading is
+      this in a different spelling: the text line plus its underline, where the
+      underline is a boundary rather than content.
+    * A list item is not a single line — its continuations are part of it.
+
+    Only a *paragraph* takes a lazy continuation. `> ## Kubernetes manifests`
+    followed by prose is a quoted heading followed by a paragraph, and quoting the
+    heading does not make the two one block.
 
     Windows are whitespace-normalised, so a claim written across a soft wrap is
     matched as the single line a reader actually sees.
     """
     windows: list[str] = []
     current: list[str] = []
-    in_quote = False
-    # Set after a single-line block element: the next ordinary line is then a new
-    # paragraph rather than this element's continuation.
-    window_is_closed = False
+    # The block kind the open window belongs to: one of the ``_K8S_BLOCK_KINDS``
+    # names, ``"paragraph"``, or ``None`` when no window is open.
+    open_block: str | None = None
 
     def flush() -> None:
-        nonlocal in_quote, window_is_closed
+        nonlocal open_block
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
         current.clear()
-        in_quote = False
-        window_is_closed = False
+        open_block = None
+
+    def block_kind(text: str) -> str:
+        for name, pattern in _K8S_BLOCK_KINDS:
+            if pattern.match(text):
+                return name
+        return "paragraph"
 
     for line in text.splitlines():
         stripped = line.strip()
-        is_quote = bool(_K8S_BLOCK_QUOTE_RE.match(line))
-        if is_quote:
-            body = _K8S_QUOTE_MARKER_RE.sub("", line).strip()
-            # A `>`-only line is a paragraph break inside the quote, not content.
-            if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
-                flush()
-                continue
-            if not in_quote:
-                flush()
-                in_quote = True
-            current.append(body)
-            continue
-        single_line_block = bool(_K8S_BLOCK_HEADING_RE.match(line) or _K8S_BLOCK_TABLE_RE.match(line))
-        if not stripped or single_line_block or _K8S_BLOCK_LIST_RE.match(line):
+        if not stripped:
             flush()
-            if stripped and not _K8S_SEPARATOR_ONLY_RE.match(stripped):
-                current.append(stripped)
-                # A heading or a table row is one line; a list item continues.
-                window_is_closed = single_line_block
             continue
-        # Inside a quote this is a lazy continuation and belongs to it; outside one,
-        # it is a new paragraph unless the previous block was a single-line element.
-        if not in_quote and window_is_closed:
+        if _K8S_SETEXT_UNDERLINE_RE.match(line):
+            # The underline marks the text above it as a heading: that window is
+            # already complete, and it does not carry a claim of its own.
             flush()
-        current.append(stripped)
-        window_is_closed = False
+            continue
+        in_quote = bool(_K8S_BLOCK_QUOTE_RE.match(line))
+        body = _K8S_QUOTE_MARKER_RE.sub("", line).strip() if in_quote else stripped
+        # A `>`-only line is a paragraph break inside the quote, not content.
+        if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
+            flush()
+            continue
+        kind = block_kind(body)
+        # Only a paragraph continues a paragraph, and a list item continues only on
+        # an indented line — the ordinary wrapped form of an item. A quoted heading,
+        # row or list item is still that block, so an unindented line after it is a
+        # new paragraph: quoting the element does not fuse it with what follows.
+        continues_open_block = kind == "paragraph" and (
+            open_block == "paragraph" or (open_block == "list" and line[:1] in (" ", "\t"))
+        )
+        if not continues_open_block:
+            flush()
+        current.append(body)
+        open_block = kind
     flush()
     return windows
 
@@ -4344,9 +4391,14 @@ def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[s
             if not _K8S_SUBJECT_CONTEXT_RE.search(clause):
                 continue
             for match in _K8S_STATIC_CHECK_COUNT_RE.finditer(clause):
-                token = match.group("chinese") or match.group("english") or ""
+                group = next((name for name in _K8S_COUNT_GROUPS if match.group(name)), None)
+                token = match.group(group) if group else ""
                 stated = _parse_stated_count(token)
-                if _continues_a_larger_numeral(clause, match.start()):
+                # The span of the count itself, not of the match: the Chinese
+                # alternative starts at 静态检查, and a numeral-continuation check
+                # anchored on the phrase would look at the wrong preceding words.
+                count_start = match.start(group) if group else match.start()
+                if _continues_a_larger_numeral(clause, count_start):
                     errors.append(
                         f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
                         f"it continues a longer numeral, and {module} defines {expected} test functions"
