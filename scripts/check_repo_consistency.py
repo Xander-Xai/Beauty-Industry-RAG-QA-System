@@ -4204,9 +4204,12 @@ _CN_UNBOUND = "；;。、！？!?,，项"
 #: Inline delimiters are transparent to that test. ``静态检查共 **26 项**。`` and
 #: ``静态检查共 `26 项`。`` are the same claim as the bare form, and a terminator
 #: that stopped at the closing ``*`` would silently drop them — which is worse than
-#: a false positive, because nothing would say the claim went unverified.
+#: a false positive, because nothing would say the claim went unverified. Plain
+#: whitespace is transparent for the same reason: ``共 26 项 ）`` is the bare form
+#: with a space in it. Neither weakens the test, because what follows the whitespace
+#: must still be a bracket or the end of the clause.
 _CN_INLINE_DELIMITERS = r"[*_`~]"
-_CN_TALLY_END = r"(?=(?:" + _CN_INLINE_DELIMITERS + r"[ \t]*)*(?:[)\]】）]|$))"
+_CN_TALLY_END = r"(?=(?:" + _CN_INLINE_DELIMITERS + r"[ \t]*)*[ \t]*(?:[)\]】）]|$))"
 
 _K8S_STATIC_CHECK_COUNT_RE = re.compile(
     r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项\s*静态检查"
@@ -4401,15 +4404,17 @@ def _markdown_claim_windows(text: str) -> list[str]:
         if in_quote:
             marker_run = _K8S_QUOTE_PREFIX_RE.match(line).group(0)
             depth = marker_run.count(">")
-            body = line[len(marker_run) :]
-            # One space after the last `>` belongs to the marker; the rest is the
-            # block's own indentation and is what decides a list continuation.
-            indent = max(0, len(marker_run) - len(marker_run.rstrip(" \t")) - 1)
+            body = line[len(marker_run) :].strip()
         else:
             depth = 0
-            body = line
-            indent = len(body) - len(body.lstrip())
-        body = body.strip()
+            body = line.strip()
+        # The column the block's content starts at, measured from the same origin
+        # for every line of the block. It has to be the column in the source line and
+        # not the whitespace left after the markers: the prefix match caps how much
+        # it consumes, so a deeply indented continuation of a quoted list item still
+        # has leading spaces on the body, and measuring only what the prefix ate
+        # made that continuation look no more indented than the item it belongs to.
+        indent = len(line) - len(line.lstrip(" \t>"))
         # A `>`-only line is a paragraph break inside the quote, not content.
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()

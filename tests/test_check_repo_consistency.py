@@ -5649,3 +5649,65 @@ def test_an_indented_nested_quote_marker_is_still_a_nested_quote():
     assert _markdown_claim_windows(same_depth) == ["The Kubernetes manifests are covered by 26 static checks."]
     quoted_item = "> - The Kubernetes manifests are covered by 26 static\n>   checks.\n"
     assert _markdown_claim_windows(quoted_item) == ["- The Kubernetes manifests are covered by 26 static checks."]
+
+
+def test_whitespace_before_the_tally_terminator_is_transparent():
+    """`共 26 项 ）` is the bare form with a space in it, and must be compared."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document, stated in (
+        ("Kubernetes 静态检查 (共 26 项 )", "states 26"),
+        ("Kubernetes 静态检查共 26 项 。", "states 26"),
+        ("Kubernetes 静态检查共 **26 项** ）", "states 26"),
+        ("Kubernetes 静态检查 (共 31 项 )", None),
+    ):
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        if stated is None:
+            assert errors == [], document
+        else:
+            assert len(errors) == 1, document
+            assert stated in errors[0], document
+
+    # Transparency is not a loophole: a noun after the whitespace still wins.
+    for document in (
+        "Kubernetes 静态检查覆盖 5 项 资源。",
+        "Kubernetes 静态检查覆盖 **5 项** 资源。",
+        "Kubernetes 静态检查覆盖 5 项 YAML 资源。",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+
+def test_a_deeply_indented_quoted_list_continuation_is_measured_from_the_source_column():
+    """Indentation is the content's column, not what the quote prefix happened to eat.
+
+    The prefix match caps how much whitespace it consumes, so a deeply indented
+    continuation still carries leading spaces on the body. Measuring only the
+    prefix's share made it look no more indented than the item it belongs to, and
+    the item was split in two.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    stale = ">   - The Kubernetes manifests are covered by 26 static\n>     checks.\n"
+    assert _markdown_claim_windows(stale) == ["- The Kubernetes manifests are covered by 26 static checks."]
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    current = ">   - The Kubernetes manifests are covered by 31 static\n>     checks.\n"
+    assert k8s_static_check_count_errors("README.md", current, expected=31) == []
+
+    # The shallower wraps, and the unquoted one, are unaffected.
+    for document in (
+        "> - The Kubernetes manifests are covered by 26 static\n>   checks.",
+        "- The Kubernetes manifests are covered by 26 static\n  checks.",
+    ):
+        assert _markdown_claim_windows(document) == ["- The Kubernetes manifests are covered by 26 static checks."]
+        assert len(k8s_static_check_count_errors("README.md", document, expected=31)) == 1
+
+    # And a line at the item's own column still ends the item, so the measurement
+    # did not become "any quoted line continues".
+    ends_item = "> - The Kubernetes manifests are covered by 26 static checks.\n> The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(ends_item) == [
+        "- The Kubernetes manifests are covered by 26 static checks.",
+        "The frontend is covered by 12 static checks.",
+    ]
