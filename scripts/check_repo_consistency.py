@@ -7,8 +7,11 @@ subcommands, stale "offline ingestion is missing" claims in current operator
 docs, superseded governance/contract claims in canonical docs,
 post-merge reconciliation-phase wording (pending candidate / awaiting merge /
 stale latest-merged-main references), current docs that still present the
-retired dual-4B topology, and an invalid/absent repository truth audit. It does
-not flag historical CHANGELOG text or historical implementation plans.
+retired dual-4B topology, and an invalid/absent repository truth audit. It also
+ties a stated Kubernetes static-check count back to the test module that defines
+those checks, so a summary cannot keep counting the manifests after a check is
+added. It does not flag historical CHANGELOG text or historical implementation
+plans.
 
 It also enforces one evidence vocabulary. ``docs/interview-evidence-map.md``
 owns the canonical taxonomy, and every current interview-facing or
@@ -4123,6 +4126,514 @@ def check_slo_objective_counts(errors: list[str], root: Path | None = None) -> N
         errors.extend(slo_count_errors(_display(path), path.read_text(encoding="utf-8"), expected))
 
 
+# --------------------------------------------------------------------------
+# Kubernetes static-check count
+# --------------------------------------------------------------------------
+#
+# The manifests under `deploy/k8s/` are the only `REPO_VERIFIED` Kubernetes claim
+# this repository makes, and four current documents state how many static checks
+# back it. The test module defines them, so the count is derived from that module
+# rather than restated: `26` outlived four added checks and sat next to two correct
+# `31`s in the same repository, which is exactly the drift this guard is for.
+#
+# The comparison is deliberately narrow. This guard knows about one number — the
+# size of one test module — and it only claims to understand a number whose own
+# Markdown window names the Kubernetes subject it belongs to. It is not a
+# repository-wide "every number must agree" framework and must not grow into one.
+
+K8S_STATIC_CHECK_MODULE = Path("tests/deploy/test_k8s_manifests.py")
+
+
+def k8s_static_check_count(module_path: Path) -> int:
+    """How many module-level test functions the K8s manifest contract defines.
+
+    Parsed rather than counted by running pytest: this guard runs in CI as a
+    documentation check and must stay offline and cheap. Module level only, so a
+    nested helper that happens to be named ``test_*`` cannot inflate the number.
+    """
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    return sum(1 for node in tree.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"))
+
+
+#: A stated count in either language: ``26 项``, ``31 项``, ``31 static checks``.
+#: Each alternative names its own groups, and exactly one is set per match. Matched
+#: against a whitespace-normalised clause, so a soft wrap cannot split a claim.
+#: The Chinese numeral class includes 百/千/零 so the parser *sees* a count it cannot
+#: read and reports "cannot verify" instead of silently ignoring the claim, and the
+#: numeric token is captured whole — sign, grouping and decimal point included —
+#: so ``-5`` is never read as ``5``.
+#:
+#: ``N 项`` on its own is not a static-check count. Chinese counts items of every
+#: kind, so in ``Kubernetes 清单的 5 项资源由 31 项静态检查覆盖。`` the 5 counts
+#: resources. The Chinese count therefore has to be bound to ``静态检查`` — in either
+#: direction, since the documents use both:
+#:
+#: * count first: it must modify the phrase, ``31 项静态检查``;
+#: * phrase first: it must be the nearest count after the phrase, and it must be a
+#:   *bare tally* — ``静态检查指…（31 项，全部离线）``. A count that goes on to modify
+#:   something is not a check count: in ``静态检查覆盖 5 项资源。`` the 5 counts
+#:   resources, and in ``5 项 YAML 资源`` the counted noun is one gap further along,
+#:   which is why the test for a bare tally is what may follow (a closing bracket or
+#:   the end of the clause) rather than a character that must not. The rule is
+#:   deliberately "unless shown to count something else": ``静态检查共 5 项。`` is
+#:   ambiguous prose read as five checks, because nothing else in it takes the number.
+#:
+#: This mirrors the English alternative, which already requires the phrase to follow
+#: the number.
+#:
+#: The lookbehind refuses only a match that would begin *inside* a numeral, not
+#: every start that follows a Chinese character. Chinese numerals are contiguous
+#: ideographs, so ``一百零五项`` would otherwise be matched from its ``五`` tail
+#: and read as 5; blocking on the numeral characters themselves catches that while
+#: still matching ``契约与二十六项``, where ``与`` is ordinary prose. Blocking on all
+#: CJK would silently skip any count written without a space after a Chinese word,
+#: which is exactly the guard ignoring the claim it was added to catch.
+#:
+#: The characters a bound count may not be separated from the phrase by: clause
+#: punctuation (the claim has moved on) and ``项`` itself (another count is in
+#: between, so the nearest one is no longer the one the phrase modifies).
+_CN_UNBOUND = "；;。、！？!?,，项"
+
+#: What a phrase-first tally has to be followed by to count as a *check* count: a
+#: closing bracket, or the end of the clause. It is a positive test rather than a
+#: negative one on purpose. "The next character is not Han" still accepts
+#: ``5 项 资源`` and ``5 项 YAML 资源``, because the space in between is not Han
+#: either — the counted noun is still there, one gap further along. A bare tally
+#: is a tally that runs out: nothing follows it inside the clause it belongs to.
+#:
+#: Inline delimiters are transparent to that test. ``静态检查共 **26 项**。`` and
+#: ``静态检查共 `26 项`。`` are the same claim as the bare form, and a terminator
+#: that stopped at the closing ``*`` would silently drop them — which is worse than
+#: a false positive, because nothing would say the claim went unverified. Plain
+#: whitespace is transparent for the same reason: ``共 26 项 ）`` is the bare form
+#: with a space in it. Neither weakens the test, because what follows the whitespace
+#: must still be a bracket or the end of the clause.
+_CN_INLINE_DELIMITERS = r"[*_`~]"
+_CN_TALLY_END = r"(?=(?:" + _CN_INLINE_DELIMITERS + r"[ \t]*)*[ \t]*(?:[)\]】）]|$))"
+
+_K8S_STATIC_CHECK_COUNT_RE = re.compile(
+    r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项\s*静态检查"
+    + r"|静态检查(?P<cn_trail_gap>[^"
+    + _CN_UNBOUND
+    + r"]{0,60}?)(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<cn_trail>"
+    + r"[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项"
+    + _CN_TALLY_END
+    + r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
+    + _COUNT_WORDS
+    + r")(?:[-\s](?:"
+    + _COUNT_WORDS
+    + r"))?)\s+static\s+checks?\b",
+    re.IGNORECASE,
+)
+
+#: The count groups, in the order they appear in the alternatives above. Named
+#: rather than indexed so adding an alternative cannot silently shift which token a
+#: parse reads; the count's own span is used for the numeral-continuation check.
+_K8S_COUNT_GROUPS = ("chinese", "cn_trail", "english")
+
+#: What makes a number a *Kubernetes* static-check count. Deliberately an explicit
+#: subject list rather than "the word static checks": a repository can and does write
+#: about static checks that have nothing to do with `deploy/k8s/`, and comparing
+#: those against the manifest module's count would be a fabricated error. The
+#: subject has to appear in the *same clause* as the count, not merely somewhere in
+#: the paragraph: a paragraph that names Kubernetes and then, in a separate clause,
+#: states another suite's tally is two claims, and window-level licensing would read
+#: the second one as the first one's count.
+#:
+#: `manifest` on its own is deliberately *not* in this list, which it was until the
+#: review caught it. The noun is generic — `The frontend manifest`, `The Python
+#: package manifest` — and treating any of them as the Kubernetes manifest is the
+#: same fabricated error with a different word. A Kubernetes-qualified reference
+#: still matches through `kubernetes` / `k8s`, and the module is named outright, so
+#: no current document lost its guard: the English claim in
+#: `docs/repository-truth-audit.md` names `tests/deploy/test_k8s_manifests.py` in
+#: the same clause. A bare "The manifests are covered by 31 static checks" is now
+#: out of scope, which is the trade the guard accepts — out of scope beats wrong.
+_K8S_SUBJECT_CONTEXT_RE = re.compile(r"kubernetes|k8s|test_k8s_manifests", re.IGNORECASE)
+
+#: The phrase that turns a number in an in-scope window into a static-check count.
+_K8S_STATIC_CHECK_PHRASE_RE = re.compile(r"静态检查|static\s+checks?", re.IGNORECASE)
+
+#: Markdown structural boundaries that end a semantic window. A blank line always
+#: does; so does a new block element, because a heading, a table row and a list item
+#: are separate claims that merely happen to sit next to each other. Wrapped
+#: continuation lines match none of these and therefore join the window they belong
+#: to, which is what stops an ordinary soft wrap from hiding a claim. Ordered-list
+#: markers may hold up to nine digits, per CommonMark's list-item rule.
+_K8S_BLOCK_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+_K8S_BLOCK_TABLE_RE = re.compile(r"^\s{0,3}\|")
+_K8S_BLOCK_LIST_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,9}[.)])\s+")
+
+
+def _list_interrupts_a_paragraph(body: str) -> bool:
+    """Whether a list marker may interrupt an open paragraph, per CommonMark.
+
+    A bullet may always interrupt; an ordered marker may only when its number is 1.
+    ``1000) 26 static checks.`` on the line after paragraph text is therefore *not* a
+    list item — it is paragraph continuation text, and treating it as a block start
+    split the claim and let its count escape.
+    """
+    marker = _K8S_BLOCK_LIST_RE.match(body).group(0).strip()
+    if marker[0] not in "0123456789":
+        return True
+    return int(re.match(r"\d+", marker).group(0)) == 1
+
+
+#: The block kinds, longest-ambiguity first, so a heading is not read as a list
+#: item and a row is not read as either. Order is load-bearing.
+_K8S_BLOCK_KINDS = (
+    ("heading", _K8S_BLOCK_HEADING_RE),
+    ("table", _K8S_BLOCK_TABLE_RE),
+    ("list", _K8S_BLOCK_LIST_RE),
+)
+
+#: A blockquote line, and the marker to strip off it. Standard Markdown prefixes
+#: *every* source line of a paragraph with ``>``, so the marker repeats per line and
+#: says nothing about where a claim ends: treating each marked line as its own block
+#: would split one wrapped paragraph into one window per line, and a stale count
+#: would slip through merely because the author rewrapped it. The marker is removed
+#: instead, so the window holds the prose a reader actually sees.
+#:
+#: Exactly one space after the last ``>`` is consumed, because that one space is
+#: part of the marker. The rest is the block's own indentation, and it has to
+#: survive: ``> - item`` followed by ``>   continuation`` is one list item, and a
+#: marker regex that ate the indentation would make the continuation look
+#: unindented and split the item in two.
+_K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
+
+#: The whole leading blockquote marker run of a line, with the content's own
+#: indentation still attached. Depth, body and indentation all come from this one
+#: match, because deriving them from separate regexes is how they came to disagree.
+#:
+#: The asymmetry in the pattern is the load-bearing part:
+#:
+#: A line with tabs expanded to CommonMark's four-column tab stops, because the
+#: block structure is defined in columns and not in characters. ``>\\t> text`` is a
+#: valid depth-2 quote: the tab carries the line to column 4, the outer marker's
+#: padding leaves two permitted indentation columns, and the second ``>`` is a
+#: marker. Counting characters instead gets this wrong in both directions —
+#: ``[ \\t]{0,4}`` reads ``>\\t\\t\\t\\t> text`` as nested when the four tabs carry the
+#: line to column 16, and a spaces-only bound misses the single-tab case entirely.
+#: Windows are whitespace-normalised anyway, so expanding here changes no claim text.
+_K8S_TAB_STOP = 4
+
+
+def _expand_tabs(line: str) -> str:
+    """Expand ``\\t`` to the next four-column tab stop, as CommonMark defines it."""
+    if "\t" not in line:
+        return line
+    column = 0
+    out: list[str] = []
+    for char in line:
+        if char == "\t":
+            width = _K8S_TAB_STOP - (column % _K8S_TAB_STOP)
+            out.append(" " * width)
+            column += width
+        else:
+            out.append(char)
+            column += 1
+    return "".join(out)
+
+
+#: * *between* markers, up to four columns are consumed. Three of those are the
+#:   inner marker's permitted indentation; the fourth is the outer marker's own
+#:   optional space, which is why the bound is four and not three — `>    > text` is
+#:   valid and reading it as depth 1 merges the inner paragraph into the outer one.
+#:   Spaces, because tabs are gone by now. The lookahead keeps the slack harmless:
+#:   the run only grows when another ``>`` actually follows.
+#: * after the *last* marker, at most one space is consumed, because that single
+#:   space is the marker's own optional space. Everything after it is the block's
+#:   content indentation.
+#:
+#: Consuming greedily in both positions (``(?:>[ \t]{0,3})*``) destroys the second
+#: measurement: ``>   continuation`` loses its two content spaces entirely, so a
+#: wrapped quoted list item looks like it has no indentation and gets split in two.
+#: That is not fixable downstream, which is why the asymmetry is here rather than in
+#: the arithmetic that consumes this match.
+_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ ]{0,4}(?=>))*>[ \t]?")
+
+#: Punctuation that separates clauses inside one window. A count only counts as a
+#: static-check count when it shares a clause with the phrase *and* the Kubernetes
+#: subject, so a paragraph that mentions an unrelated tally elsewhere is not dragged
+#: into the comparison. A newline is intentionally *not* a separator: joining across
+#: a soft wrap is the whole point.
+#:
+#: Two English shapes have to be separated without being over-split:
+#:
+#: * A sentence-ending period. Two sentences in one paragraph are two claims, and
+#:   leaving them joined lets the second borrow the first's subject. It is a boundary
+#:   only when whitespace or the end of the window follows it, so a period inside a
+#:   token is left alone: ``1.5``, ``README.md`` and ``api-deployment.yaml`` keep
+#:   their periods, while ``schema 1.5. The frontend...`` splits. Nothing excludes a
+#:   preceding digit — a sentence that ends in a number ends in a number as often as
+#:   not, and refusing to split there is exactly the leak being closed.
+#: * A digit-grouping comma. Splitting there would read ``1,031 static checks`` as
+#:   ``031``, certifying a claim of 1,031 as the expected count. The grouping shape
+#:   is the whole check rather than "a digit on each side": ``26, static`` is a
+#:   sentence boundary, and ``1,00`` is a typo, not a group.
+#:
+#: Every other comma, Chinese or not, still separates.
+_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))|\.(?=\s|$)")
+
+#: A Setext heading underline: a paragraph line made only of ``=`` or ``-``. The
+#: line carries no claim, but it *is* the heading mark — the text above it is a
+#: heading, so the window closes there instead of absorbing the paragraph below.
+_K8S_SETEXT_UNDERLINE_RE = re.compile(r"^\s{0,3}(?:=+|-+)\s*$")
+
+#: A separator-only line: a thematic break (``---``, ``***``, ``___``, each at least
+#: three markers and optionally spaced), a table separator row (``|---|``,
+#: ``|:--:|``), or a colon fence. It opens a block but carries no claim, so it starts
+#: a window and contributes nothing to it.
+#:
+#: The markers are spelled out rather than left as a character class. A class of
+#: ``* _ - | :`` accepts any mixture, so a line of two underscores — ordinary text —
+#: was treated as a boundary and split the paragraph around it. CommonMark requires
+#: three or more of a *single* marker type, which is what the repeated groups encode.
+_K8S_SEPARATOR_ONLY_RE = re.compile(
+    r"^\s{0,3}(?:"
+    r"(?:\*[ \t]*){3,}"
+    r"|(?:-[ \t]*){3,}"
+    r"|(?:_[ \t]*){3,}"
+    r"|\|?[\s:|-]*\|[\s:|-]*"
+    r"|:+"
+    r")$"
+)
+
+
+def _markdown_claim_windows(text: str) -> list[str]:
+    """Split ``text`` into bounded Markdown windows for claim scoping.
+
+    A window is one block element — a paragraph, a single table row, one list item
+    with its wrapped continuation lines, one blockquote paragraph, a Setext
+    heading's text line. Windows are bounded on purpose: the whole document is
+    never concatenated, because doing so would let a number hundreds of lines away
+    from a ``static checks`` phrase be read as its count.
+
+    Windows are bounded per *block*, and what decides whether the next ordinary
+    line joins the current window is the kind of block already open, because
+    CommonMark treats the shapes differently:
+
+    * A paragraph absorbs the unmarked line that follows it — that is ordinary
+      wrapping, and inside a quote it is the *lazy continuation* form that most
+      people use to wrap a quoted claim. An unconditional flush there would drop
+      the count out of the subject's window and let a rewrap hide it.
+    * A heading or a table row is a single line, so the line after it is the
+      start of a new paragraph. Attaching that paragraph to the heading would let
+      the heading's subject authorise the paragraph's count. A Setext heading is
+      this in a different spelling: the text line plus its underline, where the
+      underline is a boundary rather than content.
+    * A list item is not a single line — its continuations are part of it.
+
+    Only a *paragraph* takes a lazy continuation. `> ## Kubernetes manifests`
+    followed by prose is a quoted heading followed by a paragraph, and quoting the
+    heading does not make the two one block.
+
+    Windows are whitespace-normalised, so a claim written across a soft wrap is
+    matched as the single line a reader actually sees.
+    """
+    windows: list[str] = []
+    current: list[str] = []
+    # The block kind the open window belongs to: one of the ``_K8S_BLOCK_KINDS``
+    # names, ``"paragraph"``, or ``None`` when no window is open.
+    open_block: str | None = None
+    # Whether the open window is a blockquote, and at what depth. Depth may be
+    # omitted by a continuation line but not increased by one.
+    open_quoted = False
+    open_depth = 0
+    # Whether the open paragraph is a list item's. A lazy continuation line turns the
+    # block kind into ``"paragraph"``, and losing the list context made the next
+    # sibling marker look like an ordered item trying to interrupt a paragraph — the
+    # very thing the start-at-1 rule declines — so the sibling was absorbed.
+    open_in_list = False
+
+    def flush() -> None:
+        nonlocal open_block, open_quoted, open_depth, open_in_list
+        joined = " ".join(" ".join(current).split())
+        if joined:
+            windows.append(joined)
+        current.clear()
+        open_block = None
+        open_quoted = False
+        open_depth = 0
+        open_in_list = False
+
+    def block_kind(text: str) -> str:
+        for name, pattern in _K8S_BLOCK_KINDS:
+            if pattern.match(text):
+                return name
+        return "paragraph"
+
+    for line in text.splitlines():
+        line = _expand_tabs(line)
+        stripped = line.strip()
+        if not stripped:
+            flush()
+            continue
+        if _K8S_SETEXT_UNDERLINE_RE.match(line):
+            # The underline marks the text above it as a heading: that window is
+            # already complete, and it does not carry a claim of its own.
+            flush()
+            continue
+        in_quote = bool(_K8S_BLOCK_QUOTE_RE.match(line))
+        if in_quote:
+            prefix = _K8S_QUOTE_PREFIX_RE.match(line).group(0)
+            depth = prefix.count(">")
+            content = line[len(prefix) :]
+        else:
+            depth = 0
+            content = line
+        # The block's own content, with the quote prefix removed. `content` keeps its
+        # leading indentation, and classification uses it rather than `body`: the block
+        # patterns all begin `^\s{0,3}`, so stripping the indentation first defeats the
+        # limit and a four-space-indented `1)` would be read as a list item that can
+        # interrupt the paragraph above it, when CommonMark makes it literal text.
+        # Windows are whitespace-normalised at output, so the body is what they carry.
+        body = content.strip()
+        # A `>`-only line is a paragraph break inside the quote, not content. Both
+        # tests use the indentation-preserving content, because each pattern's
+        # `^\s{0,3}` limit is the point: a four-space-indented `***` is a code block,
+        # not a thematic break, and must not split the paragraph it interrupts.
+        if not body or _K8S_SEPARATOR_ONLY_RE.match(content):
+            flush()
+            continue
+        kind = block_kind(content)
+        # An ordered list marker interrupts an open *plain* paragraph only when it
+        # starts at 1. A later number on the next line is paragraph text, not a list
+        # item — reading it as a block start split `covered by\n1000) 26 static
+        # checks.` and the count escaped. Inside a list the marker is a sibling item
+        # and always splits, which is why the list context is tracked separately from
+        # the block kind: a lazy line makes the item's paragraph look plain.
+        if (
+            kind == "list"
+            and open_block == "paragraph"
+            and not open_in_list
+            and not _list_interrupts_a_paragraph(content)
+        ):
+            kind = "paragraph"
+        # Which block the line continues, decided by the block that is already open.
+        # The open block has to be a paragraph (or a list item, whose content is a
+        # paragraph): a heading or a table row is one line, so the next line is a new
+        # block even when it looks like a wrap.
+        #
+        # A paragraph is *lazy* about its continuation, and both halves of that
+        # laziness are load-bearing:
+        #
+        # * quote depth may be omitted, not only equal. `>>> wrapped\n> text` is one
+        #   paragraph inside the depth-3 quote; only *entering* a deeper quote starts a
+        #   block, because a quote marker begins one. Any number of markers may be
+        #   omitted, including all of them: `>>> …26\nstatic\n>> checks.` is one
+        #   paragraph, so quote membership is a property of the open block and not of
+        #   the latest line. The depth a line may not exceed is the paragraph's
+        #   *effective* container depth — the deepest marker it has been written with.
+        # * indentation may be omitted. `- wrapped by 26 static\nchecks.` is one
+        #   paragraph in the item, because the list-item laziness rule lets the
+        #   continuation's hanging indent be dropped.
+        #
+        # Requiring an exact depth or a full content column rejects both. What keeps
+        # the looser reading safe downstream is that neither is the only bound: the
+        # clause-level subject binding and the sentence split still decide whether the
+        # number belongs to the subject, so a lazy join widens the window and not the
+        # comparison.
+        if not in_quote and not open_quoted:
+            container_continues = True
+        elif in_quote and open_quoted:
+            container_continues = depth <= open_depth
+        elif open_quoted:
+            container_continues = True  # unmarked line leaving a quote: still its paragraph
+        else:
+            container_continues = False  # a quote marker always begins a block
+        continues_open_block = kind == "paragraph" and container_continues and open_block in ("paragraph", "list")
+        if not continues_open_block:
+            flush()
+        current.append(body)
+        open_block = kind
+        # A list item stays a list item while its paragraph continues lazily; anything
+        # else is not in a list.
+        open_in_list = open_in_list or kind == "list"
+        # Keep the paragraph's effective container across lazy lines: markers may be
+        # dropped — all of them included — and brought back without leaving the quote.
+        # Taking the latest line's `in_quote` would clear membership on an unmarked
+        # line, and the restored marker would then look like a quote being entered.
+        open_quoted = open_quoted or in_quote
+        open_depth = max(open_depth, depth)
+    flush()
+    return windows
+
+
+def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[str]:
+    """Return errors for a stated Kubernetes static-check count that is wrong.
+
+    Scoping is deliberately two bounds deep. A number is only ever read as a
+    Kubernetes static-check count when, inside one bounded Markdown window:
+
+    1. its own clause mentions static checks at all;
+    2. its own clause names a Kubernetes subject (manifests, ``k8s``, the module),
+       so the count belongs to ``deploy/k8s/`` rather than to another static-check
+       suite mentioned in the same paragraph;
+    3. that same clause contains the number.
+
+    The subject is required *per clause*, not per window, and that is the point: one
+    paragraph routinely holds two unrelated claims — "the manifests are documented
+    here; the frontend is covered by 12 static checks" — and a window-level subject
+    check licenses the second clause to borrow the first one's subject.
+
+    A count the guard cannot parse is reported rather than accepted. "Cannot
+    verify" is the honest answer for a shape it does not understand; quietly
+    skipping it would leave the exact line it was added to catch unguarded.
+    """
+    errors: list[str] = []
+    module = K8S_STATIC_CHECK_MODULE.as_posix()
+    for window in _markdown_claim_windows(text):
+        for clause in _K8S_CLAUSE_SPLIT_RE.split(window):
+            if not _K8S_STATIC_CHECK_PHRASE_RE.search(clause):
+                continue
+            if not _K8S_SUBJECT_CONTEXT_RE.search(clause):
+                continue
+            for match in _K8S_STATIC_CHECK_COUNT_RE.finditer(clause):
+                group = next((name for name in _K8S_COUNT_GROUPS if match.group(name)), None)
+                token = match.group(group) if group else ""
+                stated = _parse_stated_count(token)
+                # The span of the count itself, not of the match: the Chinese
+                # alternative starts at 静态检查, and a numeral-continuation check
+                # anchored on the phrase would look at the wrong preceding words.
+                count_start = match.start(group) if group else match.start()
+                if _continues_a_larger_numeral(clause, count_start):
+                    errors.append(
+                        f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
+                        f"it continues a longer numeral, and {module} defines {expected} test functions"
+                    )
+                elif stated is None:
+                    errors.append(
+                        f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
+                        f"{module} defines {expected} test functions"
+                    )
+                elif stated != expected:
+                    errors.append(
+                        f"{name}: states {stated} Kubernetes static checks but {module} defines {expected} "
+                        f"({match.group(0)!r})"
+                    )
+    return errors
+
+
+def check_k8s_static_check_counts(errors: list[str], root: Path | None = None) -> None:
+    """Every stated K8s static-check count must match the module that defines them."""
+    base = ROOT if root is None else root
+    module = base / K8S_STATIC_CHECK_MODULE
+    if not module.is_file():
+        return
+    expected = k8s_static_check_count(module)
+    if expected == 0:
+        errors.append(
+            f"{K8S_STATIC_CHECK_MODULE.as_posix()}: no module-level test functions found; "
+            "the count guard has nothing to compare the documents against"
+        )
+        return
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        errors.extend(k8s_static_check_count_errors(_display(path), path.read_text(encoding="utf-8"), expected))
+
+
 def _markdown_sections(text: str) -> list[tuple[str, str]]:
     """Split ``text`` into ``(heading, body)`` pairs on level-2 headings.
 
@@ -4240,6 +4751,7 @@ def main() -> int:
     check_removed_plan_path_is_historical(errors)
     check_enumerated_section_counts(errors)
     check_slo_objective_counts(errors)
+    check_k8s_static_check_counts(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
