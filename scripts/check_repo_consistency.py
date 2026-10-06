@@ -4279,22 +4279,24 @@ _K8S_BLOCK_KINDS = (
 _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 
 #: The whole leading blockquote marker run of a line, with the content's own
-#: indentation still attached. Three things are derived from this one match, and
-#: deriving them from separate regexes is how they came to disagree:
+#: indentation still attached. Depth, body and indentation all come from this one
+#: match, because deriving them from separate regexes is how they came to disagree.
 #:
-#: * **depth** — the number of ``>`` in the run. A boolean cannot tell ``> text``
-#:   from ``> > text``, yet the second is a new block, so its count must not borrow
-#:   the outer paragraph's subject.
-#: * **body** — what remains after the run.
-#: * **indentation** — the whitespace at the end of the run, less the single space
-#:   that belongs to the marker. It has to survive: ``> - item`` followed by
-#:   ``>   continuation`` is one list item, and a regex that ate the indentation
-#:   made the continuation look unindented and split the item in two.
+#: The asymmetry in the pattern is the load-bearing part:
 #:
-#: Each ``>`` may be followed by up to three spaces before the next marker, which is
-#: what makes ``>  > text`` a nested quote rather than a depth-1 line whose text
-#: happens to start with ``>``.
-_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ \t]{0,3})*")
+#: * *between* markers, up to three spaces of indentation are consumed — that is
+#:   what makes ``>  > text`` a nested quote at depth 2 rather than a depth-1 line
+#:   whose text happens to start with ``>``;
+#: * after the *last* marker, at most one space is consumed, because that single
+#:   space is the marker's own optional space. Everything after it is the block's
+#:   content indentation.
+#:
+#: Consuming greedily in both positions (``(?:>[ \t]{0,3})*``) destroys the second
+#: measurement: ``>   continuation`` loses its two content spaces entirely, so a
+#: wrapped quoted list item looks like it has no indentation and gets split in two.
+#: That is not fixable downstream, which is why the asymmetry is here rather than in
+#: the arithmetic that consumes this match.
+_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ \t]{0,3}(?=>))*>[ \t]?")
 
 #: Punctuation that separates clauses inside one window. A count only counts as a
 #: static-check count when it shares a clause with the phrase *and* the Kubernetes
@@ -4405,18 +4407,20 @@ def _markdown_claim_windows(text: str) -> list[str]:
             continue
         in_quote = bool(_K8S_BLOCK_QUOTE_RE.match(line))
         if in_quote:
-            marker_run = _K8S_QUOTE_PREFIX_RE.match(line).group(0)
-            depth = marker_run.count(">")
-            body_start = len(marker_run)
+            prefix = _K8S_QUOTE_PREFIX_RE.match(line).group(0)
+            depth = prefix.count(">")
+            content = line[len(prefix) :]
         else:
             depth = 0
-            body_start = len(line) - len(line.lstrip())
-        body = line[body_start:].strip()
-        # The column this line's content starts at, from the same origin for every
-        # line of the block. Measured on the unstripped remainder, because the quote
-        # prefix caps how much whitespace it consumes and a deeply indented
-        # continuation of a quoted list item still carries spaces here.
-        content_col = len(line) - len(line.lstrip(" \t>"))
+            content = line
+        # Indentation *inside* the blockquote container, not a column in the source
+        # line. Container-relative is what makes the measure stable: the container's
+        # own prefix can differ in width between two lines of the same block —
+        # `> > - item` and `>>   continuation` are the same depth-2 quote written with
+        # different optional spaces — so a source column would compare the two
+        # prefixes against each other and read a continuation as unindented.
+        indent = len(content) - len(content.lstrip())
+        body = content.strip()
         # A `>`-only line is a paragraph break inside the quote, not content.
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()
@@ -4424,7 +4428,7 @@ def _markdown_claim_windows(text: str) -> list[str]:
         kind = block_kind(body)
         # A list item's content starts after its own marker, so that is the column a
         # continuation has to reach. Everything else uses the column it started at.
-        open_col = content_col
+        open_col = indent
         if kind == "list":
             open_col += len(_K8S_BLOCK_LIST_RE.match(body).group(0))
         # Which block the line continues, decided by the block that is already open:
@@ -4437,14 +4441,14 @@ def _markdown_claim_windows(text: str) -> list[str]:
         # * a list item continues only on a line that reaches its content column, which
         #   is the ordinary wrapped form of an item. A line that stops short of it is a
         #   new paragraph in the same quote, and the item's subject does not reach into
-        #   it: `> - item` and `> cont` are one item, `>- item` and `> cont` are not.
+        #   it: `> - item` and `>   cont` are one item, `>- item` and `> cont` are not.
         # * a heading or a table row is one line, so the next line is a new paragraph.
         same_quote_level = in_quote == open_quoted and depth == open_depth
         lazy_continuation = open_quoted and not in_quote and open_block == "paragraph"
         continues_open_block = (
             kind == "paragraph"
             and (same_quote_level or lazy_continuation)
-            and (open_block == "paragraph" or (open_block == "list" and content_col >= open_content_col))
+            and (open_block == "paragraph" or (open_block == "list" and indent >= open_content_col))
         )
         if not continues_open_block:
             flush()

@@ -5753,3 +5753,44 @@ def test_a_list_continuation_must_reach_the_items_content_column():
     assert _markdown_claim_windows("1. a list item\n   its continuation\n") == ["1. a list item its continuation"]
     # A line that stops short of it starts a new paragraph.
     assert _markdown_claim_windows("- a list item\n its continuation\n") == ["- a list item", "its continuation"]
+
+
+def test_indentation_is_measured_inside_the_quote_container():
+    """A nested quote's prefix width varies between lines; the measure must not.
+
+    `> > - item` and `>>   continuation` are the same depth-2 quote written with
+    different optional spaces. Comparing source columns compared the two prefixes
+    against each other — opener column 6, continuation column 5 — and split a claim
+    that was one window before. Indentation is now counted from where the container's
+    own prefix ends.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    # Both orderings of the optional space, and the loose-both-ways version.
+    for opener, continuation in (
+        (">> - The Kubernetes manifests are covered by 26 static", ">>   checks."),
+        ("> > - The Kubernetes manifests are covered by 26 static", ">>   checks."),
+        (">> - The Kubernetes manifests are covered by 26 static", "> >   checks."),
+    ):
+        document = f"{opener}\n{continuation}\n"
+        assert _markdown_claim_windows(document) == ["- The Kubernetes manifests are covered by 26 static checks."], (
+            document
+        )
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert "states 26 Kubernetes static checks" in errors[0], document
+        current = document.replace("26 static", "31 static")
+        assert k8s_static_check_count_errors("README.md", current, expected=31) == [], document
+
+    # The container-relative measure did not break the shallower shapes: a list item
+    # still needs a line that reaches its content column, whatever the nesting.
+    for opener, continuation, joined in (
+        ("> - a", ">   b", True),
+        (">- a", "> b", False),
+        (">   - a", ">     b", True),
+        ("- a", "  b", True),
+        ("- a", " b", False),
+        ("1. a", "   b", True),
+    ):
+        document = f"{opener}\n{continuation}\n"
+        assert (len(_markdown_claim_windows(document)) == 1) is joined, document
