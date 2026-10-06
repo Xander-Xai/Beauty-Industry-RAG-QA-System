@@ -252,7 +252,7 @@ docker compose up -d
 
 ### Kubernetes（第二形态，非 canonical）
 
-`deploy/k8s/` 提供 API 网关的最小 Deployment / Service / ConfigMap / Secret 契约与 26 项静态检查。证据等级仅 `REPO_VERIFIED`（YAML 与契约校验）；**本仓库没有集群，真实部署为 `PENDING`**。探针契约与已知边界见 [Kubernetes 部署契约](docs/deployment-guide-k8s.md)。
+`deploy/k8s/` 提供 API 网关的最小 Deployment / Service / ConfigMap / Secret 契约与 31 项静态检查。证据等级仅 `REPO_VERIFIED`（YAML 与契约校验）；**本仓库没有集群，真实部署为 `PENDING`**。探针契约与已知边界见 [Kubernetes 部署契约](docs/deployment-guide-k8s.md)。
 
 ### 离线知识构建
 

@@ -290,7 +290,7 @@
 - `docker-compose.observability.yml` → 可选可观测叠加层；CI 有测试保证它是**纯增量**的（不启动 Prometheus / Jaeger / Grafana 时不影响 canonical 形态）
 - `deploy/k8s/api-deployment.yaml` → 三种探针的分工与注释
 - `docs/deployment-guide.md`、`docs/deployment-guide-k8s.md`
-- `tests/deploy/test_k8s_manifests.py` → 26 项静态检查
+- `tests/deploy/test_k8s_manifests.py` → 31 项静态检查
 
 **边界**：Compose 与 K8s 清单都是 `REPO_VERIFIED`（YAML 与契约校验）。**本仓库没有集群**，真实部署是 `PENDING`。演示可观测叠加层能启动 Prometheus / Jaeger / Grafana **不是**证据——启动它们不证明一条 span 到了。
 

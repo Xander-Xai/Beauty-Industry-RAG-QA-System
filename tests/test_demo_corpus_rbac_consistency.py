@@ -473,20 +473,23 @@ def _identity_caption() -> str:
 
 
 def test_the_identity_caption_does_not_claim_uint32_checks_on_the_dev_header_path():
-    """The regression: the caption read "uint32 校验，畸形声明 fail closed" beside
-    a pointer to the identity resolver, while the requests the demo actually
-    makes use the dev-mode headers — and `common/auth.py` parses those with a
-    bare `int(...)`, with no range check. `-1` passes, and `-1 & mask` overlaps
-    every document mask.
+    """The regression this caption was corrected for, and the one it must not return to.
 
-    The uint32 validation is real, but it is on the JWT-claims path. Attributing
-    it to the demonstrated path makes the mock's stricter-than-production
-    behaviour look like a guarantee the service provides.
+    The caption read "uint32 校验，畸形声明 fail closed" beside a pointer to the
+    identity resolver while the requests the demo actually makes use the dev-mode
+    headers — and `common/auth.py` parsed those with a bare `int(...)`, with no
+    range check, so `-1` passed and `-1 & mask` overlaps every document mask.
+
+    The caption was corrected to say the dev-header path was an unbounded
+    `int()` read. That correction has itself been overtaken: the dev-header path
+    now shares the canonical uint32 validator, so the honest caption may claim
+    the check again — but only because the code below now enforces it. This test
+    keeps the honesty property in force in whichever direction is currently true.
     """
     caption = _identity_caption()
+    enforces = _dev_header_path_enforces_the_uint32_contract()
 
-    assert "dev-mode header" in caption, caption
-    assert "int()" in caption, caption
+    assert ("共用同一套 uint32 校验" in caption) is enforces, caption
 
 
 def test_the_identity_caption_still_credits_the_jwt_path_for_uint32_validation():
@@ -494,25 +497,58 @@ def test_the_identity_caption_still_credits_the_jwt_path_for_uint32_validation()
     assert "uint32" in _identity_caption(), _identity_caption()
 
 
-def test_the_dev_header_path_really_is_an_unbounded_int_conversion():
-    """The caption's correction is only honest if the code matches it.
+def _dev_header_path_enforces_the_uint32_contract() -> bool:
+    """Behavioural check that the dev-header branch really applies the uint32 range.
+
+    Reads it off the running code rather than off the source text, so the check
+    cannot be satisfied by a comment, a dead branch, or a bound that some other
+    layer happens to add.
+    """
+    from common.auth import _identity_from_dev_headers
+
+    headers = {"X-Role-Mask": "-1", "X-Dept-Mask": "-1"}
+    try:
+        _identity_from_dev_headers(_StubRequest(headers))
+    except ValueError:
+        return True
+    return False
+
+
+class _StubRequest:
+    """Header-mapping stand-in for the identity-ingress helpers."""
+
+    def __init__(self, headers: dict):
+        self.headers = headers
+
+
+def test_the_dev_header_path_really_is_bounded_by_the_canonical_validator():
+    """The caption's uint32 claim is only honest if the code matches it.
 
     Pins the current behaviour of `common/auth.py`'s dev-mode branch so that a
-    future fix to that path has to update the caption in the same change, rather
-    than leaving the figure quietly stale in the other direction.
+    future change to that path has to update the caption in the same change,
+    rather than leaving the figure quietly stale in the other direction.
     """
     import inspect
 
-    from common.auth import parse_identity
+    from common.auth import _identity_from_dev_headers, _identity_from_jwt, parse_identity
 
     source = inspect.getsource(parse_identity)
     dev_branch = source[source.index("# 2. Dev-mode headers") :]
+    assert "int(role_str)" not in dev_branch, "the dev-header branch parses headers directly again"
+    assert "_identity_from_dev_headers" in dev_branch, "the dev-header branch stopped using the shared ingress"
 
-    assert "int(role_str)" in dev_branch, "the dev-header branch no longer parses headers directly"
-    assert "0xFFFFFFFF" not in dev_branch, (
-        "the dev-header branch now bounds the mask; update the walkthrough caption, "
-        "which currently says this path is an unbounded int() read"
-    )
+    # Behavioural bound, at both edges of the canonical range.
+    for accepted in ("0", "4294967295"):
+        identity = _identity_from_dev_headers(_StubRequest({"X-Role-Mask": accepted, "X-Dept-Mask": accepted}))
+        assert identity.user_role_mask == int(accepted)
+
+    for refused in ("-1", "4294967296"):
+        with pytest.raises(ValueError):
+            _identity_from_dev_headers(_StubRequest({"X-Role-Mask": refused, "X-Dept-Mask": refused}))
+
+    # One validator, not two look-alike rule sets: the same verdict on both paths.
+    with pytest.raises(ValueError):
+        _identity_from_jwt({"sub": "u", "role_mask": -1, "dept_mask": -1})
 
 
 def test_the_mock_fixture_is_stricter_than_the_service_and_says_so():
@@ -562,7 +598,8 @@ def test_the_identity_row_points_at_the_module_that_parses_masks():
 
     assert row["code"] == "common/auth.py", row["code"]
     source = (REPO_ROOT / row["code"]).read_text(encoding="utf-8")
-    assert "int(role_str)" in source, "the cited module is no longer the one reading dev-mode masks"
+    assert "_identity_from_dev_headers" in source, "the cited module is no longer the one reading dev-mode masks"
+    assert "_validate_permission_mask_claim" in source, "the cited module no longer holds the shared mask validator"
 
 
 def test_a_row_claiming_two_stores_cites_both_implementations():
