@@ -7,8 +7,11 @@ subcommands, stale "offline ingestion is missing" claims in current operator
 docs, superseded governance/contract claims in canonical docs,
 post-merge reconciliation-phase wording (pending candidate / awaiting merge /
 stale latest-merged-main references), current docs that still present the
-retired dual-4B topology, and an invalid/absent repository truth audit. It does
-not flag historical CHANGELOG text or historical implementation plans.
+retired dual-4B topology, and an invalid/absent repository truth audit. It also
+ties a stated Kubernetes static-check count back to the test module that defines
+those checks, so a summary cannot keep counting the manifests after a check is
+added. It does not flag historical CHANGELOG text or historical implementation
+plans.
 
 It also enforces one evidence vocabulary. ``docs/interview-evidence-map.md``
 owns the canonical taxonomy, and every current interview-facing or
@@ -4123,6 +4126,116 @@ def check_slo_objective_counts(errors: list[str], root: Path | None = None) -> N
         errors.extend(slo_count_errors(_display(path), path.read_text(encoding="utf-8"), expected))
 
 
+# --------------------------------------------------------------------------
+# Kubernetes static-check count
+# --------------------------------------------------------------------------
+#
+# The manifests under `deploy/k8s/` are the only `REPO_VERIFIED` Kubernetes claim
+# this repository makes, and four current documents state how many static checks
+# back it. The test module defines them, so the count is derived from that module
+# rather than restated: `26` outlived four added checks and sat next to two correct
+# `31`s in the same repository, which is exactly the drift this guard is for.
+
+K8S_STATIC_CHECK_MODULE = Path("tests/deploy/test_k8s_manifests.py")
+
+
+def k8s_static_check_count(module_path: Path) -> int:
+    """How many module-level test functions the K8s manifest contract defines.
+
+    Parsed rather than counted by running pytest: this guard runs in CI as a
+    documentation check and must stay offline and cheap. Module level only, so a
+    nested helper that happens to be named ``test_*`` cannot inflate the number.
+    """
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    return sum(1 for node in tree.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"))
+
+
+#: A stated count in either language: ``26 项``, ``31 项``, ``31 static checks``.
+#: Each alternative names its own group, and exactly one is set per match. The
+#: Chinese numeral class includes 百/千/零 so the parser *sees* a count it cannot
+#: read and reports "cannot verify" instead of silently ignoring the claim, and the
+#: numeric token is captured whole — sign, grouping and decimal point included —
+#: so ``-5`` is never read as ``5``.
+#:
+#: The lookbehind refuses only a match that would begin *inside* a numeral, not
+#: every start that follows a Chinese character. Chinese numerals are contiguous
+#: ideographs, so ``一百零五项`` would otherwise be matched from its ``五`` tail
+#: and read as 5; blocking on the numeral characters themselves catches that while
+#: still matching ``契约与二十六项``, where ``与`` is ordinary prose. Blocking on all
+#: CJK would silently skip any count written without a space after a Chinese word,
+#: which is exactly the guard ignoring the claim it was added to catch.
+_K8S_STATIC_CHECK_COUNT_RE = re.compile(
+    r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项"
+    r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
+    + _COUNT_WORDS
+    + r")(?:[-\s](?:"
+    + _COUNT_WORDS
+    + r"))?)\s+static\s+checks?\b",
+    re.IGNORECASE,
+)
+
+#: What makes a line a static-check count rather than some unrelated count: the
+#: line has to be about static checks at all. Scoping by ``N 项`` alone or by
+#: ``tests/deploy/`` alone is not enough — this repository's Chinese prose uses
+#: "一项检查" for an ordinary item of work, and one guide line both names the
+#: module and says "一项" without counting anything. Requiring the line to say
+#: "static check" keeps every real claim in scope and leaves that prose alone.
+_K8S_STATIC_CHECK_SUBJECT_RE = re.compile(r"静态检查|static\s+checks?", re.IGNORECASE)
+
+
+def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[str]:
+    """Return errors for a stated static-check count the test module contradicts.
+
+    A count the guard cannot parse is reported rather than accepted. "Cannot
+    verify" is the honest answer for a shape it does not understand; quietly
+    skipping it would leave the exact line it was added to catch unguarded.
+    """
+    errors: list[str] = []
+    module = K8S_STATIC_CHECK_MODULE.as_posix()
+    for line in text.splitlines():
+        if not _K8S_STATIC_CHECK_SUBJECT_RE.search(line):
+            continue
+        for match in _K8S_STATIC_CHECK_COUNT_RE.finditer(line):
+            if _continues_a_larger_numeral(line, match.start()):
+                errors.append(
+                    f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
+                    f"it continues a longer numeral, and {module} defines {expected} test functions"
+                )
+                continue
+            token = match.group("chinese") or match.group("english") or ""
+            stated = _parse_stated_count(token)
+            if stated is None:
+                errors.append(
+                    f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
+                    f"{module} defines {expected} test functions"
+                )
+            elif stated != expected:
+                errors.append(
+                    f"{name}: states {stated} Kubernetes static checks but {module} defines {expected} "
+                    f"({match.group(0)!r})"
+                )
+    return errors
+
+
+def check_k8s_static_check_counts(errors: list[str], root: Path | None = None) -> None:
+    """Every stated K8s static-check count must match the module that defines them."""
+    base = ROOT if root is None else root
+    module = base / K8S_STATIC_CHECK_MODULE
+    if not module.is_file():
+        return
+    expected = k8s_static_check_count(module)
+    if expected == 0:
+        errors.append(
+            f"{K8S_STATIC_CHECK_MODULE.as_posix()}: no module-level test functions found; "
+            "the count guard has nothing to compare the documents against"
+        )
+        return
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        errors.extend(k8s_static_check_count_errors(_display(path), path.read_text(encoding="utf-8"), expected))
+
+
 def _markdown_sections(text: str) -> list[tuple[str, str]]:
     """Split ``text`` into ``(heading, body)`` pairs on level-2 headings.
 
@@ -4240,6 +4353,7 @@ def main() -> int:
     check_removed_plan_path_is_historical(errors)
     check_enumerated_section_counts(errors)
     check_slo_objective_counts(errors)
+    check_k8s_static_check_counts(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):

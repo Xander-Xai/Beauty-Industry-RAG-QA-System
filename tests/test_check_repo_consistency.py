@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts.check_repo_consistency import (
     CANONICAL,
+    CANONICAL_DOCS,
     HISTORICAL,
     REQUIRED_AUDIT_AREAS,
     UNCLASSIFIED,
@@ -4649,3 +4652,169 @@ def test_audit_row_must_keep_deployment_pending_even_with_an_artifact():
         builds=True,
         has_e2e_artifact=True,
     ), "an E2E artifact must never license a production-deployment claim"
+
+
+# ── the Kubernetes static-check count is derived, never restated ────────────
+def test_k8s_static_check_count_is_derived_from_the_test_module():
+    """The count comes from the module that defines the checks, not from a doc."""
+    from scripts.check_repo_consistency import ROOT, k8s_static_check_count
+
+    module = ROOT / "tests" / "deploy" / "test_k8s_manifests.py"
+    derived = k8s_static_check_count(module)
+    assert derived > 0, "the K8s manifest contract must define at least one static check"
+
+    collected = subprocess.run(
+        [sys.executable, "-m", "pytest", str(module), "--collect-only", "-q"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    match = re.search(r"(\d+) tests? collected", collected)
+    assert match, f"could not read a collected-test count from pytest output:\n{collected}"
+    assert derived == int(match.group(1)), (
+        "the AST count and the collected-test count must agree; a disagreement means "
+        "the guard is counting something pytest would not run"
+    )
+
+
+def test_k8s_static_check_count_ignores_nested_and_non_test_helpers(tmp_path):
+    """Module level only, so a nested `test_*` helper cannot inflate the count."""
+    from scripts.check_repo_consistency import k8s_static_check_count
+
+    module = tmp_path / "test_k8s_manifests.py"
+    module.write_text(
+        "def test_one():\n"
+        "    def test_nested_not_collected():\n"
+        "        pass\n"
+        "    test_nested_not_collected()\n"
+        "\n"
+        "def helper():\n"
+        "    pass\n"
+        "\n"
+        "class TestClass:\n"
+        "    def test_method_collected():\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    assert k8s_static_check_count(module) == 1
+
+
+def test_stale_k8s_static_check_count_is_reported():
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    claim = "`deploy/k8s/` 提供最小契约与 26 项静态检查。"
+    errors = k8s_static_check_count_errors("README.md", claim, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+    assert "defines 31" in errors[0]
+
+
+def test_current_k8s_static_check_count_is_accepted():
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for claim in (
+        "`deploy/k8s/` 提供最小契约与 31 项静态检查。",
+        "`tests/deploy/test_k8s_manifests.py` → 31 项静态检查",
+        "`python3 -m pytest tests/deploy/ -q` → 31 项静态检查。分组：",
+        "静态检查指`tests/deploy/test_k8s_manifests.py`（31 项，全部离线、无网络、无集群）。",
+        "The manifests and their 31 static checks",
+        "The manifests and their thirty-one static checks",
+    ):
+        assert k8s_static_check_count_errors("README.md", claim, expected=31) == [], claim
+
+
+def test_unrelated_item_counts_are_not_read_as_static_check_counts():
+    """`N 项` is common Chinese prose. Only a line that names the checks counts."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for line in (
+        "仓库包含 6 个核心工程能力与 5 项 SLO 目标。",
+        "这个 manifest 用 0440 加 fsGroup 1000。",
+        "基础镜像固定为 golang:1.24-alpine3.22 与 alpine:3.22.6。",
+        "每个 epoch 通过持久 manifest 固定为一个 embedding version。",
+        # Regression: a guard note that names the module and then says "一项检查"
+        # is ordinary prose about adding a check, not a count of them.
+        "31 这个数字由 `tests/deploy/test_k8s_manifests.py` 定义，所以再加一项检查时，摘要不会再留在旧数字上。",
+    ):
+        assert k8s_static_check_count_errors("README.md", line, expected=31) == [], line
+
+
+def test_unreadable_k8s_static_check_count_is_reported_not_ignored():
+    """A shape the parser cannot read is a gap in the guard, not a pass."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    errors = k8s_static_check_count_errors("README.md", "`deploy/k8s/` 契约与二百零六项静态检查。", expected=31)
+    assert len(errors) == 1
+    assert "cannot verify the static-check count" in errors[0]
+
+    negative = k8s_static_check_count_errors("README.md", "`deploy/k8s/` 契约与 -26 项静态检查。", expected=31)
+    assert len(negative) == 1, "a sign must be captured, so -26 can never be read as 26 and pass"
+
+
+def test_current_documents_state_the_static_check_count_the_module_defines():
+    from scripts.check_repo_consistency import (
+        ROOT,
+        k8s_static_check_count,
+        k8s_static_check_count_errors,
+    )
+
+    expected = k8s_static_check_count(ROOT / "tests" / "deploy" / "test_k8s_manifests.py")
+    checked = 0
+    for path in CANONICAL_DOCS:
+        if not path.exists():
+            continue
+        assert k8s_static_check_count_errors(str(path), path.read_text(encoding="utf-8"), expected) == []
+        checked += 1
+    assert checked > 0
+
+
+def test_guard_reports_a_missing_static_check_module(tmp_path, monkeypatch):
+    from scripts.check_repo_consistency import check_k8s_static_check_counts
+
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    errors: list[str] = []
+    check_k8s_static_check_counts(errors, root=tmp_path)
+    assert errors == [], "an absent module means there is nothing to compare; nothing is claimed"
+
+
+def test_guard_reports_an_empty_static_check_module(tmp_path, monkeypatch):
+    """Silently skipping a module with no checks would make the guard a no-op."""
+    from scripts.check_repo_consistency import check_k8s_static_check_counts
+
+    module = tmp_path / "tests" / "deploy" / "test_k8s_manifests.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def helper():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+
+    errors: list[str] = []
+    check_k8s_static_check_counts(errors, root=tmp_path)
+    assert len(errors) == 1
+    assert "no module-level test functions found" in errors[0]
+
+
+def test_guard_fails_end_to_end_when_the_static_check_count_drifts(tmp_path, monkeypatch):
+    """Wiring check: `main()` must call the guard, or the pure function is decoration."""
+    from scripts.check_repo_consistency import check_k8s_static_check_counts
+
+    module = tmp_path / "tests" / "deploy" / "test_k8s_manifests.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def test_a():\n    pass\n\n\ndef test_b():\n    pass\n", encoding="utf-8")
+    readme = tmp_path / "README.md"
+    readme.write_text("`deploy/k8s/` 契约与 26 项静态检查。\n", encoding="utf-8")
+    monkeypatch.setattr("scripts.check_repo_consistency.ROOT", tmp_path)
+    monkeypatch.setattr("scripts.check_repo_consistency.CANONICAL_DOCS", [readme])
+
+    errors: list[str] = []
+    check_k8s_static_check_counts(errors, root=tmp_path)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks but tests/deploy/test_k8s_manifests.py defines 2" in errors[0]
+
+
+def test_consistency_guard_main_calls_the_static_check_guard():
+    """A guard that is not invoked from `main()` never runs in CI."""
+    from scripts import check_repo_consistency as guard
+
+    source = Path(guard.__file__).read_text(encoding="utf-8")
+    main_body = source.split("def main()", 1)[1]
+    assert "check_k8s_static_check_counts(errors)" in main_body
