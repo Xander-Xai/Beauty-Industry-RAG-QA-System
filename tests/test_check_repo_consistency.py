@@ -6026,3 +6026,61 @@ def test_effective_quote_depth_survives_a_marker_restore():
         "The Kubernetes manifests are covered by 26 static checks.",
         "The frontend is covered by 12 static checks.",
     ]
+
+
+def test_fully_unmarked_lazy_lines_keep_quote_membership():
+    """Any number of markers may be omitted, including all of them.
+
+    `>>> …26` / `static` / `>> checks.` is one paragraph: the middle line drops every
+    marker, and the third brings some back. Clearing quote membership on the unmarked
+    line made the restored `>>` look like a quote being entered and split the claim.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for document in (
+        ">>> The Kubernetes manifests are covered by 26\nstatic\n>> checks.\n",
+        ">>> The Kubernetes manifests are covered by 26\nstatic\n> checks.\n",
+        ">>> The Kubernetes manifests are covered by 26\nstatic\nchecks.\n",
+    ):
+        assert _markdown_claim_windows(document) == [
+            "The Kubernetes manifests are covered by 26 static checks.",
+        ], document
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert "states 26 Kubernetes static checks" in errors[0], document
+        assert k8s_static_check_count_errors("README.md", document.replace("26", "31"), expected=31) == [], document
+
+    # Membership is retained, not manufactured: entering a quote from plain prose
+    # still begins a block, and a deeper line still begins one.
+    for document in (
+        "The Kubernetes manifests are documented here\n> The frontend is covered by 12 static checks.",
+        "> The Kubernetes manifests are documented here\n>> The frontend is covered by 12 static checks.",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+        assert not _k8s_claim_is_in_scope(document), document
+
+
+def test_ordered_list_markers_may_hold_up_to_nine_digits():
+    """CommonMark's list-item rule allows one to nine digits, not one to three.
+
+    `1000) …` was not recognised as a list item, so it and the next item merged into
+    one window and the frontend count borrowed the Kubernetes subject.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for first, second in (("1000)", "1001)"), ("100)", "200)"), ("1.", "2."), ("123456789)", "123456790)")):
+        document = (
+            f"{first} Kubernetes manifests are documented here\n{second} The frontend is covered by 12 static checks.\n"
+        )
+        assert _markdown_claim_windows(document) == [
+            f"{first} Kubernetes manifests are documented here",
+            f"{second} The frontend is covered by 12 static checks.",
+        ], document
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+    # Ten digits is not a marker, so that line is paragraph text and continues the
+    # preceding item — which is the honest reading, not a merge of two list items.
+    document = "1. Kubernetes manifests are documented here\n0123456789) The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(document) == [
+        "1. Kubernetes manifests are documented here 0123456789) The frontend is covered by 12 static checks.",
+    ]

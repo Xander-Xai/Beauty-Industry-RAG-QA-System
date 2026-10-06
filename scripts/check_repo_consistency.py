@@ -4258,10 +4258,11 @@ _K8S_STATIC_CHECK_PHRASE_RE = re.compile(r"静态检查|static\s+checks?", re.IG
 #: does; so does a new block element, because a heading, a table row and a list item
 #: are separate claims that merely happen to sit next to each other. Wrapped
 #: continuation lines match none of these and therefore join the window they belong
-#: to, which is what stops an ordinary soft wrap from hiding a claim.
+#: to, which is what stops an ordinary soft wrap from hiding a claim. Ordered-list
+#: markers may hold up to nine digits, per CommonMark's list-item rule.
 _K8S_BLOCK_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
 _K8S_BLOCK_TABLE_RE = re.compile(r"^\s{0,3}\|")
-_K8S_BLOCK_LIST_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,3}[.)])\s+")
+_K8S_BLOCK_LIST_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,9}[.)])\s+")
 
 #: The block kinds, longest-ambiguity first, so a heading is not read as a list
 #: item and a row is not read as either. Order is load-bearing.
@@ -4464,12 +4465,11 @@ def _markdown_claim_windows(text: str) -> list[str]:
         #
         # * quote depth may be omitted, not only equal. `>>> wrapped\n> text` is one
         #   paragraph inside the depth-3 quote; only *entering* a deeper quote starts a
-        #   block, because a quote marker begins one. The depth a line may not exceed
-        #   is the paragraph's *effective* container depth — the deepest marker it has
-        #   been written with — not the previous line's written depth. Those differ
-        #   exactly in the restore case: `>>> …26\n> static\n>> checks.` omits markers
-        #   and then brings some back, and comparing against the reduced middle line
-        #   reads the third line as a deeper quote and splits one CommonMark paragraph.
+        #   block, because a quote marker begins one. Any number of markers may be
+        #   omitted, including all of them: `>>> …26\nstatic\n>> checks.` is one
+        #   paragraph, so quote membership is a property of the open block and not of
+        #   the latest line. The depth a line may not exceed is the paragraph's
+        #   *effective* container depth — the deepest marker it has been written with.
         # * indentation may be omitted. `- wrapped by 26 static\nchecks.` is one
         #   paragraph in the item, because the list-item laziness rule lets the
         #   continuation's hanging indent be dropped.
@@ -4492,11 +4492,11 @@ def _markdown_claim_windows(text: str) -> list[str]:
             flush()
         current.append(body)
         open_block = kind
-        open_quoted = in_quote
-        # Keep the paragraph's effective container depth across lazy lines: a line may
-        # drop markers, and a later line may bring some back without leaving the
-        # container. Recording the written depth each time makes the restore look like
-        # a deeper quote.
+        # Keep the paragraph's effective container across lazy lines: markers may be
+        # dropped — all of them included — and brought back without leaving the quote.
+        # Taking the latest line's `in_quote` would clear membership on an unmarked
+        # line, and the restored marker would then look like a quote being entered.
+        open_quoted = open_quoted or in_quote
         open_depth = max(open_depth, depth)
     flush()
     return windows
