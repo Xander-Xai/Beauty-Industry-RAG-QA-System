@@ -5864,3 +5864,28 @@ def test_a_generic_manifest_noun_is_not_a_kubernetes_subject():
         errors = k8s_static_check_count_errors("README.md", document, expected=31)
         assert len(errors) == 1, document
         assert "states 26 Kubernetes static checks" in errors[0], document
+
+
+def test_the_nested_marker_allowance_counts_columns_not_characters():
+    """Four spaces are four columns; four tabs are not four columns of anything.
+
+    The widened inter-marker bound accepted any four space-or-tab characters, so
+    `>\\t\\t\\t\\t> text` was read as a nested quote and split the claim. Tabs advance
+    to a tab stop rather than one column, so the inter-marker run is spaces only; the
+    marker's own optional space after the *last* marker may still be a tab.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    document = "> The Kubernetes manifests are covered by\n>\t\t\t\t> 26 static checks.\n"
+    assert _markdown_claim_windows(document) == [
+        "The Kubernetes manifests are covered by > 26 static checks.",
+    ], "the tab run is not a marker, so this is a continuation of the quoted paragraph"
+    errors = k8s_static_check_count_errors("README.md", document, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+    assert k8s_static_check_count_errors("README.md", document.replace("26 static", "31 static"), expected=31) == []
+
+    # A single tab is a legitimate stand-in for the marker's optional space, and the
+    # space run is still the four-column one the nested form needs.
+    assert _markdown_claim_windows("> a\n>\t> b\n") == ["a > b"]
+    assert _markdown_claim_windows("> a\n>    > b\n") == ["a", "b"]

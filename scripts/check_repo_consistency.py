@@ -4291,12 +4291,17 @@ _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 #:
 #: The asymmetry in the pattern is the load-bearing part:
 #:
-#: * *between* markers, up to four spaces are consumed. Three of those are the inner
-#:   marker's permitted indentation; the fourth is the outer marker's own optional
-#:   space, which is why the bound is four and not three — `>    > text` is a valid
-#:   nested quote, and reading it as depth 1 merges the inner paragraph into the
-#:   outer one. The lookahead keeps the slack harmless: the run only grows when
-#:   another ``>`` actually follows.
+#: * *between* markers, up to four **spaces** are consumed. Three of those are the
+#:   inner marker's permitted indentation; the fourth is the outer marker's own
+#:   optional space, which is why the bound is four and not three — `>    > text` is
+#:   valid and reading it as depth 1 merges the inner paragraph into the outer one.
+#:   Spaces, not tabs: the allowance is a column width, and a tab advances to a tab
+#:   stop rather than one column, so four tabs is not four columns of anything.
+#:   `>\t\t\t\t> text` is therefore *not* a nested quote — the second `>` sits inside
+#:   a code block, and the line is an ordinary continuation of the outer paragraph.
+#:   The lookahead keeps the slack harmless: the run only grows when another ``>``
+#:   actually follows. The marker's own optional space after the *last* marker may
+#:   be a tab, which is the one place a tab is a legitimate stand-in.
 #: * after the *last* marker, at most one space is consumed, because that single
 #:   space is the marker's own optional space. Everything after it is the block's
 #:   content indentation.
@@ -4306,7 +4311,7 @@ _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 #: wrapped quoted list item looks like it has no indentation and gets split in two.
 #: That is not fixable downstream, which is why the asymmetry is here rather than in
 #: the arithmetic that consumes this match.
-_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ \t]{0,4}(?=>))*>[ \t]?")
+_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ ]{0,4}(?=>))*>[ \t]?")
 
 #: Punctuation that separates clauses inside one window. A count only counts as a
 #: static-check count when it shares a clause with the phrase *and* the Kubernetes
