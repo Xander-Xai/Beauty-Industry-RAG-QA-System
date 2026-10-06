@@ -4744,8 +4744,8 @@ def test_current_k8s_static_check_count_is_accepted():
         "`tests/deploy/test_k8s_manifests.py` → 31 项静态检查",
         "`python3 -m pytest tests/deploy/ -q`（即 `tests/deploy/test_k8s_manifests.py`）→ 31 项静态检查。分组：",
         "静态检查指`tests/deploy/test_k8s_manifests.py`（31 项，全部离线、无网络、无集群）。",
-        "The manifests and their 31 static checks",
-        "The manifests and their thirty-one static checks",
+        "The Kubernetes manifests and their 31 static checks",
+        "The Kubernetes manifests and their thirty-one static checks",
     ):
         assert k8s_static_check_count_errors("README.md", claim, expected=31) == [], claim
         # A claim the guard skips because it is out of scope must not be "accepted"
@@ -5160,7 +5160,9 @@ def test_an_ordinary_comma_still_separates_clauses():
     # The exemption is a *grouping* comma, not "any comma next to a digit": a comma
     # after a count is a sentence boundary, and it must still bind the subject to
     # the clause it appears in.
-    split_but_bound = "The Kubernetes manifests have 8 known limits, and the manifests are covered by 26 static checks."
+    split_but_bound = (
+        "The Kubernetes manifests have 8 known limits, and the k8s manifests are covered by 26 static checks."
+    )
     errors = k8s_static_check_count_errors("README.md", split_but_bound, expected=31)
     assert len(errors) == 1, "the 8 must not be compared; the 26 must be"
     assert "states 26 Kubernetes static checks" in errors[0]
@@ -5282,7 +5284,7 @@ def test_a_heading_does_not_absorb_the_paragraph_after_it():
         assert not _k8s_claim_is_in_scope(document), f"fixture must be out of scope: {document}"
 
     # A stale claim in the paragraph after a heading is still caught.
-    stale = "## Kubernetes manifests\nThe manifests are covered by 26 static checks."
+    stale = "## Kubernetes manifests\nThe manifests are covered by 26 static checks in `deploy/k8s/`."
     errors = k8s_static_check_count_errors("README.md", stale, expected=31)
     assert len(errors) == 1
     assert "states 26 Kubernetes static checks" in errors[0]
@@ -5385,7 +5387,7 @@ def test_a_sentence_ending_in_a_number_is_still_a_sentence_boundary():
     assert k8s_static_check_count_errors("README.md", document, expected=31) == []
     assert not _k8s_claim_is_in_scope(document)
 
-    stale = "Kubernetes uses manifest schema 1.5. The manifests are covered by 26 static checks."
+    stale = "Kubernetes uses manifest schema 1.5. The k8s manifests are covered by 26 static checks."
     errors = k8s_static_check_count_errors("README.md", stale, expected=31)
     assert len(errors) == 1
     assert "states 26 Kubernetes static checks" in errors[0]
@@ -5794,3 +5796,71 @@ def test_indentation_is_measured_inside_the_quote_container():
     ):
         document = f"{opener}\n{continuation}\n"
         assert (len(_markdown_claim_windows(document)) == 1) is joined, document
+
+
+def test_four_spaces_before_a_nested_quote_marker_is_still_a_nested_quote():
+    """Three of those spaces are the inner marker's indentation, the fourth is the
+    outer marker's optional space — so the bound between markers is four, not three.
+
+    Reading `>    > text` as depth 1 merged the inner paragraph into the outer one and
+    let its count borrow the outer subject.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for separator in (" ", "  ", "   ", "    "):
+        document = (
+            f"> Kubernetes manifests are documented here\n>{separator}> The frontend is covered by 12 static checks.\n"
+        )
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+        assert not _k8s_claim_is_in_scope(document), document
+        assert _markdown_claim_windows(document) == [
+            "Kubernetes manifests are documented here",
+            "The frontend is covered by 12 static checks.",
+        ], document
+
+    # Five spaces is an indented code block, not a nested quote: the marker is not
+    # there, so the line is an ordinary continuation of the outer paragraph.
+    code = "> Kubernetes manifests are documented here\n>     > not a nested quote\n"
+    assert _markdown_claim_windows(code) == [
+        "Kubernetes manifests are documented here > not a nested quote",
+    ]
+
+    # A stale claim inside the nested block is still caught.
+    stale = (
+        "> Kubernetes manifests are documented here\n>    > The Kubernetes manifests are covered by 26 static checks.\n"
+    )
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+
+def test_a_generic_manifest_noun_is_not_a_kubernetes_subject():
+    """`manifest` is a generic noun, so naming it is not naming the K8s manifests.
+
+    `The frontend manifest is covered by 12 static checks.` was compared against the
+    K8s module's size. The word was in the subject list to cover an English phrasing
+    the current documents no longer use — every real claim names `deploy/k8s/`,
+    `k8s`, or the test module in the same clause.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document in (
+        "The frontend manifest is covered by 12 static checks.",
+        "The Python package manifest has 12 static checks.",
+        "The manifests and their 31 static checks",
+        # A wrong number is still ignored for the same reason: out of scope beats wrong.
+        "The frontend manifest is covered by 999 static checks.",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+        assert not _k8s_claim_is_in_scope(document), f"fixture must be out of scope: {document}"
+
+    # A Kubernetes-qualified reference is still in scope, by either route.
+    for document in (
+        "The Kubernetes manifests are covered by 26 static checks.",
+        "The k8s manifests are covered by 26 static checks.",
+        "The manifests are covered by 26 static checks in `deploy/k8s/`.",
+        "The manifests and their 26 static checks (`tests/deploy/test_k8s_manifests.py`, offline).",
+    ):
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert "states 26 Kubernetes static checks" in errors[0], document

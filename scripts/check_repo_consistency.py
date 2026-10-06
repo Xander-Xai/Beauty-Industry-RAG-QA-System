@@ -4238,11 +4238,18 @@ _K8S_COUNT_GROUPS = ("chinese", "cn_trail", "english")
 #: subject has to appear in the *same clause* as the count, not merely somewhere in
 #: the paragraph: a paragraph that names Kubernetes and then, in a separate clause,
 #: states another suite's tally is two claims, and window-level licensing would read
-#: the second one as the first one's count. Note that ``tests/deploy/`` alone is
-#: *not* context: that directory holds the deploy contract, and a future
-#: non-Kubernetes deploy test landing there would make the name point at the wrong
-#: count.
-_K8S_SUBJECT_CONTEXT_RE = re.compile(r"kubernetes|k8s|manifest|test_k8s_manifests", re.IGNORECASE)
+#: the second one as the first one's count.
+#:
+#: `manifest` on its own is deliberately *not* in this list, which it was until the
+#: review caught it. The noun is generic — `The frontend manifest`, `The Python
+#: package manifest` — and treating any of them as the Kubernetes manifest is the
+#: same fabricated error with a different word. A Kubernetes-qualified reference
+#: still matches through `kubernetes` / `k8s`, and the module is named outright, so
+#: no current document lost its guard: the English claim in
+#: `docs/repository-truth-audit.md` names `tests/deploy/test_k8s_manifests.py` in
+#: the same clause. A bare "The manifests are covered by 31 static checks" is now
+#: out of scope, which is the trade the guard accepts — out of scope beats wrong.
+_K8S_SUBJECT_CONTEXT_RE = re.compile(r"kubernetes|k8s|test_k8s_manifests", re.IGNORECASE)
 
 #: The phrase that turns a number in an in-scope window into a static-check count.
 _K8S_STATIC_CHECK_PHRASE_RE = re.compile(r"静态检查|static\s+checks?", re.IGNORECASE)
@@ -4284,9 +4291,12 @@ _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 #:
 #: The asymmetry in the pattern is the load-bearing part:
 #:
-#: * *between* markers, up to three spaces of indentation are consumed — that is
-#:   what makes ``>  > text`` a nested quote at depth 2 rather than a depth-1 line
-#:   whose text happens to start with ``>``;
+#: * *between* markers, up to four spaces are consumed. Three of those are the inner
+#:   marker's permitted indentation; the fourth is the outer marker's own optional
+#:   space, which is why the bound is four and not three — `>    > text` is a valid
+#:   nested quote, and reading it as depth 1 merges the inner paragraph into the
+#:   outer one. The lookahead keeps the slack harmless: the run only grows when
+#:   another ``>`` actually follows.
 #: * after the *last* marker, at most one space is consumed, because that single
 #:   space is the marker's own optional space. Everything after it is the block's
 #:   content indentation.
@@ -4296,7 +4306,7 @@ _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 #: wrapped quoted list item looks like it has no indentation and gets split in two.
 #: That is not fixable downstream, which is why the asymmetry is here rather than in
 #: the arithmetic that consumes this match.
-_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ \t]{0,3}(?=>))*>[ \t]?")
+_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ \t]{0,4}(?=>))*>[ \t]?")
 
 #: Punctuation that separates clauses inside one window. A count only counts as a
 #: static-check count when it shares a clause with the phrase *and* the Kubernetes
