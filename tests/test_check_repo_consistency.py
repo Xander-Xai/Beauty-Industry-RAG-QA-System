@@ -5711,3 +5711,45 @@ def test_a_deeply_indented_quoted_list_continuation_is_measured_from_the_source_
         "- The Kubernetes manifests are covered by 26 static checks.",
         "The frontend is covered by 12 static checks.",
     ]
+
+
+def test_a_list_continuation_must_reach_the_items_content_column():
+    """`>- item` and `> cont` are two blocks; `> - item` and `>   cont` are one.
+
+    The optional space after a quote marker shifts both the opener and the candidate
+    by one column, so comparing the line's own column made `>- item` / `> cont` look
+    like a continuation. The item's *content* column — the one after its own marker —
+    is what a continuation has to reach, and that is stable under the quote marker's
+    optional space.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    document = ">- The Kubernetes manifests\n> The frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+    assert not _k8s_claim_is_in_scope(document)
+    assert _markdown_claim_windows(document) == [
+        "- The Kubernetes manifests",
+        "The frontend is covered by 12 static checks.",
+    ]
+
+    # With the space present, the same two lines *are* one list item, and its own
+    # subject and count are one claim.
+    joined = "> - The Kubernetes manifests are covered by 26 static\n>   checks.\n"
+    assert _markdown_claim_windows(joined) == ["- The Kubernetes manifests are covered by 26 static checks."]
+    errors = k8s_static_check_count_errors("README.md", joined, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    # A stale claim in the item is still caught when the marker is tight, and a
+    # paragraph after it does not inherit the item's subject.
+    after = (
+        ">- The Kubernetes manifests are covered by 26 static checks.\n> The frontend is covered by 12 static checks.\n"
+    )
+    errors = k8s_static_check_count_errors("README.md", after, expected=31)
+    assert len(errors) == 1, "only the item's own 26 is compared"
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    # An ordered item's content column is after `1. `, and reaching it continues.
+    assert _markdown_claim_windows("1. a list item\n   its continuation\n") == ["1. a list item its continuation"]
+    # A line that stops short of it starts a new paragraph.
+    assert _markdown_claim_windows("- a list item\n its continuation\n") == ["- a list item", "its continuation"]

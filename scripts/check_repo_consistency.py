@@ -4365,16 +4365,19 @@ def _markdown_claim_windows(text: str) -> list[str]:
     # The block kind the open window belongs to: one of the ``_K8S_BLOCK_KINDS``
     # names, ``"paragraph"``, or ``None`` when no window is open.
     open_block: str | None = None
-    # Whether the open window is a blockquote, at what depth, and how far its
-    # content is indented. Indentation is measured after the ``>`` markers: inside
-    # a quote the markers occupy the first column, so the raw line always starts
-    # with ``>`` and says nothing about whether a line continues a list item.
+    # Whether the open window is a blockquote, at what depth, and — for a list item —
+    # the source column its content starts at. That column, not the line's own
+    # indentation, is what a continuation has to reach: `> - item` puts its content at
+    # column 4, so `>   cont` (column 4) continues it while `>- item` puts its content
+    # at column 3, so `> cont` (column 2) does not. Measuring the line's own column
+    # instead cannot tell those apart, because the quote's optional post-marker space
+    # shifts both the opener and the candidate.
     open_quoted = False
     open_depth = 0
-    open_indent = 0
+    open_content_col = 0
 
     def flush() -> None:
-        nonlocal open_block, open_quoted, open_depth, open_indent
+        nonlocal open_block, open_quoted, open_depth, open_content_col
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
@@ -4382,7 +4385,7 @@ def _markdown_claim_windows(text: str) -> list[str]:
         open_block = None
         open_quoted = False
         open_depth = 0
-        open_indent = 0
+        open_content_col = 0
 
     def block_kind(text: str) -> str:
         for name, pattern in _K8S_BLOCK_KINDS:
@@ -4404,22 +4407,26 @@ def _markdown_claim_windows(text: str) -> list[str]:
         if in_quote:
             marker_run = _K8S_QUOTE_PREFIX_RE.match(line).group(0)
             depth = marker_run.count(">")
-            body = line[len(marker_run) :].strip()
+            body_start = len(marker_run)
         else:
             depth = 0
-            body = line.strip()
-        # The column the block's content starts at, measured from the same origin
-        # for every line of the block. It has to be the column in the source line and
-        # not the whitespace left after the markers: the prefix match caps how much
-        # it consumes, so a deeply indented continuation of a quoted list item still
-        # has leading spaces on the body, and measuring only what the prefix ate
-        # made that continuation look no more indented than the item it belongs to.
-        indent = len(line) - len(line.lstrip(" \t>"))
+            body_start = len(line) - len(line.lstrip())
+        body = line[body_start:].strip()
+        # The column this line's content starts at, from the same origin for every
+        # line of the block. Measured on the unstripped remainder, because the quote
+        # prefix caps how much whitespace it consumes and a deeply indented
+        # continuation of a quoted list item still carries spaces here.
+        content_col = len(line) - len(line.lstrip(" \t>"))
         # A `>`-only line is a paragraph break inside the quote, not content.
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()
             continue
         kind = block_kind(body)
+        # A list item's content starts after its own marker, so that is the column a
+        # continuation has to reach. Everything else uses the column it started at.
+        open_col = content_col
+        if kind == "list":
+            open_col += len(_K8S_BLOCK_LIST_RE.match(body).group(0))
         # Which block the line continues, decided by the block that is already open:
         #
         # * a paragraph continues a paragraph, quoted or not. Leaving a quote with an
@@ -4427,15 +4434,17 @@ def _markdown_claim_windows(text: str) -> list[str]:
         #   but a blockquote always interrupts a paragraph, so entering one starts a
         #   new block — and a *deeper* quote starts a new block too, which is the
         #   same rule one level down;
-        # * a list item continues only on a line indented past its own content, which
-        #   is the ordinary wrapped form of an item and is measured after the ``>``;
+        # * a list item continues only on a line that reaches its content column, which
+        #   is the ordinary wrapped form of an item. A line that stops short of it is a
+        #   new paragraph in the same quote, and the item's subject does not reach into
+        #   it: `> - item` and `> cont` are one item, `>- item` and `> cont` are not.
         # * a heading or a table row is one line, so the next line is a new paragraph.
         same_quote_level = in_quote == open_quoted and depth == open_depth
         lazy_continuation = open_quoted and not in_quote and open_block == "paragraph"
         continues_open_block = (
             kind == "paragraph"
             and (same_quote_level or lazy_continuation)
-            and (open_block == "paragraph" or (open_block == "list" and indent > open_indent))
+            and (open_block == "paragraph" or (open_block == "list" and content_col >= open_content_col))
         )
         if not continues_open_block:
             flush()
@@ -4443,7 +4452,7 @@ def _markdown_claim_windows(text: str) -> list[str]:
         open_block = kind
         open_quoted = in_quote
         open_depth = depth
-        open_indent = indent
+        open_content_col = open_col
     flush()
     return windows
 
