@@ -222,6 +222,24 @@ Changes present on `main` after the 2.3.0 release entry:
   `role_mask`/`dept_mask` is rejected before `UserIdentity` construction, so Pydantic coercion
   cannot launder a stringly-typed mask into an authenticated identity. A present-but-null claim
   is treated as malformed rather than absent.
+- The `AUTH_DEV_MODE` header identity path now obeys the same canonical uint32 mask contract as
+  the JWT path, through the same validator (`common/auth.py::_validate_permission_mask_claim`)
+  rather than a second rule set. `common/auth.py` used to read these masks with a bare
+  `int(...)`, which had two consequences: a mask outside `[0, 2**32-1]` authenticated, so
+  `X-Role-Mask: -1` produced an identity whose `-1 & mask` overlaps every document mask; and a
+  header that was not an integer raised an unhandled `ValueError` and returned HTTP 500 instead
+  of an authorization decision. A rejected header now yields the anonymous zero-mask identity,
+  the same fail-closed outcome the JWT branch already used. Mask validation happens before
+  `UserIdentity` construction, so no Pydantic coercion can launder the value. `X-User-ID` is a
+  label and grants nothing on its own; an absent mask header keeps its pre-existing default of
+  mask 0. RBAC bitmask semantics, the role/dept AND/OR rules and the JWT path are unchanged.
+  Scope is a contract asymmetry between two identity sources: `AUTH_DEV_MODE=true` trusts
+  caller-supplied headers by design and is not a production posture, no new authority is granted
+  beyond removing masks the canonical range never allowed, and no runtime or production identity
+  validation evidence was created. Verified by disabling each control in turn: 26 / 31 / 33 / 5
+  tests fail in `tests/test_auth_identity_resolution.py`, and 2 fail in
+  `tests/test_demo_corpus_rbac_consistency.py` when the demo walkthrough caption is left claiming
+  the shared contract the code does not enforce.
 - Access-token issuance refuses to let `extra_claims` shadow the claims the issuer owns
   (`sub`, `role_mask`, `dept_mask`, `iat`, `exp`, `type`), so issuer input and the signed token
   can no longer disagree. Genuine extension claims such as `tenant_id` remain settable.

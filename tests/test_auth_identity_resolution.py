@@ -326,3 +326,248 @@ def test_validator_rejects_coercion_and_out_of_range():
     for bad in ("1", 1.0, True, False, -1, 0x100000000, None, [], {}):
         with pytest.raises(ValueError):
             _validate_permission_mask_claim(bad, "role_mask")
+
+
+# ── AUTH_DEV_MODE header permission masks ────────────────────────────────
+#
+# `AUTH_DEV_MODE` is a second identity source, so a mask arriving in
+# `X-Role-Mask` / `X-Dept-Mask` is the same kind of value as a JWT permission
+# claim and is held to the same canonical uint32 contract, by the same
+# validator. This branch previously read `int(request.headers.get(...))`:
+#
+#   * a mask outside [0, 2**32-1] was accepted, so `-1` reached UserIdentity
+#     and `-1 & mask` overlaps every document mask;
+#   * a non-integer header raised an unhandled ValueError and returned HTTP 500
+#     instead of an authorization decision.
+#
+# Only the receiving boundary is verified here. `AUTH_DEV_MODE=true` is not a
+# production posture and nothing below claims production identity validation.
+
+
+_MASK_HEADERS = ["X-Role-Mask", "X-Dept-Mask"]
+_MASK_RESPONSE_FIELDS = {"X-Role-Mask": "role_mask", "X-Dept-Mask": "dept_mask"}
+
+#: Valid canonical uint32 masks, spanning the whole accepted range.
+_VALID_DEV_MASKS = ["0", "1", "2", "4", "7", "2147483647", "4294967295"]
+
+#: Malformed headers that *decode* to an integer, so a value exists to be judged.
+#: Each is out of the canonical uint32 range.
+_OUT_OF_RANGE_DEV_MASKS = [
+    "-1",
+    "-4294967295",
+    "4294967296",  # 2**32
+    "4294967297",  # 2**32 + 1
+    "1099511627776",  # 2**40
+    "340282366920938463463374607431768211456",  # 2**128
+]
+
+#: Malformed headers that do *not* represent an integer at all, so they must be
+#: refused before any value exists. `"1.0"` and `"1e3"` are the float-like
+#: strings a truncating parser would turn into mask 1; `"+7"` is deliberately
+#: absent because it decodes to the valid integer 7.
+_UNPARSABLE_DEV_MASKS = [
+    "1.0",
+    "1e3",
+    "abc",
+    "",
+    "   ",
+    "0x10",
+    "+-1",
+    "1,0",
+    "NaN",
+    "inf",
+]
+
+
+class _RequestStub:
+    """Minimal header-mapping stand-in for the identity-ingress helpers."""
+
+    def __init__(self, headers: dict):
+        self.headers = headers
+
+
+@pytest.fixture
+def _dev_mode(monkeypatch):
+    monkeypatch.setenv("AUTH_DEV_MODE", "true")
+    reload_config()
+
+
+@pytest.mark.parametrize("header", _MASK_HEADERS)
+@pytest.mark.parametrize("mask", _VALID_DEV_MASKS, ids=repr)
+def test_valid_uint32_dev_header_mask_is_accepted(_dev_mode, header, mask):
+    """The whole canonical uint32 range, both bounds included, is a dev-mode identity."""
+    resp = TestClient(_protected_app()).get(
+        "/protected",
+        headers={"X-User-ID": "dev_user", header: mask},
+    )
+
+    assert resp.status_code == 200, f"{header}: {mask!r} must authenticate"
+    body = resp.json()
+    assert body[_MASK_RESPONSE_FIELDS[header]] == int(mask)
+    assert body["user_id"] == "dev_user"
+
+
+@pytest.mark.parametrize("header", _MASK_HEADERS)
+@pytest.mark.parametrize("mask", _OUT_OF_RANGE_DEV_MASKS + _UNPARSABLE_DEV_MASKS, ids=repr)
+def test_malformed_dev_header_mask_fails_closed(_dev_mode, header, mask):
+    """A header the uint32 contract rejects yields the anonymous zero-mask identity.
+
+    Two properties in one assertion: the claimed permission never survives, and
+    the rejection is an authorization decision rather than a server error. The
+    pre-fix behaviour was 200-with-an-out-of-range-mask for the numeric cases and
+    HTTP 500 for the unparsable ones.
+    """
+    resp = TestClient(_protected_app()).get(
+        "/protected",
+        headers={"X-User-ID": "dev_user", header: mask},
+    )
+
+    assert resp.status_code == 200, f"{header}: {mask!r} must fail closed, not error out"
+    assert resp.json() == {"user_id": "anonymous", "role_mask": 0, "dept_mask": 0}
+
+
+@pytest.mark.parametrize("header", _MASK_HEADERS)
+def test_absent_dev_header_mask_keeps_the_documented_zero_default(_dev_mode, header):
+    """An absent header is the pre-existing default of mask 0, itself a valid uint32.
+
+    Pinned explicitly so the absent case cannot be silently redefined into a
+    rejection: dev mode has always defaulted an omitted mask to 0, and 0 already
+    fails closed because zero masks clear no restricted document.
+    """
+    other = "X-Dept-Mask" if header == "X-Role-Mask" else "X-Role-Mask"
+    resp = TestClient(_protected_app()).get(
+        "/protected",
+        headers={"X-User-ID": "dev_user", other: "3"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    expected = {"role_mask": 3, "dept_mask": 3}
+    expected[_MASK_RESPONSE_FIELDS[header]] = 0
+    assert body == {"user_id": "dev_user", **expected}
+
+
+def test_both_masks_valid_at_the_upper_bound_together(_dev_mode):
+    """2**32-1 on both headers at once is still exactly one valid identity."""
+    resp = TestClient(_protected_app()).get(
+        "/protected",
+        headers={"X-User-ID": "dev_user", "X-Role-Mask": "4294967295", "X-Dept-Mask": "4294967295"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"user_id": "dev_user", "role_mask": 0xFFFFFFFF, "dept_mask": 0xFFFFFFFF}
+
+
+def test_one_valid_and_one_malformed_mask_fails_closed(_dev_mode):
+    """Both masks are validated, so a good header must not rescue a bad one."""
+    resp = TestClient(_protected_app()).get(
+        "/protected",
+        headers={"X-User-ID": "dev_user", "X-Role-Mask": "4", "X-Dept-Mask": "-1"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"user_id": "anonymous", "role_mask": 0, "dept_mask": 0}
+
+
+def test_valid_dev_header_happy_path_is_unregressed(_dev_mode):
+    """The pre-existing happy path still produces the caller-named identity."""
+    resp = TestClient(_protected_app()).get(
+        "/protected",
+        headers={"X-User-ID": "dev_user", "X-Role-Mask": "1", "X-Dept-Mask": "2"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"user_id": "dev_user", "role_mask": 1, "dept_mask": 2}
+
+
+def test_dev_header_masks_are_validated_before_useridentity_construction(_dev_mode):
+    """No Pydantic laundering: the ingress helper raises instead of coercing.
+
+    `UserIdentity`'s mask fields are plain `int``, so Pydantic will happily
+    accept a malformed value -- which is precisely why the check has to happen at
+    ingress. This asserts both halves of that argument: the model really would
+    launder the value, and the dev-header path really does refuse it before the
+    model is reached.
+    """
+    from common.auth import _identity_from_dev_headers
+    from common.models import UserIdentity
+
+    # The laundering this contract exists to prevent, asserted so the test below
+    # cannot pass by accident if the model ever became strict.
+    assert UserIdentity(user_role_mask="1").user_role_mask == 1
+    assert UserIdentity(user_role_mask="-1").user_role_mask == -1
+    assert UserIdentity(user_role_mask=1.0).user_role_mask == 1
+
+    with pytest.raises(ValueError, match=r"within \[0, 4294967295\]"):
+        _identity_from_dev_headers(_RequestStub({"X-Role-Mask": "-1", "X-Dept-Mask": "2"}))
+
+    identity = _identity_from_dev_headers(_RequestStub({"X-Role-Mask": "1", "X-Dept-Mask": "2"}))
+    assert (identity.user_role_mask, identity.user_dept_mask) == (1, 2)
+
+
+@pytest.mark.parametrize("mask", _VALID_DEV_MASKS, ids=repr)
+def test_dev_and_jwt_paths_accept_exactly_the_same_masks(mask, _dev_mode):
+    """One contract, two ingress paths: the accepted set is identical."""
+    from common.auth import _identity_from_dev_headers, _identity_from_jwt
+
+    value = int(mask)
+    dev_identity = _identity_from_dev_headers(_RequestStub({"X-Role-Mask": mask, "X-Dept-Mask": mask}))
+    jwt_identity = _identity_from_jwt({"sub": "u", "role_mask": value, "dept_mask": value})
+
+    assert (dev_identity.user_role_mask, dev_identity.user_dept_mask) == (value, value)
+    assert (jwt_identity.user_role_mask, jwt_identity.user_dept_mask) == (value, value)
+
+
+@pytest.mark.parametrize("mask", _OUT_OF_RANGE_DEV_MASKS, ids=repr)
+def test_dev_and_jwt_paths_reject_the_same_out_of_range_values(mask, _dev_mode):
+    """A decoded header is judged by the JWT path's range rule, verbatim.
+
+    Compared on the decoded integer because a JWT claim cannot be a string: the
+    shared value class has to reach the same verdict on both ingress paths.
+    """
+    from common.auth import _identity_from_dev_headers, _identity_from_jwt
+
+    value = int(mask)
+
+    with pytest.raises(ValueError, match=r"within \[0, 4294967295\]"):
+        _identity_from_dev_headers(_RequestStub({"X-Role-Mask": mask, "X-Dept-Mask": mask}))
+
+    with pytest.raises(ValueError, match=r"within \[0, 4294967295\]"):
+        _identity_from_jwt({"sub": "u", "role_mask": value, "dept_mask": value})
+
+
+@pytest.mark.parametrize("mask", _UNPARSABLE_DEV_MASKS, ids=repr)
+def test_unparsable_dev_header_mask_is_refused_before_any_value_exists(mask, _dev_mode):
+    """A header that is not an integer never reaches the range rule at all."""
+    from common.auth import _identity_from_dev_headers
+
+    with pytest.raises(ValueError, match="base-10 integer"):
+        _identity_from_dev_headers(_RequestStub({"X-Role-Mask": mask, "X-Dept-Mask": mask}))
+
+
+def test_dev_header_ingress_calls_the_canonical_validator(monkeypatch, _dev_mode):
+    """Structural proof that there is one validator, not two look-alike rule sets.
+
+    Replaces the module's validator with a sentinel and asserts the dev-header
+    ingress actually calls it. A second, copied range check inside the dev-header
+    branch would leave this sentinel uncalled and fail.
+    """
+    import common.auth as auth_module
+
+    calls = []
+    original = auth_module._validate_permission_mask_claim
+
+    def _spy(value, source):
+        calls.append((value, source))
+        return original(value, source)
+
+    monkeypatch.setattr(auth_module, "_validate_permission_mask_claim", _spy)
+
+    identity = auth_module._identity_from_dev_headers(_RequestStub({"X-Role-Mask": "5", "X-Dept-Mask": "6"}))
+    assert (identity.user_role_mask, identity.user_dept_mask) == (5, 6)
+    assert calls == [(5, "X-Role-Mask"), (6, "X-Dept-Mask")]
+
+    calls.clear()
+    with pytest.raises(ValueError):
+        auth_module._identity_from_dev_headers(_RequestStub({"X-Role-Mask": "4294967296", "X-Dept-Mask": "6"}))
+    assert calls == [(0x100000000, "X-Role-Mask")]
