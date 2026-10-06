@@ -5410,9 +5410,19 @@ def test_a_lazy_continuation_only_applies_to_a_quoted_paragraph():
     quoted_paragraph = "> The Kubernetes manifests are covered by 26 static\nchecks.\n"
     assert len(k8s_static_check_count_errors("README.md", quoted_paragraph, expected=31)) == 1
 
-    # An indented continuation of a quoted list item is that item's content.
-    quoted_item = "> - The Kubernetes manifests\n>   The frontend is covered by 12 static checks.\n"
-    assert k8s_static_check_count_errors("README.md", quoted_item, expected=31) == []
+    # An indented continuation *is* the quoted list item's own content, so a claim
+    # in it is in the item's scope — the subject and the count are one claim, and
+    # widening it to read the 12 as Kubernetes's would be a fabricated error only
+    # if the item had not named Kubernetes, which here it does.
+    quoted_item = "> - The Kubernetes manifests\n>   are covered by 12 static checks.\n"
+    errors = k8s_static_check_count_errors("README.md", quoted_item, expected=31)
+    assert len(errors) == 1, "the item names Kubernetes, so its 12 is a Kubernetes count"
+    assert "states 12 Kubernetes static checks" in errors[0]
+
+    # The unindented form after the same item is a new paragraph, and the item's
+    # subject does not reach into it.
+    unindented = "> - The Kubernetes manifests\nThe frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", unindented, expected=31) == []
 
 
 def test_a_setext_heading_closes_before_the_following_paragraph():
@@ -5439,3 +5449,78 @@ def test_claim_windows_close_a_setext_heading_before_the_following_paragraph():
 
     document = "heading text one\n-------------\nheading text two\n=============\nbody prose\n"
     assert _markdown_claim_windows(document) == ["heading text one", "heading text two", "body prose"]
+
+
+def test_a_phrase_first_chinese_count_must_not_modify_another_noun():
+    """`静态检查覆盖 5 项资源` counts resources, not checks.
+
+    The phrase-first alternative accepted the next `N 项` whatever it counted, so
+    an ordinary sentence about how many resources the checks cover failed the
+    repository consistency job.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document in (
+        "Kubernetes 静态检查覆盖 5 项资源。",
+        "`deploy/k8s/` 的 31 项静态检查覆盖 5 项资源。",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+    # A bare tally after the phrase is still read as a check count: nothing in
+    # `静态检查共 5 项` takes the number, and that is the form documents use.
+    bare = k8s_static_check_count_errors("README.md", "Kubernetes 静态检查共 26 项。", expected=31)
+    assert len(bare) == 1
+    assert "states 26 Kubernetes static checks" in bare[0]
+
+    # The parenthetical form the current documentation actually uses stays bound.
+    real = "静态检查指`tests/deploy/test_k8s_manifests.py`（26 项，全部离线）。"
+    errors = k8s_static_check_count_errors("README.md", real, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+
+def test_a_quoted_list_continuation_keeps_its_indentation():
+    """The `>` marker occupies column one, so the item's indent is what follows it.
+
+    Reading indentation off the raw line made every quoted line look unindented, so
+    `> - ...26 static\n>   checks.` split into two windows and the stale count was
+    never checked.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    stale = "> - The Kubernetes manifests are covered by 26 static\n>   checks.\n"
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    current = "> - The Kubernetes manifests are covered by 31 static\n>   checks.\n"
+    assert k8s_static_check_count_errors("README.md", current, expected=31) == []
+
+    assert _markdown_claim_windows(stale) == ["- The Kubernetes manifests are covered by 26 static checks."]
+
+    # The unquoted wrap of the same item is unaffected.
+    plain = "- The Kubernetes manifests are covered by 26 static\n  checks.\n"
+    assert len(k8s_static_check_count_errors("README.md", plain, expected=31)) == 1
+
+
+def test_a_blockquote_interrupts_a_preceding_paragraph():
+    """Entering a quote starts a new block; it does not continue the paragraph above.
+
+    Both bodies are paragraphs, so the join rule alone let the quoted frontend count
+    borrow the preceding paragraph's Kubernetes subject.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    document = "The Kubernetes manifests are documented here\n> The frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+    assert not _k8s_claim_is_in_scope(document)
+    assert _markdown_claim_windows(document) == [
+        "The Kubernetes manifests are documented here",
+        "The frontend is covered by 12 static checks.",
+    ]
+
+    # The reverse direction is lazy continuation and stays one window, so this
+    # asymmetry is not "a quote always ends the window".
+    lazy = "> The Kubernetes manifests are covered by 26 static\nchecks.\n"
+    assert _markdown_claim_windows(lazy) == ["The Kubernetes manifests are covered by 26 static checks."]
+    assert len(k8s_static_check_count_errors("README.md", lazy, expected=31)) == 1

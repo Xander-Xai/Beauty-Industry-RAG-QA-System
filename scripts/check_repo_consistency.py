@@ -4165,11 +4165,19 @@ def k8s_static_check_count(module_path: Path) -> int:
 #:
 #: ``N 项`` on its own is not a static-check count. Chinese counts items of every
 #: kind, so in ``Kubernetes 清单的 5 项资源由 31 项静态检查覆盖。`` the 5 counts
-#: resources. The Chinese count therefore has to be bound to ``静态检查``: either it
-#: modifies the phrase (``31 项静态检查``), or it is the nearest count after it
-#: (``静态检查指…（31 项，…）``) with no other count and no clause separator in
-#: between. This mirrors the English alternative, which already requires the phrase
-#: to follow the number.
+#: resources. The Chinese count therefore has to be bound to ``静态检查`` — in either
+#: direction, since the documents use both:
+#:
+#: * count first: it must modify the phrase, ``31 项静态检查``;
+#: * phrase first: it must be the nearest count after the phrase, and it must be a
+#:   *bare tally* — ``静态检查指…（31 项，全部离线）``. A count that modifies another
+#:   noun is not a check count, which is what the ``(?![CJK])`` after ``项`` rejects:
+#:   in ``静态检查覆盖 5 项资源。`` the 5 counts resources. The rule is deliberately
+#:   "unless shown to count something else": ``静态检查共 5 项。`` is ambiguous prose
+#:   and is read as five checks, because nothing else in it takes the number.
+#:
+#: This mirrors the English alternative, which already requires the phrase to follow
+#: the number.
 #:
 #: The lookbehind refuses only a match that would begin *inside* a numeral, not
 #: every start that follows a Chinese character. Chinese numerals are contiguous
@@ -4184,12 +4192,17 @@ def k8s_static_check_count(module_path: Path) -> int:
 #: between, so the nearest one is no longer the one the phrase modifies).
 _CN_UNBOUND = "；;。、！？!?,，项"
 
+#: A Han character, used to tell a bare tally from a count that modifies a noun.
+_CJK_RE = r"\u4e00-\u9fff"
+
 _K8S_STATIC_CHECK_COUNT_RE = re.compile(
     r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项\s*静态检查"
     + r"|静态检查(?P<cn_trail_gap>[^"
     + _CN_UNBOUND
     + r"]{0,60}?)(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<cn_trail>"
-    + r"[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项"
+    + r"[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项(?!["
+    + _CJK_RE
+    + r"])"
     + r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
     + _COUNT_WORDS
     + r")(?:[-\s](?:"
@@ -4242,8 +4255,14 @@ _K8S_BLOCK_KINDS = (
 #: would split one wrapped paragraph into one window per line, and a stale count
 #: would slip through merely because the author rewrapped it. The marker is removed
 #: instead, so the window holds the prose a reader actually sees.
+#:
+#: Exactly one space after the last ``>`` is consumed, because that one space is
+#: part of the marker. The rest is the block's own indentation, and it has to
+#: survive: ``> - item`` followed by ``>   continuation`` is one list item, and a
+#: marker regex that ate the indentation would make the continuation look
+#: unindented and split the item in two.
 _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
-_K8S_QUOTE_MARKER_RE = re.compile(r"^\s{0,3}(?:>\s*)+")
+_K8S_QUOTE_MARKER_RE = re.compile(r"^\s{0,3}(?:>[ \t]?)+")
 
 #: Punctuation that separates clauses inside one window. A count only counts as a
 #: static-check count when it shares a clause with the phrase *and* the Kubernetes
@@ -4314,14 +4333,22 @@ def _markdown_claim_windows(text: str) -> list[str]:
     # The block kind the open window belongs to: one of the ``_K8S_BLOCK_KINDS``
     # names, ``"paragraph"``, or ``None`` when no window is open.
     open_block: str | None = None
+    # Whether the open window is a blockquote, and how far its content is indented.
+    # Indentation is measured after the ``>`` markers: inside a quote the markers
+    # occupy the first column, so the raw line always starts with ``>`` and says
+    # nothing about whether a line continues a list item.
+    open_quoted = False
+    open_indent = 0
 
     def flush() -> None:
-        nonlocal open_block
+        nonlocal open_block, open_quoted, open_indent
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
         current.clear()
         open_block = None
+        open_quoted = False
+        open_indent = 0
 
     def block_kind(text: str) -> str:
         for name, pattern in _K8S_BLOCK_KINDS:
@@ -4340,23 +4367,34 @@ def _markdown_claim_windows(text: str) -> list[str]:
             flush()
             continue
         in_quote = bool(_K8S_BLOCK_QUOTE_RE.match(line))
-        body = _K8S_QUOTE_MARKER_RE.sub("", line).strip() if in_quote else stripped
+        body = _K8S_QUOTE_MARKER_RE.sub("", line) if in_quote else line
+        indent = len(body) - len(body.lstrip())
+        body = body.strip()
         # A `>`-only line is a paragraph break inside the quote, not content.
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()
             continue
         kind = block_kind(body)
-        # Only a paragraph continues a paragraph, and a list item continues only on
-        # an indented line — the ordinary wrapped form of an item. A quoted heading,
-        # row or list item is still that block, so an unindented line after it is a
-        # new paragraph: quoting the element does not fuse it with what follows.
-        continues_open_block = kind == "paragraph" and (
-            open_block == "paragraph" or (open_block == "list" and line[:1] in (" ", "\t"))
+        # Which block the line continues, decided by the block that is already open:
+        #
+        # * a paragraph continues a paragraph, quoted or not. Leaving a quote with an
+        #   unmarked line is the *lazy continuation* form and is still that paragraph,
+        #   but a blockquote always interrupts a paragraph, so entering one starts a
+        #   new block;
+        # * a list item continues only on a line indented past its own content, which
+        #   is the ordinary wrapped form of an item and is measured after the ``>``;
+        # * a heading or a table row is one line, so the next line is a new paragraph.
+        continues_open_block = (
+            kind == "paragraph"
+            and not (in_quote and not open_quoted)
+            and (open_block == "paragraph" or (open_block == "list" and indent > open_indent))
         )
         if not continues_open_block:
             flush()
         current.append(body)
         open_block = kind
+        open_quoted = in_quote
+        open_indent = indent
     flush()
     return windows
 
