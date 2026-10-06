@@ -5524,3 +5524,61 @@ def test_a_blockquote_interrupts_a_preceding_paragraph():
     lazy = "> The Kubernetes manifests are covered by 26 static\nchecks.\n"
     assert _markdown_claim_windows(lazy) == ["The Kubernetes manifests are covered by 26 static checks."]
     assert len(k8s_static_check_count_errors("README.md", lazy, expected=31)) == 1
+
+
+def test_a_phrase_first_tally_must_run_out_inside_its_clause():
+    """ "Not Han next" is not "bare": the counted noun can be one gap further on.
+
+    `(?![CJK])` accepted `5 项 资源` and `5 项 YAML 资源`, because the space between
+    `项` and the noun is not Han either. A bare tally is now a positive test: what
+    follows the count must be a closing bracket or the end of the clause.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document in (
+        "Kubernetes 静态检查覆盖 5 项 资源。",
+        "Kubernetes 静态检查覆盖 5 项 YAML 资源。",
+        "Kubernetes 静态检查覆盖 5 项资源。",
+        "Kubernetes 静态检查覆盖 5 项 限制，由 31 项静态检查验证。",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+    # A tally that really does run out is still compared, with or without a bracket.
+    for document in (
+        "Kubernetes 静态检查共 26 项。",
+        "Kubernetes 静态检查共 26 项）。",
+        "静态检查指`tests/deploy/test_k8s_manifests.py`（26 项，全部离线）。",
+    ):
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert "states 26 Kubernetes static checks" in errors[0], document
+
+
+def test_entering_a_nested_blockquote_starts_a_new_block():
+    """Quote depth is what separates `> text` from `> > text`; a boolean cannot."""
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    document = "> The Kubernetes manifests are documented here\n> > The frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+    assert not _k8s_claim_is_in_scope(document)
+    assert _markdown_claim_windows(document) == [
+        "The Kubernetes manifests are documented here",
+        "The frontend is covered by 12 static checks.",
+    ]
+
+    # The inner block's own stale claim is still checked.
+    stale = "> The Kubernetes manifests are documented here\n> > The Kubernetes manifests are covered by 26 static checks.\n"
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    # Wrapping at the same depth is one window, which is what the depth check must
+    # not break.
+    same_depth = "> > The Kubernetes manifests are covered by 26 static\n> > checks.\n"
+    assert _markdown_claim_windows(same_depth) == ["The Kubernetes manifests are covered by 26 static checks."]
+    assert len(k8s_static_check_count_errors("README.md", same_depth, expected=31)) == 1
+
+    # And the unmarked lazy continuation out of a quote is unaffected.
+    lazy = "> The Kubernetes manifests are covered by 26 static\nchecks.\n"
+    assert _markdown_claim_windows(lazy) == ["The Kubernetes manifests are covered by 26 static checks."]
+    assert len(k8s_static_check_count_errors("README.md", lazy, expected=31)) == 1

@@ -4170,11 +4170,13 @@ def k8s_static_check_count(module_path: Path) -> int:
 #:
 #: * count first: it must modify the phrase, ``31 项静态检查``;
 #: * phrase first: it must be the nearest count after the phrase, and it must be a
-#:   *bare tally* — ``静态检查指…（31 项，全部离线）``. A count that modifies another
-#:   noun is not a check count, which is what the ``(?![CJK])`` after ``项`` rejects:
-#:   in ``静态检查覆盖 5 项资源。`` the 5 counts resources. The rule is deliberately
-#:   "unless shown to count something else": ``静态检查共 5 项。`` is ambiguous prose
-#:   and is read as five checks, because nothing else in it takes the number.
+#:   *bare tally* — ``静态检查指…（31 项，全部离线）``. A count that goes on to modify
+#:   something is not a check count: in ``静态检查覆盖 5 项资源。`` the 5 counts
+#:   resources, and in ``5 项 YAML 资源`` the counted noun is one gap further along,
+#:   which is why the test for a bare tally is what may follow (a closing bracket or
+#:   the end of the clause) rather than a character that must not. The rule is
+#:   deliberately "unless shown to count something else": ``静态检查共 5 项。`` is
+#:   ambiguous prose read as five checks, because nothing else in it takes the number.
 #:
 #: This mirrors the English alternative, which already requires the phrase to follow
 #: the number.
@@ -4192,17 +4194,21 @@ def k8s_static_check_count(module_path: Path) -> int:
 #: between, so the nearest one is no longer the one the phrase modifies).
 _CN_UNBOUND = "；;。、！？!?,，项"
 
-#: A Han character, used to tell a bare tally from a count that modifies a noun.
-_CJK_RE = r"\u4e00-\u9fff"
+#: What a phrase-first tally has to be followed by to count as a *check* count: a
+#: closing bracket, or the end of the clause. It is a positive test rather than a
+#: negative one on purpose. "The next character is not Han" still accepts
+#: ``5 项 资源`` and ``5 项 YAML 资源``, because the space in between is not Han
+#: either — the counted noun is still there, one gap further along. A bare tally
+#: is a tally that runs out: nothing follows it inside the clause it belongs to.
+_CN_TALLY_END = r"(?=\s*(?:[)\]】）]|$))"
 
 _K8S_STATIC_CHECK_COUNT_RE = re.compile(
     r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项\s*静态检查"
     + r"|静态检查(?P<cn_trail_gap>[^"
     + _CN_UNBOUND
     + r"]{0,60}?)(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<cn_trail>"
-    + r"[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项(?!["
-    + _CJK_RE
-    + r"])"
+    + r"[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项"
+    + _CN_TALLY_END
     + r"|(?<![\w,.\-+])(?P<english>[\d,.\-+]+|(?:"
     + _COUNT_WORDS
     + r")(?:[-\s](?:"
@@ -4263,6 +4269,12 @@ _K8S_BLOCK_KINDS = (
 #: unindented and split the item in two.
 _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 _K8S_QUOTE_MARKER_RE = re.compile(r"^\s{0,3}(?:>[ \t]?)+")
+
+#: How deep a blockquote line is: how many ``>`` markers it carries. Depth is what
+#: makes ``> text`` and ``> > text`` different blocks, and a boolean cannot see the
+#: difference — entering a nested quote interrupts the outer paragraph, and that
+#: inner paragraph's count must not borrow the outer one's Kubernetes subject.
+_K8S_QUOTE_DEPTH_RE = re.compile(r"^\s{0,3}(?:>[ \t]?)*")
 
 #: Punctuation that separates clauses inside one window. A count only counts as a
 #: static-check count when it shares a clause with the phrase *and* the Kubernetes
@@ -4333,21 +4345,23 @@ def _markdown_claim_windows(text: str) -> list[str]:
     # The block kind the open window belongs to: one of the ``_K8S_BLOCK_KINDS``
     # names, ``"paragraph"``, or ``None`` when no window is open.
     open_block: str | None = None
-    # Whether the open window is a blockquote, and how far its content is indented.
-    # Indentation is measured after the ``>`` markers: inside a quote the markers
-    # occupy the first column, so the raw line always starts with ``>`` and says
-    # nothing about whether a line continues a list item.
+    # Whether the open window is a blockquote, at what depth, and how far its
+    # content is indented. Indentation is measured after the ``>`` markers: inside
+    # a quote the markers occupy the first column, so the raw line always starts
+    # with ``>`` and says nothing about whether a line continues a list item.
     open_quoted = False
+    open_depth = 0
     open_indent = 0
 
     def flush() -> None:
-        nonlocal open_block, open_quoted, open_indent
+        nonlocal open_block, open_quoted, open_depth, open_indent
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
         current.clear()
         open_block = None
         open_quoted = False
+        open_depth = 0
         open_indent = 0
 
     def block_kind(text: str) -> str:
@@ -4374,19 +4388,23 @@ def _markdown_claim_windows(text: str) -> list[str]:
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()
             continue
+        depth = _K8S_QUOTE_DEPTH_RE.match(line).group(0).count(">") if in_quote else 0
         kind = block_kind(body)
         # Which block the line continues, decided by the block that is already open:
         #
         # * a paragraph continues a paragraph, quoted or not. Leaving a quote with an
         #   unmarked line is the *lazy continuation* form and is still that paragraph,
         #   but a blockquote always interrupts a paragraph, so entering one starts a
-        #   new block;
+        #   new block — and a *deeper* quote starts a new block too, which is the
+        #   same rule one level down;
         # * a list item continues only on a line indented past its own content, which
         #   is the ordinary wrapped form of an item and is measured after the ``>``;
         # * a heading or a table row is one line, so the next line is a new paragraph.
+        same_quote_level = in_quote == open_quoted and depth == open_depth
+        lazy_continuation = open_quoted and not in_quote and open_block == "paragraph"
         continues_open_block = (
             kind == "paragraph"
-            and not (in_quote and not open_quoted)
+            and (same_quote_level or lazy_continuation)
             and (open_block == "paragraph" or (open_block == "list" and indent > open_indent))
         )
         if not continues_open_block:
@@ -4394,6 +4412,7 @@ def _markdown_claim_windows(text: str) -> list[str]:
         current.append(body)
         open_block = kind
         open_quoted = in_quote
+        open_depth = depth
         open_indent = indent
     flush()
     return windows
