@@ -4291,17 +4291,40 @@ _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 #:
 #: The asymmetry in the pattern is the load-bearing part:
 #:
-#: * *between* markers, up to four **spaces** are consumed. Three of those are the
+#: A line with tabs expanded to CommonMark's four-column tab stops, because the
+#: block structure is defined in columns and not in characters. ``>\\t> text`` is a
+#: valid depth-2 quote: the tab carries the line to column 4, the outer marker's
+#: padding leaves two permitted indentation columns, and the second ``>`` is a
+#: marker. Counting characters instead gets this wrong in both directions —
+#: ``[ \\t]{0,4}`` reads ``>\\t\\t\\t\\t> text`` as nested when the four tabs carry the
+#: line to column 16, and a spaces-only bound misses the single-tab case entirely.
+#: Windows are whitespace-normalised anyway, so expanding here changes no claim text.
+_K8S_TAB_STOP = 4
+
+
+def _expand_tabs(line: str) -> str:
+    """Expand ``\\t`` to the next four-column tab stop, as CommonMark defines it."""
+    if "\t" not in line:
+        return line
+    column = 0
+    out: list[str] = []
+    for char in line:
+        if char == "\t":
+            width = _K8S_TAB_STOP - (column % _K8S_TAB_STOP)
+            out.append(" " * width)
+            column += width
+        else:
+            out.append(char)
+            column += 1
+    return "".join(out)
+
+
+#: * *between* markers, up to four columns are consumed. Three of those are the
 #:   inner marker's permitted indentation; the fourth is the outer marker's own
 #:   optional space, which is why the bound is four and not three — `>    > text` is
 #:   valid and reading it as depth 1 merges the inner paragraph into the outer one.
-#:   Spaces, not tabs: the allowance is a column width, and a tab advances to a tab
-#:   stop rather than one column, so four tabs is not four columns of anything.
-#:   `>\t\t\t\t> text` is therefore *not* a nested quote — the second `>` sits inside
-#:   a code block, and the line is an ordinary continuation of the outer paragraph.
-#:   The lookahead keeps the slack harmless: the run only grows when another ``>``
-#:   actually follows. The marker's own optional space after the *last* marker may
-#:   be a tab, which is the one place a tab is a legitimate stand-in.
+#:   Spaces, because tabs are gone by now. The lookahead keeps the slack harmless:
+#:   the run only grows when another ``>`` actually follows.
 #: * after the *last* marker, at most one space is consumed, because that single
 #:   space is the marker's own optional space. Everything after it is the block's
 #:   content indentation.
@@ -4411,6 +4434,7 @@ def _markdown_claim_windows(text: str) -> list[str]:
         return "paragraph"
 
     for line in text.splitlines():
+        line = _expand_tabs(line)
         stripped = line.strip()
         if not stripped:
             flush()
