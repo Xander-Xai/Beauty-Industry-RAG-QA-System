@@ -9,6 +9,7 @@ from offline.elasticsearch_writer import (
     ElasticsearchWriter,
     document_id,
 )
+from offline.source_trust import managed_record
 from tests.offline.fakes import FakeElasticsearchClient
 
 
@@ -17,8 +18,16 @@ def _chunks(tmp_path, name="doc.txt", text="alpha beta gamma delta epsilon zeta"
 
     path = tmp_path / name
     path.write_text(text, encoding="utf-8")
+    # These sources are managed internal content from the operator's own data
+    # root, so they declare managed provenance explicitly. The BM25 writer runs
+    # the same ingestion trust gate as the vector writers, so a chunk without
+    # provenance is refused rather than indexed.
     return DocumentProcessor(chunk_size=20, chunk_overlap=0).process_chunks(
-        path, role_mask=2, dept_mask=4, doc_version_epoch="epoch_1"
+        path,
+        role_mask=2,
+        dept_mask=4,
+        doc_version_epoch="epoch_1",
+        provenance=managed_record(name).to_payload(),
     )
 
 
@@ -97,3 +106,19 @@ def test_all_required_fields_present_in_mapping():
     properties = writer.client.store["cosmetics_docs"]["mappings"]["properties"]
     for field, expected in REQUIRED_FIELD_TYPES.items():
         assert properties[field]["type"] == expected
+
+
+def test_provenance_subfields_are_keyword_typed():
+    """The trust decision must be filterable, never analyzed into text."""
+    _, writer = _writer()
+    provenance = writer.client.store["cosmetics_docs"]["mappings"]["properties"]["provenance"]
+    assert provenance["properties"]["source_trust"]["type"] == "keyword"
+    assert provenance["properties"]["approval_status"]["type"] == "keyword"
+    assert provenance["properties"]["trust_class"]["type"] == "keyword"
+
+
+def test_build_document_persists_provenance(tmp_path):
+    _, writer = _writer()
+    chunk = _chunks(tmp_path, "a.txt")[0]
+    document = writer.build_document(chunk)
+    assert document["provenance"] == managed_record("a.txt").to_payload()

@@ -2,12 +2,20 @@
 
 Runs before sealing. Any error makes ``seal-epoch`` fail, so a partially built
 staging epoch can never be sealed by accident.
+
+This module also owns the **ingestion trust gate** that decides whether a
+snapshot may be sealed at all. It re-derives eligibility from the provenance
+persisted on each point/document rather than from any in-memory state, so the
+answer to "may this epoch be activated" is a property of the stored snapshot
+and not of whatever the build process happened to hold. See
+:meth:`SnapshotValidator._validate_source_trust`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from offline.source_trust import provenance_verdict
 from offline.validation import UINT32_MAX
 
 
@@ -19,6 +27,11 @@ class ValidationReport:
     es_count: int = 0
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: Sources that blocked the seal because their persisted provenance is
+    #: quarantined. Structured rather than recoverable from ``errors`` by string
+    #: matching, so the CLI can attribute the refusal per source when it audits
+    #: the failed seal.
+    quarantined_sources: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -55,8 +68,8 @@ class SnapshotValidator:
 
     def validate(self, epoch: str) -> ValidationReport:
         report = ValidationReport(epoch=epoch)
-        text_points = _scroll_active(self.text_client, self.text_collection, epoch, doc_type="text")
-        image_points = _scroll_active(self.image_client, self.image_collection, epoch, doc_type="image")
+        text_points = scroll_active_points(self.text_client, self.text_collection, epoch, doc_type="text")
+        image_points = scroll_active_points(self.image_client, self.image_collection, epoch, doc_type="image")
         report.text_count = len(text_points)
         report.image_count = len(image_points)
         if self.es_writer is not None:
@@ -103,6 +116,7 @@ class SnapshotValidator:
                 report.errors.append(f"orphan image point {point.id} is missing doc_id or source_path")
 
         self._validate_es(report, epoch)
+        self._validate_source_trust(report, epoch, text_points, image_points)
         self._validate_expected_doc_ids(report, text_points, image_points)
         return report
 
@@ -129,6 +143,32 @@ class SnapshotValidator:
                 report.errors.append(
                     f"ES document {document.get('chunk_id')!r} has wrong epoch {document.get('doc_version_epoch')!r}"
                 )
+            _validate_trust_provenance(
+                document.get("provenance"),
+                report,
+                f"ES document {document.get('chunk_id')!r}",
+            )
+
+    def _validate_source_trust(self, report: ValidationReport, epoch: str, text_points, image_points) -> None:
+        """Fail the seal when any stored source is quarantined or unprovenanced.
+
+        This is the activation-eligibility gate. It reads the provenance persisted
+        on the points themselves, so it holds for a snapshot that was assembled
+        by any process, including a carry-forward from an earlier epoch: an
+        unapproved source cannot reach an activatable snapshot by being copied
+        forward any more than by being written fresh.
+
+        There is no legacy exemption, and that is a decision rather than an
+        omission. A point written before this contract has no
+        ``doc_version_epoch`` and no ``embedding_version``, and the two checks
+        above already refuse it at the same seal — so an exemption here would be
+        unreachable code that only widens the gate. Legacy *retrieval* in the
+        sentinel ``default`` epoch is unaffected and unchanged.
+        """
+        for point in text_points:
+            _validate_trust_provenance((point.payload or {}).get("provenance"), report, f"text point {point.id}")
+        for point in image_points:
+            _validate_trust_provenance((point.payload or {}).get("provenance"), report, f"image point {point.id}")
 
     def _validate_expected_doc_ids(self, report, text_points, image_points) -> None:
         if self.expected_doc_ids is None:
@@ -154,7 +194,21 @@ def _validate_permission_fields(payload: dict, report: ValidationReport, label: 
         report.errors.append(f"{label} has non-active status {payload.get('status')!r}")
 
 
-def _scroll_active(client, collection: str, epoch: str, *, doc_type: str):
+def _validate_trust_provenance(provenance, report: ValidationReport, label: str) -> None:
+    """Record one error when stored provenance blocks sealing.
+
+    The single fail-closed check for the seal gate, shared with the writers so
+    every layer answers "is this activatable" from the same stored axes.
+    """
+    blocked, source_id = provenance_verdict(provenance, label=label)
+    if blocked is None:
+        return
+    report.errors.append(blocked)
+    if source_id and source_id not in report.quarantined_sources:
+        report.quarantined_sources.append(source_id)
+
+
+def scroll_active_points(client, collection: str, epoch: str, *, doc_type: str):
     from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
 
     if not client.collection_exists(collection):

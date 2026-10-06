@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from offline.rebuild import run_full_rebuild
 from offline.snapshot_builder import BuildResult, IngestionSource, configured_snapshot_builder
 from offline.source_discovery import discover_sources, resolve_permission, resolve_supported_extensions
+from offline.source_trust import TrustRegistry, resolve_source_trust
 
 
 @dataclass(frozen=True)
@@ -72,16 +73,44 @@ class OfflineScheduler:
             config = get_config_dict()
         self.config = config
         self._builder = builder
+        self._trust_registry: TrustRegistry | None = None
         self.scheduler_config = load_scheduler_config(config)
 
     @property
     def builder(self):
         if self._builder is None:
-            self._builder = configured_snapshot_builder(self.config)
+            builder = configured_snapshot_builder(self.config)
+            builder.trust_registry = self.trust_registry
+            self._builder = builder
         return self._builder
 
     def resolve_permission(self, relative_path: str) -> tuple[int, int]:
         return resolve_permission(relative_path, self.config.get("permission_rules", {}))
+
+    def resolve_source_trust(self, relative_path: str) -> str:
+        """Resolve the provenance claim for one relative path."""
+        return resolve_source_trust(relative_path, self.config.get("source_trust", {}))
+
+    @property
+    def trust_registry(self) -> TrustRegistry:
+        """The approval ledger backing the ingestion trust contract."""
+        if self._trust_registry is None:
+            self._trust_registry = TrustRegistry(self.trust_store_path)
+        return self._trust_registry
+
+    @property
+    def trust_store_path(self) -> str:
+        """Path of the approval ledger.
+
+        Kept separate from the ingestion state database: the review decisions
+        must survive a state-store rebuild, because losing them would silently
+        return every approved import to quarantine.
+        """
+        return str(
+            (self.config.get("source_trust", {}) or {}).get(
+                "approval_store_path", "./data/offline_source_trust.sqlite3"
+            )
+        )
 
     def discover_sources(self) -> list[IngestionSource]:
         knowledge_base = self.config.get("knowledge_base", {})
@@ -90,6 +119,7 @@ class OfflineScheduler:
             knowledge_base.get("data_dir", "./data"),
             permission_rules=self.config.get("permission_rules", {}),
             extensions=extensions,
+            trust_rules=self.config.get("source_trust", {}),
         )
 
     def run_incremental_cycle(

@@ -17,6 +17,12 @@ from offline.image_processor import (
     image_identity,
 )
 from offline.qdrant_writer import QdrantImageWriter
+from offline.source_trust import managed_record
+
+#: These fixtures are managed internal corpus content, so they declare managed
+#: provenance explicitly: the image writer runs the same ingestion trust gate as
+#: the text writer and refuses a record with no provenance.
+_MANAGED = managed_record("scan.png").to_payload()
 
 
 def _png_bytes(color="white", size=(64, 32)) -> bytes:
@@ -61,6 +67,7 @@ def test_image_processor_builds_authorized_record():
         dept_mask=4,
         doc_version_epoch="epoch_1",
         source_path="/data/scan.png",
+        provenance=_MANAGED,
     )
     assert record.role_mask == 2 and record.dept_mask == 4
     assert record.embedding_type == "image_clip"
@@ -83,10 +90,10 @@ def test_standalone_image_identity_is_stable(tmp_path):
     path.write_bytes(_png_bytes())
     processor = _processor()
     first = processor.process_standalone_image(
-        path, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1", doc_id="doc"
+        path, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1", doc_id="doc", provenance=_MANAGED
     )
     second = processor.process_standalone_image(
-        path, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1", doc_id="doc"
+        path, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1", doc_id="doc", provenance=_MANAGED
     )
     assert first.image_id == second.image_id
     assert first.image_id == image_identity("doc", __import__("hashlib").sha256(path.read_bytes()).hexdigest(), 0)
@@ -119,6 +126,7 @@ def _write_image(client, collection, epoch, role=0, dept=0, dimension=8, index=0
         dept_mask=dept,
         doc_version_epoch=epoch,
         source_path="/data/scan.png",
+        provenance=_MANAGED,
     )
     writer = QdrantImageWriter(client, collection, dimension=dimension)
     writer.replace_document("doc", epoch, [record], [record.embedding])
@@ -314,6 +322,7 @@ def test_image_writer_rejects_mixed_embedding_version():
         dept_mask=0,
         doc_version_epoch="epoch_1",
         source_path="/data/scan.png",
+        provenance=_MANAGED,
     )
     writer = QdrantImageWriter(client, "image_version", dimension=8, embedding_version="other-clip-v9")
     with pytest.raises(ValueError, match="embedding version changed within epoch"):

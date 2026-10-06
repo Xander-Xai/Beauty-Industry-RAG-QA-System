@@ -17,6 +17,7 @@ from typing import Protocol
 
 from offline.chunking import POINT_NAMESPACE
 from offline.file_lock import FileLockProvider
+from offline.source_trust import enforce_writable_provenance, persisted_trust_class
 from offline.validation import validate_epoch, validate_permissions
 
 _FILE_LOCK_PROVIDER = FileLockProvider()
@@ -38,6 +39,7 @@ class ImageRecord(Protocol):
     status: str
     doc_version_epoch: str
     metadata: dict
+    provenance: dict
 
 
 def ensure_cosine_collection(client, collection_name: str, dimension: int) -> None:
@@ -115,6 +117,14 @@ class QdrantImageWriter:
         for image, vector in zip(images, vectors, strict=True):
             validate_permissions(image.role_mask, image.dept_mask)
             validate_epoch(image.doc_version_epoch)
+            # Same ingestion trust gate as the text writer: see
+            # offline/source_trust.py::enforce_writable_provenance.
+            enforce_writable_provenance(
+                getattr(image, "provenance", {}),
+                label=f"image point {image.image_id!r}",
+                source_id=image.doc_id,
+                epoch=image.doc_version_epoch,
+            )
             payload = {
                 "doc_id": image.doc_id,
                 "image_id": image.image_id,
@@ -133,6 +143,7 @@ class QdrantImageWriter:
                 "status": image.status,
                 "doc_version_epoch": image.doc_version_epoch,
                 "metadata": image.metadata,
+                "provenance": dict(getattr(image, "provenance", {})),
             }
             points.append(
                 PointStruct(
@@ -235,6 +246,7 @@ class QdrantImageWriter:
                 payload.get("role_mask"),
                 payload.get("dept_mask"),
                 payload.get("status"),
+                persisted_trust_class(payload.get("provenance")),
             )
 
         return sorted((signature(payload) for payload in payloads), key=repr)

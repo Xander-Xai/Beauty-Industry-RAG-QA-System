@@ -393,6 +393,12 @@ ACTION_USER_CREATE = "admin.user.create"
 ACTION_ROLE_UPDATE = "admin.role.update"
 ACTION_MEDIA_ACCESS_DENIED = "media.access.denied"
 ACTION_EPOCH_SEAL = "knowledge.epoch.seal"
+#: Ingestion trust: an explicit human approval/rejection of one source, and the
+#: refusal to grant a quarantined source activation eligibility. Both are real
+#: code paths in ``offline/source_trust.py`` — the first is the only way a
+#: source leaves quarantine, the second is the gate that keeps it there.
+ACTION_SOURCE_TRUST_DECISION = "knowledge.source.trust_decision"
+ACTION_SOURCE_TRUST_QUARANTINE = "knowledge.source.quarantine"
 
 KNOWN_ACTIONS = frozenset(
     {
@@ -403,6 +409,8 @@ KNOWN_ACTIONS = frozenset(
         ACTION_ROLE_UPDATE,
         ACTION_MEDIA_ACCESS_DENIED,
         ACTION_EPOCH_SEAL,
+        ACTION_SOURCE_TRUST_DECISION,
+        ACTION_SOURCE_TRUST_QUARANTINE,
     }
 )
 
