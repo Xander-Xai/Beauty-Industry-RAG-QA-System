@@ -5082,7 +5082,9 @@ def test_a_wrapped_blockquote_claim_is_still_checked():
     blank = "> The Kubernetes manifests are documented here.\n\n> The frontend is covered by 12 static checks.\n"
     assert k8s_static_check_count_errors("README.md", blank, expected=31) == []
 
-    # A quote followed by ordinary prose must not fuse the two into one window.
+    # The unmarked line after the quote is a lazy continuation and joins the quote's
+    # window, so what keeps its own 12 out of scope is the sentence split, not the
+    # window boundary.
     after = (
         "> The Kubernetes manifests are covered by 26 static checks.\nThe frontend is covered by 12 static checks.\n"
     )
@@ -5168,3 +5170,152 @@ def test_an_ordinary_comma_still_separates_clauses():
     malformed = "The Kubernetes manifests are covered by 1,03 static checks."
     assert k8s_static_check_count_errors("README.md", malformed, expected=31) == []
     assert not _k8s_claim_is_in_scope(malformed), "a malformed grouping must not be certified by accident"
+
+
+# ── review: sentences are clauses, lazy quotes continue, headings end ─────────
+def test_period_delimited_sentences_are_separate_clauses():
+    """Two English sentences in one paragraph are two claims.
+
+    The splitter had `。`, `!` and `?` but not the ordinary ASCII full stop, so
+    `...documented here. The frontend is covered by 12 static checks.` stayed one
+    clause and the frontend's count borrowed the manifests' subject — the same
+    cross-clause leak the clause-level subject check exists to stop.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document in (
+        "The Kubernetes manifests are documented here. The frontend is covered by 12 static checks.",
+        "The Kubernetes manifests are documented here.  The frontend is covered by 999 static checks.",
+        "The frontend is covered by 12 static checks. The Kubernetes manifests are documented here.",
+        "The manifests are documented here! The frontend is covered by 12 static checks?",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+        assert not _k8s_claim_is_in_scope(document), f"fixture must be out of scope: {document}"
+
+    # A stale claim in its own sentence is still caught.
+    stale = "The frontend is documented here. The Kubernetes manifests are covered by 26 static checks."
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+
+def test_periods_inside_a_token_are_not_sentence_boundaries():
+    """Splitting every `.` would break file paths and decimals out of the subject."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    document = "See `README.md`, `deploy/k8s/api-deployment.yaml` and the 1.5 GiB limit. The frontend is covered by 12 static checks."
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+
+    # A path that *ends* a sentence still ends it: the period before `py` is not
+    # the boundary, the full stop after it is.
+    wrapped = "The manifests are defined in `tests/deploy/test_k8s_manifests.py`.\nThe frontend is covered by 12 static checks."
+    assert k8s_static_check_count_errors("README.md", wrapped, expected=31) == []
+
+    # Without that full stop the text really is one clause, and saying so is the
+    # honest reading — the guard may not invent a boundary the author did not write.
+    unpunctuated = "The manifests are defined in `tests/deploy/test_k8s_manifests.py`\nThe frontend is covered by 12 static checks."
+    assert len(k8s_static_check_count_errors("README.md", unpunctuated, expected=31)) == 1
+
+    # A numbered claim whose count precedes a period is not truncated.
+    assert (
+        len(
+            k8s_static_check_count_errors(
+                "README.md", "The Kubernetes manifests are covered by 26 static checks.", expected=31
+            )
+        )
+        == 1
+    )
+
+
+def test_a_lazy_blockquote_continuation_stays_in_the_quote_window():
+    """CommonMark lazy continuation: the unmarked line is part of the quote.
+
+    An unconditional flush on leaving the quote dropped the count out of the
+    subject's window, so rewrapping a stale claim this way bypassed the guard.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    stale = "> The Kubernetes manifests are covered by 26 static\nchecks.\n"
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    assert (
+        k8s_static_check_count_errors(
+            "README.md", "> The Kubernetes manifests are covered by 31 static\nchecks.\n", expected=31
+        )
+        == []
+    )
+
+    # A lazy continuation is one window; whether the 12 is in scope then depends only
+    # on whether the author ended a sentence. Without punctuation the text really
+    # is one clause, and the guard reports it rather than guessing a boundary.
+    unpunctuated = (
+        "> The Kubernetes manifests are covered by 26 static checks\nThe frontend is covered by 12 static checks.\n"
+    )
+    errors = k8s_static_check_count_errors("README.md", unpunctuated, expected=31)
+    assert len(errors) == 2
+
+    punctuated = (
+        "> The Kubernetes manifests are covered by 26 static checks.\nThe frontend is covered by 12 static checks.\n"
+    )
+    errors = k8s_static_check_count_errors("README.md", punctuated, expected=31)
+    assert len(errors) == 1, "the punctuated second sentence has no Kubernetes subject"
+
+    # A blank line still ends the quote, so the prose after it is its own window.
+    separated = (
+        "> The Kubernetes manifests are covered by 26 static checks.\n\nThe frontend is covered by 12 static checks.\n"
+    )
+    assert len(k8s_static_check_count_errors("README.md", separated, expected=31)) == 1
+
+
+def test_a_heading_does_not_absorb_the_paragraph_after_it():
+    """A heading is one line; the next line starts a new paragraph, blank or not."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document in (
+        "## Kubernetes manifests\nThe frontend is covered by 12 static checks.",
+        "## Kubernetes manifests\n\nThe frontend is covered by 12 static checks.",
+        "### k8s manifests\nThe demo capture is covered by 3 static checks.",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+        assert not _k8s_claim_is_in_scope(document), f"fixture must be out of scope: {document}"
+
+    # A stale claim in the paragraph after a heading is still caught.
+    stale = "## Kubernetes manifests\nThe manifests are covered by 26 static checks."
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    # A stale claim inside the heading itself is caught too.
+    in_heading = "## The Kubernetes manifests are covered by 26 static checks\n\nBody prose.\n"
+    assert len(k8s_static_check_count_errors("README.md", in_heading, expected=31)) == 1
+
+
+def test_claim_windows_close_single_line_blocks_but_keep_list_and_quote_continuations():
+    """The structural rule in one place: headings and rows close, items and quotes continue."""
+    from scripts.check_repo_consistency import _markdown_claim_windows
+
+    document = (
+        "## a heading\n"
+        "the paragraph under it\n"
+        "\n"
+        "| a | table row |\n"
+        "prose after the row\n"
+        "\n"
+        "- a list item\n"
+        "  its wrapped continuation\n"
+        "- second item\n"
+        "\n"
+        "> a quoted line\n"
+        "its lazy continuation\n"
+    )
+    assert _markdown_claim_windows(document) == [
+        "## a heading",
+        "the paragraph under it",
+        "| a | table row |",
+        "prose after the row",
+        "- a list item its wrapped continuation",
+        "- second item",
+        "a quoted line its lazy continuation",
+    ]

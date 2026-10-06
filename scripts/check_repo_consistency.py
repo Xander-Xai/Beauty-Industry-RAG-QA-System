@@ -4218,13 +4218,22 @@ _K8S_QUOTE_MARKER_RE = re.compile(r"^\s{0,3}(?:>\s*)+")
 #: static-check count when it shares a clause with the phrase *and* the Kubernetes
 #: subject, so a paragraph that mentions an unrelated tally elsewhere is not dragged
 #: into the comparison. A newline is intentionally *not* a separator: joining across
-#: a soft wrap is the whole point. An ASCII comma between two digits is *not* a
-#: separator either — it is digit grouping, and splitting there would read
-#: ``1,031 static checks`` as ``031``, certifying a claim of 1,031 as the expected
-#: count. The grouping shape is the whole check rather than "a digit on each side":
-#: ``26, static`` is a sentence boundary, and ``1,00`` is a typo, not a group.
+#: a soft wrap is the whole point.
+#:
+#: Two English shapes have to be separated without being over-split:
+#:
+#: * A sentence-ending period. Two sentences in one paragraph are two claims, and
+#:   leaving them joined lets the second borrow the first's subject. It is only a
+#:   sentence boundary when whitespace or the end of the window follows it, and not
+#:   after a digit, so ``...covered here. The frontend...`` splits while
+#:   ``1. The``, ``1.5`` and ``README.md`` do not.
+#: * A digit-grouping comma. Splitting there would read ``1,031 static checks`` as
+#:   ``031``, certifying a claim of 1,031 as the expected count. The grouping shape
+#:   is the whole check rather than "a digit on each side": ``26, static`` is a
+#:   sentence boundary, and ``1,00`` is a typo, not a group.
+#:
 #: Every other comma, Chinese or not, still separates.
-_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))")
+_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))|(?<!\d)\.(?=\s|$)")
 
 #: A separator-only line: ``|---|``, ``---``, ``:::``. It opens a table block but
 #: carries no claim, so it starts a window and contributes nothing to it.
@@ -4240,10 +4249,19 @@ def _markdown_claim_windows(text: str) -> list[str]:
     would let a number hundreds of lines away from a ``static checks`` phrase be read
     as its count.
 
-    A blockquote's own paragraph boundary is a blank source line, including the
-    ``>``-only line Markdown uses inside a quote to break a paragraph. Consecutive
-    marked lines are one window with the ``>`` markers stripped, because that is one
-    rendered paragraph; a ``>``-only line is not content and still ends it.
+    Two block shapes decide whether the *next* ordinary line joins the window or
+    starts a new one, because CommonMark treats them differently:
+
+    * A blockquote paragraph absorbs an unmarked following line. That is the
+      *lazy continuation* form, and it is how most people wrap a quoted claim, so an
+      unconditional flush on leaving the quote would drop the count out of the
+      subject's window and let a rewrap hide it. A blank line, a ``>``-only line, or
+      a new block element still ends the quote.
+    * A heading does the opposite: it is a single line, and the line after it —
+      blank line or not — is the start of a new paragraph. Attaching the paragraph to
+      the heading would let the heading's subject authorise the paragraph's count.
+      Table rows are single lines for the same reason. A list item is not: its
+      continuation lines are part of it.
 
     Windows are whitespace-normalised, so a claim written across a soft wrap is
     matched as the single line a reader actually sees.
@@ -4251,14 +4269,18 @@ def _markdown_claim_windows(text: str) -> list[str]:
     windows: list[str] = []
     current: list[str] = []
     in_quote = False
+    # Set after a single-line block element: the next ordinary line is then a new
+    # paragraph rather than this element's continuation.
+    window_is_closed = False
 
     def flush() -> None:
-        nonlocal in_quote
+        nonlocal in_quote, window_is_closed
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
         current.clear()
         in_quote = False
+        window_is_closed = False
 
     for line in text.splitlines():
         stripped = line.strip()
@@ -4274,20 +4296,20 @@ def _markdown_claim_windows(text: str) -> list[str]:
                 in_quote = True
             current.append(body)
             continue
-        starts_element = bool(
-            _K8S_BLOCK_HEADING_RE.match(line) or _K8S_BLOCK_TABLE_RE.match(line) or _K8S_BLOCK_LIST_RE.match(line)
-        )
-        # A quoted block and the prose after it are separate claims, so leaving the
-        # quote ends its window — even when the next line looks like an ordinary
-        # continuation, which a lazy continuation line inside a quote also does.
-        if in_quote:
-            flush()
-        if not stripped or starts_element:
+        single_line_block = bool(_K8S_BLOCK_HEADING_RE.match(line) or _K8S_BLOCK_TABLE_RE.match(line))
+        if not stripped or single_line_block or _K8S_BLOCK_LIST_RE.match(line):
             flush()
             if stripped and not _K8S_SEPARATOR_ONLY_RE.match(stripped):
                 current.append(stripped)
+                # A heading or a table row is one line; a list item continues.
+                window_is_closed = single_line_block
             continue
+        # Inside a quote this is a lazy continuation and belongs to it; outside one,
+        # it is a new paragraph unless the previous block was a single-line element.
+        if not in_quote and window_is_closed:
+            flush()
         current.append(stripped)
+        window_is_closed = False
     flush()
     return windows
 
