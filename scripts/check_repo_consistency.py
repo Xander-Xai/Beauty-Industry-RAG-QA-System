@@ -4264,6 +4264,21 @@ _K8S_BLOCK_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
 _K8S_BLOCK_TABLE_RE = re.compile(r"^\s{0,3}\|")
 _K8S_BLOCK_LIST_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,9}[.)])\s+")
 
+
+def _list_interrupts_a_paragraph(body: str) -> bool:
+    """Whether a list marker may interrupt an open paragraph, per CommonMark.
+
+    A bullet may always interrupt; an ordered marker may only when its number is 1.
+    ``1000) 26 static checks.`` on the line after paragraph text is therefore *not* a
+    list item — it is paragraph continuation text, and treating it as a block start
+    split the claim and let its count escape.
+    """
+    marker = _K8S_BLOCK_LIST_RE.match(body).group(0).strip()
+    if marker[0] not in "0123456789":
+        return True
+    return int(re.match(r"\d+", marker).group(0)) == 1
+
+
 #: The block kinds, longest-ambiguity first, so a heading is not read as a list
 #: item and a row is not read as either. Order is load-bearing.
 _K8S_BLOCK_KINDS = (
@@ -4455,6 +4470,12 @@ def _markdown_claim_windows(text: str) -> list[str]:
             flush()
             continue
         kind = block_kind(body)
+        # An ordered list marker interrupts an open paragraph only when it starts at 1.
+        # A later number on the next line is paragraph text, not a list item — reading
+        # it as a block start split `covered by\n1000) 26 static checks.` and the count
+        # escaped. A marker after another list item is a sibling item and still splits.
+        if kind == "list" and open_block == "paragraph" and not _list_interrupts_a_paragraph(body):
+            kind = "paragraph"
         # Which block the line continues, decided by the block that is already open.
         # The open block has to be a paragraph (or a list item, whose content is a
         # paragraph): a heading or a table row is one line, so the next line is a new

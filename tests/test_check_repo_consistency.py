@@ -6084,3 +6084,40 @@ def test_ordered_list_markers_may_hold_up_to_nine_digits():
     assert _markdown_claim_windows(document) == [
         "1. Kubernetes manifests are documented here 0123456789) The frontend is covered by 12 static checks.",
     ]
+
+
+def test_an_ordered_marker_interrupts_a_paragraph_only_when_it_starts_at_one():
+    """CommonMark: a bullet may interrupt a paragraph; an ordered marker only at 1.
+
+    `covered by\\n1000) 26 static checks.` is paragraph continuation text, so the
+    guard must keep it in one window and compare the count. Reading the marker as a
+    block start split the claim and the stale count escaped.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for marker in ("1000)", "123456789)"):
+        document = f"The Kubernetes manifests are covered by\n{marker} 26 static checks.\n"
+        assert _markdown_claim_windows(document) == [
+            f"The Kubernetes manifests are covered by {marker} 26 static checks.",
+        ], document
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert "states 26 Kubernetes static checks" in errors[0], document
+
+    # The parenthesis form keeps the marker inside one sentence. The period form
+    # `4.` is also a sentence boundary, so it splits at the period rather than at the
+    # marker — either way the count is not compared against the wrong subject.
+    period_form = "The Kubernetes manifests are covered by\n4. The frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", period_form, expected=31) == []
+
+    # A marker that does interrupt — a bullet, or an ordered marker at 1 — starts a
+    # block, so the paragraph's subject does not reach the next line.
+    for marker in ("-", "1)", "1."):
+        document = f"The Kubernetes manifests are covered by\n{marker} The frontend is covered by 12 static checks.\n"
+        assert len(_markdown_claim_windows(document)) == 2, document
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+    # A marker after another list item is a sibling item, whatever its number: the
+    # interruption rule does not apply and each item is its own window.
+    for document in ("1000) a\n1001) b\n", "1. a\n2. b\n", "- a\n- b\n"):
+        assert _markdown_claim_windows(document) == document.strip().splitlines(), document
