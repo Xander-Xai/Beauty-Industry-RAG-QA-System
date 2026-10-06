@@ -4671,10 +4671,12 @@ def _k8s_claim_is_in_scope(text: str) -> bool:
     )
 
     for window in _markdown_claim_windows(text):
-        if not _K8S_SUBJECT_CONTEXT_RE.search(window):
-            continue
         for clause in _K8S_CLAUSE_SPLIT_RE.split(window):
-            if _K8S_STATIC_CHECK_PHRASE_RE.search(clause) and _K8S_STATIC_CHECK_COUNT_RE.search(clause):
+            if (
+                _K8S_STATIC_CHECK_PHRASE_RE.search(clause)
+                and _K8S_SUBJECT_CONTEXT_RE.search(clause)
+                and _K8S_STATIC_CHECK_COUNT_RE.search(clause)
+            ):
                 return True
     return False
 
@@ -5007,3 +5009,162 @@ def test_guarded_documents_keep_every_real_claim_in_scope():
         and k8s_static_check_count_errors(str(path), path.read_text(encoding="utf-8"), expected) == []
     }
     assert claiming <= found, f"claims dropped out of scope: {sorted(claiming - found)}"
+
+
+# ── review: the Kubernetes subject must be bound to the counted clause ────────
+def test_the_kubernetes_subject_does_not_authorise_a_neighbouring_clause():
+    """Window-level licensing was the first false positive: it still was not fixed.
+
+    One paragraph, two clauses, two different subjects. Checking the subject at the
+    window level let the Kubernetes clause vouch for the frontend's 12 checks, so
+    the guard would report a count that is perfectly correct about a different
+    suite.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document in (
+        "The Kubernetes manifests are documented here; The frontend is covered by 12 static checks.",
+        "The Kubernetes manifests are documented here;\nThe frontend is covered by 12 static checks.",
+        "`deploy/k8s/` 清单已归档；前端由 12 项静态检查覆盖。",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+        assert not _k8s_claim_is_in_scope(document), f"fixture must be out of scope: {document}"
+
+    # The reverse order must not leak either: the count precedes its subject clause.
+    reversed_claim = "The frontend is covered by 12 static checks; the Kubernetes manifests are documented here."
+    assert k8s_static_check_count_errors("README.md", reversed_claim, expected=31) == []
+    assert not _k8s_claim_is_in_scope(reversed_claim)
+
+    # Naming the subject in the *same* clause is still what brings it into scope.
+    in_scope = "The Kubernetes manifests are covered by 12 static checks."
+    assert len(k8s_static_check_count_errors("README.md", in_scope, expected=31)) == 1
+    assert _k8s_claim_is_in_scope(in_scope)
+
+
+def test_a_wrapped_claim_still_binds_its_subject_inside_the_clause():
+    """The clause bound applies to a soft-wrapped claim too, not just a single line."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    wrapped = "The Kubernetes manifests are\ndocumented here; The frontend is covered by 12 static\nchecks."
+    assert k8s_static_check_count_errors("README.md", wrapped, expected=31) == []
+
+    stale = "The Kubernetes manifests are covered by\n26 static checks."
+    assert len(k8s_static_check_count_errors("README.md", stale, expected=31)) == 1
+
+
+# ── review: a blockquote wraps per line, so its lines are one window ──────────
+def test_a_wrapped_blockquote_claim_is_still_checked():
+    """Standard Markdown repeats `>` on every line of a paragraph.
+
+    Treating each marked line as its own block element split one rendered paragraph
+    into one window per line, and neither half held both the count and the subject —
+    so rewrapping a stale claim inside a blockquote hid it.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    stale = "> The Kubernetes manifests are covered by 26 static\n> checks.\n"
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    assert (
+        k8s_static_check_count_errors(
+            "README.md", "> The Kubernetes manifests are covered by 31 static\n> checks.\n", expected=31
+        )
+        == []
+    )
+
+    # The `>`-only line is a paragraph break inside the quote, not a claim.
+    separated = "> The Kubernetes manifests are documented here.\n>\n> The frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", separated, expected=31) == []
+
+    # A blank source line also ends a quote paragraph.
+    blank = "> The Kubernetes manifests are documented here.\n\n> The frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", blank, expected=31) == []
+
+    # A quote followed by ordinary prose must not fuse the two into one window.
+    after = (
+        "> The Kubernetes manifests are covered by 26 static checks.\nThe frontend is covered by 12 static checks.\n"
+    )
+    errors = k8s_static_check_count_errors("README.md", after, expected=31)
+    assert len(errors) == 1, "only the quoted Kubernetes claim is in scope"
+
+
+def test_claim_windows_keep_wrapped_blockquote_lines_together():
+    from scripts.check_repo_consistency import _markdown_claim_windows
+
+    document = (
+        "> a quoted line one\n"
+        "> a quoted line two\n"
+        "\n"
+        "> another quote\n"
+        ">\n"
+        "> after the paragraph break\n"
+        "\n"
+        "ordinary prose\n"
+    )
+    assert _markdown_claim_windows(document) == [
+        "a quoted line one a quoted line two",
+        "another quote",
+        "after the paragraph break",
+        "ordinary prose",
+    ]
+
+
+# ── review: a grouping comma is part of the count, not a clause break ────────
+def test_a_grouped_count_is_not_split_on_its_grouping_comma():
+    """`1,031` is one number; splitting there read it as `031` and certified it."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    errors = k8s_static_check_count_errors(
+        "README.md", "The Kubernetes manifests are covered by 1,031 static checks.", expected=31
+    )
+    assert len(errors) == 1
+    assert "states 1031 Kubernetes static checks" in errors[0], "1,031 must be read as 1031, never as 031 or 31"
+
+    assert (
+        k8s_static_check_count_errors(
+            "README.md", "The Kubernetes manifests are covered by 31 static checks.", expected=31
+        )
+        == []
+    )
+    assert (
+        len(
+            k8s_static_check_count_errors(
+                "README.md", "The Kubernetes manifests are covered by 26 static checks.", expected=31
+            )
+        )
+        == 1
+    )
+
+    # Chinese grouping uses the same ASCII comma, and the count may sit after the
+    # subject in a wrapped line.
+    cn = "`deploy/k8s/` 的清单由 1,031 项\n静态检查覆盖。"
+    cn_errors = k8s_static_check_count_errors("README.md", cn, expected=31)
+    assert len(cn_errors) == 1
+    assert "states 1031" in cn_errors[0]
+
+
+def test_an_ordinary_comma_still_separates_clauses():
+    """The grouping exception must not become "commas never separate"."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    document = (
+        "The Kubernetes manifests are documented here, the frontend is covered by 12 static checks, "
+        "and the demo capture by 3."
+    )
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+
+    # The exemption is a *grouping* comma, not "any comma next to a digit": a comma
+    # after a count is a sentence boundary, and it must still bind the subject to
+    # the clause it appears in.
+    split_but_bound = "The Kubernetes manifests have 8 known limits, and the manifests are covered by 26 static checks."
+    errors = k8s_static_check_count_errors("README.md", split_but_bound, expected=31)
+    assert len(errors) == 1, "the 8 must not be compared; the 26 must be"
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    # A malformed grouping is not a group, so it is prose: out of scope beats
+    # reading it as a passing count.
+    malformed = "The Kubernetes manifests are covered by 1,03 static checks."
+    assert k8s_static_check_count_errors("README.md", malformed, expected=31) == []
+    assert not _k8s_claim_is_in_scope(malformed), "a malformed grouping must not be certified by accident"

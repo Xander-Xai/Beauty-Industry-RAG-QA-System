@@ -4183,11 +4183,14 @@ _K8S_STATIC_CHECK_COUNT_RE = re.compile(
 #: What makes a number a *Kubernetes* static-check count. Deliberately an explicit
 #: subject list rather than "the word static checks": a repository can and does write
 #: about static checks that have nothing to do with `deploy/k8s/`, and comparing
-#: those against the manifest module's count would be a fabricated error. A window
-#: that never names Kubernetes, ``k8s``, a manifest, or the test module itself is
-#: out of scope. Note that ``tests/deploy/`` alone is *not* context: that directory
-#: holds the deploy contract, and a future non-Kubernetes deploy test landing
-#: there would make the name point at the wrong count.
+#: those against the manifest module's count would be a fabricated error. The
+#: subject has to appear in the *same clause* as the count, not merely somewhere in
+#: the paragraph: a paragraph that names Kubernetes and then, in a separate clause,
+#: states another suite's tally is two claims, and window-level licensing would read
+#: the second one as the first one's count. Note that ``tests/deploy/`` alone is
+#: *not* context: that directory holds the deploy contract, and a future
+#: non-Kubernetes deploy test landing there would make the name point at the wrong
+#: count.
 _K8S_SUBJECT_CONTEXT_RE = re.compile(r"kubernetes|k8s|manifest|test_k8s_manifests", re.IGNORECASE)
 
 #: The phrase that turns a number in an in-scope window into a static-check count.
@@ -4199,16 +4202,29 @@ _K8S_STATIC_CHECK_PHRASE_RE = re.compile(r"静态检查|static\s+checks?", re.IG
 #: continuation lines match none of these and therefore join the window they belong
 #: to, which is what stops an ordinary soft wrap from hiding a claim.
 _K8S_BLOCK_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
-_K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
 _K8S_BLOCK_TABLE_RE = re.compile(r"^\s{0,3}\|")
 _K8S_BLOCK_LIST_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,3}[.)])\s+")
 
+#: A blockquote line, and the marker to strip off it. Standard Markdown prefixes
+#: *every* source line of a paragraph with ``>``, so the marker repeats per line and
+#: says nothing about where a claim ends: treating each marked line as its own block
+#: would split one wrapped paragraph into one window per line, and a stale count
+#: would slip through merely because the author rewrapped it. The marker is removed
+#: instead, so the window holds the prose a reader actually sees.
+_K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
+_K8S_QUOTE_MARKER_RE = re.compile(r"^\s{0,3}(?:>\s*)+")
+
 #: Punctuation that separates clauses inside one window. A count only counts as a
-#: static-check count when it shares a clause with the phrase, so a paragraph that
-#: mentions an unrelated tally elsewhere is not dragged into the comparison. A
-#: newline is intentionally *not* a separator: joining across a soft wrap is the
-#: whole point.
-_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，,、!?！？]+")
+#: static-check count when it shares a clause with the phrase *and* the Kubernetes
+#: subject, so a paragraph that mentions an unrelated tally elsewhere is not dragged
+#: into the comparison. A newline is intentionally *not* a separator: joining across
+#: a soft wrap is the whole point. An ASCII comma between two digits is *not* a
+#: separator either — it is digit grouping, and splitting there would read
+#: ``1,031 static checks`` as ``031``, certifying a claim of 1,031 as the expected
+#: count. The grouping shape is the whole check rather than "a digit on each side":
+#: ``26, static`` is a sentence boundary, and ``1,00`` is a typo, not a group.
+#: Every other comma, Chinese or not, still separates.
+_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))")
 
 #: A separator-only line: ``|---|``, ``---``, ``:::``. It opens a table block but
 #: carries no claim, so it starts a window and contributes nothing to it.
@@ -4219,31 +4235,53 @@ def _markdown_claim_windows(text: str) -> list[str]:
     """Split ``text`` into bounded Markdown windows for claim scoping.
 
     A window is one block element — a paragraph, a single table row, one list item
-    with its wrapped continuation lines, one blockquote. Windows are bounded on
-    purpose: the whole document is never concatenated, because doing so would let a
-    number hundreds of lines away from a ``static checks`` phrase be read as its
-    count.
+    with its wrapped continuation lines, one blockquote paragraph. Windows are
+    bounded on purpose: the whole document is never concatenated, because doing so
+    would let a number hundreds of lines away from a ``static checks`` phrase be read
+    as its count.
+
+    A blockquote's own paragraph boundary is a blank source line, including the
+    ``>``-only line Markdown uses inside a quote to break a paragraph. Consecutive
+    marked lines are one window with the ``>`` markers stripped, because that is one
+    rendered paragraph; a ``>``-only line is not content and still ends it.
 
     Windows are whitespace-normalised, so a claim written across a soft wrap is
     matched as the single line a reader actually sees.
     """
     windows: list[str] = []
     current: list[str] = []
+    in_quote = False
 
     def flush() -> None:
+        nonlocal in_quote
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
         current.clear()
+        in_quote = False
 
     for line in text.splitlines():
         stripped = line.strip()
+        is_quote = bool(_K8S_BLOCK_QUOTE_RE.match(line))
+        if is_quote:
+            body = _K8S_QUOTE_MARKER_RE.sub("", line).strip()
+            # A `>`-only line is a paragraph break inside the quote, not content.
+            if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
+                flush()
+                continue
+            if not in_quote:
+                flush()
+                in_quote = True
+            current.append(body)
+            continue
         starts_element = bool(
-            _K8S_BLOCK_HEADING_RE.match(line)
-            or _K8S_BLOCK_QUOTE_RE.match(line)
-            or _K8S_BLOCK_TABLE_RE.match(line)
-            or _K8S_BLOCK_LIST_RE.match(line)
+            _K8S_BLOCK_HEADING_RE.match(line) or _K8S_BLOCK_TABLE_RE.match(line) or _K8S_BLOCK_LIST_RE.match(line)
         )
+        # A quoted block and the prose after it are separate claims, so leaving the
+        # quote ends its window — even when the next line looks like an ordinary
+        # continuation, which a lazy continuation line inside a quote also does.
+        if in_quote:
+            flush()
         if not stripped or starts_element:
             flush()
             if stripped and not _K8S_SEPARATOR_ONLY_RE.match(stripped):
@@ -4257,14 +4295,19 @@ def _markdown_claim_windows(text: str) -> list[str]:
 def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[str]:
     """Return errors for a stated Kubernetes static-check count that is wrong.
 
-    Scoping, from widest to narrowest, so a number is only ever read as a Kubernetes
-    static-check count when all three hold:
+    Scoping is deliberately two bounds deep. A number is only ever read as a
+    Kubernetes static-check count when, inside one bounded Markdown window:
 
-    1. its Markdown window names a Kubernetes subject (manifests, ``k8s``, the
-       module), so the count belongs to ``deploy/k8s/`` rather than to some other
-       static-check suite;
-    2. its clause mentions static checks at all;
-    3. the clause also contains the number.
+    1. its own clause mentions static checks at all;
+    2. its own clause names a Kubernetes subject (manifests, ``k8s``, the module),
+       so the count belongs to ``deploy/k8s/`` rather than to another static-check
+       suite mentioned in the same paragraph;
+    3. that same clause contains the number.
+
+    The subject is required *per clause*, not per window, and that is the point: one
+    paragraph routinely holds two unrelated claims — "the manifests are documented
+    here; the frontend is covered by 12 static checks" — and a window-level subject
+    check licenses the second clause to borrow the first one's subject.
 
     A count the guard cannot parse is reported rather than accepted. "Cannot
     verify" is the honest answer for a shape it does not understand; quietly
@@ -4273,10 +4316,10 @@ def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[s
     errors: list[str] = []
     module = K8S_STATIC_CHECK_MODULE.as_posix()
     for window in _markdown_claim_windows(text):
-        if not _K8S_SUBJECT_CONTEXT_RE.search(window):
-            continue
         for clause in _K8S_CLAUSE_SPLIT_RE.split(window):
             if not _K8S_STATIC_CHECK_PHRASE_RE.search(clause):
+                continue
+            if not _K8S_SUBJECT_CONTEXT_RE.search(clause):
                 continue
             for match in _K8S_STATIC_CHECK_COUNT_RE.finditer(clause):
                 token = match.group("chinese") or match.group("english") or ""
