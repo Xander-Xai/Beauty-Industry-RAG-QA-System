@@ -124,13 +124,15 @@ def _decode_jwt(token: str) -> dict | None:
 _MAX_UINT32 = 0xFFFFFFFF
 
 
-def _validate_permission_mask_claim(value, claim_name: str) -> int:
-    """Validate one permission-mask claim against the canonical uint32 contract.
+def _validate_permission_mask_claim(value, source: str) -> int:
+    """Validate one permission mask against the canonical uint32 contract.
 
-    JWT authorization-claim validation at identity ingress. A valid signature only
-    proves the token came from the key holder; it says nothing about whether the
-    permission claims inside are well-formed. Previously the raw claim went straight
-    into ``UserIdentity``, whose mask fields are plain ``int``, so Pydantic coerced
+    Identity-ingress validation, shared by *every* identity source: a signed JWT
+    claim and a ``AUTH_DEV_MODE`` ``X-*-Mask`` header are the same kind of value
+    and are held to the same contract. A valid signature only proves the token
+    came from the key holder; it says nothing about whether the permission claims
+    inside are well-formed. Previously the raw claim went straight into
+    ``UserIdentity``, whose mask fields are plain ``int``, so Pydantic coerced
     ``"1"`` to ``1`` and a stringly-typed mask became an authenticated identity.
 
     Strict by construction:
@@ -140,13 +142,16 @@ def _validate_permission_mask_claim(value, claim_name: str) -> int:
     * ``0 <= value <= 0xFFFFFFFF``;
     * no ``int(value)`` coercion, no narrowing, no fallback.
 
+    ``source`` names the ingress in error messages only ("role_mask", "dept_mask"
+    for a JWT claim; the header name for a dev header); it selects no rule.
+
     Raises ``ValueError`` so the caller can fail closed rather than construct an
-    identity from an unvalidated claim.
+    identity from an unvalidated mask.
     """
     if type(value) is not int:
-        raise ValueError(f"JWT claim {claim_name!r} must be an integer, got {type(value).__name__}")
+        raise ValueError(f"permission mask {source!r} must be an integer, got {type(value).__name__}")
     if not 0 <= value <= _MAX_UINT32:
-        raise ValueError(f"JWT claim {claim_name!r} must be within [0, {_MAX_UINT32}], got {value}")
+        raise ValueError(f"permission mask {source!r} must be within [0, {_MAX_UINT32}], got {value}")
     return value
 
 
@@ -180,6 +185,48 @@ def _identity_from_jwt(payload: dict) -> UserIdentity:
         user_id=user_id,
         user_role_mask=role_mask if role_mask is not None else 0,
         user_dept_mask=dept_mask if dept_mask is not None else 0,
+    )
+
+
+def _dev_header_mask(request: Request, header_name: str) -> int:
+    """Decode one ``AUTH_DEV_MODE`` mask header into a canonical uint32 mask.
+
+    A header is a *transport encoding* of a mask, not a permission value, so the
+    string has to be decoded before it can be judged. Decoding is deliberately not
+    validation: the decoded integer is then handed to
+    ``_validate_permission_mask_claim``, which is the single place the uint32
+    contract is decided — the same one the JWT path uses. There is no second
+    range check and no second rule set here, so the two identity sources cannot
+    drift apart.
+
+    Decoding is total: a header that does not represent an integer raises
+    ``ValueError`` rather than yielding a partial or default value. An *absent*
+    header keeps the pre-existing dev-mode default of mask 0, which is a valid
+    uint32 and therefore still fails closed on its own (zero masks clear no
+    restricted document).
+    """
+    raw = request.headers.get(header_name)
+    if raw is None:
+        return _validate_permission_mask_claim(0, header_name)
+    try:
+        decoded = int(raw, 10)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"dev header {header_name!r} must be a base-10 integer, got {raw!r}") from exc
+    return _validate_permission_mask_claim(decoded, header_name)
+
+
+def _identity_from_dev_headers(request: Request) -> UserIdentity:
+    """Build a UserIdentity from the ``AUTH_DEV_MODE`` ``X-User-*`` headers.
+
+    Both masks are validated *before* ``UserIdentity`` is constructed, by the same
+    canonical validator the JWT path uses, so no downstream Pydantic coercion can
+    launder a malformed header value into an authenticated mask. ``user_id`` is
+    carried through unchanged: it is a label, and it grants nothing on its own.
+    """
+    return UserIdentity(
+        user_id=request.headers.get("X-User-ID", "anonymous"),
+        user_role_mask=_dev_header_mask(request, "X-Role-Mask"),
+        user_dept_mask=_dev_header_mask(request, "X-Dept-Mask"),
     )
 
 
@@ -278,6 +325,11 @@ async def parse_identity(request: Request) -> UserIdentity:
     1. ``Authorization: Bearer <jwt>``
     2. Dev-mode ``X-User-*`` headers (仅 dev_mode=True 时生效)
     3. Anonymous fallback
+
+    Both credential sources share one permission-mask contract
+    (``_validate_permission_mask_claim``): a mask that is not an integer in
+    ``[0, 2**32-1]`` fails closed to the anonymous zero-mask identity rather than
+    reaching ``UserIdentity``.
     """
     cfg = get_config()
 
@@ -305,14 +357,16 @@ async def parse_identity(request: Request) -> UserIdentity:
     # 2. Dev-mode headers — 仅在 dev_mode=True 时信任 Header
     if cfg.auth.dev_mode:
         user_id = request.headers.get("X-User-ID", "anonymous")
-        role_str = request.headers.get("X-Role-Mask", "0")
-        dept_str = request.headers.get("X-Dept-Mask", "0")
         logger.debug("dev_mode: trusting X-User-* headers for user=%s", user_id)
-        return UserIdentity(
-            user_id=user_id,
-            user_role_mask=int(role_str),
-            user_dept_mask=int(dept_str),
-        )
+        try:
+            return _identity_from_dev_headers(request)
+        except (ValueError, TypeError) as exc:
+            # The headers claim permissions the canonical uint32 contract rejects, so
+            # they cannot produce an identity. Fail closed with the same anonymous
+            # zero-mask identity the JWT branch returns for malformed claims, rather
+            # than surfacing a 500 or narrowing to a fallback value.
+            logger.warning("AUTH_DEV_MODE permission headers rejected: %s", exc)
+            return UserIdentity(user_id="anonymous", user_role_mask=0, user_dept_mask=0)
 
     # 3. 生产模式：无有效 JWT 则返回匿名（零掩码），不信任 Header
     return UserIdentity(user_id="anonymous", user_role_mask=0, user_dept_mask=0)
