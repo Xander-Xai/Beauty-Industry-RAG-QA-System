@@ -38,6 +38,10 @@ levels; see [Run outcomes that are not evidence levels](interview-evidence-map.m
 - [Operations guide](operations-guide.md)
 - [Data administration guide](data-admin-guide.md)
 - [Repository truth audit](repository-truth-audit.md)
+- [Final canonical-runtime consistency audit](final-canonical-runtime-audit.md): the post-merge
+  re-verification of architecture, generation topology, evidence taxonomy, historical scale and
+  evidence boundaries against the code and config, with a claim/source/code-evidence/classification
+  table. It is an audit record, not a new capability source, and it promotes no evidence.
 - [Repository metadata packet](repository-metadata.md): the intended GitHub About configuration
   (description, 20 topics, homepage policy, social preview) and the rules it must obey — no
   homepage that points at a deployment that does not exist, and nothing in the metadata that

@@ -1533,6 +1533,41 @@ def test_grep_family_prefix_is_not_treated_as_a_series():
     assert operational_metric_reference_errors("docs/x.md", text) == []
 
 
+def test_glob_family_reference_is_not_treated_as_a_series():
+    """`rag_http_*` names a family, not one series, exactly like `grep rag_http` does.
+
+    The token regex absorbs the trailing underscore, so the prefix test compares
+    `rag_http__` against the inventory, matches nothing, and would report the doc as
+    citing a series that does not exist.
+    """
+    from scripts.check_repo_consistency import operational_metric_reference_errors
+
+    text = "该端点暴露 `rag_http_*`、`rag_vllm_generation_*` 等系列。\n"
+    assert operational_metric_reference_errors("docs/x.md", text) == []
+
+
+def test_glob_over_a_family_that_is_never_emitted_is_flagged():
+    """Accepting the glob form must not accept a family the collector never emits."""
+    from scripts.check_repo_consistency import operational_metric_reference_errors
+
+    text = "该端点暴露 `rag_totally_invented_*` 系列。\n"
+    errors = operational_metric_reference_errors("docs/x.md", text)
+    assert errors
+    assert "rag_totally_invented_" in errors[0]
+
+
+def test_evidence_documents_are_in_the_metric_reference_scope():
+    """A phantom series in the evidence map or the truth audit used to pass silently.
+
+    Both enumerate emitted series while classifying evidence, and the README names
+    `/api/metrics` as the endpoint carrying them, so none of the three can be exempt.
+    """
+    from scripts.check_repo_consistency import OPERATIONAL_METRIC_DOCS
+
+    for name in ("README.md", "docs/interview-evidence-map.md", "docs/repository-truth-audit.md"):
+        assert name in OPERATIONAL_METRIC_DOCS, f"{name} cites rag_* series and must be scanned"
+
+
 def test_exporter_truth_contract_passes_for_current_docs():
     from scripts.check_repo_consistency import check_exporter_truth_contract
 

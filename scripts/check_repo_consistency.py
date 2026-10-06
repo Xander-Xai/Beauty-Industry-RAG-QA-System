@@ -2361,12 +2361,24 @@ _DERIVATION_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: Operational docs whose `rag_*` references an operator will paste into a query.
+#: Documents whose `rag_*` references name series this repository claims to emit.
+#:
+#: Originally the four operational guides, on the reasoning that only those carry
+#: references an operator pastes into a query. That reasoning turned out to be too
+#: narrow for the two properties this repository states most loudly: the evidence map
+#: and the truth audit both enumerate emitted series as part of classifying evidence,
+#: and the README names `/api/metrics` as the endpoint that carries them. A phantom
+#: series written into any of those three reads exactly like a real one and nothing
+#: failed, which is the same failure this guard exists to catch, just one document
+#: class over.
 OPERATIONAL_METRIC_DOCS = (
+    "README.md",
     "docs/operations-guide.md",
     "docs/slo-runbook.md",
     "docs/pre-launch-checklist.md",
     "docs/deployment-guide.md",
+    "docs/interview-evidence-map.md",
+    "docs/repository-truth-audit.md",
 )
 
 
@@ -2527,14 +2539,24 @@ def _rag_tokens(text: str) -> list[tuple[int, str]]:
     once, so a token that is a strict prefix of a real emitted series or of a
     runtime-assembled prefix is treated as a family reference rather than as a claim
     about one missing series.
+
+    The explicit glob form ``rag_http_*`` is the same claim written out, and it needs
+    its own rule: the token regex absorbs the trailing underscore, so the prefix test
+    below would compare ``rag_http__`` against the inventory and match nothing, and
+    the doc would be reported as citing a series that does not exist. It is a family
+    reference precisely because it is written as one.
     """
     available = emitted_metric_reference_set()
     found: list[tuple[int, str]] = []
     for index, line in enumerate(text.splitlines()):
         for match in re.finditer(r"\brag_[A-Za-z0-9_]+", line):
             token = match.group(0)
-            if match.end() < len(line) and line[match.end()] == "_":
+            trailing = line[match.end() : match.end() + 1]
+            if trailing == "_":
                 continue
+            if trailing == "*" and token.endswith("_"):
+                if any(series.startswith(token) for series in available):
+                    continue
             if any(series.startswith(f"{token}_") for series in available):
                 continue
             found.append((index, token))
@@ -2649,7 +2671,7 @@ _CLASSIFICATION_SOURCE = "docs/interview-evidence-map.md → Classification voca
 #: None of this repository's own changes can close them, so the audit must keep
 #: recording them as open. The numbers are stable by construction: a closed tracker
 #: is deleted from this list in the same commit that closes it.
-OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18, 32)
+OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18, 32, 54)
 
 #: Reconciliation lineage, anchored on the tracking issue and never on the PR
 #: number. A PR number is narration that ages out: the next PR exists long
@@ -2661,7 +2683,7 @@ OPEN_EXTERNAL_VALIDATION_TRACKERS = (8, 12, 18, 32)
 #: ``docs/repository-truth-audit.md``, exactly like
 #: ``OPEN_EXTERNAL_VALIDATION_TRACKERS`` above. A new reconciliation issue
 #: supersedes the previous one; it does not extend it.
-COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22, 24)
+COMPLETED_RECONCILIATION_ISSUES = (16, 20, 22, 24, 47)
 
 #: The single reconciliation issue the audit describes as the current open scope,
 #: or ``None`` when no reconciliation issue is open.
