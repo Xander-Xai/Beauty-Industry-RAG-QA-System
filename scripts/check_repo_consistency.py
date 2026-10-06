@@ -4380,9 +4380,11 @@ _K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))|\.
 #: heading, so the window closes there instead of absorbing the paragraph below.
 _K8S_SETEXT_UNDERLINE_RE = re.compile(r"^\s{0,3}(?:=+|-+)\s*$")
 
-#: A separator-only line: ``|---|``, ``---``, ``:::``. It opens a table block but
-#: carries no claim, so it starts a window and contributes nothing to it.
-_K8S_SEPARATOR_ONLY_RE = re.compile(r"^[\s|:\-]+$")
+#: A separator-only line: ``|---|``, ``---``, ``***``, ``___``, ``:::``. It opens a
+#: block but carries no claim, so it starts a window and contributes nothing to it.
+#: All three CommonMark thematic-break spellings are here: a dash-only pattern let
+#: ``***`` through as paragraph text, merging the paragraphs on either side of it.
+_K8S_SEPARATOR_ONLY_RE = re.compile(r"^[\s|:\-*_]+$")
 
 
 def _markdown_claim_windows(text: str) -> list[str]:
@@ -4467,22 +4469,30 @@ def _markdown_claim_windows(text: str) -> list[str]:
         else:
             depth = 0
             content = line
-        # The block's own content, with the quote prefix removed. Windows are
-        # whitespace-normalised, so the leading indentation a continuation carries is
-        # not compared against anything — a paragraph's continuation is lazy about it.
+        # The block's own content, with the quote prefix removed. `content` keeps its
+        # leading indentation, and classification uses it rather than `body`: the block
+        # patterns all begin `^\s{0,3}`, so stripping the indentation first defeats the
+        # limit and a four-space-indented `1)` would be read as a list item that can
+        # interrupt the paragraph above it, when CommonMark makes it literal text.
+        # Windows are whitespace-normalised at output, so the body is what they carry.
         body = content.strip()
         # A `>`-only line is a paragraph break inside the quote, not content.
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()
             continue
-        kind = block_kind(body)
+        kind = block_kind(content)
         # An ordered list marker interrupts an open *plain* paragraph only when it
         # starts at 1. A later number on the next line is paragraph text, not a list
         # item — reading it as a block start split `covered by\n1000) 26 static
         # checks.` and the count escaped. Inside a list the marker is a sibling item
         # and always splits, which is why the list context is tracked separately from
         # the block kind: a lazy line makes the item's paragraph look plain.
-        if kind == "list" and open_block == "paragraph" and not open_in_list and not _list_interrupts_a_paragraph(body):
+        if (
+            kind == "list"
+            and open_block == "paragraph"
+            and not open_in_list
+            and not _list_interrupts_a_paragraph(content)
+        ):
             kind = "paragraph"
         # Which block the line continues, decided by the block that is already open.
         # The open block has to be a paragraph (or a list item, whose content is a

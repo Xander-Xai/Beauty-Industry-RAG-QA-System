@@ -6155,3 +6155,49 @@ def test_list_context_survives_a_lazy_continuation():
         "1001) a",
         "1002) b",
     ]
+
+
+def test_block_classification_keeps_the_source_indentation():
+    """The block patterns all start `^\\s{0,3}`; stripping first defeats the limit.
+
+    `covered by\\n    1) 26 static checks.` is a four-space-indented line, which
+    CommonMark makes literal paragraph text, not a list that interrupts. Classifying
+    the stripped body read it as `1)` and split the claim.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for line in ("    1) 26 static checks.", "    - 26 static checks.", "      1000) 26 static checks."):
+        document = f"The Kubernetes manifests are covered by\n{line}\n"
+        expected = f"The Kubernetes manifests are covered by {line.strip()}"
+        assert _markdown_claim_windows(document) == [expected], document
+        assert len(k8s_static_check_count_errors("README.md", document, expected=31)) == 1, document
+
+    # Up to three spaces is still a marker, and still interrupts.
+    for line in (
+        "1) The frontend is covered by 12 static checks.",
+        "   1) The frontend is covered by 12 static checks.",
+    ):
+        document = f"The Kubernetes manifests are covered by\n{line}\n"
+        assert len(_markdown_claim_windows(document)) == 2, document
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+
+def test_all_thematic_break_spellings_are_boundaries():
+    """`***` and `___` are thematic breaks too, so they separate paragraphs.
+
+    Only the dash spelling was recognised, so a `***` between two paragraphs let the
+    first one's Kubernetes subject reach the second one's count.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for rule in ("***", "___", "---", "- - -", "* * *", "_ _ _"):
+        document = f"Kubernetes manifests are documented here\n{rule}\nThe frontend is covered by 12 static checks.\n"
+        assert _markdown_claim_windows(document) == [
+            "Kubernetes manifests are documented here",
+            "The frontend is covered by 12 static checks.",
+        ], document
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+    # Underscores and asterisks are still ordinary paragraph text mid-sentence.
+    inline = "The Kubernetes manifests are covered by 26 static checks and use _underscores_ and *stars*."
+    assert len(k8s_static_check_count_errors("README.md", inline, expected=31)) == 1
