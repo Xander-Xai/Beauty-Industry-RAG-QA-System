@@ -6201,3 +6201,9 @@ def test_all_thematic_break_spellings_are_boundaries():
     # Underscores and asterisks are still ordinary paragraph text mid-sentence.
     inline = "The Kubernetes manifests are covered by 26 static checks and use _underscores_ and *stars*."
     assert len(k8s_static_check_count_errors("README.md", inline, expected=31)) == 1
+
+    # A thematic break is three or more of a *single* marker: two underscores are
+    # ordinary text, so the paragraph around them stays one window.
+    two = "The Kubernetes manifests are covered by\n__\n26 static checks.\n"
+    assert _markdown_claim_windows(two) == ["The Kubernetes manifests are covered by __ 26 static checks."]
+    assert len(k8s_static_check_count_errors("README.md", two, expected=31)) == 1

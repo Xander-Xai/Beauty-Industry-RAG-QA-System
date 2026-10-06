@@ -4380,11 +4380,24 @@ _K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，、!?！？]+|,(?!\d{3}(?!\d))|\.
 #: heading, so the window closes there instead of absorbing the paragraph below.
 _K8S_SETEXT_UNDERLINE_RE = re.compile(r"^\s{0,3}(?:=+|-+)\s*$")
 
-#: A separator-only line: ``|---|``, ``---``, ``***``, ``___``, ``:::``. It opens a
-#: block but carries no claim, so it starts a window and contributes nothing to it.
-#: All three CommonMark thematic-break spellings are here: a dash-only pattern let
-#: ``***`` through as paragraph text, merging the paragraphs on either side of it.
-_K8S_SEPARATOR_ONLY_RE = re.compile(r"^[\s|:\-*_]+$")
+#: A separator-only line: a thematic break (``---``, ``***``, ``___``, each at least
+#: three markers and optionally spaced), a table separator row (``|---|``,
+#: ``|:--:|``), or a colon fence. It opens a block but carries no claim, so it starts
+#: a window and contributes nothing to it.
+#:
+#: The markers are spelled out rather than left as a character class. A class of
+#: ``* _ - | :`` accepts any mixture, so a line of two underscores — ordinary text —
+#: was treated as a boundary and split the paragraph around it. CommonMark requires
+#: three or more of a *single* marker type, which is what the repeated groups encode.
+_K8S_SEPARATOR_ONLY_RE = re.compile(
+    r"^\s{0,3}(?:"
+    r"(?:\*[ \t]*){3,}"
+    r"|(?:-[ \t]*){3,}"
+    r"|(?:_[ \t]*){3,}"
+    r"|\|?[\s:|-]*\|[\s:|-]*"
+    r"|:+"
+    r")$"
+)
 
 
 def _markdown_claim_windows(text: str) -> list[str]:
