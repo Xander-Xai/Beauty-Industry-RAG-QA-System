@@ -4425,9 +4425,14 @@ def _markdown_claim_windows(text: str) -> list[str]:
     # omitted by a continuation line but not increased by one.
     open_quoted = False
     open_depth = 0
+    # Whether the open paragraph is a list item's. A lazy continuation line turns the
+    # block kind into ``"paragraph"``, and losing the list context made the next
+    # sibling marker look like an ordered item trying to interrupt a paragraph — the
+    # very thing the start-at-1 rule declines — so the sibling was absorbed.
+    open_in_list = False
 
     def flush() -> None:
-        nonlocal open_block, open_quoted, open_depth
+        nonlocal open_block, open_quoted, open_depth, open_in_list
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
@@ -4435,6 +4440,7 @@ def _markdown_claim_windows(text: str) -> list[str]:
         open_block = None
         open_quoted = False
         open_depth = 0
+        open_in_list = False
 
     def block_kind(text: str) -> str:
         for name, pattern in _K8S_BLOCK_KINDS:
@@ -4470,11 +4476,13 @@ def _markdown_claim_windows(text: str) -> list[str]:
             flush()
             continue
         kind = block_kind(body)
-        # An ordered list marker interrupts an open paragraph only when it starts at 1.
-        # A later number on the next line is paragraph text, not a list item — reading
-        # it as a block start split `covered by\n1000) 26 static checks.` and the count
-        # escaped. A marker after another list item is a sibling item and still splits.
-        if kind == "list" and open_block == "paragraph" and not _list_interrupts_a_paragraph(body):
+        # An ordered list marker interrupts an open *plain* paragraph only when it
+        # starts at 1. A later number on the next line is paragraph text, not a list
+        # item — reading it as a block start split `covered by\n1000) 26 static
+        # checks.` and the count escaped. Inside a list the marker is a sibling item
+        # and always splits, which is why the list context is tracked separately from
+        # the block kind: a lazy line makes the item's paragraph look plain.
+        if kind == "list" and open_block == "paragraph" and not open_in_list and not _list_interrupts_a_paragraph(body):
             kind = "paragraph"
         # Which block the line continues, decided by the block that is already open.
         # The open block has to be a paragraph (or a list item, whose content is a
@@ -4513,6 +4521,9 @@ def _markdown_claim_windows(text: str) -> list[str]:
             flush()
         current.append(body)
         open_block = kind
+        # A list item stays a list item while its paragraph continues lazily; anything
+        # else is not in a list.
+        open_in_list = open_in_list or kind == "list"
         # Keep the paragraph's effective container across lazy lines: markers may be
         # dropped — all of them included — and brought back without leaving the quote.
         # Taking the latest line's `in_quote` would clear membership on an unmarked

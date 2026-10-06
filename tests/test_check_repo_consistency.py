@@ -6121,3 +6121,37 @@ def test_an_ordered_marker_interrupts_a_paragraph_only_when_it_starts_at_one():
     # interruption rule does not apply and each item is its own window.
     for document in ("1000) a\n1001) b\n", "1. a\n2. b\n", "- a\n- b\n"):
         assert _markdown_claim_windows(document) == document.strip().splitlines(), document
+
+
+def test_list_context_survives_a_lazy_continuation():
+    """A lazy line makes the item's paragraph look plain; the sibling still splits.
+
+    `1000) …` / `continuation` / `1001) …`: the middle line turns `open_block` into
+    `"paragraph"`, so the start-at-1 interruption rule would have read the sibling
+    marker as paragraph text and merged the two items, letting the frontend's count
+    borrow the Kubernetes subject. List membership is tracked separately.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    document = "1000) Kubernetes manifests are documented here\ncontinuation\n1001) The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(document) == [
+        "1000) Kubernetes manifests are documented here continuation",
+        "1001) The frontend is covered by 12 static checks.",
+    ], "the lazy line joins the item; the sibling marker still splits"
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+
+    # The start-at-1 rule still applies to a plain paragraph: two high-numbered
+    # markers after prose are both paragraph text, so the count is compared.
+    plain = "The Kubernetes manifests are covered by\n1000) a\n1001) 26 static checks.\n"
+    assert _markdown_claim_windows(plain) == [
+        "The Kubernetes manifests are covered by 1000) a 1001) 26 static checks.",
+    ]
+    assert len(k8s_static_check_count_errors("README.md", plain, expected=31)) == 1
+
+    # Both rules together: an item's lazy paragraph, then a sibling, then another.
+    mixed = "1000) The Kubernetes manifests are covered by 26 static\ncontinuation\n1001) a\n1002) b\n"
+    assert _markdown_claim_windows(mixed) == [
+        "1000) The Kubernetes manifests are covered by 26 static continuation",
+        "1001) a",
+        "1002) b",
+    ]
