@@ -4405,19 +4405,13 @@ def _markdown_claim_windows(text: str) -> list[str]:
     # The block kind the open window belongs to: one of the ``_K8S_BLOCK_KINDS``
     # names, ``"paragraph"``, or ``None`` when no window is open.
     open_block: str | None = None
-    # Whether the open window is a blockquote, at what depth, and — for a list item —
-    # the source column its content starts at. That column, not the line's own
-    # indentation, is what a continuation has to reach: `> - item` puts its content at
-    # column 4, so `>   cont` (column 4) continues it while `>- item` puts its content
-    # at column 3, so `> cont` (column 2) does not. Measuring the line's own column
-    # instead cannot tell those apart, because the quote's optional post-marker space
-    # shifts both the opener and the candidate.
+    # Whether the open window is a blockquote, and at what depth. Depth may be
+    # omitted by a continuation line but not increased by one.
     open_quoted = False
     open_depth = 0
-    open_content_col = 0
 
     def flush() -> None:
-        nonlocal open_block, open_quoted, open_depth, open_content_col
+        nonlocal open_block, open_quoted, open_depth
         joined = " ".join(" ".join(current).split())
         if joined:
             windows.append(joined)
@@ -4425,7 +4419,6 @@ def _markdown_claim_windows(text: str) -> list[str]:
         open_block = None
         open_quoted = False
         open_depth = 0
-        open_content_col = 0
 
     def block_kind(text: str) -> str:
         for name, pattern in _K8S_BLOCK_KINDS:
@@ -4452,50 +4445,50 @@ def _markdown_claim_windows(text: str) -> list[str]:
         else:
             depth = 0
             content = line
-        # Indentation *inside* the blockquote container, not a column in the source
-        # line. Container-relative is what makes the measure stable: the container's
-        # own prefix can differ in width between two lines of the same block —
-        # `> > - item` and `>>   continuation` are the same depth-2 quote written with
-        # different optional spaces — so a source column would compare the two
-        # prefixes against each other and read a continuation as unindented.
-        indent = len(content) - len(content.lstrip())
+        # The block's own content, with the quote prefix removed. Windows are
+        # whitespace-normalised, so the leading indentation a continuation carries is
+        # not compared against anything — a paragraph's continuation is lazy about it.
         body = content.strip()
         # A `>`-only line is a paragraph break inside the quote, not content.
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()
             continue
         kind = block_kind(body)
-        # A list item's content starts after its own marker, so that is the column a
-        # continuation has to reach. Everything else uses the column it started at.
-        open_col = indent
-        if kind == "list":
-            open_col += len(_K8S_BLOCK_LIST_RE.match(body).group(0))
-        # Which block the line continues, decided by the block that is already open:
+        # Which block the line continues, decided by the block that is already open.
+        # The open block has to be a paragraph (or a list item, whose content is a
+        # paragraph): a heading or a table row is one line, so the next line is a new
+        # block even when it looks like a wrap.
         #
-        # * a paragraph continues a paragraph, quoted or not. Leaving a quote with an
-        #   unmarked line is the *lazy continuation* form and is still that paragraph,
-        #   but a blockquote always interrupts a paragraph, so entering one starts a
-        #   new block — and a *deeper* quote starts a new block too, which is the
-        #   same rule one level down;
-        # * a list item continues only on a line that reaches its content column, which
-        #   is the ordinary wrapped form of an item. A line that stops short of it is a
-        #   new paragraph in the same quote, and the item's subject does not reach into
-        #   it: `> - item` and `>   cont` are one item, `>- item` and `> cont` are not.
-        # * a heading or a table row is one line, so the next line is a new paragraph.
-        same_quote_level = in_quote == open_quoted and depth == open_depth
-        lazy_continuation = open_quoted and not in_quote and open_block == "paragraph"
-        continues_open_block = (
-            kind == "paragraph"
-            and (same_quote_level or lazy_continuation)
-            and (open_block == "paragraph" or (open_block == "list" and indent >= open_content_col))
-        )
+        # A paragraph is *lazy* about its continuation, and both halves of that
+        # laziness are load-bearing:
+        #
+        # * quote depth may be omitted, not only equal. `>>> wrapped\n> text` is one
+        #   paragraph inside the depth-3 quote; only *entering* a deeper quote starts a
+        #   block, because a quote marker begins one.
+        # * indentation may be omitted. `- wrapped by 26 static\nchecks.` is one
+        #   paragraph in the item, because the list-item laziness rule lets the
+        #   continuation's hanging indent be dropped.
+        #
+        # Requiring an exact depth or a full content column rejects both. What keeps
+        # the looser reading safe downstream is that neither is the only bound: the
+        # clause-level subject binding and the sentence split still decide whether the
+        # number belongs to the subject, so a lazy join widens the window and not the
+        # comparison.
+        if not in_quote and not open_quoted:
+            container_continues = True
+        elif in_quote and open_quoted:
+            container_continues = depth <= open_depth
+        elif open_quoted:
+            container_continues = True  # unmarked line leaving a quote: still its paragraph
+        else:
+            container_continues = False  # a quote marker always begins a block
+        continues_open_block = kind == "paragraph" and container_continues and open_block in ("paragraph", "list")
         if not continues_open_block:
             flush()
         current.append(body)
         open_block = kind
         open_quoted = in_quote
         open_depth = depth
-        open_content_col = open_col
     flush()
     return windows
 

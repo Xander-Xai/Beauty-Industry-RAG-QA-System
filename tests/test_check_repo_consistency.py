@@ -5403,10 +5403,14 @@ def test_a_lazy_continuation_only_applies_to_a_quoted_paragraph():
 
     for document in (
         "> ## Kubernetes manifests\nThe frontend is covered by 12 static checks.",
-        "> - The Kubernetes manifests\nThe frontend is covered by 12 static checks.",
         "> | a | b |\nThe frontend is covered by 12 static checks.",
     ):
         assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+    # An unmarked line after a quoted list item is that item's lazy paragraph, so the
+    # window is one; what keeps the frontend's 12 out of scope is the sentence split.
+    item_then_prose = "> - The Kubernetes manifests.\nThe frontend is covered by 12 static checks.\n"
+    assert k8s_static_check_count_errors("README.md", item_then_prose, expected=31) == []
 
     # A genuinely quoted paragraph still absorbs the unmarked line.
     quoted_paragraph = "> The Kubernetes manifests are covered by 26 static\nchecks.\n"
@@ -5421,9 +5425,13 @@ def test_a_lazy_continuation_only_applies_to_a_quoted_paragraph():
     assert len(errors) == 1, "the item names Kubernetes, so its 12 is a Kubernetes count"
     assert "states 12 Kubernetes static checks" in errors[0]
 
-    # The unindented form after the same item is a new paragraph, and the item's
-    # subject does not reach into it.
-    unindented = "> - The Kubernetes manifests\nThe frontend is covered by 12 static checks.\n"
+    # The unindented form joins the same way, because a list item's paragraph is lazy
+    # about its continuation indent. What keeps the next sentence out of the item's
+    # scope is the *sentence split*, not the window: two sentences are two clauses, and
+    # the second does not name Kubernetes. That is the bound this case now rests on,
+    # so both the punctuated and unpunctuated forms are asserted below rather than
+    # assumed — see `test_a_list_items_paragraph_is_lazy_about_its_continuation`.
+    unindented = "> - The Kubernetes manifests.\n> The frontend is covered by 12 static checks.\n"
     assert k8s_static_check_count_errors("README.md", unindented, expected=31) == []
 
 
@@ -5702,59 +5710,96 @@ def test_a_deeply_indented_quoted_list_continuation_is_measured_from_the_source_
     for document in (
         "> - The Kubernetes manifests are covered by 26 static\n>   checks.",
         "- The Kubernetes manifests are covered by 26 static\n  checks.",
+        "- The Kubernetes manifests are covered by 26 static\nchecks.",
     ):
         assert _markdown_claim_windows(document) == ["- The Kubernetes manifests are covered by 26 static checks."]
         assert len(k8s_static_check_count_errors("README.md", document, expected=31)) == 1
 
-    # And a line at the item's own column still ends the item, so the measurement
-    # did not become "any quoted line continues".
-    ends_item = "> - The Kubernetes manifests are covered by 26 static checks.\n> The frontend is covered by 12 static checks.\n"
-    assert _markdown_claim_windows(ends_item) == [
-        "- The Kubernetes manifests are covered by 26 static checks.",
-        "The frontend is covered by 12 static checks.",
-    ]
 
+def test_a_list_items_paragraph_is_lazy_about_its_continuation():
+    """CommonMark: a list item's paragraph may drop its continuation's indent.
 
-def test_a_list_continuation_must_reach_the_items_content_column():
-    """`>- item` and `> cont` are two blocks; `> - item` and `>   cont` are one.
+    This is the same shape as an earlier finding — an item naming Kubernetes followed
+    by a paragraph about another suite — and the two cannot both hold: laziness is a
+    property of the *paragraph*, not of how far the continuation was indented, so
+    there is no measurement that separates `- …26 static\\nchecks.` (one paragraph)
+    from `>- …\\n> The frontend…` (also one paragraph, under the same rule).
 
-    The optional space after a quote marker shifts both the opener and the candidate
-    by one column, so comparing the line's own column made `>- item` / `> cont` look
-    like a continuation. The item's *content* column — the one after its own marker —
-    is what a continuation has to reach, and that is stable under the quote marker's
-    optional space.
+    The spec-faithful reading is chosen, because it is the reading a reader gets and
+    because it *widens the guard's coverage* rather than narrowing it. The bound that
+    keeps two unrelated claims apart is now the sentence split plus the clause-level
+    subject, so both forms are asserted: punctuated, they stay apart; unpunctuated,
+    they are one clause and the number is compared, which is reported as the honest
+    consequence rather than hidden.
     """
     from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
 
-    document = ">- The Kubernetes manifests\n> The frontend is covered by 12 static checks.\n"
-    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
-    assert not _k8s_claim_is_in_scope(document)
-    assert _markdown_claim_windows(document) == [
-        "- The Kubernetes manifests",
-        "The frontend is covered by 12 static checks.",
-    ]
-
-    # With the space present, the same two lines *are* one list item, and its own
-    # subject and count are one claim.
-    joined = "> - The Kubernetes manifests are covered by 26 static\n>   checks.\n"
-    assert _markdown_claim_windows(joined) == ["- The Kubernetes manifests are covered by 26 static checks."]
-    errors = k8s_static_check_count_errors("README.md", joined, expected=31)
+    # The reported case: an unpunctuated wrap inside a list item is one paragraph,
+    # so the stale count is now caught.
+    stale = "- The Kubernetes manifests are covered by 26 static\nchecks.\n"
+    assert _markdown_claim_windows(stale) == ["- The Kubernetes manifests are covered by 26 static checks."]
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
     assert len(errors) == 1
     assert "states 26 Kubernetes static checks" in errors[0]
+    assert k8s_static_check_count_errors("README.md", stale.replace("26 static", "31 static"), expected=31) == []
 
-    # A stale claim in the item is still caught when the marker is tight, and a
-    # paragraph after it does not inherit the item's subject.
-    after = (
-        ">- The Kubernetes manifests are covered by 26 static checks.\n> The frontend is covered by 12 static checks.\n"
-    )
-    errors = k8s_static_check_count_errors("README.md", after, expected=31)
-    assert len(errors) == 1, "only the item's own 26 is compared"
-    assert "states 26 Kubernetes static checks" in errors[0]
+    # The same sentence with its subject restored is one clause, so the 12 is compared
+    # against the manifests module. This is a *reported* false positive under the
+    # earlier strict rule; under laziness it is the spec's answer, and it is recorded
+    # here rather than left to be discovered.
+    unpunctuated = ">- The Kubernetes manifests\n> The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(unpunctuated) == [
+        "- The Kubernetes manifests The frontend is covered by 12 static checks.",
+    ]
+    assert len(k8s_static_check_count_errors("README.md", unpunctuated, expected=31)) == 1
 
-    # An ordered item's content column is after `1. `, and reaching it continues.
-    assert _markdown_claim_windows("1. a list item\n   its continuation\n") == ["1. a list item its continuation"]
-    # A line that stops short of it starts a new paragraph.
-    assert _markdown_claim_windows("- a list item\n its continuation\n") == ["- a list item", "its continuation"]
+    # Two *sentences* are two clauses whatever the indentation, and the second does not
+    # name Kubernetes — this is the form real prose takes, and it stays out of scope.
+    punctuated = ">- The Kubernetes manifests.\n> The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(punctuated) == [
+        "- The Kubernetes manifests. The frontend is covered by 12 static checks.",
+    ]
+    assert k8s_static_check_count_errors("README.md", punctuated, expected=31) == []
+    assert not _k8s_claim_is_in_scope(punctuated)
+
+    # An ordered item behaves the same way, and a block element still breaks out.
+    assert _markdown_claim_windows("1. a list item\nits continuation\n") == ["1. a list item its continuation"]
+    assert _markdown_claim_windows("- a list item\n- a second item\n") == ["- a list item", "- a second item"]
+
+
+def test_a_list_items_paragraph_continues_at_any_indentation():
+    """The removed content-column test, replaced by what actually bounds it.
+
+    Rounds 9–12 required a continuation to reach the list item's content column.
+    CommonMark's list-item laziness rule does not: `- …26 static\\nchecks.` is one
+    paragraph. The rule that replaced it is that a paragraph continues a paragraph,
+    and the bounds that keep unrelated claims apart are the sentence split and the
+    clause-level subject — asserted in
+    `test_a_list_items_paragraph_is_lazy_about_its_continuation`.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows
+
+    for opener, continuation in (
+        ("> - a", ">   b"),
+        (">- a", "> b"),
+        (">   - a", ">     b"),
+        ("- a", "  b"),
+        ("- a", " b"),
+        ("1. a", "   b"),
+    ):
+        document = f"{opener}\n{continuation}\n"
+        assert _markdown_claim_windows(document) == [f"{opener.lstrip('> ')} {continuation.lstrip('> ')}"], document
+
+    # A block element still ends the item, so laziness did not become "everything
+    # joins": headings, rows, setext underlines and blank lines all still break.
+    for document, expected in (
+        ("- a\n\n  b", ["- a", "b"]),
+        ("- a\n## heading", ["- a", "## heading"]),
+        ("- a\n| x |", ["- a", "| x |"]),
+        ("- a\n---", ["- a"]),
+        ("> - a\n> ## heading", ["- a", "## heading"]),
+    ):
+        assert _markdown_claim_windows(f"{document}\n") == expected, document
 
 
 def test_indentation_is_measured_inside_the_quote_container():
@@ -5784,18 +5829,18 @@ def test_indentation_is_measured_inside_the_quote_container():
         current = document.replace("26 static", "31 static")
         assert k8s_static_check_count_errors("README.md", current, expected=31) == [], document
 
-    # The container-relative measure did not break the shallower shapes: a list item
-    # still needs a line that reaches its content column, whatever the nesting.
-    for opener, continuation, joined in (
-        ("> - a", ">   b", True),
-        (">- a", "> b", False),
-        (">   - a", ">     b", True),
-        ("- a", "  b", True),
-        ("- a", " b", False),
-        ("1. a", "   b", True),
+    # The container's own prefix width no longer decides anything: a nested quote and
+    # its paragraph, however it is written, is one paragraph.
+    for opener, continuation in (
+        ("> - a", ">   b"),
+        (">- a", "> b"),
+        (">   - a", ">     b"),
+        ("- a", "  b"),
+        ("- a", " b"),
+        ("1. a", "   b"),
     ):
         document = f"{opener}\n{continuation}\n"
-        assert (len(_markdown_claim_windows(document)) == 1) is joined, document
+        assert len(_markdown_claim_windows(document)) == 1, document
 
 
 def test_four_spaces_before_a_nested_quote_marker_is_still_a_nested_quote():
@@ -5901,3 +5946,39 @@ def test_the_nested_marker_allowance_is_measured_in_columns():
     assert _markdown_claim_windows("> a\n>   > b\n") == ["a", "b"]
     assert _markdown_claim_windows("> a\n>    > b\n") == ["a", "b"]
     assert _markdown_claim_windows("> a\n>     > b\n") == ["a > b"]
+
+
+def test_quote_markers_may_be_omitted_on_a_continuation_line():
+    """CommonMark lets a wrapped paragraph omit some leading `>` markers.
+
+    `>>> wrapped by 26 static` / `> checks.` is one paragraph inside the depth-3
+    quote, so requiring the depth to be unchanged rejected it and split the claim.
+    Depth may be *omitted*; only entering a deeper quote starts a block, because a
+    quote marker begins one.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for opener, continuation in (
+        (">>> The Kubernetes manifests are covered by 26 static", "> checks."),
+        (">> The Kubernetes manifests are covered by 26 static", "> checks."),
+        (">> The Kubernetes manifests are covered by 26 static", ">> checks."),
+        (">> The Kubernetes manifests are covered by 26 static", "checks."),
+    ):
+        document = f"{opener}\n{continuation}\n"
+        assert _markdown_claim_windows(document) == [
+            "The Kubernetes manifests are covered by 26 static checks.",
+        ], document
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert "states 26 Kubernetes static checks" in errors[0], document
+        current = document.replace("26 static", "31 static")
+        assert k8s_static_check_count_errors("README.md", current, expected=31) == [], document
+
+    # Entering a deeper quote still begins a block, and an unmarked line still ends a
+    # quote — omission is one-directional.
+    deeper = "> The Kubernetes manifests are documented here\n>> The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(deeper) == [
+        "The Kubernetes manifests are documented here",
+        "The frontend is covered by 12 static checks.",
+    ]
+    assert k8s_static_check_count_errors("README.md", deeper, expected=31) == []
