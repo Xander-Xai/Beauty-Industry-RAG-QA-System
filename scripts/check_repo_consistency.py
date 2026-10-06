@@ -4200,7 +4200,13 @@ _CN_UNBOUND = "；;。、！？!?,，项"
 #: ``5 项 资源`` and ``5 项 YAML 资源``, because the space in between is not Han
 #: either — the counted noun is still there, one gap further along. A bare tally
 #: is a tally that runs out: nothing follows it inside the clause it belongs to.
-_CN_TALLY_END = r"(?=\s*(?:[)\]】）]|$))"
+#:
+#: Inline delimiters are transparent to that test. ``静态检查共 **26 项**。`` and
+#: ``静态检查共 `26 项`。`` are the same claim as the bare form, and a terminator
+#: that stopped at the closing ``*`` would silently drop them — which is worse than
+#: a false positive, because nothing would say the claim went unverified.
+_CN_INLINE_DELIMITERS = r"[*_`~]"
+_CN_TALLY_END = r"(?=(?:" + _CN_INLINE_DELIMITERS + r"[ \t]*)*(?:[)\]】）]|$))"
 
 _K8S_STATIC_CHECK_COUNT_RE = re.compile(
     r"(?<![一二两三四五六七八九十百千零\d,.\-+])(?P<chinese>[一二两三四五六七八九十百千零]+|[\d,.\-+]+)\s*项\s*静态检查"
@@ -4268,13 +4274,24 @@ _K8S_BLOCK_KINDS = (
 #: marker regex that ate the indentation would make the continuation look
 #: unindented and split the item in two.
 _K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
-_K8S_QUOTE_MARKER_RE = re.compile(r"^\s{0,3}(?:>[ \t]?)+")
 
-#: How deep a blockquote line is: how many ``>`` markers it carries. Depth is what
-#: makes ``> text`` and ``> > text`` different blocks, and a boolean cannot see the
-#: difference — entering a nested quote interrupts the outer paragraph, and that
-#: inner paragraph's count must not borrow the outer one's Kubernetes subject.
-_K8S_QUOTE_DEPTH_RE = re.compile(r"^\s{0,3}(?:>[ \t]?)*")
+#: The whole leading blockquote marker run of a line, with the content's own
+#: indentation still attached. Three things are derived from this one match, and
+#: deriving them from separate regexes is how they came to disagree:
+#:
+#: * **depth** — the number of ``>`` in the run. A boolean cannot tell ``> text``
+#:   from ``> > text``, yet the second is a new block, so its count must not borrow
+#:   the outer paragraph's subject.
+#: * **body** — what remains after the run.
+#: * **indentation** — the whitespace at the end of the run, less the single space
+#:   that belongs to the marker. It has to survive: ``> - item`` followed by
+#:   ``>   continuation`` is one list item, and a regex that ate the indentation
+#:   made the continuation look unindented and split the item in two.
+#:
+#: Each ``>`` may be followed by up to three spaces before the next marker, which is
+#: what makes ``>  > text`` a nested quote rather than a depth-1 line whose text
+#: happens to start with ``>``.
+_K8S_QUOTE_PREFIX_RE = re.compile(r"^\s{0,3}(?:>[ \t]{0,3})*")
 
 #: Punctuation that separates clauses inside one window. A count only counts as a
 #: static-check count when it shares a clause with the phrase *and* the Kubernetes
@@ -4381,14 +4398,22 @@ def _markdown_claim_windows(text: str) -> list[str]:
             flush()
             continue
         in_quote = bool(_K8S_BLOCK_QUOTE_RE.match(line))
-        body = _K8S_QUOTE_MARKER_RE.sub("", line) if in_quote else line
-        indent = len(body) - len(body.lstrip())
+        if in_quote:
+            marker_run = _K8S_QUOTE_PREFIX_RE.match(line).group(0)
+            depth = marker_run.count(">")
+            body = line[len(marker_run) :]
+            # One space after the last `>` belongs to the marker; the rest is the
+            # block's own indentation and is what decides a list continuation.
+            indent = max(0, len(marker_run) - len(marker_run.rstrip(" \t")) - 1)
+        else:
+            depth = 0
+            body = line
+            indent = len(body) - len(body.lstrip())
         body = body.strip()
         # A `>`-only line is a paragraph break inside the quote, not content.
         if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
             flush()
             continue
-        depth = _K8S_QUOTE_DEPTH_RE.match(line).group(0).count(">") if in_quote else 0
         kind = block_kind(body)
         # Which block the line continues, decided by the block that is already open:
         #

@@ -5582,3 +5582,70 @@ def test_entering_a_nested_blockquote_starts_a_new_block():
     lazy = "> The Kubernetes manifests are covered by 26 static\nchecks.\n"
     assert _markdown_claim_windows(lazy) == ["The Kubernetes manifests are covered by 26 static checks."]
     assert len(k8s_static_check_count_errors("README.md", lazy, expected=31)) == 1
+
+
+def test_inline_delimiters_are_transparent_to_the_tally_terminator():
+    """`**26 项**` is the same claim as `26 项`; the closing `*` must not hide it.
+
+    A terminator that stopped at the closing delimiter returned no error for the
+    stale count, which is the worse failure: nothing said the claim went unverified.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for document, stated in (
+        ("Kubernetes 静态检查共 **26 项**。", "states 26"),
+        ("Kubernetes 静态检查共 `26 项`。", "states 26"),
+        ("Kubernetes 静态检查共 _26 项_。", "states 26"),
+    ):
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert stated in errors[0], document
+
+    # Delimiters are transparent, not a loophole: a noun still follows them.
+    for document in (
+        "Kubernetes 静态检查覆盖 **5 项** 资源。",
+        "Kubernetes 静态检查覆盖 **5 项资源**。",
+        "Kubernetes 静态检查覆盖 `5 项 YAML` 资源。",
+    ):
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+
+    # The current count is still accepted through the same delimiters.
+    assert k8s_static_check_count_errors("README.md", "Kubernetes 静态检查共 **31 项**。", expected=31) == []
+
+
+def test_an_indented_nested_quote_marker_is_still_a_nested_quote():
+    """CommonMark allows up to three spaces before a nested `>`, so `>  > text` is depth 2.
+
+    The depth regex allowed at most one whitespace character between markers, read
+    the line as depth 1, and merged it into the outer paragraph.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for separator in (" ", "  ", "   "):
+        document = (
+            f"> Kubernetes manifests are documented here\n>{separator}> The frontend is covered by 12 static checks.\n"
+        )
+        assert k8s_static_check_count_errors("README.md", document, expected=31) == [], document
+        assert not _k8s_claim_is_in_scope(document), document
+        assert _markdown_claim_windows(document) == [
+            "Kubernetes manifests are documented here",
+            "The frontend is covered by 12 static checks.",
+        ]
+
+    # More than three spaces is an indented code block, not a nested quote, and the
+    # line stays inside the outer quote's paragraph.
+    code = "> Kubernetes manifests are documented here\n>     not a nested quote\n"
+    assert _markdown_claim_windows(code) == [
+        "Kubernetes manifests are documented here not a nested quote",
+    ]
+
+    # The nested block's own stale claim, the same-depth wrap, and the quoted list
+    # continuation are all unaffected by the deeper parsing.
+    stale = (
+        "> Kubernetes manifests are documented here\n>  > The Kubernetes manifests are covered by 26 static checks.\n"
+    )
+    assert len(k8s_static_check_count_errors("README.md", stale, expected=31)) == 1
+    same_depth = "> > The Kubernetes manifests are covered by 26 static\n> > checks.\n"
+    assert _markdown_claim_windows(same_depth) == ["The Kubernetes manifests are covered by 26 static checks."]
+    quoted_item = "> - The Kubernetes manifests are covered by 26 static\n>   checks.\n"
+    assert _markdown_claim_windows(quoted_item) == ["- The Kubernetes manifests are covered by 26 static checks."]
