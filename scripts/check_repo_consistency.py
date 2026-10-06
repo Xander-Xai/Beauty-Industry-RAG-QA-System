@@ -4464,7 +4464,12 @@ def _markdown_claim_windows(text: str) -> list[str]:
         #
         # * quote depth may be omitted, not only equal. `>>> wrapped\n> text` is one
         #   paragraph inside the depth-3 quote; only *entering* a deeper quote starts a
-        #   block, because a quote marker begins one.
+        #   block, because a quote marker begins one. The depth a line may not exceed
+        #   is the paragraph's *effective* container depth — the deepest marker it has
+        #   been written with — not the previous line's written depth. Those differ
+        #   exactly in the restore case: `>>> …26\n> static\n>> checks.` omits markers
+        #   and then brings some back, and comparing against the reduced middle line
+        #   reads the third line as a deeper quote and splits one CommonMark paragraph.
         # * indentation may be omitted. `- wrapped by 26 static\nchecks.` is one
         #   paragraph in the item, because the list-item laziness rule lets the
         #   continuation's hanging indent be dropped.
@@ -4488,7 +4493,11 @@ def _markdown_claim_windows(text: str) -> list[str]:
         current.append(body)
         open_block = kind
         open_quoted = in_quote
-        open_depth = depth
+        # Keep the paragraph's effective container depth across lazy lines: a line may
+        # drop markers, and a later line may bring some back without leaving the
+        # container. Recording the written depth each time makes the restore look like
+        # a deeper quote.
+        open_depth = max(open_depth, depth)
     flush()
     return windows
 

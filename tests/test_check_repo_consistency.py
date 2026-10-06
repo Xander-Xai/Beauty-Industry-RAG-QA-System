@@ -5982,3 +5982,47 @@ def test_quote_markers_may_be_omitted_on_a_continuation_line():
         "The frontend is covered by 12 static checks.",
     ]
     assert k8s_static_check_count_errors("README.md", deeper, expected=31) == []
+
+
+def test_effective_quote_depth_survives_a_marker_restore():
+    """Omit markers, then bring some back, and the paragraph is still one block.
+
+    `open_depth` was replaced with each line's *written* depth, so after the reduced
+    middle line `> static` the restored `>> checks.` looked like a deeper quote and
+    split the paragraph. The comparison is against the paragraph's effective
+    container depth — the deepest marker it has been written with — which is what the
+    CommonMark example 251 shape needs.
+    """
+    from scripts.check_repo_consistency import _markdown_claim_windows, k8s_static_check_count_errors
+
+    for document in (
+        ">>> The Kubernetes manifests are covered by 26\n> static\n>> checks.\n",
+        ">>> The Kubernetes manifests are covered by 26\n> static\n> checks.\n",
+        ">> The Kubernetes manifests are covered by 26\n> static\n>> checks.\n",
+    ):
+        assert _markdown_claim_windows(document) == [
+            "The Kubernetes manifests are covered by 26 static checks.",
+        ], document
+        errors = k8s_static_check_count_errors("README.md", document, expected=31)
+        assert len(errors) == 1, document
+        assert "states 26 Kubernetes static checks" in errors[0], document
+        assert k8s_static_check_count_errors("README.md", document.replace("26", "31"), expected=31) == [], document
+
+    # Only *entering* a deeper quote begins a block: a line whose depth exceeds the
+    # paragraph's effective depth still starts one, so this is not "any depth joins".
+    deeper = "> The Kubernetes manifests are documented here\n>> The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(deeper) == [
+        "The Kubernetes manifests are documented here",
+        "The frontend is covered by 12 static checks.",
+    ]
+    assert k8s_static_check_count_errors("README.md", deeper, expected=31) == []
+
+    # A *deeper* line than the paragraph's effective depth starts a new block, so this
+    # is not "any depth joins". Effective depth resets when the previous block is
+    # flushed, so the comparison is against this paragraph's container and not a
+    # carry-over from an earlier one.
+    new_block = ">>> The Kubernetes manifests are covered by 26 static checks.\n>>>> The frontend is covered by 12 static checks.\n"
+    assert _markdown_claim_windows(new_block) == [
+        "The Kubernetes manifests are covered by 26 static checks.",
+        "The frontend is covered by 12 static checks.",
+    ]
