@@ -4489,8 +4489,11 @@ def _markdown_claim_windows(text: str) -> list[str]:
         # interrupt the paragraph above it, when CommonMark makes it literal text.
         # Windows are whitespace-normalised at output, so the body is what they carry.
         body = content.strip()
-        # A `>`-only line is a paragraph break inside the quote, not content.
-        if not body or _K8S_SEPARATOR_ONLY_RE.match(body):
+        # A `>`-only line is a paragraph break inside the quote, not content. Both
+        # tests use the indentation-preserving content, because each pattern's
+        # `^\s{0,3}` limit is the point: a four-space-indented `***` is a code block,
+        # not a thematic break, and must not split the paragraph it interrupts.
+        if not body or _K8S_SEPARATOR_ONLY_RE.match(content):
             flush()
             continue
         kind = block_kind(content)

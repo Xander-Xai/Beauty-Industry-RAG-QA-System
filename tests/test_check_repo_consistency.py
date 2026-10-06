@@ -6202,6 +6202,16 @@ def test_all_thematic_break_spellings_are_boundaries():
     inline = "The Kubernetes manifests are covered by 26 static checks and use _underscores_ and *stars*."
     assert len(k8s_static_check_count_errors("README.md", inline, expected=31)) == 1
 
+    # A separator is also subject to the three-space limit: four spaces of
+    # indentation makes it a code block, not a scenic break, so it stays in the
+    # paragraph and the count is compared.
+    for rule in ("***", "---", "___"):
+        document = f"The Kubernetes manifests are covered by\n    {rule}\n26 static checks.\n"
+        assert _markdown_claim_windows(document) == [
+            f"The Kubernetes manifests are covered by {rule} 26 static checks.",
+        ], document
+        assert len(k8s_static_check_count_errors("README.md", document, expected=31)) == 1, document
+
     # A thematic break is three or more of a *single* marker: two underscores are
     # ordinary text, so the paragraph around them stays one window.
     two = "The Kubernetes manifests are covered by\n__\n26 static checks.\n"
