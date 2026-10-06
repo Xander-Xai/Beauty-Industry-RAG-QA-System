@@ -203,7 +203,7 @@ ConfigMap 里每个键都对着一个 `os.environ.get` 调用点验证过，没�
 
 ## 7. 静态检查覆盖的契约
 
-`python3 -m pytest tests/deploy/ -q` → 31 项静态检查。分组：
+`python3 -m pytest tests/deploy/ -q`（即 `tests/deploy/test_k8s_manifests.py`）→ 31 项静态检查。分组：
 
 YAML 可解析、apiVersion/kind 完整、Namespace 一致 · Deployment selector ⊆ pod labels · Service selector 命中 pod labels、targetPort 匹配 · 探针指向真实免认证端点、liveness 不依赖后端 · secret 仅被引用不硬编码、Secret 无真实值、ConfigMap 无 secret 形态键 · resources requests/limits 齐备且不倒挂 · 镜像 tag 固定且匹配 runtime version、RollingUpdate 策略 · RS256 配置与挂载、**挂载权限对非 root 可读**、**uid 与 Dockerfile 固定值一致**、**推理 URL 用单体实际读取的变量**、ES username 与密码配对、副本数与用户存储。
 

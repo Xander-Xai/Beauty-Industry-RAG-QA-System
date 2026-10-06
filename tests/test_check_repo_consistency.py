@@ -4655,6 +4655,30 @@ def test_audit_row_must_keep_deployment_pending_even_with_an_artifact():
 
 
 # ── the Kubernetes static-check count is derived, never restated ────────────
+def _k8s_claim_is_in_scope(text: str) -> bool:
+    """True when the guard's scoping puts ``text`` in the Kubernetes comparison.
+
+    A fixture that is silently out of scope asserts nothing: "no errors" then
+    passes for the wrong reason and the regression it was written for stops
+    holding. Every "this claim is accepted" fixture is checked against this.
+    """
+    from scripts.check_repo_consistency import (
+        _K8S_CLAUSE_SPLIT_RE,
+        _K8S_STATIC_CHECK_COUNT_RE,
+        _K8S_STATIC_CHECK_PHRASE_RE,
+        _K8S_SUBJECT_CONTEXT_RE,
+        _markdown_claim_windows,
+    )
+
+    for window in _markdown_claim_windows(text):
+        if not _K8S_SUBJECT_CONTEXT_RE.search(window):
+            continue
+        for clause in _K8S_CLAUSE_SPLIT_RE.split(window):
+            if _K8S_STATIC_CHECK_PHRASE_RE.search(clause) and _K8S_STATIC_CHECK_COUNT_RE.search(clause):
+                return True
+    return False
+
+
 def test_k8s_static_check_count_is_derived_from_the_test_module():
     """The count comes from the module that defines the checks, not from a doc."""
     from scripts.check_repo_consistency import ROOT, k8s_static_check_count
@@ -4716,12 +4740,15 @@ def test_current_k8s_static_check_count_is_accepted():
     for claim in (
         "`deploy/k8s/` 提供最小契约与 31 项静态检查。",
         "`tests/deploy/test_k8s_manifests.py` → 31 项静态检查",
-        "`python3 -m pytest tests/deploy/ -q` → 31 项静态检查。分组：",
+        "`python3 -m pytest tests/deploy/ -q`（即 `tests/deploy/test_k8s_manifests.py`）→ 31 项静态检查。分组：",
         "静态检查指`tests/deploy/test_k8s_manifests.py`（31 项，全部离线、无网络、无集群）。",
         "The manifests and their 31 static checks",
         "The manifests and their thirty-one static checks",
     ):
         assert k8s_static_check_count_errors("README.md", claim, expected=31) == [], claim
+        # A claim the guard skips because it is out of scope must not be "accepted"
+        # for the wrong reason: confirm the scoping actually put it in scope.
+        assert _k8s_claim_is_in_scope(claim), f"fixture is out of scope, so it asserts nothing: {claim}"
 
 
 def test_unrelated_item_counts_are_not_read_as_static_check_counts():
@@ -4818,3 +4845,165 @@ def test_consistency_guard_main_calls_the_static_check_guard():
     source = Path(guard.__file__).read_text(encoding="utf-8")
     main_body = source.split("def main()", 1)[1]
     assert "check_k8s_static_check_counts(errors)" in main_body
+
+
+# ── review: the guard must only compare counts that are about Kubernetes ──────
+def test_static_check_count_without_a_kubernetes_subject_is_ignored():
+    """`static checks` alone does not make a number a Kubernetes claim.
+
+    This repository has more than one thing a document could call a static check.
+    Comparing any of them against the K8s manifest module's size would invent an
+    error out of an unrelated sentence.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    for line in (
+        "The frontend is covered by 12 static checks.",
+        "The demo capture script is covered by 3 static checks.",
+        "The retrieval benchmark harness is covered by 41 static checks.",
+        "前端由 12 项静态检查覆盖。",
+        # A different deploy-shaped suite: `tests/deploy/` on its own is not
+        # Kubernetes context, and this one names another module explicitly.
+        "`tests/test_demo_corpus_rbac_consistency.py` 覆盖 5 项静态检查。",
+        # A wrong number would still be ignored: out of scope beats wrong.
+        "The frontend is covered by 999 static checks.",
+    ):
+        assert k8s_static_check_count_errors("README.md", line, expected=31) == [], line
+        assert not _k8s_claim_is_in_scope(line), f"fixture must be out of scope: {line}"
+
+
+def test_a_kubernetes_claim_next_to_a_non_kubernetes_one_is_scoped_separately():
+    """Windows are bounded, so one claim cannot borrow the other's subject.
+
+    Concatenating the document would put both sentences in one window and read the
+    frontend's 12 as the manifest module's count.
+    """
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    document = (
+        "`deploy/k8s/` 的清单与 31 项静态检查确实存在且为 `REPO_VERIFIED`。\n"
+        "\n"
+        "The frontend is covered by 12 static checks.\n"
+    )
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+
+
+def test_an_unrelated_tally_in_another_clause_is_not_read_as_the_static_check_count():
+    """Within one window, the count still has to share a clause with the phrase."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    document = "`deploy/k8s/` 清单有 8 项已知限制；`tests/deploy/test_k8s_manifests.py` 的 31 项静态检查全部离线。"
+    assert k8s_static_check_count_errors("README.md", document, expected=31) == []
+
+    stale = "`deploy/k8s/` 清单有 8 项已知限制；`tests/deploy/test_k8s_manifests.py` 的 26 项静态检查全部离线。"
+    errors = k8s_static_check_count_errors("README.md", stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+
+def test_a_kubernetes_subject_is_required_before_the_number_is_read():
+    """`tests/deploy/` names the deploy contract, not this module."""
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    # Correct number, but nothing in the window says Kubernetes...
+    assert k8s_static_check_count_errors("README.md", "`tests/deploy/` 有 31 项静态检查。", expected=31) == []
+    # ...and a wrong number stays unreported for the same reason.
+    assert k8s_static_check_count_errors("README.md", "`tests/deploy/` 有 26 项静态检查。", expected=31) == []
+    # Naming the module is what brings it into scope.
+    errors = k8s_static_check_count_errors(
+        "README.md",
+        "`tests/deploy/test_k8s_manifests.py` 有 26 项静态检查。",
+        expected=31,
+    )
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+
+# ── review: a Markdown soft wrap must not hide a claim ───────────────────────
+def test_static_check_count_split_across_a_soft_wrap_is_still_checked():
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    wrapped_stale = "The Kubernetes manifests are covered by 26 static\nchecks."
+    errors = k8s_static_check_count_errors("README.md", wrapped_stale, expected=31)
+    assert len(errors) == 1
+    assert "states 26 Kubernetes static checks" in errors[0]
+
+    wrapped_current = "The Kubernetes manifests are covered by 31 static\nchecks."
+    assert k8s_static_check_count_errors("README.md", wrapped_current, expected=31) == []
+
+    # The subject itself may be on the other side of the wrap too.
+    subject_wrapped = (
+        "The Kubernetes manifests are covered by 26 static\nchecks in\n`tests/deploy/test_k8s_manifests.py`."
+    )
+    assert len(k8s_static_check_count_errors("README.md", subject_wrapped, expected=31)) == 1
+
+    # Chinese, wrapped between the count and the phrase.
+    cn_stale = "`deploy/k8s/` 的清单与 26 项\n静态检查确实存在。"
+    assert len(k8s_static_check_count_errors("README.md", cn_stale, expected=31)) == 1
+    cn_current = "`deploy/k8s/` 的清单与 31 项\n静态检查确实存在。"
+    assert k8s_static_check_count_errors("README.md", cn_current, expected=31) == []
+
+
+def test_a_wrapped_non_kubernetes_claim_is_still_ignored():
+    from scripts.check_repo_consistency import k8s_static_check_count_errors
+
+    wrapped = "The frontend is covered by 12 static\nchecks."
+    assert k8s_static_check_count_errors("README.md", wrapped, expected=31) == []
+
+
+def test_claim_windows_are_bounded_block_elements():
+    """Wrapped lines join their block; headings, rows and items start new ones."""
+    from scripts.check_repo_consistency import _markdown_claim_windows
+
+    document = (
+        "first paragraph line one\n"
+        "first paragraph line two\n"
+        "\n"
+        "## A heading\n"
+        "\n"
+        "- a list item line one\n"
+        "  a list item line two\n"
+        "- second item\n"
+        "\n"
+        "| a | table row |\n"
+        "|---|---|\n"
+        "| b | another row |\n"
+    )
+    assert _markdown_claim_windows(document) == [
+        "first paragraph line one first paragraph line two",
+        "## A heading",
+        "- a list item line one a list item line two",
+        "- second item",
+        "| a | table row |",
+        "| b | another row |",
+    ]
+
+
+def test_guarded_documents_keep_every_real_claim_in_scope():
+    """The scoping must not have silently dropped a current document's claim.
+
+    Scope narrowing is only safe while the claims stay visible: six current
+    documents state the count, and each of them must still reach the comparison.
+    """
+    from scripts.check_repo_consistency import (
+        ROOT,
+        k8s_static_check_count,
+        k8s_static_check_count_errors,
+    )
+
+    expected = k8s_static_check_count(ROOT / "tests" / "deploy" / "test_k8s_manifests.py")
+    claiming = {
+        "README.md",
+        "docs/deployment-guide-k8s.md",
+        "docs/interview-walkthrough.md",
+        "docs/repository-metadata.md",
+        "docs/repository-truth-audit.md",
+    }
+    found = {
+        path.relative_to(ROOT).as_posix()
+        for path in CANONICAL_DOCS
+        if path.exists()
+        and _k8s_claim_is_in_scope(path.read_text(encoding="utf-8"))
+        and k8s_static_check_count_errors(str(path), path.read_text(encoding="utf-8"), expected) == []
+    }
+    assert claiming <= found, f"claims dropped out of scope: {sorted(claiming - found)}"

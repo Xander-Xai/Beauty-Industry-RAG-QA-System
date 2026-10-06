@@ -4135,6 +4135,11 @@ def check_slo_objective_counts(errors: list[str], root: Path | None = None) -> N
 # back it. The test module defines them, so the count is derived from that module
 # rather than restated: `26` outlived four added checks and sat next to two correct
 # `31`s in the same repository, which is exactly the drift this guard is for.
+#
+# The comparison is deliberately narrow. This guard knows about one number — the
+# size of one test module — and it only claims to understand a number whose own
+# Markdown window names the Kubernetes subject it belongs to. It is not a
+# repository-wide "every number must agree" framework and must not grow into one.
 
 K8S_STATIC_CHECK_MODULE = Path("tests/deploy/test_k8s_manifests.py")
 
@@ -4151,8 +4156,9 @@ def k8s_static_check_count(module_path: Path) -> int:
 
 
 #: A stated count in either language: ``26 项``, ``31 项``, ``31 static checks``.
-#: Each alternative names its own group, and exactly one is set per match. The
-#: Chinese numeral class includes 百/千/零 so the parser *sees* a count it cannot
+#: Each alternative names its own group, and exactly one is set per match. Matched
+#: against a whitespace-normalised clause, so a soft wrap cannot split a claim.
+#: The Chinese numeral class includes 百/千/零 so the parser *sees* a count it cannot
 #: read and reports "cannot verify" instead of silently ignoring the claim, and the
 #: numeric token is captured whole — sign, grouping and decimal point included —
 #: so ``-5`` is never read as ``5``.
@@ -4174,17 +4180,91 @@ _K8S_STATIC_CHECK_COUNT_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: What makes a line a static-check count rather than some unrelated count: the
-#: line has to be about static checks at all. Scoping by ``N 项`` alone or by
-#: ``tests/deploy/`` alone is not enough — this repository's Chinese prose uses
-#: "一项检查" for an ordinary item of work, and one guide line both names the
-#: module and says "一项" without counting anything. Requiring the line to say
-#: "static check" keeps every real claim in scope and leaves that prose alone.
-_K8S_STATIC_CHECK_SUBJECT_RE = re.compile(r"静态检查|static\s+checks?", re.IGNORECASE)
+#: What makes a number a *Kubernetes* static-check count. Deliberately an explicit
+#: subject list rather than "the word static checks": a repository can and does write
+#: about static checks that have nothing to do with `deploy/k8s/`, and comparing
+#: those against the manifest module's count would be a fabricated error. A window
+#: that never names Kubernetes, ``k8s``, a manifest, or the test module itself is
+#: out of scope. Note that ``tests/deploy/`` alone is *not* context: that directory
+#: holds the deploy contract, and a future non-Kubernetes deploy test landing
+#: there would make the name point at the wrong count.
+_K8S_SUBJECT_CONTEXT_RE = re.compile(r"kubernetes|k8s|manifest|test_k8s_manifests", re.IGNORECASE)
+
+#: The phrase that turns a number in an in-scope window into a static-check count.
+_K8S_STATIC_CHECK_PHRASE_RE = re.compile(r"静态检查|static\s+checks?", re.IGNORECASE)
+
+#: Markdown structural boundaries that end a semantic window. A blank line always
+#: does; so does a new block element, because a heading, a table row and a list item
+#: are separate claims that merely happen to sit next to each other. Wrapped
+#: continuation lines match none of these and therefore join the window they belong
+#: to, which is what stops an ordinary soft wrap from hiding a claim.
+_K8S_BLOCK_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+_K8S_BLOCK_QUOTE_RE = re.compile(r"^\s{0,3}>")
+_K8S_BLOCK_TABLE_RE = re.compile(r"^\s{0,3}\|")
+_K8S_BLOCK_LIST_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d{1,3}[.)])\s+")
+
+#: Punctuation that separates clauses inside one window. A count only counts as a
+#: static-check count when it shares a clause with the phrase, so a paragraph that
+#: mentions an unrelated tally elsewhere is not dragged into the comparison. A
+#: newline is intentionally *not* a separator: joining across a soft wrap is the
+#: whole point.
+_K8S_CLAUSE_SPLIT_RE = re.compile(r"[；;。，,、!?！？]+")
+
+#: A separator-only line: ``|---|``, ``---``, ``:::``. It opens a table block but
+#: carries no claim, so it starts a window and contributes nothing to it.
+_K8S_SEPARATOR_ONLY_RE = re.compile(r"^[\s|:\-]+$")
+
+
+def _markdown_claim_windows(text: str) -> list[str]:
+    """Split ``text`` into bounded Markdown windows for claim scoping.
+
+    A window is one block element — a paragraph, a single table row, one list item
+    with its wrapped continuation lines, one blockquote. Windows are bounded on
+    purpose: the whole document is never concatenated, because doing so would let a
+    number hundreds of lines away from a ``static checks`` phrase be read as its
+    count.
+
+    Windows are whitespace-normalised, so a claim written across a soft wrap is
+    matched as the single line a reader actually sees.
+    """
+    windows: list[str] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        joined = " ".join(" ".join(current).split())
+        if joined:
+            windows.append(joined)
+        current.clear()
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        starts_element = bool(
+            _K8S_BLOCK_HEADING_RE.match(line)
+            or _K8S_BLOCK_QUOTE_RE.match(line)
+            or _K8S_BLOCK_TABLE_RE.match(line)
+            or _K8S_BLOCK_LIST_RE.match(line)
+        )
+        if not stripped or starts_element:
+            flush()
+            if stripped and not _K8S_SEPARATOR_ONLY_RE.match(stripped):
+                current.append(stripped)
+            continue
+        current.append(stripped)
+    flush()
+    return windows
 
 
 def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[str]:
-    """Return errors for a stated static-check count the test module contradicts.
+    """Return errors for a stated Kubernetes static-check count that is wrong.
+
+    Scoping, from widest to narrowest, so a number is only ever read as a Kubernetes
+    static-check count when all three hold:
+
+    1. its Markdown window names a Kubernetes subject (manifests, ``k8s``, the
+       module), so the count belongs to ``deploy/k8s/`` rather than to some other
+       static-check suite;
+    2. its clause mentions static checks at all;
+    3. the clause also contains the number.
 
     A count the guard cannot parse is reported rather than accepted. "Cannot
     verify" is the honest answer for a shape it does not understand; quietly
@@ -4192,28 +4272,30 @@ def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[s
     """
     errors: list[str] = []
     module = K8S_STATIC_CHECK_MODULE.as_posix()
-    for line in text.splitlines():
-        if not _K8S_STATIC_CHECK_SUBJECT_RE.search(line):
+    for window in _markdown_claim_windows(text):
+        if not _K8S_SUBJECT_CONTEXT_RE.search(window):
             continue
-        for match in _K8S_STATIC_CHECK_COUNT_RE.finditer(line):
-            if _continues_a_larger_numeral(line, match.start()):
-                errors.append(
-                    f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
-                    f"it continues a longer numeral, and {module} defines {expected} test functions"
-                )
+        for clause in _K8S_CLAUSE_SPLIT_RE.split(window):
+            if not _K8S_STATIC_CHECK_PHRASE_RE.search(clause):
                 continue
-            token = match.group("chinese") or match.group("english") or ""
-            stated = _parse_stated_count(token)
-            if stated is None:
-                errors.append(
-                    f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
-                    f"{module} defines {expected} test functions"
-                )
-            elif stated != expected:
-                errors.append(
-                    f"{name}: states {stated} Kubernetes static checks but {module} defines {expected} "
-                    f"({match.group(0)!r})"
-                )
+            for match in _K8S_STATIC_CHECK_COUNT_RE.finditer(clause):
+                token = match.group("chinese") or match.group("english") or ""
+                stated = _parse_stated_count(token)
+                if _continues_a_larger_numeral(clause, match.start()):
+                    errors.append(
+                        f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
+                        f"it continues a longer numeral, and {module} defines {expected} test functions"
+                    )
+                elif stated is None:
+                    errors.append(
+                        f"{name}: cannot verify the static-check count in {match.group(0)!r}; "
+                        f"{module} defines {expected} test functions"
+                    )
+                elif stated != expected:
+                    errors.append(
+                        f"{name}: states {stated} Kubernetes static checks but {module} defines {expected} "
+                        f"({match.group(0)!r})"
+                    )
     return errors
 
 
