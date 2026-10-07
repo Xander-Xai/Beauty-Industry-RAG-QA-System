@@ -26,7 +26,7 @@
   one unconsumed config block; it introduced no new capability and produced no new external
   validation evidence.
 - [#24](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/24) is the final
-  interview-readiness truth reconciliation and is **completed** (closed 2026-10-03); PR #25
+  repository-truth reconciliation and is **completed** (closed 2026-10-03); PR #25
   delivered it and is **merged**. It is therefore no longer the current open scope, and no new
   reconciliation issue has replaced it — see
   [Reconciliation lineage invariants](#reconciliation-lineage-invariants).
@@ -40,7 +40,7 @@
   `info.title` / `info.version` still come from `config.json`, and
   `tests/test_runtime_api_metadata.py` fails if the topology claim returns. No architecture,
   model routing, config or historical production record changed.
-- Recruiter-facing landing and interview walkthrough (PR #55): merged as `424f43f`. It reworked
+- Repository landing and technical walkthrough (PR #55): merged as `424f43f`. It reworked
   the README top fold, added `docs/technical-walkthrough.md` and `docs/repository-metadata.md`,
   and reconciled the top-fold evidence strip with the canonical six-level taxonomy (the strip had
   rendered five rows under a three-level heading and omitted `HISTORICAL`). Documentation only.
@@ -153,7 +153,7 @@ taken by re-querying the GitHub API at the verification date recorded in
 the working tree, so it never claims to know whether an issue is open right now — what it
 enforces is that a transition nobody recorded cannot pass silently.
 
-- PR #15 — interview truth and validation-evidence reconciliation: merged.
+- PR #15 — repository truth and validation-evidence reconciliation: merged.
 - PR #17 — deterministic retrieval benchmark **framework**: merged.
 - [#16](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/16) — benchmark framework
   implementation scope: closed (`completed`), delivered by PR #17.
@@ -165,7 +165,7 @@ enforces is that a transition nobody recorded cannot pass silently.
 - [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) — post-merge truth
   reconciliation: completed, delivered by PR #23.
 - [#24](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/24) — final
-  interview-readiness truth reconciliation: completed (closed 2026-10-03), delivered by
+  repository-truth reconciliation: completed (closed 2026-10-03), delivered by
   PR #25 (merged 2026-10-03). It closed the enterprise RAG security gap and reconciled the
   OTLP/Jaeger config surface and the Qdrant evidence wording; see
   [Reconciliation lineage invariants](#reconciliation-lineage-invariants) for why the lineage

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This repository is a **public interview / reference implementation**. It exists to
+This repository is a **public reference implementation**. It exists to
 demonstrate engineering design and to be reviewed and read by others.
 
 It is not a production service operated on behalf of users, and it is not offered

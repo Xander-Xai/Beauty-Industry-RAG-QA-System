@@ -14,7 +14,7 @@ Two constraints shape every row:
    underlying threat impossible, and no row should be read that way.
 
 Evidence levels are the canonical vocabulary defined in
-[Interview evidence map](evidence-map.md#classification-vocabulary).
+[Evidence map](evidence-map.md#classification-vocabulary).
 This document introduces no status word of its own.
 
 ## Coverage matrix

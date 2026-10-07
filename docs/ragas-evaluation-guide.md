@@ -8,7 +8,7 @@
 
 RAGAS（Retrieval Augmented Generation Assessment）是 RAG 系统评估的事实标准框架。它通过 4 个核心指标量化评估 RAG 管线的质量：
 
-| 指标 | 评估对象 | 说明 | 面试话术 |
+| 指标 | 评估对象 | 说明 | 评审口径 |
 |------|---------|------|---------|
 | **Faithfulness** | 生成答案 | 答案是否忠于检索上下文（有没有幻觉）。衡量模型的"诚实度"。 | "最核心的指标——直接衡量 RAG 的检索有没有真正发挥作用，防止模型凭空编造。" |
 | **Answer Relevancy** | 生成答案 | 答案和问题的相关程度。 | "衡量生成质量——检索到了正确信息，但模型答非所问就是这里得分低。" |
@@ -277,13 +277,13 @@ python -m tests.evaluation.ragas_eval \
 
 ---
 
-## 7. 面试话术
+## 7. 评估口径与常见问题
 
-当面试官问"怎么评估你的 RAG 系统"时，可以这样展示：
+当被问到"怎么评估这个 RAG 系统"时，可以这样说明：
 
 ### 开场
 
-> "我使用了 RAGAS 框架对 RAG 系统进行离线评估，覆盖 faithfulness、answer_relevancy、context_precision、context_recall 四个维度。黄金数据集最初是 27 条 seed，现已扩展到 300+ 条（实际条数以 `validate_golden_set` 输出为准），覆盖成分、法规、配方、图像、通用五种业务类型和 easy/medium/hard 三个难度级别。"
+> "本项目使用 RAGAS 框架对 RAG 系统进行离线评估，覆盖 faithfulness、answer_relevancy、context_precision、context_recall 四个维度。黄金数据集最初是 27 条 seed，现已扩展到 300+ 条（实际条数以 `validate_golden_set` 输出为准），覆盖成分、法规、配方、图像、通用五种业务类型和 easy/medium/hard 三个难度级别。"
 
 ### 如何计算指标
 
@@ -291,7 +291,7 @@ python -m tests.evaluation.ragas_eval \
 
 ### 如何做优化
 
-> "我做了基线评估后，通过优化检索策略（调整 BM25 权重、改进 chunk 策略）来提升 context recall。每次优化都通过 RAGAS 报告做对比验证，确保不会顾此失彼。"
+> "在基线评估之后，通过优化检索策略（调整 BM25 权重、改进 chunk 策略）来提升 context recall。每次优化都通过 RAGAS 报告做对比验证，确保不会顾此失彼。"
 >
 > **示例占位符说明**：不要在未提供真实 RAGAS 报告前声称任何具体提升百分比（如 "从 X% 到 Y%"）。本项目当前没有经过验证的 RAGAS quality score；格式校验通过 ≠ 领域事实正确，golden set 存在 ≠ 质量分数有效。
 

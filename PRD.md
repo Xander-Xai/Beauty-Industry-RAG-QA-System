@@ -488,7 +488,7 @@ L2 Private Cache	query_hash + version + role_mask + dept_mask	存储特定权限
     ■ 批处理排队延迟（P50/P99）
     ■ CrossEncoder/NLI/BiEncoder GPU 利用率
 ● 告警：BLIP 触发率 >10%、缓存校验失败突增、KV Cache 持续 >85%、KV Pressure >0.9 持续 30s、Prefix Caching 命中率突降 >50%、Redis 降级持续 >5 分钟、L1/L2 命中率突降 >30%、Rerank Batch 排队延迟 >50ms 等。
-12.1 KV Cache 分类与监控（面试高频点明确化）
+12.1 KV Cache 分类与监控
 vLLM Prefix Caching 按共享特性分为三类：
 1. Shared KV Cache：system prompt、法规前缀模板等，可跨请求复用，命中率反映系统级效率。
 2. Per-request KV Cache：用户 query 相关 tokens，不可复用，仅影响单次请求的 Prefill 时间。
@@ -523,7 +523,7 @@ KV_Pressure = current_used_kv / max_kv_capacity
   ○ KV Cache 建模从“MB/token 常数”升级为“基于层数/GQA 的结构化估算”。
   ○ 并发模型从“静态并发数”升级为“token 分布驱动的 KV occupancy 动态模型”。
   ○ 多 vLLM 实例 KV 模型修正：明确 KV pool 为统一资源池，多实例导致 partition 与 fragmentation 风险。
-9. KV Cache 感知降级 + Prefix Caching 保护，避免降级引发缓存雪崩；明确区分 Shared/Per-request KV Cache，面试高频点清晰可答。
+9. KV Cache 感知降级 + Prefix Caching 保护，避免降级引发缓存雪崩；明确区分 Shared/Per-request KV Cache。
 10. Redis 职责分离 + 降级容灾，消除单点故障域，Cache 层不再承担权限校验职责。
 11. 检索鲁棒性重构：
   ○ 并行多路召回替代三段式递归，消除延迟翻倍与召回不稳定性。
