@@ -272,6 +272,16 @@ Changes present on `main` after the 2.3.0 release entry:
 - CLIP synchronous routing thresholds are now config-driven (`config.json` → `clip_sync`).
 - Docs, README and PRD reconciled against the current code/config/test contracts
   (single 4B topology, manual epoch activation, authenticated stats/metrics, ES auth).
+- `.gitignore` no longer lists `PRD.md` as an internal document. It is tracked
+  and linked from `README.md` as the published product/architecture design
+  document, and the unnegated rule would have made it impossible to re-add
+  after any `git rm --cached`. The ignore block is split so the coverage rules
+  and the generated-artifact rules state what they actually exclude.
+- `docs/evidence-map.md` gained a row for the six retained microservice
+  directories, graded `REPO_VERIFIED` (components exist) / `PENDING` (integrated
+  deployment). They were described as components rather than a canonical runtime
+  in `README.md` and `docs/architecture-baseline.md`, but had no row in the
+  authoritative evidence table. No evidence level was promoted.
 
 ### Security
 
