@@ -89,11 +89,17 @@ keys/
 *.sqlite
 *.sqlite3
 
-# Internal documents (not for public repo)
-PRD.md
+# Local working notes (not for public repo). PRD.md is deliberately NOT ignored:
+# it is tracked and linked from README.md as the product/architecture design
+# document, so its truth markers are part of the published evidence surface.
 AUDIT_REPORT.md
+
+# Coverage output
 .coverage
 __pycache__/
+
+# Generated benchmark artifacts. The contract README in each directory is
+# tracked; measured runs are never committed from a local machine.
 artifacts/benchmarks/*
 !artifacts/benchmarks/README.md
 artifacts/performance/*
