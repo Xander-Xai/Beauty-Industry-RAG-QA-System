@@ -204,6 +204,28 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Fixed
 
+- `deploy/grafana/` held a second, unwired Grafana dashboard
+  (`rag-cosmetics-overview`, 12 panels) whose panels plotted 14 `rag_*` series and two
+  `nvidia_gpu_memory_used_bytes` series that **no exporter in this repository
+  produces** — `rag_latency_p50/p95/p99`, `rag_kv_pressure`,
+  `rag_cache_l1_hit_rate`, `rag_cache_l2_hit_rate`, `rag_evidence_score_avg`,
+  `rag_evidence_gate_pass_rate`, `rag_rewrite_fallback_rate`,
+  `rag_nli_contradiction_rate`, `rag_degradation_count`, `rag_admission_rejected_total`,
+  `rag_requests_total`, `rag_active_requests`, plus DCGM GPU memory. The directory was
+  cited by no document and mounted by no compose file
+  (`docker-compose.observability.yml` mounts `monitoring/grafana/`), yet it sat on the
+  canonical deployment path and shipped as JSON, so a reviewer browsing `deploy/` found
+  dashboards promising latency percentiles, KV pressure and cache hit rates for a system
+  that publishes none of them. This is precisely the claim
+  `docs/evidence-map.md` lists as a known risk ("citing a `rag_*` series the exporter
+  does not emit"), and it existed only because the emitted-metric guard was scoped to one
+  known file path. The three files are removed; the canonical dashboard remains
+  `monitoring/grafana/dashboards/rag-overview.json` (10 panels, emitted metrics only,
+  unchanged). The per-dashboard checks were widened to walk the whole tree: no dashboard
+  JSON may exist outside the canonical directory, every dashboard JSON anywhere must
+  reference only emitted metrics, and no panel may plot a series from an exporter this
+  repository never runs. No metric was added and no capability changed — the fix removes
+  a claim, it does not implement one.
 - The FastAPI `description` (runtime-exposed through Swagger UI and the generated
   OpenAPI `info` block) advertised the product as "基于双 GPU". No code, config, test or
   artifact in this repository evidences that topology: the 4B/14B vLLM deployment is
