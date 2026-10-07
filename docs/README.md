@@ -94,6 +94,11 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   (`v2.5` is a working-milestone label, not a release.)
 - [Real RAGAS evaluation](validation/real-ragas-evaluation.md): evaluator dependency
   isolation, correctness fixes, and the real-evaluation blockers.
+- [Deferred runtime validation index](deferred-runtime-validation.md): the single
+  index of every runtime validation not yet executed (retrieval benchmark,
+  performance, OTLP runtime export closure, real model smokes, GPU topology, RAGAS,
+  Kubernetes, browser E2E), each with its required environment, procedure,
+  expected artifact and evidence-promotion rule. Every entry is `NOT EXECUTED`.
 
 ## Interview / Architecture truth
 
