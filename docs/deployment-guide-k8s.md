@@ -16,9 +16,9 @@
 
 ## 1. 范围：只有一个 workload
 
-只包含 API 网关：Deployment + Service + ConfigMap + Secret 引用。
+只包含一个 workload：`rag-api`。它是 **FastAPI 单体**（`app.py`），不是独立的 `api-gateway/` 服务——Deployment 引用仓库根 `Dockerfile`，其入口是 `python app.py`（见 §6 的 `VLLM_4B_URL` 一行）。`api-gateway/` 是一个保留的微服务组件，本清单**不**部署它。
 
-**不在范围内**：vLLM 推理、Qdrant、Elasticsearch、Redis、MinIO。网关假设它们作为集群内Service 存在，与 compose 拓扑对齐。这些依赖的实际部署方式取决于你的集群，**本仓库不声称验证过任何一种**。
+**不在范围内**：vLLM 推理、Qdrant、Elasticsearch、Redis、MinIO。该 workload 假设它们作为集群内 Service 存在，与 compose 拓扑对齐。这些依赖的实际部署方式取决于你的集群，**本仓库不声称验证过任何一种**。
 
 **刻意不引入**：Helm、Istio、ArgoCD、KServe、Service Mesh、Operator、GPU Scheduler、Kafka、HPA。`replicas: 1` 的理由见§5。
 

@@ -88,6 +88,7 @@ reconciling the taxonomy does not have to rewrite an artifact contract's own enu
 | `PASS` | validation record stage outcome | the recorded check for that stage succeeded |
 | `NOT RUN` | validation record stage outcome | the stage was not executed, so it carries no evidence |
 | `NOT EXECUTED` | deferred-validation index status | the validation was not executed, so it carries no evidence; equivalent to `NOT RUN`, and used by [the deferred runtime validation index](deferred-runtime-validation.md) |
+| `SYNTHETIC DEMO` | synthetic-fixture provenance | the value comes from a deliberately fabricated fixture used to exercise a code path (the committed demo figure and its corpus), not from a measurement of anything. It is a statement about **where a number came from**, not about how much evidence exists — which is why it is not a level: a synthetic figure cannot be promoted, demoted, or re-validated, and it can never satisfy an upgrade path |
 
 Rules:
 
@@ -99,6 +100,10 @@ Rules:
    `REPO_VERIFIED` (framework) / `PENDING` (result), which states which half is missing.
 3. `BLOCKED` and `NOT RUN` describe this run. They do not convert a `PENDING`
    capability into a validated one, and a blocked run produces no publishable number.
+4. A `SYNTHETIC DEMO` value sits beside the evidence column, never inside it. The
+   token explains where a number came from; the evidence column still states what
+   this repository can prove. A synthetic fixture exercises a code path — it is not a
+   measurement, and it can never satisfy an upgrade path.
 
 ## Capability self-verification index
 

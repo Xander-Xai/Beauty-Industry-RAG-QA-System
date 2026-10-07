@@ -571,6 +571,10 @@ stable rather than renamed. See
 - **api/routes.py + frontend: 前端图片上传 FormData 与后端 JSON 不兼容**
   - 新增 `POST /api/query/upload` 端点，支持 `multipart/form-data`
   - 前端图片上传请求改为调用 `/api/query/upload`
+  - *（历史条目，当前树上不存在 — `HISTORICAL`）*：该端点**不在当前代码中**。`api/routes.py`
+    现在只暴露 `/api/query`、`/api/chat`、`/api/continuation`、`/api/dialog_history`、
+    `/api/health`、`/api/ready`、`/api/stats`、`/api/media/{doc_id}`、`/api/metrics`；`frontend/src/`
+    也没有任何 upload 调用。保留本条目是为了记录它曾被声称过，不作为当前能力的证据。
 
 - **retrieval/bm25_retriever.py: JSON 加载使用破坏性字符串替换**
   - 移除 `json.loads(f.read().replace('\\"', '"'))` 中的 `.replace()`

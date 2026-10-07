@@ -107,7 +107,7 @@ flowchart LR
   GATES --> OUT["答案 + 引用 + 审计字段"]
 ```
 
-上图为**第一屏简化视图**。完整 canonical 架构图（含离线知识构建链路与 Qdrant / Elasticsearch / Redis / vLLM 依赖）见 [docs/architecture-baseline.md](docs/architecture-baseline.md)，它也是唯一的架构口径来源。微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。
+上图为**第一屏简化视图**。完整 canonical 架构图（含离线知识构建链路与 Qdrant / Elasticsearch / Redis / vLLM 依赖）见 [docs/architecture-baseline.md](docs/architecture-baseline.md)，它也是唯一的架构口径来源。微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。
 
 ---
 

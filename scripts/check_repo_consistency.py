@@ -3807,7 +3807,7 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
 
 # ── 12. a section may not restate a hardcoded count of its own list ─────────
 #
-# README's Interviewer Guide preface said "六个问题" above a Q1..Q7 list. Nothing
+# A reviewer Q&A preface once said "六个问题" above a Q1..Q7 list. Nothing
 # failed: every other guard here checks evidence vocabulary or whether a claim
 # outruns its evidence, and none of them cross-check a section's prose against
 # the section's own contents. Deleting the number fixed that instance; these two

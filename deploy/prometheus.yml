@@ -1,5 +1,10 @@
 # Prometheus 配置 — 化妆品行业 RAG 问答系统
-# 抓取 monitoring-service 的 /metrics 端点
+#
+# 抓取目标（按顺序）：
+#   1. `rag-api`             -> canonical FastAPI 单体的 /api/metrics（需 Bearer token）
+#                              这是 6 条告警规则唯一依赖的 series 来源。
+#   2. `rag-monitoring-service` -> 可选的遗留微服务组件，不在 canonical 部署中，
+#                              不 emit 任何告警规则引用的 series；保留仅为可观测性。
 
 global:
   scrape_interval: 15s

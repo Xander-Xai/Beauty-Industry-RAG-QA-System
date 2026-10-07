@@ -12,7 +12,7 @@
   [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
 - v2.5 working-milestone runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
-- Interview truth and validation-evidence reconciliation merged via PR #15 (squash `aa189d9`).
+- Documentation truth and validation-evidence reconciliation merged via PR #15 (squash `aa189d9`).
 - Deterministic retrieval benchmark framework merged via PR #17 (squash `8446d19`). Its final tree is
   byte-identical to `main`'s, so the merged source branch `feat/reproducible-rag-benchmark` was verified
   as fully contained in `main` and deleted.
@@ -70,7 +70,7 @@ Post-reconciliation verification date: 2026-10-06.
 
 The `Status` column of the audit table below uses the **canonical evidence
 vocabulary** defined in
-[Interview evidence map → Classification vocabulary](evidence-map.md#classification-vocabulary):
+[Evidence map → Classification vocabulary](evidence-map.md#classification-vocabulary):
 `HISTORICAL_PRODUCTION`, `HISTORICAL`, `REPO_VERIFIED`, `LOCAL_REAL_VALIDATION`,
 `DESIGN_TARGET`, `PENDING`. That table is the only source of evidence levels in this
 repository; this audit adds no status word of its own, and a retired vocabulary such
@@ -99,7 +99,7 @@ or credential is unavailable here, so the capability is not validated.
 | Session persistence | `SessionState` persists to Redis across workers with in-memory fallback and a stable Pydantic-safe schema | `core/pipeline_context.py` | `tests/test_pipeline_context.py`, `tests/integration/test_redis_session_runtime.py` | `REDIS_PASSWORD`/`REDIS_CACHE_*` | Local real Redis (7.4.9): write in process A, typed restore in process B, update seen in process C, TTL refresh, malformed/incompatible fallback. Cluster/Sentinel not validated | `LOCAL_REAL_VALIDATION` | Production Redis topology stays deployment-specific |
 | Trusted proxy | Client IP comes from the TCP peer unless the peer is a trusted proxy; forwarded chain is walked right-to-left | `api/routes_auth.py`, `app.py` | `tests/test_auth_routes.py`, `tests/integration/test_trusted_proxy_runtime.py` | `TRUSTED_PROXIES` | Real nginx (single + multi-hop) and direct access validated; uvicorn `proxy_headers=False` required so the app policy is authoritative. Only nginx validated | `LOCAL_REAL_VALIDATION` | Other LB/proxy products need deployment-specific config |
 | Observability endpoints | `/api/stats` and `/api/metrics` require an authenticated identity; `/api/health` is public | `api/routes.py` | `tests/test_metrics_endpoint.py`, `tests/test_api.py`, `tests/integration/test_metrics_auth_runtime.py` | n/a | CI API tests + local authenticated Prometheus scrape (no token 401, bearer 200, target UP, `up == 1`) | `LOCAL_REAL_VALIDATION` | Keep bearer-token scraping documented |
-| Microservices | Service components exist; integrated production deployment is not established | `api-gateway/`, `retrieval-service/`, `generation-service/`, `monitoring-service/` | Component tests exist; no complete frontend-to-service e2e evidence | Compose files and per-service settings | CI is not a production deployment or end-to-end verification | `REPO_VERIFIED` (components) / `PENDING` (integrated deployment) | Treat as secondary components pending independent deployment validation |
+| Microservices | Service components exist; integrated production deployment is not established | `api-gateway/`, `retrieval-service/`, `generation-service/`, `monitoring-service/`, `cache-service/`, `rewrite-service/` | Component tests exist; no complete frontend-to-service e2e evidence | Compose files and per-service settings | CI is not a production deployment or end-to-end verification | `REPO_VERIFIED` (components) / `PENDING` (integrated deployment) | Treat as secondary components pending independent deployment validation |
 | Document parsing | TXT/PDF/DOCX/XLSX parsing with scanned-PDF OCR routing | `offline/document_processor.py`, `offline/chunking.py` | `tests/offline/test_document_processor.py`, `tests/offline/test_chunking.py` | `knowledge_base.chunk_size`, `max_document_bytes`, `max_binary_document_bytes`, `xlsx_rows_per_block` | Deterministic fixtures; no real-corpus parsing benchmark | `REPO_VERIFIED` | Claim parsing implementation only |
 | OCR | OCR adapter and image pipeline exist; real PaddleOCR runtime is external | `offline/image_processor.py` | `tests/offline/test_image_processing.py` (deterministic provider) | `knowledge_base.ocr.*`; optional `offline/requirements-ocr.txt` | PaddleOCR not installed in default CI; real OCR smoke not run | `REPO_VERIFIED` (adapter) / `PENDING` (real runtime) | Real PaddleOCR smoke pending external runtime |
 | BGE | BGE text embedding adapter shares the online pooling contract | `offline/embeddings.py`, `offline/text_ingestion.py` | `tests/offline/*`, `tests/test_offline_text_ingestion.py`; `scripts/smoke_bge_ingestion.py` | `embedding.text.model_path`/`model_revision`/`dimension` | CI uses deterministic embedder; real model smoke `EXTERNAL_MODEL_ASSET_REQUIRED` | `REPO_VERIFIED` (adapter contract) / `PENDING` (real weights) | Real configured BGE smoke pending external asset |

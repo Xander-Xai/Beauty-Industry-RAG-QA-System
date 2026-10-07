@@ -51,7 +51,7 @@ class AdapterManager:
     用法::
 
         mgr = AdapterManager(
-            base_model_name="Qwen/Qwen2.5-14B",
+            base_model_name="Qwen/Qwen3-14B",
             adapter_dir="./adapters",
             default_adapter="regulation-lora",
         )

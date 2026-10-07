@@ -2,7 +2,7 @@
 
 > 这份清单基于当前仓库真实状态整理，不再把尚未闭环的能力写成“默认已可上线”。
 
-> 部署形态基线：当前 canonical 部署是 **Docker Compose + FastAPI 单体 `app.py`**。本清单不以 Kubernetes、Kafka、GraphRAG 或 Multi-Agent 作为上线前置条件；`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/` 是可选组件，纳入生产前需要各自独立的部署与契约验证。
+> 部署形态基线：当前 canonical 部署是 **Docker Compose + FastAPI 单体 `app.py`**。本清单不以 Kubernetes、Kafka、GraphRAG 或 Multi-Agent 作为上线前置条件；`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/` 是可选组件，纳入生产前需要各自独立的部署与契约验证。
 
 ## P0 阻塞项
 

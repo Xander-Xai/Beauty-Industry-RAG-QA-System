@@ -58,7 +58,7 @@
 - `core/pipeline.py` → `OnlineRAGPipeline.process()`，整条链路在一个方法里顺序展开
 - `docs/architecture-baseline.md` → 「当前主链路」代码块
 
-**边界**：**架构口径只认上面那份 baseline**。`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/` 目录是保留的代码组件，不代表端到端生产验证。
+**边界**：**架构口径只认上面那份 baseline**。`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/` 目录是保留的代码组件，不代表端到端生产验证。
 
 ---
 

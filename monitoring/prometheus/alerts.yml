@@ -52,7 +52,7 @@ groups:
             Prometheus cannot scrape {{ $labels.job }}. The API is down, or the
             bearer token on the scrape config is rejected (GET /api/metrics
             requires authentication and returns 401 without it).
-          runbook: docs/slo-runbook.md#high-error-rate
+          runbook: docs/slo-runbook.md#higherrorrate
 
       - alert: RagHighErrorRate
         expr: >-
@@ -73,7 +73,7 @@ groups:
             Server error ratio is {{ $value | humanizePercentage }} over 5
             minutes, against a DESIGN_TARGET of < 1%. Traffic is present, so
             this is a real error ratio rather than a single idle 500.
-          runbook: docs/slo-runbook.md#high-error-rate
+          runbook: docs/slo-runbook.md#higherrorrate
 
   - name: rag-latency
     interval: 30s
@@ -94,7 +94,7 @@ groups:
             request-count guard is load-bearing: a Prometheus summary keeps
             reporting its last quantile indefinitely, so without it a single
             slow request would keep this alert firing long after traffic stopped.
-          runbook: docs/slo-runbook.md#high-latency
+          runbook: docs/slo-runbook.md#highlatency
 
   - name: rag-dependencies
     interval: 30s
@@ -144,4 +144,4 @@ groups:
             {{ $value }} requests are in flight. The bound is a DESIGN_TARGET
             placeholder, not a measured capacity limit; this repository holds no
             load artifact that would justify a specific number.
-          runbook: docs/slo-runbook.md#high-latency
+          runbook: docs/slo-runbook.md#highlatency
