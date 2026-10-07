@@ -311,8 +311,8 @@ def test_pipeline_builds_query_aware_rrf_overrides():
     assert weights["rewrite_variant"] == 1.0
 
 
-def test_interview_baseline_locks_the_recall_count_and_mainline():
-    """The canonical interview answer must stay aligned with executable routing."""
+def test_architecture_baseline_locks_the_recall_count_and_mainline():
+    """The canonical architecture description must stay aligned with executable routing."""
     baseline = (Path(__file__).resolve().parents[1] / "docs" / "architecture-baseline.md").read_text(encoding="utf-8")
 
     assert "唯一事实基线" in baseline
