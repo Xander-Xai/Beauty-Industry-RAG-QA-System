@@ -25,7 +25,7 @@
 
 ## 30 秒读懂
 
-给面试官的第一屏。每一行都能在本仓库里打开对照。
+快速技术概览。每一行都能在本仓库里打开对照。
 
 | # | 问题 | 答案 | 深挖入口 |
 |---|---|---|---|
@@ -36,7 +36,7 @@
 | 5 | **历史生产规模** | `HISTORICAL_PRODUCTION`（**上一家公司生产环境，不是本仓库 benchmark**）：3000+ 文档、5000+ 图片、200+ 用户、10–15 QPS、日均 1500+ 请求、RTX A5000 ×2 | [Historical Production Context](#historical-production-context) |
 | 6 | **哪些是 repo verified** | `REPO_VERIFIED`（代码 + 确定性测试覆盖）：主链路全流程、两级重排、双 Gate、RBAC、认证、指标端点、审计、告警规则、benchmark/性能**框架** | [Evidence Matrix](#evidence-matrix) |
 | 7 | **哪些还没有真实验证** | `PENDING`：真实 QPS/延迟产物、真实检索 benchmark 结果、真实 RAGAS 分数、OTLP 运行期闭环尚未跑通、告警在生产触发、真实 4B/14B vLLM GPU 部署、真实 BGE/CLIP/PaddleOCR smoke | [Repository-Reproducible Evidence](#repository-reproducible-evidence) |
-| 8 | **怎么进入架构 / 代码 / demo** | 架构：本页 Architecture 图 · 代码：`core/pipeline.py` + `retrieval/parallel_recall.py` · Demo：下方演示图与复现命令 · 5 分钟面试脚本：[docs/technical-walkthrough.md](docs/technical-walkthrough.md) | [Quick Start](#quick-start) |
+| 8 | **怎么进入架构 / 代码 / demo** | 架构：本页 Architecture 图 · 代码：`core/pipeline.py` + `retrieval/parallel_recall.py` · Demo：下方演示图与复现命令 · 5 分钟技术走查脚本：[docs/technical-walkthrough.md](docs/technical-walkthrough.md) | [Quick Start](#quick-start) |
 
 ### 六级证据，只用这一套词
 
@@ -253,11 +253,11 @@ python3 scripts/check_repo_consistency.py
 
 ---
 
-## 5 分钟面试 Walkthrough
+## 5 分钟技术 Walkthrough
 
-**[→ docs/technical-walkthrough.md](docs/technical-walkthrough.md)** 是一份可 screen-share 的 5 分钟脚本：按「业务背景 → 整体架构 → 一次 Query 如何穿过系统 → Hybrid Retrieval → Rerank → 双 Gate → 多模态 ingestion → RBAC → Cache → 模型路由 → Observability → Evaluation → Docker/K8s → 失败与降级 → 未验证边界」逐节给出**要说的话**和**要打开的真实代码文件**。面试时按节跳，不用背。
+**[→ docs/technical-walkthrough.md](docs/technical-walkthrough.md)** 是一份可 screen-share 的 5 分钟脚本：按「业务背景 → 整体架构 → 一次 Query 如何穿过系统 → Hybrid Retrieval → Rerank → 双 Gate → 多模态 ingestion → RBAC → Cache → 模型路由 → Observability → Evaluation → Docker/K8s → 失败与降级 → 未验证边界」逐节给出**要说的话**和**要打开的真实代码文件**。走查时按节跳，不用背。
 
-技术面试官的精简问答，每条都标了证据等级——**这本身就是我想让你看到的能力：把"实现了"和"验证过"分开。**
+面向技术评审的精简问答，每条都标了证据等级——**这正是本项目要展示的能力：把"实现了"和"验证过"分开。**
 
 **Q1 · 这个系统解决什么业务问题？**
 化妆品行业内部知识问答：法规条款、成分机理、产品资料分散在 PDF / 图片 / 表格里，检索体验差且回答容易编造。系统把多模态知识建成可检索资产，在线给出**带证据、带出处、证据不足就拒答**的答案，并对不同角色和部门做权限隔离。拒答机制（双 Gate）是业务需求，不是装饰。
@@ -355,11 +355,11 @@ FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE �
 
 ## Documentation
 
-请从 [docs/README.md](docs/README.md) 查找当前操作指南、设计文档与历史计划（历史计划不代表当前实现状态）。面试 / 真实性口径入口：
+请从 [docs/README.md](docs/README.md) 查找当前操作指南、设计文档与历史计划（历史计划不代表当前实现状态）。架构 / 真实性口径入口：
 
 | 文档 | 作用 |
 |---|---|
-| [docs/technical-walkthrough.md](docs/technical-walkthrough.md) | **5 分钟 screen-share 脚本**：按面试问题分节，每节给出要说的话与要打开的代码文件 |
+| [docs/technical-walkthrough.md](docs/technical-walkthrough.md) | **5 分钟 screen-share 脚本**：按评审问题分节，每节给出要说的话与要打开的代码文件 |
 | [docs/architecture-baseline.md](docs/architecture-baseline.md) | **架构唯一事实基线**：召回路数、重排、Gate、路由、版本语义 |
 | [docs/evidence-map.md](docs/evidence-map.md) | **证据等级唯一权威表** + 逐能力分级 + benchmark artifact 验收标准 + 已知表述风险 |
 | [docs/repository-truth-audit.md](docs/repository-truth-audit.md) | 逐能力实现 / 证据 / 状态审计，含 Qdrant 两态、告警双机制、外部验证边界 |
@@ -392,7 +392,7 @@ frontend/                 React application
 api-gateway/  retrieval-service/  generation-service/  monitoring-service/
                            Microservice components; separate integration status
 tests/                    Deterministic unit/integration/contract/performance suites
-docs/                     User, operator, design, audit and interview-truth documentation
+docs/                     User, operator, design, audit and evidence-truth documentation
 scripts/                  check_repo_consistency.py and validation helpers
 config.json               Runtime configuration; system.version is 2.3.0
 ```
