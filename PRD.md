@@ -4,6 +4,20 @@
 
 **Canonical Runtime Status:** [README.md](README.md) + [docs/repository-truth-audit.md](docs/repository-truth-audit.md).
 
+> **How to read this document.** Every section below carries a status marker. Nothing in this
+> PRD is evidence on its own; the marker tells you which claim to read it as.
+>
+> | Marker | Meaning |
+> |---|---|
+> | `CURRENT` | Implemented in the canonical path and covered by collected tests. Levels: `REPO_VERIFIED`, or a compound `REPO_VERIFIED` (implementation) / `PENDING` (runtime) |
+> | `DESIGN_TARGET` | A target or design recorded here. No implementation, or no reproducible benchmark. `DESIGN_TARGET` in every case |
+> | `HISTORICAL_DESIGN` | Superseded design retained for lineage. Not the current architecture; kept because the reasoning is still useful |
+> | `PENDING_VALIDATION` | Implemented, but validating it needs an asset, runtime or credential this repository does not have |
+>
+> Evidence levels themselves are defined once, in
+> [docs/evidence-map.md → Classification vocabulary](docs/evidence-map.md#classification-vocabulary).
+> This document does not introduce a second vocabulary.
+
 | Topic | Current classification | Evidence / boundary |
 |---|---|---|
 | Offline ingestion and OCR | Implemented (external validation pending) | `offline/` implements TXT/PDF/DOCX/XLSX parsing, OCR/image pipeline, BGE/CLIP adapters, Qdrant text/image and Elasticsearch writers, incremental/carry-forward/full-rebuild, validator, epoch seal, scheduler and feedback; real model/OCR smoke is pending external assets (see audit) |
@@ -18,7 +32,7 @@
 | KV admission | Partial | Admission control code exists; capacity behavior requires workload-specific measurement |
 | Performance metrics | Design targets | Numerical latency/QPS claims below have no benchmark artifact and are not verified production results |
 | Performance evidence artifact | Implemented in code; no run yet | `benchmarks/performance.py` implements a seven-file contract where an unexecuted run records `null` rather than `0` and carries a `blocked_reason`; `artifacts/performance/` contains only its README, so no QPS/P95/P99 has been measured |
-| Structured audit trail | Implemented in code | `common/audit.py` emits business-action events (`auth.login.*`, `admin.user.create`, `admin.role.update`, `media.access.denied`, `knowledge.epoch.seal`) with a stable schema, forced redaction and request-id correlation; persisted to Redis Stream + daily JSONL. No SIEM forwarding, and no `knowledge.epoch.activate` event because no activate endpoint exists |
+| Structured audit trail | Implemented in code | `common/audit.py` emits business-action events with a stable 9-field schema, forced redaction and request-id correlation; persisted to Redis Stream + daily JSONL. **Nine** action types are registered in `KNOWN_ACTIONS`: `auth.login.success`, `auth.login.failure`, `auth.login.rate_limited`, `admin.user.create`, `admin.role.update`, `media.access.denied`, `knowledge.epoch.seal`, `knowledge.source.trust_decision`, `knowledge.source.quarantine`. No SIEM forwarding, and no `knowledge.epoch.activate` event because no activate endpoint exists |
 | Alerting | Implemented as configuration | `monitoring/prometheus/alerts.yml` defines 6 alerts over metrics the canonical collector actually emits; every threshold is a `DESIGN_TARGET`. No production Prometheus evaluates them and no alert has fired in production |
 | SLO / runbook | Documented; objectives are targets | `docs/slo-runbook.md` defines 5 objectives and 8 incident procedures against degradation paths that exist in code. No objective has been met or measured |
 | OpenTelemetry export | Exporter implemented and test-covered; disabled by default; runtime closed loop pending | `monitoring/otel_exporter.py` adds an opt-in OTLP path with non-fatal failure semantics and a span-attribute allow-list; with `OTEL_EXPORT_ENABLED=false` no span processor is attached, and the exporter package is an optional dependency in `requirements-otel.txt`. Application -> exporter -> collector -> backend -> queried span is `PENDING` |
@@ -38,8 +52,60 @@ All performance figures below are **design targets or model estimates**, not ver
 > |---|---|---|
 > | §4.2 / §5.1 | 历史/目标设计：双 vLLM 实例（独立的 vLLM-Rewrite 与 vLLM-Gen-4B，端口 8101/8102） | **单一共享 4B 端点** `gpu1.models.vllm_4b`（端口 8101）；rewrite 与简单生成共用 `gen_4b` endpoint，复杂查询走 `gen_14b`（Qwen3-14B） |
 > | §3.6 / §10.5 | `knowledge_version_epoch` 由 Airflow 自动 bump / 切换 active epoch | 构建（build/validate/seal）可自动化；**激活 epoch 是显式人工发布动作**，未实现自动 activation |
-> | §13 / §4.1 | 微服务拆分（`/rewrite`、`/generate`、`api-gateway/`）为部署单位 | 已验证主线为 FastAPI 单体 `app.py`；微服务目录保留但未完成与当前前端的全链路契约对齐 |
+> | §13 / §4.1 | 微服务拆分（`/rewrite`、`/generate`、`api-gateway/`）为部署单位 | 已验证主线为 FastAPI 单体 `app.py`；六个微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/`）保留但未完成与当前前端的全链路契约对齐 |
 > | §2 / §5 / §7 | 延迟/QPS/吞吐数字 | 无 benchmark artifact，均为**设计目标/模型估算**，不是实测生产结果 |
+> | §5.2.5 / §9 | KV 压力降级阈值 70% / 80% / 90% / 95% | `admission/kv_admission.py` 的实际常量是 `THRESHOLD_TRUNCATE=0.80`、`THRESHOLD_SOFT_STOP=0.90`、`THRESHOLD_CRITICAL=0.95`（另有更早的 `threshold_tighten`）。**以代码为准；本 PRD 这两个阈值区间已过时** |
+> | §6 | BLIP 触发率 < 5% | `models/blip_service.py` 的模块文档记录 ~15%，且触发信号是 `max(keyword_rule_score, bert_classifier_score, has_image_hit)` **三路**取最大——本 PRD 的「双路」表述已过时 |
+> | §10.2 | Prompt Registry 由 DB 管理版本 | 缓存键确实含 `pv`（`generation.prompt_version`），但版本存储是文件目录 `./data/feedback/rewrite/prompt_versions`（`rewrite/feedback.py`），不是 DB |
+>
+> **逐节状态索引**：下表给出每个章节的可引用状态，避免把设计稿整段读成当前实现。
+>
+> | 章节 | 状态 | 依据 / 边界 |
+> |---|---|---|
+> | §1 项目背景 | `CURRENT` | 业务问题陈述 |
+> | §2 系统目标与指标（延迟 / 有效并发 / QPS / 输出长度 / 多轮保留） | `DESIGN_TARGET` | 无 benchmark artifact。P95≈2s、P99≤3s、QPS 12–18、有效并发 20–25 全部是推导模型，见 §2.2 |
+> | §2.1 端到端延迟拆解 | `DESIGN_TARGET` | 逐阶段区间是模型估算，一次都没测过 |
+> | §2.2 吞吐模型 | `DESIGN_TARGET` | 公式自洽，但输入量（KV 预算、token 分布）未经 workload 验证 |
+> | §3.1 数据范围（500+ 文档 baseline） | `HISTORICAL_DESIGN` | 设计阶段规模基线，**不是**当前可复现规模，也不是历史生产规模 |
+> | §3.2 文档处理 | `CURRENT`（字符切块已实现）+ `HISTORICAL_DESIGN`（JSON Lines 中间产物未采用） | 默认 500 字符 / 10% 重叠；`doc_type`/`page_number`/权限掩码注入均已实现 |
+> | §3.3 图像处理 | `CURRENT`（OCR provider 接口 + CLIP 512d + 视觉权重）+ `HISTORICAL_DESIGN`（`image_ocr` 独立 embedding_type 未采用） | PaddleOCR 为可选外部运行时，默认不安装 → 见 PENDING_VALIDATION |
+> | §3.4 向量存储与权限标签 | `CURRENT` | `rag_text_768` / `rag_image_512` 双集合 + uint32 掩码；仓库未声明任何 IVF/ANN 调优参数 |
+> | §3.5 Bitmask 编码规则 | `CURRENT` | `common/auth.py::is_allowed` 与本文伪代码一致；uint32 边界与 fail-closed 在 `_validate_permission_mask_claim` / `is_document_authorized` |
+> | §3.6 文档生命周期与版本化 | `CURRENT`（epoch 构建/校验/封存）+ `HISTORICAL_DESIGN`（定时任务自动 archived、前端历史区间查询） | 激活 epoch 是人工动作；`expiry_date` 运行时判断已不再使用 |
+> | §3.7 离线调度 | `CURRENT`（cron/Airflow/CLI 共用业务逻辑）+ `PENDING_VALIDATION`（真实 Airflow 执行） | DAG 仅在 Airflow 与离线模块可发现时注册；默认 Compose 不启动 Airflow |
+> | §4.1 核心链路 | `CURRENT` | 在线顺序与 `core/pipeline.py` 一致 |
+> | §4.2 执行层隔离（双 vLLM 实例） | `HISTORICAL_DESIGN` | 当前是单一共享 4B 端点 + 14B，见上方 reconciliation |
+> | §4.3 模型分级路由 | `CURRENT`（路由契约）+ `PENDING_VALIDATION`（真实 GPU） | BERT 复杂度判别 → 4B / 14B；训练产物需单独生成 |
+> | §4.4 Query Rewrite | `CURRENT`（降级链、JSON Schema、兜底档位）+ `DESIGN_TARGET`（每周 gold set 评估并自动更新 prompt 与 BERT 阈值） | 失败降级为 HTTP 200 结构化拒答，不返回 503，已实现；**数据闭环的自动更新未实现** |
+> | §4.5 双 Embedding 路由与 CLIP 策略 | `CURRENT`（判别路由、同步/异步 CLIP、超时丢弃、删除 CLIP embedding cache）+ `DESIGN_TARGET`（融合权重由日志学习、每周 A/B 校准） | 权重初值来自 `config.json`；**无自动学习代码** |
+> | §4.6 长文本一致性（上下文重建 + 证据锁定） | `CURRENT` | 不做尾续写；`has_more` / `session_id` 契约已实现 |
+> | §4.7 动态输出长度 | `CURRENT`（按业务类型分级）+ `CURRENT`（KV 联动截断） | `admission/kv_admission.py::get_effective_max_tokens()` 返回 action 而不改 `max_tokens`，Prefix Caching 保护已实现 |
+> | §5.1 硬件与组件分配 | `HISTORICAL_DESIGN`（GPU 分层与 Rerank Batch Aggregator 的 CPU→GPU 迁移叙述） | 见 §4.2：当前是共享 4B 端点 |
+> | §5.2 KV Cache 建模与准入 | `CURRENT`（`admission/kv_admission.py` 已接入 `core/pipeline.py`）+ `DESIGN_TARGET`（所有 KV 数值、并发区间、安全系数） | 双因子 KV 成本模型已实现；`kv_per_token≈0.45 KB` 是模型估算，从未实测 |
+> | §5.2.5 KV 压力 Spill/Reject | `CURRENT`（分级降级链已实现）+ `HISTORICAL_DESIGN`（本节阈值区间，见上方 reconciliation） | 以代码常量为准 |
+> | §5.2.6 吞吐模型统一表达 | `DESIGN_TARGET` | 推导闭环，无实测 |
+> | §5.3 vLLM continuous batching 认知 | `CURRENT`（设计原则正确且被代码遵守） | — |
+> | §6 多模态能力 | `CURRENT`（MinIO 60s 签名 URL + 端点内权限重校验已实现）+ `HISTORICAL_DESIGN`（BLIP 触发率与双路触发表述） | 见上方 reconciliation |
+> | §7.1 并行多路召回 | `CURRENT` | 4 条路径、权限/版本下推、ES Fallback、去重归一化均已实现 |
+> | §7.2 检索一致性评分 | `CURRENT`（`retrieval/parallel_recall.py::_compute_agreement_score`，MiniBatchKMeans 熵 + Jaccard，0.7/0.3 混合，已接入 Evidence Gate）+ `DESIGN_TARGET`（阈值调优、告警、每月实体 Recall@K/F1 评估） | **注意**：聚类向量是 `[score, hash(doc_id)%1000/1000]` 代理量，不是真实文档向量；结论只能说明各召回源是否指向同一簇，不能说明语义质量 |
+> | §7.3 两阶段 Rerank | `CURRENT`（BiEncoder 150 → 双 CE 精排 10、Platt 校准、请求内批量）+ `DESIGN_TARGET`（跨请求微批聚合、GPU P99 ≤60ms） | `batch_predict()` 是**请求内**同步批处理；跨请求 `submit_batch()` 未接入主链路。§5.2 的延迟改善数字未实测 |
+> | §7.4 Evidence Ensemble Gate | `CURRENT`（四因子加权 + 三档决策 + 法规矛盾拒答） | 权重 w1~w4 来自 `config.json`，**未实现**离线日志学习 |
+> | §8 Fail-safe | `CURRENT` | 业务逻辑返回 200 + 结构化拒答；仅基础设施故障 / 极端过载返回 503 |
+> | §9 弹性降级与限流 | `CURRENT`（令牌桶 + KV 分级降级 + Prefix Caching 保护）+ `HISTORICAL_DESIGN`（本节阈值区间） | 见上方 reconciliation |
+> | §10.1–§10.3 缓存 Key 与分层 | `CURRENT` | 权限 + 版本进入 Key 空间；L1 只服务 public、L2 物理分区 |
+> | §10.4 Redis 职责 | `CURRENT` | L2 命中即视为权限通过；Redis 只做 TTL 与 Key |
+> | §10.5 失效策略 | `CURRENT`（epoch 切换即自然失效）+ `HISTORICAL_DESIGN`（Airflow 自动 bump） | 激活为人工动作 |
+> | §10.6 语义安全缓存 | `CURRENT` | `requires_context=true` 仅同 session 复用 |
+> | §10.7 CLIP 缓存策略（已移除） | `CURRENT` | 已删除 query-hash CLIP embedding cache |
+> | §11 权限与安全审计 | `CURRENT` | 掩码/过滤表达式/拦截原因入审计；query SHA256 脱敏 |
+> | §12 可观测性 | `CURRENT`（追踪钩子、OTLP exporter 默认关闭、`/api/metrics`、6 条告警、10 面板）+ `PENDING_VALIDATION`（运行期闭环、生产触发、面板填充）+ `HISTORICAL_DESIGN`（Jaeger thrift agent 路径，已移除） | 本节列出的 KV / GPU / batch 指标**多数不存在**；真实存在的是 `rag_*` 原始计数器，边界见 evidence map |
+> | §12.1 KV Cache 分类与监控 | `HISTORICAL_DESIGN` | Shared / Per-request 分类未实现为独立监控项；`kv_pressure` 经 `/api/stats` 暴露但无告警 |
+> | §12.2 离线反馈闭环 | `CURRENT`（A/B 平台 `common/ab_testing.py` 已接入 `core/pipeline.py`；反馈 review 门控已实现）+ `DESIGN_TARGET`（每周采样 500 条人工标注、2000 条标注样本集、每周贝叶斯优化 RRF 权重、ROC 调阈值、1 周 A/B 后全量发布） | **没有任何一条自动学习闭环在运行**；A/B 代码路径存在但未配置任何实验 |
+> | §13 API 服务拆分 | `HISTORICAL_DESIGN` | `/rewrite`、`/generate` 及其 P99 目标是拆分设计；当前主线是单体 |
+>
+> **未验证的数字一律是数字，不是结论。** 本文出现的所有延迟、QPS、并发、KV 与 GPU 数值都是
+> `DESIGN_TARGET`。仓库内**没有任何**可复现的 benchmark artifact，因此任何章节都不得被引用为
+> 「系统达到 X」。
 >
 > **运维契约（v2.5 working milestone，已实现）**：`GET /api/stats` 与 `GET /api/metrics` 需要身份认证（`require_identity`）；Docker Compose 的 Elasticsearch 启用 `xpack.security.enabled=true` 并要求 `ELASTICSEARCH_USERNAME`/`ELASTICSEARCH_PASSWORD`；登录限流仅在配置 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`。操作细节见 [docs/deployment-guide.md](docs/deployment-guide.md) 与 [docs/operations-guide.md](docs/operations-guide.md)。
 >
@@ -172,7 +238,9 @@ Rewrite 失败时绝不返回 503，而是进入“结构兜底 + 保守执行�
 2. 结构兜底：利用规则/关键词 + BERT 意图分类生成基础字段（business_type="regulation", intent="compliance", requires_context=True），rewritten_query 回退为原始 query。
 3. 保守执行策略：识别为法规兜底场景时，强制提升检索量（TopK 100→300）、强制开启 RAG、禁止缓存命中、输出长度收缩、强制开启 Evidence Gate 且阈值提升至 ≥0.8。
 4. 最终交互兜底：若 Evidence Gate 未通过，返回“无法确认，请补充信息”的引导语（HTTP 200），而非 503 错误。
-数据闭环校准：Rewrite 输出字段（intent/business_type）的准确性通过离线人工标注样本（gold set）每周评估，并基于评估结果更新 prompt 模板与 BERT 分类器阈值，保证路由信号可学习、可演进。
+数据闭环校准：*设计目标*——Rewrite 输出字段（intent/business_type）的准确性通过离线人工标注样本（gold set）**每周**评估，并基于评估结果自动更新 prompt 模板与 BERT 分类器阈值。
+> ★ 该评估与自动更新**未实现，也无调度**。仓库内的评测集是 `tests/evaluation/golden_set.jsonl`（301 条，
+> 用于 RAGAS 格式校验），不是用于路由阈值调优的人工标注 gold set。
 4.5 双 Embedding 路由与 CLIP 同步策略（修正版）
 设计原则：
 1. CLIP 不允许纯异步脱离主链路：多模态召回必须参与主决策。
@@ -191,10 +259,9 @@ is_visual_relevant = max(
 0.3 – 0.6	⚠️ CLIP 低成本同步（仅检索 TopK=20，控制延迟）
 < 0.3	❌ 跳过 CLIP（纯文本语义检索）
 2) 同步 CLIP 执行（受控延迟）
-● 推理位置：CPU ONNX Runtime + SIMD 加速。
-● 延迟控制：
-  ○ 正常耗时：≤80ms。
-  ○ 超时 Fallback：若 CLIP 推理或检索超时（阈值 120ms），直接丢弃 CLIP 分支结果，仅依赖 BGE 文本检索结果，保证主链路鲁棒性。
+● 【已实现】CLIP 作为可注入的 embedder 适配器，超时/异常时丢弃该分支并仅依赖 BGE 文本检索。
+● ★ 「CPU ONNX Runtime + SIMD 加速」「正常耗时 ≤80ms」「超时阈值 120ms」——**未实现或未实测**：
+  代码中没有 ONNX Runtime 执行路径，也没有这两个时间常量。
 3) 异步机制重定义（非阻塞增强）
 异步流程仅在主链路返回后执行，用于以下三个场景：
 ● (1) 补充召回：主链路返回后，CLIP 后台检索 TopK=100，结果写入当前 Session 的临时缓存，用于后续可能的追问。
@@ -206,13 +273,15 @@ is_visual_relevant = max(
   ○ Query 受 Rewrite 与多轮对话影响，语义漂移大，Cache 命中率趋近于 0。
   ○ Embedding 对改写极其敏感，无法复用。
   ○ 避免内存浪费与虚假的缓存监控指标。
-5) 多模态融合权重动态化（基于日志学习校准）
-升级加权 RRF 融合公式，权重来源明确为离线学习结果：
+5) 多模态融合权重（当前为查询类型静态映射，非学习所得）
+加权 RRF 融合公式：
 final_score = w_text * text_score + w_clip * clip_score + w_ocr * ocr_score
-● 权重初始值由历史日志分析得出（基于 rerank 点击率与人工标注相关性），并每周根据 A/B 实验更新。
-● w_clip 动态映射：由 is_visual_relevant 决定，但具体数值（2.0 / 1.0 / 0.0）来自线下网格搜索与线上验证。
-● 冷启动时采用默认权重，系统上线后由反馈闭环持续优化。
+● 【已实现】权重按 business_type / is_visual_relevant 做确定性映射，数值来自 `config.json`。
+● ★ 设计目标：权重由历史日志（rerank 点击率与人工标注相关性）分析得出，并**每周**根据 A/B 实验更新；
+  w_clip 的 2.0 / 1.0 / 0.0 来自线下网格搜索与线上验证。**学习与调参环节均未实现**，见 §12.2。
+● 因此本系统**不是**「权重随检索价值自学习」的系统；它是「权重由配置驱动、随查询类型切换」的系统。
 4.6 长文本生成一致性保障（替代续写机制）
+【状态：`CURRENT`】
 为避免长文本被截断后导致语义不一致问题，系统不采用“基于上次输出尾部续写”的方式，而采用 “上下文重建 + 单次重生成” 机制，确保多次输出 ≈ 一次完整推理的拆分展示。
 ● 触发条件：当生成内容超过业务类型对应的最大输出 tokens（如法规 1024），返回 session_id 和 has_more=true，但不暴露中间生成结果作为续写输入。
 ● 续写请求处理流程：
@@ -247,10 +316,11 @@ vLLM 的 Prefix Caching 仅用于加速相同前缀的生成请求，不能跨�
 GPU1 调度（无状态路由 + GPU 批处理模式）：
 ● 架构原则：去除外部 CPU Orchestrator 调度排队。各模型作为独立 vLLM 实例或 GPU Batch Service 运行，系统上层仅包含一个无状态 Router。
 ● Router 职责：根据请求类型（Rewrite / Gen / Rerank）直接将请求转发至对应的 vLLM 引擎端口或 GPU Batch 服务，不进行请求排队、不维护优先级队列、不干预 vLLM 内部 continuous batching 决策。
-● Rerank Batch Aggregator（新增）：
-  ○ 位于 GPU1，接收来自检索阶段的候选文档流，进行微批聚合（time-based 10–20ms 或 size-based 32 条请求）。
-  ○ 批处理内容：CrossEncoder（40 pair → 合并为 batch matrix）、NLI（Top-K 批量推理）、BiEncoder（宽保留阶段批量编码）、CLIP Text Encoder（同步请求批量处理）、BLIP（异步队列批处理）。
-  ○ 并发隔离：各模型独立 CUDA context 与 KV Cache，由 vLLM 内部的 Scheduler 全权负责 token 级调度与批次合并；Rerank 服务使用独立 CUDA Stream，避免干扰 LLM 推理。
+● Rerank Batch Aggregator：
+  ○ 【已实现】`retrieval/rerank_batch_aggregator.py`，聚合**请求内**的 (query, doc) pair；
+    被 `cross_encoder_ensemble.rerank()`（CrossEncoder 双模型）与 `answer_gate`（NLI 批量）调用。
+  ○ ★ time-based 窗口（10–20ms）、跨请求聚合、BLIP 异步队列批处理、独立 CUDA Stream——
+    **均未实现**。跨请求路径需显式调用 `submit_batch()`，主链路不调用。
 5.2 KV Cache 资源精细化估算与 Admission Control（系统级并发准入）
 5.2.1 设计原则
 系统引入 KV-aware admission control，将并发从“请求级并发控制”升级为 “token-level KV budget scheduling”，确保在 vLLM continuous batching 下 GPU KV cache 使用率稳定在安全阈值以内，避免 OOM 风险。核心修正点：
@@ -317,11 +387,16 @@ vLLM 的 continuous batching 使 KV Cache 不是按请求分配，而是按 toke
 新增 KV Pressure Monitor，实时计算：
 KV_Pressure = current_used_kv / max_kv_capacity
 触发策略：
-KV Pressure	行为
-> 0.7	令牌桶收紧，请求排队
-> 0.8	降低 max_tokens（应用层流式截断），P0 法规从 1024 → 512 等
-> 0.9	停止接入新请求（soft admission stop），已接入请求继续执行
-> 0.95	强制降级模型：P1/P2 从 14B 切换至 4B；若压力持续，P0 亦降级并收缩输出长度
+KV Pressure	行为	代码常量
+（更早）	令牌桶收紧，请求排队	`threshold_tighten`
+> 0.80	应用层流式截断（**不改** `max_tokens`），P0 法规收缩输出	`THRESHOLD_TRUNCATE = 0.80`
+> 0.90	soft stop：P1 降级至 4B、P2 丢弃	`THRESHOLD_SOFT_STOP = 0.90`
+> 0.95	极端过载：按优先级分别拒收 / 排队 / 降级	`THRESHOLD_CRITICAL = 0.95`
+
+> **已按实现更正**：本节最初写的是 0.7 / 0.8 / 0.9 / 0.95。`admission/kv_admission.py` 实际的
+> `THRESHOLD_TRUNCATE` 是 **0.80**、`THRESHOLD_SOFT_STOP` 是 **0.90**、`THRESHOLD_CRITICAL` 是
+> **0.95**，且降级顺序为「截断 → 降级 → 拒收」，与上表一致。这些数字仍是 `DESIGN_TARGET`：
+> 它们是配置默认值，从未在真实 GPU 负载下调优过。
 当 KV 预算不足时的优先级降级顺序：
 1. reject low priority request (P2)
 2. truncate output tokens
@@ -342,8 +417,9 @@ vLLM 的 continuous batching 使 KV Cache 不是按请求分配，而是按 toke
 6. 多模态能力
 ● 支持范围：仅限离线已向量化图像，不支持用户实时上传图片在线解析。
 ● 默认路径：CLIP 向量（视觉相似）+ OCR 文本向量（语义）。
-● 按需 BLIP：Rule（关键词规则）+ BERT 意图分类双路决策触发，触发率 <5%，结果缓存 TTL 1h，GPU 批处理延迟 ≤120ms（原 CPU 单条 ≥250ms）。
-● 加权 RRF 融合：权重由 is_visual_relevant 和 business_type 动态决定（视觉相关度高时 CLIP 权重提升至 2.0，法规查询 ES 权重 1.5），具体权重值通过离线点击日志与相关性标注学习得到，并定期更新。
+● 按需 BLIP：**三路**决策取最大触发——关键词规则 + BERT 意图分类 + 是否命中图像结果（`models/blip_service.py`：`max(keyword_rule_score, bert_classifier_score, has_image_hit)`，阈值取 `gpu1.models.blip.trigger_threshold`，默认 0.3）；结果缓存 TTL 1h。GPU 批处理延迟 ≤120ms 是**设计目标**。
+  > 本节原写“**双路**决策触发，触发率 <5%”。代码是三路，模块文档记录的触发率是 **~15%**；两者都与本文不符，已按实现更正。触发率本身是设计估计，不是实测分布。
+● 加权 RRF 融合：权重由 is_visual_relevant 和 business_type 动态决定（视觉相关度高时 CLIP 权重提升，法规查询提高 BM25 权重），具体数值取自 `config.json`。★ 「通过离线点击日志与相关性标注学习并定期更新」**未实现**，见 §12.2。
 ● 资源访问安全：检索返回 doc_id，前端请求 /api/media/{doc_id} 获取 MinIO 临时签名 URL（60s 有效期），端点内执行权限重校验。
 7. 检索与排序（重构：鲁棒多路召回与证据投票机制 + GPU 批处理化）
 7.1 并行多路召回与权限过滤（消除三段式递归）
@@ -364,32 +440,35 @@ ES Fallback 与稀疏权限兜底：
 Union Recall Set = R_bge ∪ R_bm25 ∪ R_clip ∪ R_rewrite
 对 Union Set 进行简单的 doc_id 去重与分数归一化，统一进入 Rerank 层。
 7.2 检索一致性评分（解决 Recall 不稳定核心）
-新增关键指标 Retrieval Agreement Score，衡量不同召回源是否“指向同一语义簇”，防止召回漂移导致 CrossEncoder 被噪声误导。
+【状态：`CURRENT`（已实现并接入 Evidence Gate）+ `DESIGN_TARGET`（阈值调优与告警未实现）】
+关键指标 Retrieval Agreement Score 已实现：`retrieval/parallel_recall.py::_compute_agreement_score` 用 MiniBatchKMeans 聚类熵（权重 0.7）与各路 Top-K 的 Jaccard 重合度（权重 0.3）混合，并由 `core/pipeline.py` 传入 Evidence Gate 作为 w3 因子。
+> **边界**：聚类使用的是 `[score, hash(doc_id)%1000/1000]` **代理向量**，不是真实文档向量。因此它只能说明「各召回源是否指向同一簇」，**不能**说明簇内语义质量。
 ● 计算逻辑：对召回集合中的文档向量进行聚类（如 MiniBatchKMeans），计算簇内熵值或主要簇的占比。
 ● 作用：
   ○ 若 Agreement 低（召回分散），后续 Evidence Gate 将提升置信度阈值要求。
   ○ 触发告警：提示检索阶段可能存在意图模糊或知识库覆盖不足。
 实体识别评估闭环（补充统计验证）：
 系统虽不依赖显式 NER 组件，但通过 Query Rewrite 的 standardized_entities 字段实现实体级控制。为保证召回稳定性，引入离线评估机制：
-● 每月在标注语料库（含成分名、法规条款号、INCI 名称等）上计算实体召回 Recall@K 与 F1 分数。
-● 评估结果用于调整 Rewrite Prompt 模板、检索权重以及 RRF 融合系数，确保实体级召回能力可量化、可优化。
+● ★ **未实现**：每月在标注语料库上计算实体召回 Recall@K 与 F1，并用结果调整 Prompt、检索权重与 RRF 系数。
+  仓库中既没有该标注语料库，也没有这条月度评估的调度；`standardized_entities` 目前只是 Rewrite 输出的
+  一个字段。检索 benchmark 的 `Recall@1/3/5/10` 是**框架**（`benchmarks/`），结果为 `PENDING`。
 7.3 两阶段 Rerank（GPU 批处理化重构）
 Stage 1：BiEncoder（宽保留策略，GPU Batch）
 ● 输入：Union Recall Set（去重后约 150~200 条候选）
 ● 行为：从各路召回 Top100 中，合并保留 Top 150 条（而非粗暴截断至 40）。
 ● 目标：保证关键证据不会在早期被过滤，为后续投票留出冗余空间。
-● 执行方式：GPU1 上的 BiEncoder Batch Service，将多个请求的候选文档合并为 batch 进行编码，单请求等效延迟 P99 ≤ 60ms（原 CPU 串行 180ms）。
+● 执行方式：请求内批量编码（`retrieval/bi_encoder.py`，默认保留 Top 150）。
+  *设计目标*：GPU1 上的 BiEncoder Batch Service 跨请求合并候选，单请求等效延迟 P99 ≤ 60ms（原 CPU 串行 180ms）——**未实现，未实测**。
 Stage 2：CrossEncoder Ensemble（GPU 微批聚合，消除单点性能瓶颈）
 ● 引入双模型轻量 Ensemble：
   ○ CE-A：法律/成分调优版 CrossEncoder
   ○ CE-B：通用语义 CrossEncoder
-● 批处理架构（核心修正）：
-  ○ 引入 Rerank Batch Aggregator，位于 GPU1，聚合跨请求的 (query, doc) pair。
-  ○ 聚合策略：
-    ■ time-based batching：10–20ms 窗口
-    ■ size-based batching：max 64 pairs per batch（动态填充）
-  ○ 单 pair 等效计算成本由 200–400ms（CPU）降低至 1–3ms（GPU 批处理分摊）。
-  ○ 整体 Stage 2 端到端延迟（含排队聚合）P99 ≤ 60ms。
+● 批处理架构：
+  ○ 【已实现】`retrieval/rerank_batch_aggregator.py`，由 `cross_encoder_ensemble.rerank()` 调用，
+    按 `max_batch_size` 分块做 **请求内同步** 批量预测，并记录填充率与排队延迟统计。
+  ○ 【未接入主链路】跨请求 micro-batching：需显式调用 `submit_batch()`，当前在线路径不调用。
+    因此**不得**声称「当前主链路已完成跨请求动态微批」。
+  ○ *设计目标*：time-based 10–20ms 窗口、单 pair 200–400ms → 1–3ms、Stage 2 P99 ≤ 60ms——**未实现，未实测**。
 ● 计算逻辑：CE_score = avg(CE_A(doc), CE_B(doc))
 ● 输出：Top 10 文档及其经 Platt Scaling 校准的概率分数。
 7.4 Evidence Ensemble Gate（从单点判决到置信投票）
@@ -409,18 +488,21 @@ Evidence Score	行为
 ≥ 0.75	放行：高置信，直接进入 LLM 生成
 0.55 – 0.75	多证据增强生成：Prompt 中强制注入 Top3 文档摘要并要求 LLM 对比回答
 < 0.55	拒答：返回 200 OK 并给出引导性拒答（“无法确认，请补充信息”），与 HTTP 503 严格区分
-权重学习闭环：Evidence Score 中的权重 w1~w4 通过离线日志学习得到，优化目标为最大化人工标注的“回答可用性”与“点击率”的相关性，每周更新一次。
+权重学习闭环：Evidence Score 的权重 w1~w4 取自 `config.json`，是**手工设定的设计值**。
+> ★ 通过离线日志学习、优化「回答可用性 × 点击率」相关性并每周更新——**未实现**，见 §12.2。
+> Evidence Gate 的阈值同样未经真实标注数据调优，属 `DESIGN_TARGET`。
 8. Fail‑safe 机制
 ● Evidence Ensemble Gate：如上所述，从单一分数判断升级为多因素投票。
 ● Answer Gate：NLI 模型校验 Answer 与 Top1 Doc 的蕴含关系（GPU 批处理，延迟 ≤25ms）。contradiction>0.5 则标记警告，法规类强制拒答。
 ● 降级与熔断区分：系统仅在基础设施故障（如 Redis 连接断开、Qdrant 超时）或极端过载（详见第 9 节）时返回 HTTP 503。业务逻辑（如 Rewrite 失败、证据不足）一律返回 HTTP 200 并附带结构化拒答理由，确保 API 契约稳定。
 9. 弹性降级与限流
 ● 令牌桶限流（Redis-State）：法规 60%、研发 30%、闲聊 10%。
-● KV Cache 感知渐进降级（与第 5.2.5 节联动，阈值统一为 70/80/90/95%）：
-  ○ 70%：令牌桶收紧，请求排队
-  ○ 80%：应用层流式截断（采样参数不变），P0 法规从 1024 截断至 512 等
-  ○ 90%：P0 保持 14B，P1 降级至 4B，P2 丢弃
-  ○ 95%（极端过载）：P0 保留降级后执行（如从 14B 降至 4B 并收缩 Token），P1 限流排队，P2 返回 503（服务繁忙稍后重试）。注意：此处 503 是系统级过载保护，与业务逻辑中的”法规请求失败”无关，法规核心场景在业务层已通过兜底策略保证可用性。
+● KV Cache 感知渐进降级（与第 5.2.5 节联动，阈值以 `admission/kv_admission.py` 的常量为准）：
+  ○ `threshold_tighten`：令牌桶收紧，请求排队
+  ○ `THRESHOLD_TRUNCATE`（0.80）：应用层流式截断（采样参数不变），P0 法规收缩输出
+  ○ `THRESHOLD_SOFT_STOP`（0.90）：P0 保持 14B，P1 降级至 4B，P2 丢弃
+  ○ `THRESHOLD_CRITICAL`（0.95，极度过载）：按优先级分别拒收 / 排队 / 降级收缩，P2 返回 503（服务繁忙稍后重试）。注意：此处 503 是系统级过载保护，与业务逻辑中的“法规请求失败”无关，法规核心场景在业务层已通过兜底策略保证可用性。
+  > 本节原写“阈值统一为 70/80/90/95%”，与实现不符，已按代码常量更正（0.80 / 0.90 / 0.95）。
 ● Prefix Caching 保护：降级时不修改 max_tokens 参数，避免缓存键哈希变更引发 Prefill 风暴。
 10. 缓存体系（核心重构：权限原子化与版本分区）
 10.1 设计原则：Cache Key 与权限约束原子绑定
@@ -435,11 +517,12 @@ cache_key = hash(
     role_mask +                  # 权限进入 key 空间
     dept_mask
 )
-● embedding_version：BGE/CLIP 模型 git commit SHA，确保模型更新后旧缓存自然失效。
-● prompt_version：由 Prompt Registry 管理的版本号，修改 Prompt 后自动递增。
+● embedding_version：BGE/CLIP 模型版本标识（`embedding.*.model_revision`），确保模型更新后旧缓存自然失效。
+● prompt_version：来自 `generation.prompt_version`（默认 `v2.1`），参与缓存键计算。★ 原文写的「由 Prompt Registry 管理、修改后自动递增」**未实现**：版本由配置文件声明，更新需人工改配置。
 ● schema_version：与 API 响应结构强绑定，结构变更时缓存隔离。
 ● 权限掩码直接参与 Key 计算，相同 query 对不同用户产生不同缓存分区。
-● knowledge_version_epoch 采用每日滚动的版本号（如 20260411），文档发布/过期仅需更新全局 epoch，旧版本缓存自然失效（Lazy GC），避免单文档过期引发缓存失效风暴。
+● knowledge_version_epoch 是配置中的单一知识版本标识，文档发布/封存后由**人工**切换；旧 epoch 的缓存不再被访问，由 Redis LRU 自然淘汰。
+  ★ 「每日滚动的版本号（如 20260411）」与「自动更新全局 epoch」是历史/目标设计，**未实现**（见 §3.6 / §10.5）。
 10.3 缓存分层设计（职责分离）
 缓存层级	Key 组成	服务范围	命中语义
 L1 Public Cache	query_hash + version + role_bucket (public only)	仅存储 role_mask=0 且 dept_mask=0 的全公开文档回答	命中即表示权限通过且内容最新
@@ -467,26 +550,32 @@ L2 Private Cache	query_hash + version + role_mask + dept_mask	存储特定权限
 12. 可观测性与数据闭环
 ● 【当前实现】全链路追踪钩子接入在线主链路，走 OpenTelemetry SDK TracerProvider；span 导出为可选 OTLP 路径（`monitoring/otel_exporter.py`），默认关闭。
 ● 【历史/目标设计】原「OpenTelemetry + Jaeger」表述对应 Jaeger thrift agent 路径，该配置已从仓库移除且从未有 canonical 消费者。OTel SDK 已不再附带 Jaeger exporter，当前实现走 OTLP；collector/后端/可查询 span 的闭环仍为 `PENDING`，本仓库没有任何 span 被后端查询到。
-● 关键监控指标：
-  ○ L1/L2 命中率（按权限分区统计）
-  ○ Rewrite 延迟/成功率
-  ○ BLIP 触发率
-  ○ CLIP 同步超时率与异步补充命中率（替换原 CLIP 缓存命中率）
-  ○ Evidence Ensemble Gate 分数分布与各子项权重贡献
+● **【当前实现】真实存在的指标**（`monitoring/otel_tracer.py::MetricsCollector`，由 `/api/metrics` 暴露）：
+  ○ `rag_http_requests`、`rag_http_responses_2xx/_4xx/_5xx`、`rag_http_rate_limited`
+  ○ `rag_http_active_requests`
+  ○ `rag_http_request_duration_seconds{quantile=...}` + `_count`（summary）
+  ○ `rag_cache_hit_L1` / `rag_cache_hit_L2` / `rag_cache_total`（原始计数器，**没有** 命中率 series）
+  ○ `rag_rewrite_fallback`
+  ○ `rag_redis_degraded_mode`、`rag_redis_degraded_events`
+  ○ `rag_otel_exporter_enabled`、`rag_uptime_seconds`
+  比率为派生量，需用已 emit 的计数器做 PromQL ratio，或读 `/api/stats` 的计算字段。
+  `6` 条告警规则（`monitoring/prometheus/alerts.yml`）与 `10` 面板 Grafana JSON 只引用上述真实 series。
+● **【设计目标】本节最初列出的下列指标没有实现**，仓库里不存在对应 series，不得据此排障：
+  ○ L1/L2 **命中率**（只有原始计数器）
+  ○ BLIP 触发率、CLIP 同步超时率与异步补充命中率
+  ○ Evidence Gate 分数分布与子项权重贡献
   ○ Retrieval Agreement Score 分布
   ○ NLI 矛盾比例
-  ○ KV Cache 占用率（区分 Shared KV 与 Per-request KV，见下方 KV Cache 分类）
-  ○ KV Pressure 实时值（新增）
-  ○ 有效并发数（动态值）与 max_num_seqs（新增）
-  ○ Admission Control 拒绝/排队次数（新增）
+  ○ KV Cache 占用率（Shared / Per-request 分类，见 §12.1）
+  ○ **有效并发数与 max_num_seqs**
+  ○ Admission Control 拒绝 / 排队次数
   ○ 降级触发次数
   ○ Prefix Caching 命中率
-  ○ Redis 降级模式状态
-  ○ Cache 版本切换次数（新增）
-  ○ Rerank Batch Aggregator 指标（新增）：
-    ■ Batch 填充率（avg batch size / max batch size）
-    ■ 批处理排队延迟（P50/P99）
-    ■ CrossEncoder/NLI/BiEncoder GPU 利用率
+  ○ Cache 版本切换次数
+  ○ Rerank Batch Aggregator 的 Batch 填充率、排队延迟 P50/P99、GPU 利用率
+  > 其中 `kv_pressure` 在 `/api/stats` 作为计算字段存在，但没有 Prometheus series，也没有对应告警。
+  > `monitoring/otel_tracer.py` 里的 `AlertingManager` 是一个更早的进程内阈值引擎，**未接入**
+  > canonical 请求路径；喂它的 `config.json` → `alerting.rules` 配置块已移除。它不是告警契约。
 ● 告警：BLIP 触发率 >10%、缓存校验失败突增、KV Cache 持续 >85%、KV Pressure >0.9 持续 30s、Prefix Caching 命中率突降 >50%、Redis 降级持续 >5 分钟、L1/L2 命中率突降 >30%、Rerank Batch 排队延迟 >50ms 等。
 12.1 KV Cache 分类与监控
 vLLM Prefix Caching 按共享特性分为三类：
@@ -497,27 +586,43 @@ KV Pressure 实时监控（与第 5.2.5 节联动）：
 KV_Pressure = current_used_kv / max_kv_capacity
 该指标驱动 Admission Control 与降级决策，是系统稳定性的核心仪表盘。
 12.2 离线反馈闭环（数据驱动优化）
-系统规则与权重的演进依赖以下闭环机制，确保“可学习、可验证”：
+> **状态：`CURRENT`（机制骨架已实现）+ `DESIGN_TARGET`（全部自动学习未运行）。**
+> 本节描述的是一个**目标态闭环**。仓库里存在 A/B 平台代码（`common/ab_testing.py`，已接入
+> `core/pipeline.py`）、反馈 review 门控（`offline/feedback_loop.py`，只有 `accepted` 记录进入
+> 训练导出）和回归候选人工审批；但**没有任何一条自动学习闭环在运行**，也没有配置过任何实验。
+> 下面每一条带 ★ 的都是**尚未实现**的设计，不得引用为「系统会每周自动优化」。
+
 ● 日志采集：记录每次请求的 query、检索 doc_id 列表、Rerank 分数、最终 answer、用户行为信号（点击“有帮助”/追问/复制答案）。
+  ——**已实现**（结构化审计 + 指标端点；不含原文级别的全量行为日志）。
 ● 标注与评估：
-  ○ 每周采样 500 条日志进行人工标注（回答正确性、完整性、证据充分性）。
-  ○ 离线评估集包含 2000 条标注样本，覆盖成分识别、法规问答、图像检索等场景。
+  ○ ★ 每周采样 500 条日志进行人工标注（回答正确性、完整性、证据充分性）——**未实现，无调度**。
+  ○ ★ 离线评估集包含 2000 条标注样本——**未实现**。当前唯一评测数据是
+    `tests/evaluation/golden_set.jsonl`（301 条，格式校验，非人工标注质量集）。
 ● 参数更新：
-  ○ RRF 融合权重（w_text/w_clip/w_ocr）基于点击率与人工标注相关性进行贝叶斯优化，每周更新。
-  ○ Evidence Gate 阈值与权重通过 ROC 曲线调整，以最大化 F2 分数（侧重召回）。
-  ○ Rewrite Prompt 模板根据意图识别准确率（vs 人工标注）进行 A/B 测试迭代。
-  ○ Rerank Batch 聚合参数（窗口时间、max batch size）基于 GPU 利用率和排队延迟进行动态调优。
-● A/B 实验平台：关键策略变更（如权重调整、阈值修改）需经过 1 周 A/B 实验，对比核心指标（回答有用率、拒答率、延迟）后全量发布。
+  ○ ★ RRF 融合权重（w_text/w_clip/w_ocr）基于点击率与人工标注相关性进行贝叶斯优化，每周更新
+    ——**未实现**。权重初值与现值均来自 `config.json`，代码中没有权重学习逻辑。
+  ○ ★ Evidence Gate 阈值与权重通过 ROC 曲线调整，以最大化 F2 分数——**未实现**。
+  ○ ★ Rewrite Prompt 模板根据意图识别准确率进行 A/B 测试迭代——**未实现**。版本机制存在
+    （`rewrite/feedback.py` 的 prompt 版本目录 + `generation.prompt_version`），但没有自动迭代。
+  ○ ★ Rerank Batch 聚合参数基于 GPU 利用率和排队延迟进行动态调优——**未实现**。
+● A/B 实验平台：`common/ab_testing.py` 的分流、权重/阈值覆盖与指标记录**已实现并接入主链路**，
+  但**未配置任何实验、未运行过一轮**。★「关键策略变更需经 1 周 A/B 实验后全量发布」是流程设计，
+  不是已运行的发布机制。
 13. API 服务拆分
-● /rewrite：输入原始 query，输出标准化 JSON（含 business_type/intent），P99≤45ms，max_tokens=192。
-● /generate：接收 rewrite 结果，执行完整 RAG 流程生成答案，P99≤3.0s。
+【状态：`HISTORICAL_DESIGN`】当前 canonical 主线是 FastAPI 单体（`app.py`），没有 `/rewrite`、
+`/generate` 这两个对外端点；相关逻辑位于 `rewrite/`、`router/` 内部组件中。
+● /rewrite（设计）：输入原始 query，输出标准化 JSON（含 business_type/intent），
+  **P99 ≤ 45ms（`DESIGN_TARGET`，从未实测）**，max_tokens=192。
+● /generate（设计）：接收 rewrite 结果，执行完整 RAG 流程生成答案，
+  **P99 ≤ 3.0s（`DESIGN_TARGET`，从未实测）**。
 核心设计价值总结
 1. Query Rewrite 定位为“路由增强器”而非核心强依赖，失败时降级为规则兜底，消除 503 单点风险。
 2. 无状态轻量路由 + 交给 vLLM 原生 continuous batching（历史设计为双 vLLM 实例；当前实现为单一共享 4B 端点 + 14B），废除外部优先级队列调度，消除双层调度冲突与批次碎片问题。
 3. CLIP 判别式同步路由 + 异步补充，确保多模态召回在首轮生效，同时控制延迟且实现有效预热。
 4. Bitmask 权限前置下推 + 缓存 Key 原子绑定，将权限从运行时过滤上升为索引约束与缓存分区依据，O(1) 复杂度，消除 cache hit ≠ effective hit 的一致性问题。
 5. 文档版本 epoch 化管理，用版本切换替代实时 expiry 判断与缓存主动删除，彻底避免缓存失效风暴。
-6. 加权 RRF 动态权重基于离线日志学习与 A/B 实验校准，解决多模态融合的“暴力平均”问题，权重随检索价值自适应。
+6. 加权 RRF 按查询类型施加静态权重（法规提高 BM25、视觉提高 CLIP），避免多模态融合的“暴力平均”。
+   *设计目标*：权重进一步由离线日志学习与 A/B 实验校准——**该学习环节未实现**，见 §12.2。
 7. 上下文重建 + 约束式完整生成取代传统续写，从根本上保证长文本语义一致性，杜绝重复、逻辑断裂与前后矛盾。
 8. KV-aware Admission Control + Token-Level 并发控制，将系统并发从静态配置升级为动态 KV 预算调度，构建统一的吞吐模型（QPS ≈ 有效并发 / 延迟），消除原指标不自洽问题，确保在 vLLM continuous batching 下 GPU KV Cache 利用率稳定在安全阈值内，从根本上消除 OOM 风险。
   ○ KV Cache 建模从“MB/token 常数”升级为“基于层数/GQA 的结构化估算”。
@@ -534,4 +639,8 @@ KV_Pressure = current_used_kv / max_kv_capacity
   ○ 目标是在 GPU1 批处理 CrossEncoder、NLI、BiEncoder、CLIP Text Encoder、BLIP，并用 Rerank Batch Aggregator 聚合微批。200–400ms、30–60ms 和 QPS 改善均为设计估值，不代表当前生产实测。
   ○ CPU 回归轻量逻辑层（routing/feature assembly/metadata filter/cache lookup），系统从“GPU 闲置 + CPU 爆炸”的反模式转变为“GPU 计算 + CPU 编排”的最佳实践。
   ○ 批处理参数（窗口时间、batch size）纳入离线反馈闭环，实现数据驱动的持续优化。
-14. 数据驱动闭环：所有关键策略（RRF 权重、Evidence Gate 阈值、Rewrite Prompt、Rerank Batch 参数）均通过日志采集、人工标注、离线评估与 A/B 实验进行迭代优化，系统从“规则完备”升级为“规则 + 统计反馈 + 可校准参数的检索学习系统”。
+14. 数据驱动闭环（**设计目标**）：目标形态是「规则 + 统计反馈 + 可校准参数」。
+    当前状态：机制骨架存在（A/B 分流已接入主链路、反馈 review 门控、回归候选人工审批、
+    prompt 版本管理），但**没有任何一条自动学习闭环在运行**，也没有配置过任何实验。
+    权重与阈值目前由 `config.json` 决定。因此本系统当前是「规则完备 + 可校准参数」，
+    **不是**「可自学习系统」。逐条边界见 §12.2。
