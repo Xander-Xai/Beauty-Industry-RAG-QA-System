@@ -1,14 +1,23 @@
 """
 并行多路召回管理器（readme 7.1 节）
 
-设计：并行 4 路召回 + 冗余覆盖，消除延迟翻倍问题
-1. Dense 语义路：BGE (Qdrant text_768)
-2. 关键词精确路：BM25 (ES)
-3. 视觉语义路：CLIP (Qdrant image_512，受判别路由控制)
-4. 改写泛化路：Query Rewrite 变体 Query 的 Dense 检索
+设计：动态 2–4 路召回 + 冗余覆盖，消除延迟翻倍问题。四条可选通道分别是：
+1. Dense 语义路：BGE (Qdrant text_768) —— 所有问题
+2. 关键词精确路：BM25 (ES) —— 所有问题
+3. 视觉语义路：CLIP (Qdrant image_512，受判别路由控制) —— 仅复杂且视觉相关
+4. 改写泛化路：Query Rewrite 变体 Query 的 Dense 检索 —— 仅复杂问题
+
+简单问题只跑 1+2 两路；复杂问题加第 4 路；复杂且视觉相关再加第 3 路。
+在线主链路（core/pipeline.py）因此是动态 2–4 路。实际启用哪些通道由调用方本次传入的
+top_k_per_path 决定：省略的通道即本次禁用，传 None 表示使用 config.json 的完整拓扑。
+本管理器本身不保证路数下界——直接调用 execute() 可以传任意子集或空映射。
+
+ES Fallback 是一次降级补召回，不是新的一路：它在 RRF 之后直接追加到 all_results，
+不进入 path_results，因此既不参与融合也不计入路数。其触发条件**只有**融合后有效文档数
+< 50 这一个；Qdrant 路径异常（qdrant_failed）只记一条 warning，不会独立触发 fallback。
 
 权限过滤在 Python 层执行（Qdrant pre-filter 处理状态+版本过滤）。
-RBAC 位掩码过滤在召回后通过 is_allowed() 二次校验。
+RBAC 位掩码过滤在召回后通过 is_allowed() 二次校验，并在融合与 fallback 之后再兜底一次。
 """
 
 from __future__ import annotations
@@ -32,8 +41,9 @@ class ParallelRecallManager:
     """
     并行多路召回管理器
 
-    并行执行 4 路召回，每路独立配置 top_k，
-    输出 Union Recall Set，后续去冗归一化后进入 Rerank 层。
+    并行执行本次请求 top_k_per_path 中启用（或在完整拓扑下默认启用）的通道，
+    每路独立配置 top_k，输出 Union Recall Set，后续去冗归一化后进入 Rerank 层。
+    在线主链路（core/pipeline.py）启用 2–4 路；本管理器不强制这个区间。
     """
 
     def __init__(self):
@@ -209,7 +219,11 @@ class ParallelRecallManager:
         # 计算 Retrieval Agreement Score（PRD §7.2）
         agreement_score = self._compute_agreement_score(path_results)
 
-        # ES Fallback — Qdrant 路径异常或召回不足时触发
+        # ES Fallback — degraded supplementary recall, not a fifth path. It is
+        # appended to all_results after RRF and never enters path_results, so it
+        # neither participates in fusion nor counts as a recall path. Only the
+        # `len(all_doc_ids) < 50` condition below actually runs it; `qdrant_failed`
+        # is diagnostic only and does not independently trigger the fallback.
         all_doc_ids = {r.doc_id for r in all_results}
         qdrant_paths = {"dense_bge", "clip_visual", "rewrite_variants"}
         qdrant_failed = any(
