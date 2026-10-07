@@ -279,9 +279,11 @@ Changes present on `main` after the 2.3.0 release entry:
   and the generated-artifact rules state what they actually exclude.
 - `docs/evidence-map.md` gained a row for the six retained microservice
   directories, graded `REPO_VERIFIED` (components exist) / `PENDING` (integrated
-  deployment). They were described as components rather than a canonical runtime
-  in `README.md` and `docs/architecture-baseline.md`, but had no row in the
-  authoritative evidence table. No evidence level was promoted.
+  deployment), in both the capability self-verification index and the
+  authoritative capability evidence table. They were described as components
+  rather than a canonical runtime in `README.md` and
+  `docs/architecture-baseline.md`, but had no row in either evidence table. No
+  evidence level was promoted.
 
 ### Security
 
