@@ -1,8 +1,8 @@
-# 药妆助手面试架构唯一事实基线
+# 药妆助手架构唯一事实基线
 
 更新时间：2026-10-07（canonical 架构图收敛到本文件；README 仅保留第一屏简化视图）
 
-本文件是“整体架构”“几路召回”“如何重排”“如何控制幻觉”等面试问题的唯一事实基线。README、PRD、代码注释和历史面试稿发生冲突时，以当前主链路代码、配置和架构契约测试为准。
+本文件是“整体架构”“几路召回”“如何重排”“如何控制幻觉”等架构问题的唯一事实基线。README、PRD、代码注释和历史表述稿发生冲突时，以当前主链路代码、配置和架构契约测试为准。
 
 ## 一句话结论
 
@@ -16,10 +16,10 @@ ES Fallback 不算第五路。它是 Qdrant 异常或有效文档不足时使用
 
 ## 事实等级
 
-本节的等级就是 [Interview evidence map → Classification vocabulary](evidence-map.md#classification-vocabulary)
-中的 canonical evidence vocabulary，本文件不另立一套状态词。下面只补充每个等级在当前主链路里的面试表述。
+本节的等级就是 [Evidence map → Classification vocabulary](evidence-map.md#classification-vocabulary)
+中的 canonical evidence vocabulary，本文件不另立一套状态词。下面只补充每个等级在当前主链路里的表述口径。
 
-| 等级 | 在当前主链路中的含义 | 面试表述 |
+| 等级 | 在当前主链路中的含义 | 表述口径 |
 |---|---|---|
 | `REPO_VERIFIED` | 已接入 `app.py -> api/routes.py -> core/pipeline.py`，有实现和契约测试 | 可以说“当前系统采用” |
 | `REPO_VERIFIED`（实现）/ `PENDING`（真实资产） | 有实现和契约测试，但需要真实基础设施、模型权重进一步验收 | 可以说“系统已实现，生产效果需部署验收” |
@@ -120,7 +120,7 @@ BLIP 不应描述为固定的离线建库步骤。当前主链路是在视觉查
 
 ## 重排、证据门控与生成
 
-RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精排到 Top 10。当前在线调用使用请求内批量预测；跨请求异步聚合接口虽然存在，但没有接入这条主调用，因此面试时不要说“当前主链路已经完成跨请求动态微批”。
+RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精排到 Top 10。当前在线调用使用请求内批量预测；跨请求异步聚合接口虽然存在，但没有接入这条主调用，因此不要声称“当前主链路已经完成跨请求动态微批”。
 
 生成前的 Evidence Gate 综合以下四项：
 
@@ -147,7 +147,7 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 
 ## 可观测性与评测边界
 
-面试时最重要的一句区分：**「实现了」不等于「生产验证过」**。下面按 canonical 证据等级分层，不要跨层表述。
+最重要的一句区分：**「实现了」不等于「生产验证过」**。下面按 canonical 证据等级分层，不要跨层表述。
 
 ### REPO_VERIFIED（本仓库代码 + 确定性测试覆盖）
 
@@ -207,7 +207,7 @@ RRF 后先由 BiEncoder 宽保留 Top 150，再由两个 CrossEncoder 集成精�
 - **正式告警契约**：`monitoring/prometheus/alerts.yml`，由外部 Prometheus 加载评估。
 - **`monitoring/otel_tracer.py::AlertingManager`**：更早的进程内阈值引擎，**没有**接入
   canonical 请求路径，`config.json` 里喂它的 `alerting.rules` 配置块也已移除。它是遗留代码，
-  不是 Prometheus 规则的一部分，面试时不要提。
+  不是 Prometheus 规则的一部分，不要把它当作告警机制。
 
 ### 评测
 
@@ -216,9 +216,9 @@ RAGAS harness / reporter / validator 与 Golden Set 已存在：最初 seed 27 �
 
 RAGAS 是隔离的可选 evaluator，不在默认依赖中。库级 `evaluate()` 保留 evaluator-unavailable fallback（该结果不是质量结果）；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast**：返回非零状态且不生成任何 quality report。当前没有经过验证的真实 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
 
-## Q12 标准回答
+## 标准架构说明
 
-我会把药妆助手概括为一套多模态知识底座、离线知识构建和在线 RAG 问答两条核心链路，再加上权限、安全与可观测性保障。
+本项目可以概括为一套多模态知识底座、离线知识构建和在线 RAG 问答两条核心链路，再加上权限、安全与可观测性保障。
 
 离线侧负责解析、清洗和切分法规、配方、原料、产品文档，并为图片执行 OCR 和 CLIP 向量化。BGE 文本向量与 CLIP 图像向量写入 Qdrant，文本同步写入 Elasticsearch 支持 BM25；每个知识块都带来源、状态、知识版本以及角色和部门权限掩码，调度器通过文件状态和内容哈希支持增量更新。BLIP 是在线视觉结果命中后的按需增强，不是固定离线步骤。
 
@@ -228,7 +228,7 @@ RAGAS 是隔离的可选 evaluator，不在默认依赖中。库级 `evaluate()`
 
 生成层使用单一共享 4B vLLM 端点处理 Query Rewrite 与简单生成，复杂请求路由到 Qwen3-14B，并结合 KV 压力做截断、降级或拒绝。
 
-工程侧我分三层说，因为这三层的证据强度不一样。**已实现并有测试覆盖**的是：指标端点、结构化业务动作审计、性能产物契约、Prometheus 告警规则、Grafana 仪表盘 JSON、SLO 与故障 Runbook，以及一个默认关闭的 OTLP exporter。**在本地真实依赖上验证过**的只有 Redis 多进程、nginx 代理信任、认证 Elasticsearch 和认证 Prometheus 抓取。**还没有证据**的是：真实性能数字、告警在生产触发、Grafana 面板被真实数据填充，以及 exporter 到 collector 到后端再查到 span 的完整闭环——这个闭环我一次都没跑通过，所以只能说 exporter 已实现，不能说 tracing 已闭环。另外 `config.json` 里的延迟和 QPS 目标值是设计目标，不是实测。
+工程侧分三层，因为这三层的证据强度不一样。**已实现并有测试覆盖**的是：指标端点、结构化业务动作审计、性能产物契约、Prometheus 告警规则、Grafana 仪表盘 JSON、SLO 与故障 Runbook，以及一个默认关闭的 OTLP exporter。**在本地真实依赖上验证过**的只有 Redis 多进程、nginx 代理信任、认证 Elasticsearch 和认证 Prometheus 抓取。**还没有证据**的是：真实性能数字、告警在生产触发、Grafana 面板被真实数据填充，以及 exporter 到 collector 到后端再查到 span 的完整闭环——这个闭环一次都没跑通过，所以只能说 exporter 已实现，不能说 tracing 已闭环。另外 `config.json` 里的延迟和 QPS 目标值是设计目标，不是实测。
 
 一句话总结：这是一套以 Qdrant 和 Elasticsearch 为多模态知识底座、以动态 2 至 4 路召回和两级重排保障检索质量、以双层 Gate 和 RBAC保障可信与权限安全的企业内部 RAG 系统；运维证据闭环已经建好，但真实运行数据还需要在部署环境补齐。
 
@@ -242,4 +242,4 @@ python3 -m tests.evaluation.validate_golden_set \
   --dataset tests/evaluation/golden_set.jsonl
 ```
 
-面试稿只从本文件复制。新增能力必须先接入当前主链路并补充契约测试，再把表述从“支持”升级为“当前采用”。
+表述稿只从本文件复制。新增能力必须先接入当前主链路并补充契约测试，再把表述从“支持”升级为“当前采用”。
