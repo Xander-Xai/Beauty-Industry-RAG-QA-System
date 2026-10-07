@@ -14,8 +14,8 @@ added. It does not flag historical CHANGELOG text or historical implementation
 plans.
 
 It also enforces one evidence vocabulary. ``docs/evidence-map.md``
-owns the canonical taxonomy, and every current interview-facing or
-repository-truth document must classify its claims with those levels and no
+owns the canonical taxonomy, and every current repository-truth document must
+classify its claims with those levels and no
 others; the docs index inventory must equal that taxonomy exactly. A retired
 status word such as ``VERIFIED`` or ``PARTIAL`` is not a level, and a run
 outcome such as ``BLOCKED`` does not satisfy a classification. The legal levels
@@ -1847,7 +1847,7 @@ def check_exporter_truth_contract(errors: list[str]) -> None:
         errors.extend(exporter_truth_claim_errors(name, path.read_text(encoding="utf-8")))
 
 
-# The interview baseline is the single architecture truth document, so it must
+# The architecture baseline is the single architecture truth document, so it must
 # carry both halves of the exporter split explicitly rather than by implication.
 _BASELINE_EXPORTER_IMPLEMENTATION_RE = re.compile(
     r"OTEL_EXPORT_ENABLED|monitoring/otel_exporter\.py|requirements-otel\.txt",
@@ -1858,8 +1858,8 @@ _BASELINE_CLOSED_LOOP_PENDING_RE = re.compile(
 )
 
 
-def check_interview_baseline_exporter_split(errors: list[str]) -> None:
-    """The interview baseline must state exporter implementation AND pending loop."""
+def check_architecture_baseline_exporter_split(errors: list[str]) -> None:
+    """The architecture baseline must state exporter implementation AND pending loop."""
     path = ROOT / "docs/architecture-baseline.md"
     if not path.exists() or not otlp_exporter_implemented():
         return
@@ -1877,9 +1877,9 @@ def check_interview_baseline_exporter_split(errors: list[str]) -> None:
 
 # ── 1b. one canonical row per capability in the evidence map ────────────────
 #
-# The capability table is the interview contract: every row is one claim with
+# The capability table is the architecture contract: every row is one claim with
 # one level. A capability listed twice is worse than a missing row, because the
-# two rows can disagree about the level and an interviewer quoting either one is
+# two rows can disagree about the level and a reviewer quoting either one is
 # quoting an arbitrary pick. This guard derives the capability names from the
 # table itself, so it holds for any capability, present or future.
 
@@ -1964,7 +1964,7 @@ def duplicate_capability_errors(name: str, text: str) -> list[str]:
 
 
 def check_capability_rows_are_unique(errors: list[str]) -> None:
-    """The interview evidence map must give each capability exactly one row."""
+    """The evidence map must give each capability exactly one row."""
     path = ROOT / EVIDENCE_MAP
     if not path.exists():
         return
@@ -2217,7 +2217,7 @@ def evidence_classification_errors(name: str, text: str, legal: set[str]) -> lis
     return errors
 
 
-#: Current, interview-facing and repository-truth documentation.
+#: Current repository-truth documentation.
 #:
 #: The superseded plans formerly stored under `docs/superpowers/` — a *historical
 #: path*, removed from the current branch and preserved only in Git history — are
@@ -4736,7 +4736,7 @@ def main() -> int:
     check_enterprise_readiness_contracts(errors)
     check_enterprise_readiness_coverage(errors)
     check_exporter_truth_contract(errors)
-    check_interview_baseline_exporter_split(errors)
+    check_architecture_baseline_exporter_split(errors)
     check_capability_rows_are_unique(errors)
     check_evidence_levels_are_defined(errors)
     check_qdrant_evidence_reconciliation(errors)

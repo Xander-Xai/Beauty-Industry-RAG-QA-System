@@ -1593,11 +1593,11 @@ def test_doc_that_only_denies_an_exporter_is_flagged():
     assert exporter_truth_claim_errors("docs/x.md", "# Deployment\n\nRun docker compose up.\n") == []
 
 
-def test_interview_baseline_must_split_exporter_implementation_from_closed_loop():
-    from scripts.check_repo_consistency import check_interview_baseline_exporter_split
+def test_architecture_baseline_must_split_exporter_implementation_from_closed_loop():
+    from scripts.check_repo_consistency import check_architecture_baseline_exporter_split
 
     errors: list[str] = []
-    check_interview_baseline_exporter_split(errors)
+    check_architecture_baseline_exporter_split(errors)
     assert errors == []
 
 
@@ -1873,7 +1873,7 @@ def test_truth_audit_parser_ignores_tables_outside_the_audit():
 
 
 def test_capability_rows_are_unique_in_current_evidence_map():
-    """The interview evidence map must give each capability exactly one row."""
+    """The evidence map must give each capability exactly one row."""
     from scripts.check_repo_consistency import check_capability_rows_are_unique
 
     errors: list[str] = []
@@ -2057,9 +2057,9 @@ def test_unspaced_denial_does_not_carry_to_another_line(denial):
 def _evidence_map(vocabulary_rows: str, capability_rows: str) -> str:
     """Build a minimal evidence map with a vocabulary and a capability table."""
     return (
-        "# Interview Evidence Map\n\n"
+        "# Evidence Map\n\n"
         "## Classification vocabulary\n\n"
-        "| Level | Meaning | Interview-safe framing | Must not say |\n"
+        "| Level | Meaning | Safe framing | Must not say |\n"
         "|---|---|---|---|\n"
         f"{vocabulary_rows}"
         "\n"
@@ -2973,15 +2973,15 @@ def test_restated_question_count_is_flagged():
     from scripts.check_repo_consistency import enumerated_count_errors
 
     text = (
-        "## 2-minute Interviewer Guide\n\n"
-        "给技术面试官的六个问题与本仓库可支撑的答案。\n\n"
+        "## 2-minute Review Guide\n\n"
+        "给技术评审的六个问题与本仓库可支撑的答案。\n\n"
         "**Q1 · a?**\n**Q2 · b?**\n**Q3 · c?**\n"
         "**Q4 · d?**\n**Q5 · e?**\n**Q6 · f?**\n**Q7 · g?**\n"
     )
     errors = enumerated_count_errors("README.md", text)
     assert len(errors) == 1
     # The message names the section, the offending phrase and the real item count.
-    assert "2-minute Interviewer Guide" in errors[0]
+    assert "2-minute Review Guide" in errors[0]
     assert "六个问题" in errors[0]
     assert "7 items" in errors[0]
 
@@ -2990,8 +2990,8 @@ def test_deleting_the_count_clears_the_error():
     from scripts.check_repo_consistency import enumerated_count_errors
 
     text = (
-        "## 2-minute Interviewer Guide\n\n"
-        "给技术面试官的问题清单与本仓库可支撑的答案。\n\n"
+        "## 2-minute Review Guide\n\n"
+        "给技术评审的问题清单与本仓库可支撑的答案。\n\n"
         "**Q1 · a?**\n**Q2 · b?**\n**Q3 · c?**\n"
     )
     assert enumerated_count_errors("README.md", text) == []
@@ -3000,7 +3000,7 @@ def test_deleting_the_count_clears_the_error():
 def test_english_count_restatement_is_also_flagged():
     from scripts.check_repo_consistency import enumerated_count_errors
 
-    text = "## Guide\n\nSix questions for the interviewer.\n\n**Q1 · a?**\n**Q2 · b?**\n"
+    text = "## Guide\n\nSix questions for the reviewer.\n\n**Q1 · a?**\n**Q2 · b?**\n"
     assert enumerated_count_errors("README.md", text)
     assert enumerated_count_errors("README.md", "## Guide\n\n**Q1 · a?**\n**Q2 · b?**\n") == []
 
@@ -3033,7 +3033,7 @@ def test_skipped_or_duplicated_marker_is_flagged():
 def test_enumeration_before_the_first_level_two_heading_is_still_checked():
     from scripts.check_repo_consistency import enumerated_count_errors
 
-    text = "给技术面试官的六个问题。\n\n**Q1 · a?**\n**Q2 · b?**\n\n## Later\n\nNo items.\n"
+    text = "给技术评审的六个问题。\n\n**Q1 · a?**\n**Q2 · b?**\n\n## Later\n\nNo items.\n"
     assert enumerated_count_errors("README.md", text)
 
 
@@ -3050,8 +3050,8 @@ def test_guard_fails_when_the_question_count_drifts(tmp_path, monkeypatch):
 
     readme = tmp_path / "README.md"
     readme.write_text(
-        "## 2-minute Interviewer Guide\n\n"
-        "给技术面试官的六个问题与本仓库可支撑的答案。\n\n"
+        "## 2-minute Review Guide\n\n"
+        "给技术评审的六个问题与本仓库可支撑的答案。\n\n"
         "**Q1 · a?**\n**Q2 · b?**\n**Q3 · c?**\n"
         "**Q4 · d?**\n**Q5 · e?**\n**Q6 · f?**\n**Q7 · g?**\n",
         encoding="utf-8",
