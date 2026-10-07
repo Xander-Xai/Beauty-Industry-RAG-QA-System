@@ -209,11 +209,19 @@ Changes present on `main` after the 2.3.0 release entry:
   baseline and `README.md` all state **dynamic 2–4 path** recall. A reader inspecting the
   module that owns the recall topology would have concluded retrieval is fixed-four-path.
   The docstrings now name the four *optional* channels with their actual trigger
-  conditions, state that the enabled set comes from the caller-supplied `top_k_per_path`
-  (omitted = disabled for that request, `None` = the full `config.json` topology), and
-  record that ES Fallback is appended after RRF outside `path_results`, so it is not a
-  fifth path. No behaviour changed; the same file's inline contract comment and
-  `tests/test_parallel_recall_partial_config.py` already pinned the dynamic topology.
+  conditions and scope the 2–4 range to the online pipeline in `core/pipeline.py`,
+  because `execute()` itself accepts any subset of channels (a mapping of only
+  `dense_bge` runs one path, an empty mapping runs none — see
+  `tests/test_parallel_recall_partial_config.py::test_present_empty_path_config_uses_path_default_top_k`).
+
+- The same module's fallback comment — "ES Fallback — Qdrant 路径异常或召回不足时触发" —
+  overstated the trigger in the same way. In the code, `_recall_es_fallback()` is guarded
+  **solely** by `len(all_doc_ids) < 50`; the `qdrant_failed` flag only emits a warning and
+  does not independently start the fallback. A Qdrant path failing while BM25 still
+  returns ≥50 unique documents therefore produces degraded dense/visual coverage and no
+  fallback. The comment and the module docstring now state the real single condition.
+  This is documentation only: the trigger itself was left unchanged, because changing it
+  is a retrieval-behaviour change, not a truth fix.
 
 - `deploy/grafana/` held a second, unwired Grafana dashboard
   (`rag-cosmetics-overview`, 12 panels) whose panels plotted 14 `rag_*` series and two
