@@ -286,45 +286,160 @@ def test_no_second_dashboard_json_exists():
     ], f"unexpected dashboard JSON: {[p.relative_to(REPO_ROOT).as_posix() for p in found]}"
 
 
-def test_every_dashboard_json_only_references_emitted_metrics():
-    """Tree-wide version of the emitted-metric contract, not just the canonical file."""
-    available = emitted_metrics()
-    offenders: dict[str, set[str]] = {}
-    for path in _dashboard_json_files():
-        panels = json.loads(path.read_text(encoding="utf-8")).get("panels") or []
-        referenced = {
-            match
-            for panel in panels
-            for target in panel.get("targets") or []
-            for match in re.findall(r"rag_[A-Za-z0-9_]+", target.get("expr") or "")
-        }
-        unknown = {n for n in referenced if n.rstrip("_") not in available and n not in available}
-        if unknown:
-            offenders[path.relative_to(REPO_ROOT).as_posix()] = unknown
-    assert not offenders, f"dashboards reference metrics that are never emitted: {offenders}"
+#: PromQL aggregation / function / keyword names. These are language constructs, not
+#: series, so a selector scan has to subtract them or every panel looks dirty.
+PROMQL_CONSTRUCTS = {
+    "abs",
+    "absent",
+    "absent_over_time",
+    "and",
+    "avg",
+    "avg_over_time",
+    "bottomk",
+    "bucket_limit",
+    "by",
+    "ceil",
+    "changes",
+    "clamp",
+    "clamp_max",
+    "clamp_min",
+    "count",
+    "count_over_time",
+    "count_values",
+    "day_of_month",
+    "day_of_week",
+    "day_of_year",
+    "days_in_month",
+    "delta",
+    "deriv",
+    "drop_common_labels",
+    "exp",
+    "floor",
+    "group",
+    "group_left",
+    "group_right",
+    "histogram_count",
+    "histogram_fraction",
+    "histogram_quantile",
+    "histogram_sum",
+    "holt_winters",
+    "hour",
+    "idelta",
+    "ignoring",
+    "increase",
+    "info",
+    "irate",
+    "label_join",
+    "label_replace",
+    "last_over_time",
+    "ln",
+    "log10",
+    "log2",
+    "mad_over_time",
+    "max",
+    "max_over_time",
+    "min",
+    "min_over_time",
+    "minute",
+    "month",
+    "offset",
+    "or",
+    "pi",
+    "predict_linear",
+    "present_over_time",
+    "quantile",
+    "quantile_over_time",
+    "rate",
+    "resets",
+    "round",
+    "scalar",
+    "sgn",
+    "sort",
+    "sort_desc",
+    "sqrt",
+    "stddev",
+    "stddev_over_time",
+    "stdvar",
+    "stdvar_over_time",
+    "sum",
+    "sum_over_time",
+    "time",
+    "timestamp",
+    "topk",
+    "union",
+    "unless",
+    "vector",
+    "year",
+}
+
+#: Grouping labels the canonical dashboard legitimately uses, e.g. `by (le)`.
+GROUPING_LABELS = {"le", "job", "instance", "quantile", "service"}
 
 
-def test_no_dashboard_json_plots_non_rag_exporter_metrics():
-    """A panel may not plot a series from an exporter this repository never runs.
+def series_selectors(expr: str) -> set[str]:
+    """Extract candidate series names from a PromQL expression.
 
-    `nvidia_gpu_memory_used_bytes` (DCGM) is the concrete case: it is a real
-    Prometheus series, which is exactly why a fabricated GPU panel reads as
-    legitimate to a reviewer who does not know this deployment has no DCGM.
+    A series appears in three shapes, and all three count:
+
+    * labelled — `up{job="rag-api"}`
+    * range    — `rag_http_requests[5m]`
+    * **bare** — `node_cpu_seconds_total`
+
+    The bare form is the one that is easy to miss: it carries neither `(` nor `{`, so
+    a scan that only looks for the punctuated forms cannot see it — and a panel
+    plotting a DCGM or node-exporter series slips through, which defeats the point of
+    a tree-wide guard. Everything that is language rather than data (functions,
+    keywords, grouping labels, durations, numbers, quoted strings) is subtracted, so
+    only series-shaped names survive.
     """
-    allowed_non_rag = {"up", "rate", "sum", "increase", "irate", "avg", "max", "min", "count"}
+    text = expr
+    text = re.sub(r"\b\d+(?:\.\d+)?(?:ms|s|m|h|d|w|y)?\b", " ", text)  # durations/literals
+    text = re.sub(r'"[^"]*"', " ", text)  # label values
+    text = re.sub(r"\{[^{}]*\}", " ", text)  # whole label-matcher blocks
+    text = re.sub(r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^()]*\)", " ", text)
+    text = re.sub(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", " ", text)  # function / call names
+
+    candidates = {token for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text) if "_" in token}
+    return candidates - PROMQL_CONSTRUCTS - GROUPING_LABELS
+
+
+def test_series_selectors_finds_every_selector_shape():
+    """The extractor must catch the bare form, not only the punctuated ones.
+
+    `bare` is the regression this function exists for: `node_cpu_seconds_total`
+    matches neither `ident(` nor `ident{`, so a scan built on those two patterns
+    silently accepts a node-exporter series.
+    """
+    assert series_selectors("node_cpu_seconds_total") == {"node_cpu_seconds_total"}
+    assert series_selectors('nvidia_gpu_memory_used_bytes{index="0"}') == {"nvidia_gpu_memory_used_bytes"}
+    quantile = series_selectors(
+        "histogram_quantile(0.95, sum(rate(rag_http_request_duration_seconds_bucket[5m])) by (le))"
+    )
+    assert quantile == {"rag_http_request_duration_seconds_bucket"}, quantile
+    assert series_selectors("avg_over_time(rag_http_active_requests[1m])") == {"rag_http_active_requests"}
+
+
+def test_every_dashboard_json_only_plots_series_this_repository_emits():
+    """Tree-wide emitted-series contract: no `rag_*` name and no foreign exporter.
+
+    `nvidia_gpu_memory_used_bytes` is the concrete case. It is a *real* Prometheus
+    series, which is exactly why a fabricated GPU panel reads as legitimate to a
+    reviewer who does not know this deployment runs no DCGM exporter. `up` is
+    Prometheus-internal and is whitelisted by the alert rules, so it stays allowed.
+    """
+    available = emitted_metrics() | {"up"}
+    offenders: dict[str, list[str]] = {}
     for path in _dashboard_json_files():
         panels = json.loads(path.read_text(encoding="utf-8")).get("panels") or []
+        found: list[str] = []
         for panel in panels:
             for target in panel.get("targets") or []:
-                expr = target.get("expr") or ""
-                for metric in re.findall(r"(?<![\w.])([a-zA-Z_][a-zA-Z0-9_]*)\s*[\(\{]", expr):
-                    if metric.startswith("rag_") or metric in allowed_non_rag:
-                        continue
-                    raise AssertionError(
-                        f"{path.relative_to(REPO_ROOT).as_posix()}: panel "
-                        f"{panel.get('title')!r} plots {metric!r}, which no exporter in this "
-                        f"repository produces"
-                    )
+                for name in series_selectors(target.get("expr") or ""):
+                    if name.rstrip("_") not in available and name not in available:
+                        found.append(f"{panel.get('title')!r} -> {name}")
+        if found:
+            offenders[path.relative_to(REPO_ROOT).as_posix()] = found
+    assert not offenders, f"dashboards plot series no exporter here produces: {offenders}"
 
 
 def test_dashboard_only_references_emitted_metrics(dashboard):
