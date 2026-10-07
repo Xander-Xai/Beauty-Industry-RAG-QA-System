@@ -25,11 +25,11 @@
 
 ## 30 秒读懂
 
-| # | 问题 | 答案 | 深挖入口 |
+| # | 问题 | 答案 | 工程入口 |
 |---|---|---|---|
 | 1 | **这是干什么的** | 把法规 / 成分 / 产品知识建成可检索资产，在线回答带引用的领域问题，证据不足就拒答 | [Architecture](#architecture) |
 | 2 | **解决什么业务问题** | 知识散在 PDF、图片、表格里，人工检索慢且回答容易编造；不同角色该看到的内容也不同 | [核心工程能力](#核心工程能力5-项) |
-| 3 | **架构与技术含量** | FastAPI 单体主链路；动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/technical-walkthrough.md](docs/technical-walkthrough.md) |
+| 3 | **核心架构** | FastAPI 单体主链路；动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/architecture-baseline.md](docs/architecture-baseline.md) |
 | 4 | **企业工程化** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook、Docker Compose + Kubernetes 双形态 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) |
 | 5 | **怎么跑** | `pip install -r requirements.txt && cp .env.example .env && python3 app.py` → `http://localhost:8000/docs` | [Quick Start](#quick-start) |
 | 6 | **已验证 / 未验证在哪看** | 一节讲清：[Evidence Boundary](#evidence-boundary) | [docs/evidence-map.md](docs/evidence-map.md) |
@@ -279,7 +279,6 @@ python3 scripts/check_repo_consistency.py
 
 | 文档 | 作用 |
 |---|---|
-| [docs/technical-walkthrough.md](docs/technical-walkthrough.md) | **5 分钟 screen-share 脚本**：按评审问题分节，每节给出要说的话与要打开的代码文件 |
 | [docs/architecture-baseline.md](docs/architecture-baseline.md) | **架构唯一事实基线**：召回路数、重排、Gate、路由、版本语义 |
 | [docs/evidence-map.md](docs/evidence-map.md) | **证据等级唯一权威表** + 逐能力分级 + benchmark artifact 验收标准 + 已知表述风险 |
 | [docs/repository-truth-audit.md](docs/repository-truth-audit.md) | 逐能力实现 / 证据 / 状态审计，含 Qdrant 两态、告警双机制、外部验证边界 |

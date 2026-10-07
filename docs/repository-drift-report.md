@@ -10,7 +10,7 @@
 > link/anchor integrity, evidence vocabulary, retired topology, Python entrypoints
 > and derived counts; this report only lists what that guard does **not** cover.
 > Severity follows the repository's own scheme: **P0** factual falsehood,
-> **P1** reviewer-visible contradiction, **P2** stale operational/documentation
+> **P1** reader-visible contradiction, **P2** stale operational/documentation
 > issue, **P3** cosmetic.
 
 ## Findings
@@ -23,7 +23,7 @@
 | DRIFT-004 | P2 | Index self-contradiction | `docs/README.md:118-120` claims every current doc is listed in the index | `docs/main-branch-governance.md` (current, in the guard's canonical set) | A current document was not listed in the index that claims to list every current document. | `main-branch-governance.md` is canonical and belongs in the index. | Add it to the index. | `scripts/check_repo_consistency.py` canonical-doc set | **RESOLVED** |
 | DRIFT-005 | P2 | Volatile exact count | `docs/security-regression-coverage.md:82-94` — "1 failed, 140 passed" … "13 failed, 212 passed" | same file, row totals (141 vs 225) | The mutation table carried pass counts from different points in the PR's development, so its own totals disagree and drift as the suite grows. | The failure count is the meaningful mutation outcome; the pass count only restates the suite size at one moment. | Drop the pass counts and state why. | `pytest --collect-only tests/offline/` | **RESOLVED** |
 | DRIFT-006 | P3 | Stale exact count | `CHANGELOG.md:52` — "Twelve mutation checks" | `docs/security-regression-coverage.md` (`#61` added 13 rows) | Off-by-one in a changelog count. | `#61` added thirteen mutation-check rows. | Correct the number. | `git show f99a55f -- docs/security-regression-coverage.md` | **RESOLVED** |
-| DRIFT-007 | P3 | Stale exact count | `docs/technical-walkthrough.md:3` — "30,000+ 字 README" | `README.md` (26,595 characters) | The walkthrough overstated the README length. | The README is ~26.6k characters. | Correct the number. | `wc -m README.md` | **RESOLVED** |
+| DRIFT-007 | P3 | Stale exact count | `docs/technical-walkthrough.md:3` — "30,000+ 字 README" | `README.md` (26,595 characters) | The walkthrough overstated the README length. | The README is ~26.6k characters. | Correct the number. | `wc -m README.md` | **RESOLVED** — the document it referred to was later removed from this repository; the finding is kept as history |
 | DRIFT-008 | P3 | Command inconsistency | `docs/deployment-guide.md:58` — `npm install` | `README.md:233`, `.github/workflows/ci.yml`, `docs/open-source-hardcoding-audit.md` | One guide prescribed `npm install` while every other current doc and CI use the lockfile-strict `npm ci`. | The canonical reproducible build is `npm ci`. | Use `npm ci`. | `frontend/package-lock.json` | **RESOLVED** |
 
 ## Deliberately not changed
@@ -39,7 +39,7 @@
 
 - **P0 conflicts: 0.** **P1 conflicts: 0** after DRIFT-001.
 - The canonical documents — `README.md`, `docs/architecture-baseline.md`,
-  `docs/technical-walkthrough.md`, `docs/evidence-map.md`,
+  `docs/evidence-map.md`,
   `docs/repository-metadata.md` — were checked against each other and agree on
   architecture (FastAPI monolith canonical; microservices/K8s `REPO_VERIFIED`
   components / `PENDING` deployment), model topology (single shared 4B endpoint +

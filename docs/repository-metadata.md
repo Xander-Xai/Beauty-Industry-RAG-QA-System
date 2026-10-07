@@ -30,7 +30,7 @@ Multimodal RAG QA for cosmetics regulation: hybrid retrieval, two-stage rerankin
 |---|---|
 | **先说领域与形态，再报技术栈** | 读者第一眼要判断的是"这和我的需求有没有关系"，不是"用了什么框架"。更早的一版以 `Enterprise multimodal RAG QA for cosmetics knowledge:` 开头，技术枚举占了 140 字符，后半段基本是名词列表 |
 | **写 `refuses unsupported answers`** | 这是本项目与"套模板 RAG"最可区分的一点，也是法务/合规类使用者真正在意的产品行为。更早的一版只有术语 `evidence gating`，没有行为 |
-| **写 `evidence levels separate implemented from production-validated`** | 主动把"实现了 ≠ 验证过"摆到最前面，并且**说清了划分的方向**，比 `graded by evidence level` 少一层追问——后者没有说是谁和谁分开。对读者这是清晰的工程信号，也便于 reviewer 快速核对真实性 |
+| **写 `evidence levels separate implemented from production-validated`** | 主动把"实现了 ≠ 验证过"摆到最前面，并且**说清了划分的方向**，比 `graded by evidence level` 少一层歧义——后者没有说是谁和谁分开。对读者这是清晰的工程信号，也便于按代码与文档逐条核对真实性 |
 | **补 `evaluation and observability`** | 常见的第二个检索维度是"有没有评测和可观测"。这两项在本仓库是 `REPO_VERIFIED`（harness / 指标端点 / 告警规则确实存在），属于可检索的真实能力，值得占字符 |
 | **保留 `uint32 RBAC` 而不是 `bitmask RBAC`** | `uint32` 是可核对的实现事实（`common/auth.py` 的 `_MAX_UINT32 = 0xFFFFFFFF` 位掩码契约），`bitmask` 是同义但更含糊的通用词。仓库卡片没有篇幅做解释，所以只写能被搜索到、也能被代码对照的那一个 |
 | **删掉 `Qwen/vLLM` 与 GPU 型号** | 更早的一版以 `Qwen/vLLM` 结尾。当前生成拓扑是单一共享 4B 端点、复杂请求走 14B，**且该 GPU 拓扑在本仓库从未执行过**（权重缺失、`vllm` 未安装）。把模型名放进元数据会被读成"跑过这个栈"，这是本仓库最容易被误读的一处。模型名属于 README 与代码，不属于仓库卡片 |

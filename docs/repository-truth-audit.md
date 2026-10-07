@@ -40,10 +40,13 @@
   `info.title` / `info.version` still come from `config.json`, and
   `tests/test_runtime_api_metadata.py` fails if the topology claim returns. No architecture,
   model routing, config or historical production record changed.
-- Repository landing and technical walkthrough (PR #55): merged as `424f43f`. It reworked
-  the README top fold, added `docs/technical-walkthrough.md` and `docs/repository-metadata.md`,
+- Repository landing (PR #55): merged as `424f43f`. It reworked
+  the README top fold, added `docs/repository-metadata.md`,
   and reconciled the top-fold evidence strip with the canonical six-level taxonomy (the strip had
   rendered five rows under a three-level heading and omitted `HISTORICAL`). Documentation only.
+  The technical walkthrough navigation document PR #55 also added was later removed: this
+  repository carries engineering evidence only, and every current document here is indexable
+  from [docs/README.md](README.md). No engineering content was lost with it.
 - Bounded vLLM generation resilience contract (PR #56): merged as `0c99724`. The contract and its
   124 deterministic tests are `REPO_VERIFIED`; real vLLM runtime behaviour stays `PENDING` and is
   recorded in [External validation pending](#external-validation-pending).
