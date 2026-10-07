@@ -114,6 +114,10 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   and the classification of every claim. This map owns the taxonomy; the truth audit's
   `Status` column and the validation records' `Evidence level` columns use the same
   levels.
+- [Interview readiness final report](interview-readiness-final-report.md): the
+  consolidation freeze record — repository state, core capabilities, evidence
+  matrix, deferred validation, known boundaries, interview navigation and the
+  final gate.
 
 ## Design
 

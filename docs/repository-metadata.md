@@ -2,7 +2,7 @@
 
 这份文档记录**当前生效**的 GitHub 仓库 About 配置（description / topics / homepage / social preview），并解释每一个取值。它回答一个问题：如果有人只看到 GitHub 仓库卡片（不打开 README），他应该得到什么信息？
 
-配置通过 GitHub **Settings 或 API** 手工应用，没有代码路径会自动写入它，因此本文档必须能独立说明线上状态。第 1 / 2 / 3 节的值最后一次经 GitHub API 回读确认于 **2026-10-06**；第 5 节给出复核命令。**未经回读不要改这三节**——它们描述的是 GitHub 上的事实，不是提案。
+配置通过 GitHub **Settings 或 API** 手工应用，没有代码路径会自动写入它，因此本文档必须能独立说明线上状态。第 1 / 2 / 3 节的值最后一次经 GitHub API 回读确认于 **2026-10-07**；第 5 节给出复核命令。**未经回读不要改这三节**——它们描述的是 GitHub 上的事实，不是提案。
 
 **三条硬规则**
 
@@ -16,7 +16,7 @@
 
 GitHub 允许最多 350 字符，超过会在 UI 里被截断；仓库卡片、搜索结果、`gh repo view` 与社交分享都显示这一行。**它是唯一保证被读到的一句话**。
 
-### 生效值（2026-10-06 经 GitHub API 回读确认）
+### 生效值（2026-10-07 经 GitHub API 回读确认）
 
 ```text
 Multimodal RAG QA for cosmetics regulation: hybrid retrieval, two-stage reranking, evidence gating that refuses unsupported answers, uint32 RBAC, evaluation and observability. FastAPI + Qdrant/Elasticsearch/Redis; evidence levels separate implemented from production-validated.
@@ -62,7 +62,7 @@ Enterprise multimodal RAG QA for cosmetics regulation knowledge: hybrid retrieva
 
 GitHub 最多 20 个 topic；只能用小写字母、数字和连字符，单个不超过 35 字符。Topic 是**唯一影响可检索性**的字段，比 description 更接近"招聘方搜什么"的答案。
 
-### 生效清单（正好 20，2026-10-06 经 GitHub API 回读确认）
+### 生效清单（正好 20，2026-10-07 经 GitHub API 回读确认）
 
 | # | topic | 选它的理由 |
 |---|---|---|
@@ -142,7 +142,7 @@ gh api repos/Xander-Xai/Beauty-Industry-RAG-QA-System/topics --jq '.names | leng
 
 ### 决策：**保持为空**
 
-2026-10-06 经 GitHub API 回读：`homepage` 是空字符串 `""`，这应当**维持**。空值不是"还没填"，而是本节记录的决策结果。
+2026-10-07 经 GitHub API 回读：`homepage` 是空字符串 `""`，这应当**维持**。空值不是"还没填"，而是本节记录的决策结果。
 
 Homepage 会出现在仓库卡片右侧、README 顶部右侧和社交分享里，是一个"点进去就是产品"的承诺。本仓库目前没有可指向的东西：
 
