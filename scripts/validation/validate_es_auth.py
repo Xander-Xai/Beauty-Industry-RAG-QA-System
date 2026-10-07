@@ -63,6 +63,7 @@ def main() -> int:
 
     # 3. Offline writer path: explicit mapping, upsert, search_after pagination.
     from offline.elasticsearch_writer import ElasticsearchWriter
+    from offline.source_trust import managed_record
 
     writer = ElasticsearchWriter(client, index_name=TEST_INDEX, page_size=2)
     writer.ensure_index(recreate=True, confirm=True)
@@ -84,6 +85,7 @@ def main() -> int:
                 embedding_type="bge",
                 embedding_version="validation-v1",
                 metadata={"page": i},
+                provenance=managed_record("doc-1").to_payload(),
             )
         )
         for i in range(3)

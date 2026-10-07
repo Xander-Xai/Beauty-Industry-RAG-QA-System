@@ -181,21 +181,44 @@ def _handle_ingest(args) -> int:
 
 
 def _handle_ingest_text(args) -> int:
-    from offline.source_trust import managed_record
+    from common.config import get_config_dict
+    from offline.scheduler import OfflineScheduler
+    from offline.source_trust import file_content_hash, normalize_source_trust, resolve_source_trust
     from offline.text_ingestion import configured_text_ingestion_service
 
-    # The legacy TXT-only slice has no trust rule of its own, so it declares
-    # managed provenance explicitly instead of leaving the points unprovenanced.
+    config = get_config_dict()
     source_id = args.source_id or args.source
+    # The legacy TXT slice resolves trust exactly like the full ingest path: an
+    # explicit --source-trust wins, otherwise the configured path rules classify
+    # it. Declaring managed provenance unconditionally would make this alias a
+    # direct bypass of the quarantine gate — a TXT import is quarantined by
+    # default too, and an approval recorded in the ledger is honored here.
+    if args.source_trust:
+        source_trust = normalize_source_trust(args.source_trust)
+    else:
+        source_trust = resolve_source_trust(source_id, config.get("source_trust", {}) or {})
+    scheduler = OfflineScheduler(config=config)
+    try:
+        provenance = scheduler.trust_registry.resolve(
+            source_id,
+            declared_trust=source_trust,
+            content_hash=file_content_hash(args.source),
+        ).to_payload()
+    finally:
+        scheduler.trust_registry.close()
     chunks = configured_text_ingestion_service().ingest(
         args.source,
         role_mask=args.role_mask,
         dept_mask=args.dept_mask,
         doc_version_epoch=args.epoch,
         source_id=args.source_id,
-        provenance=managed_record(source_id).to_payload(),
+        provenance=provenance,
     )
-    logger.info("Ingested %d text chunks", len(chunks))
+    logger.info(
+        "Ingested %d text chunks (source trust: %s)",
+        len(chunks),
+        "activatable" if provenance["trust_class"] == "MANAGED_INTERNAL" else "quarantined until review",
+    )
     return 0
 
 
@@ -325,6 +348,7 @@ def _review_source(args, config: dict, scheduler, registry) -> int:
     from offline.source_trust import (
         APPROVAL_APPROVED,
         APPROVAL_REJECTED,
+        TRUST_MANAGED_INTERNAL,
         SourceTrustError,
         file_content_hash,
     )
@@ -362,19 +386,39 @@ def _review_source(args, config: dict, scheduler, registry) -> int:
             return 2
 
     matching = [source for source in scheduler.discover_sources() if source.source_id == source_id]
-    if not matching:
+    if matching:
+        source_path = matching[0].path
+        source_trust = matching[0].source_trust
+    elif args.source_id:
+        # An out-of-tree import is staged via `ingest SOURCE --source-id X`, so it
+        # is deliberately absent from discovery. The explicit id plus the file on
+        # disk is enough to review it, and trust is resolved by the same path
+        # rules the ingest path uses — otherwise such a source could be staged
+        # but never approved.
+        source_path = args.source
+        source_trust = scheduler.resolve_source_trust(source_id)
+    else:
         logger.error(
             "source %s is not a discovered ingestion source (unsupported type, filtered by "
             "knowledge_base.supported_extensions, or missing from data_dir)",
             source_id,
         )
         return 2
-    source = matching[0]
+
+    if source_trust == TRUST_MANAGED_INTERNAL:
+        # A managed source is NOT_REQUIRED by contract, so a stored decision could
+        # only be ignored by resolve(). Refuse it rather than audit a decision the
+        # pipeline will not honor.
+        logger.error(
+            "source %s resolves to MANAGED_INTERNAL; managed sources need no review decision",
+            source_id,
+        )
+        return 2
 
     try:
         decision = registry.decide(
             source_id,
-            content_hash=file_content_hash(source.path),
+            content_hash=file_content_hash(source_path),
             approval_status=APPROVAL_APPROVED if args.approve else APPROVAL_REJECTED,
             actor=args.actor or "",
             note=args.note,
