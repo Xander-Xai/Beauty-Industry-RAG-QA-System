@@ -1,7 +1,7 @@
-# Interview Evidence Map
+# Evidence Map
 
-This file separates what an interview can honestly claim from what the public
-repository can actually prove. It exists because "real production experience"
+This file separates what this repository can honestly claim from what it can
+actually prove. It exists because "real production experience"
 and "publicly reproducible repository results" are different kinds of evidence
 and must never be mixed.
 
@@ -12,16 +12,16 @@ does not introduce new capabilities.
 ## Classification vocabulary
 
 This table is the **single canonical evidence taxonomy** for this repository. Every
-current interview-facing or repository-truth document classifies its claims with
+current repository-truth document classifies its claims with
 these levels and no others — including the `Status` column of
 [the repository truth audit](repository-truth-audit.md) and the `Evidence level`
 columns of the validation records. A document that needs a state this table does
 not define must extend this table (and the guard that reads it) rather than invent
 a local status word.
 
-| Level | Meaning | Interview-safe framing | Must not say |
+| Level | Meaning | Safe framing | Must not say |
 |---|---|---|---|
-| `HISTORICAL_PRODUCTION` | Work actually done in a former employer's production environment. Proprietary corpus, logs, models and dashboards are not in this repository. | "In my previous production system I ..." | "The repository proves this scale" |
+| `HISTORICAL_PRODUCTION` | Work actually done in a former employer's production environment. Proprietary corpus, logs, models and dashboards are not in this repository. | "This was done in a previous production environment" | "The repository proves this scale" |
 | `HISTORICAL` | A superseded implementation, configuration, design or compatibility artifact **in this repository**, retained only for historical lineage. It is not a current capability, and it is not evidence of former-employer production usage. | "This is a superseded repository path retained for historical/compatibility context" | "This is a current production capability" |
 | `REPO_VERIFIED` | Code/config exists and is covered by collected deterministic tests or CI in this repository. | "This is implemented and test-covered" | "This is production-validated" |
 | `LOCAL_REAL_VALIDATION` | Exercised in this repository against real external dependencies (Redis, nginx, authenticated Elasticsearch, authenticated Prometheus) on a single local host. | "Validated locally against the real dependency" | "Production cluster / HA / SLO verified" |
@@ -100,15 +100,15 @@ Rules:
 3. `BLOCKED` and `NOT RUN` describe this run. They do not convert a `PENDING`
    capability into a validated one, and a blocked run produces no publishable number.
 
-## Interview self-verification index
+## Capability self-verification index
 
-> A 10-second lookup: an interviewer names a capability, this table gives the
+> A 10-second lookup: a reviewer names a capability, this table gives the
 > honest claim, the code, the test, the evidence level, the boundary and the
 > likely follow-up. It is a navigation index over the same facts as the
 > [capability evidence](#capability-evidence) table below, not a second evidence
 > source; when the two disagree, the table below wins and this index is wrong.
 
-| Capability | Interview claim (口述) | Level | Implementation | Tests | Runtime artifact | Known boundary | Likely follow-up |
+| Capability | Reviewer claim (口述) | Level | Implementation | Tests | Runtime artifact | Known boundary | Likely follow-up |
 |---|---|---|---|---|---|---|---|
 | Dynamic hybrid retrieval (2–4 way) | "Recall is dynamic: 2 ways for simple questions, 3 with a rewrite variant, 4 when a visual judge selects CLIP." | `REPO_VERIFIED` | `retrieval/parallel_recall.py`, `core/pipeline.py` | `tests/test_parallel_recall.py` | none (no retrieval benchmark artifact) | Real relevance metrics are `PENDING` | "How do you decide 2 vs 4?" → complexity judge + visual judge |
 | Dense retrieval (BGE + Qdrant) | "Dense recall is BGE text vectors in Qdrant, permission-filtered before fusion." | `REPO_VERIFIED` (adapter + Qdrant) / `PENDING` (real BGE weights) | `offline/embeddings.py`, `offline/qdrant_writer.py`, `retrieval/parallel_recall.py` | `tests/offline/`, `tests/test_parallel_recall.py` | none | Real BGE weights smoke is `PENDING` | "Which embedding model / dimension?" |
@@ -217,14 +217,15 @@ They do not license each other:
   artifact is committed. Until then the Qdrant row stays at its current level with
   "real Qdrant service validation" as its upgrade path.
 
-Interview framing:
+Framing:
 
 > "The Qdrant writers are covered by deterministic tests against the in-process
-> Qdrant client, and during the work that landed in PR #6/#7 I also ran the same
-> writers against a real local Qdrant service alongside a real local Elasticsearch.
-> That earlier run is development history rather than a checked-in artifact, so
-> what this repository reproduces today is the in-memory coverage. Qdrant cluster,
-> HA, throughput and quality are separate work I have not validated here."
+> Qdrant client, and during the work that landed in PR #6/#7 the same
+> writers were also run against a real local Qdrant service alongside a real
+> local Elasticsearch. That earlier run is development history rather than a
+> checked-in artifact, so what this repository reproduces today is the in-memory
+> coverage. Qdrant cluster, HA, throughput and quality are separate work that has
+> not been validated here."
 
 Must not say, in either direction:
 
@@ -254,16 +255,16 @@ model weights or dashboards behind them. They are `HISTORICAL_PRODUCTION`, not
 | Later-stage model migration | Qwen2.5 → Qwen3-14B / Qwen3-4B gray-migration validation | `HISTORICAL_PRODUCTION` | proprietary production models, weights, traffic-split configuration and logs are not in this repository; the migration is **not** reproducible here |
 | Company recognition | Annual technical innovation award | `HISTORICAL_PRODUCTION` | company recognition of prior work; **not** runtime technical validation of this codebase, and not evidence about this repository |
 
-Interview framing:
+Framing:
 
-> "In my previous production system the corpus was on the order of 3000+
+> "In the previous production system the corpus was on the order of 3000+
 > documents and 5000+ images for 200+ internal users, with short bursts around
 > 10–15 QPS. That is company production context; the public repository contains
 > a small sanitized subset and no production logs, so those numbers are not a
 > reproducible benchmark from this repo."
 
-> "Production model serving ran on RTX A5000 ×2, and in a later stage I validated
-> a Qwen2.5 to Qwen3-14B / Qwen3-4B gray migration. Those weights, logs and
+> "Production model serving ran on RTX A5000 ×2, and in a later stage a
+> Qwen2.5 to Qwen3-14B / Qwen3-4B gray migration was validated. Those weights, logs and
 > traffic-split configuration were proprietary and are not in this repository, so
 > the repository does not reproduce that migration."
 

@@ -1,6 +1,6 @@
-# 5 分钟面试 Walkthrough（screen-share 脚本）
+# 5 分钟技术 Walkthrough（screen-share 脚本）
 
-按面试官会问的顺序，逐节给出**要说的话**与**要打开的真实代码文件**。目标：5 分钟内让对方知道具体做了什么，而不是让他读完 26,000+ 字 README。
+按技术评审会问的顺序，逐节给出**要说的话**与**要打开的真实代码文件**。目标：5 分钟内让 reviewer 知道具体做了什么，而不是让他读完 26,000+ 字 README。
 
 本文档**不建立任何新的事实来源**。架构口径唯一来自 [architecture-baseline.md](architecture-baseline.md)，证据等级唯一来自 [evidence-map.md](evidence-map.md)，逐能力审计唯一来自 [repository-truth-audit.md](repository-truth-audit.md)。本文只做**导航**与**话术**：每一节指向的那几个文件，才是答案本身。
 
@@ -9,9 +9,9 @@
 | 用法 | 做法 |
 |---|---|
 | 提前准备 | 通读一遍，把每节的「打开这些文件」在本地先打开一次，避免现场找文件 |
-| 现场进行 | 从「业务背景」开始按节跳。**对方打断就停下来回答**，不要念稿 |
+| 评审进行 | 从「业务背景」开始按节跳。**对方打断就停下来回答**，不要念稿 |
 | 时间不够 | 只讲「整体架构」→「一次 Query 如何经过系统」→「Hybrid Retrieval」→「双 Gate」→「当前未验证边界」五节，其余按对方追问补 |
-| 想证明严谨 | 主动讲最后一节。**主动交代未验证边界，比被问到再答可信得多** |
+| 想展示严谨 | 主动讲最后一节。**主动交代未验证边界，比被问到再答可信得多** |
 
 每节固定三段：
 
@@ -33,7 +33,7 @@
 
 **打开这些文件**
 
-- `docs/architecture-baseline.md` → Q12 标准回答（先看这一段，最省时间）
+- `docs/architecture-baseline.md` → 「标准架构说明」（先看这一段，最省时间）
 - `PRD.md` → 顶部 runtime reconciliation 表
 - `frontend/src/App.jsx` → 演示里"点引用跳回来源文档"的交互
 
@@ -98,7 +98,7 @@
 - `core/pipeline.py` → `_build_rrf_weights()` → 业务类型到路径权重的映射
 - `tests/test_rrf_fusion.py`、`tests/test_parallel_recall.py` → 融合逻辑的确定性测试
 
-**边界**：路由与融合逻辑是 `REPO_VERIFIED`。检索**质量**指标（Recall / NDCG / MRR）是 `PENDING`：框架在 `benchmarks/`，仓库里没有任何可复现 artifact，所以面试中不给任何检索数字。
+**边界**：路由与融合逻辑是 `REPO_VERIFIED`。检索**质量**指标（Recall / NDCG / MRR）是 `PENDING`：框架在 `benchmarks/`，仓库里没有任何可复现 artifact，所以本仓库文档不给任何检索数字。
 
 ---
 
@@ -108,7 +108,7 @@
 
 > 两级。第一级 BiEncoder 便宜，把 150~200 条候选宽保留到 150 条；第二级是**两个 CrossEncoder 的 ensemble**，精排到 10 条，两个模型的分数经 Platt 校准后合成 ensemble 分。
 >
-> 一个容易被追问的点：仓库里还有一个跨请求异步聚合批量预测的接口，但它**没有**接进当前主调用，主链路用的是请求内批量预测。我不会说"已经做了跨请求动态微批"。
+> 一个容易被追问的点：仓库里还有一个跨请求异步聚合批量预测的接口，但它**没有**接进当前主调用，主链路用的是请求内批量预测。不应说"已经做了跨请求动态微批"。
 
 **打开这些文件**
 
@@ -125,7 +125,7 @@
 
 **说**
 
-> 这是我认为整个项目最像"工程"而不是"demo"的地方——**两层门控把幻觉挡在生成前后**。
+> 这是整个项目最像"工程"而不是"demo"的地方——**两层门控把幻觉挡在生成前后**。
 >
 > 生成前的 Evidence Gate 综合四个信号：CrossEncoder Top 1 分、Top 3 平均分、多路召回一致性、Top 3 文档之间的一致性。输出三选一：正常生成、增强证据后生成、拒答。
 >
@@ -213,7 +213,7 @@
 
 > 当前生成拓扑是**一个共享的 4B vLLM 端点**，Query Rewrite 和简单生成都用它，复杂请求路由到 Qwen3-14B。路由本身无状态，按业务类型和复杂度决定档位；KV 压力过高时可以截断、降级或拒绝。
 >
-> 旧 PRD 里的"独立 vLLM-Rewrite + vLLM-Gen-4B 双实例"是历史 / 目标设计，不是当前实现——我会主动说清这一点。
+> 旧 PRD 里的"独立 vLLM-Rewrite + vLLM-Gen-4B 双实例"是历史 / 目标设计，不是当前实现——这里主动说清这一点。
 
 **打开这些文件**
 
@@ -251,7 +251,7 @@
 - 指标端点、告警规则、Grafana JSON、审计、exporter 实现：`REPO_VERIFIED`。
 - 带 Bearer token 的 Prometheus 抓取（无 token 401 / Bearer 200 / `up == 1`）：`LOCAL_REAL_VALIDATION`。
 - **告警在生产触发过**：`PENDING`。**Grafana 面板被真实数据填充过**：`PENDING`。**应用 → exporter → collector → 后端 → 真的查到一条 span**：`PENDING`——这条闭环一次都没在本仓库跑通过，所以我只说 exporter 已实现，不说 tracing 已闭环。
-- `monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，**没有**接入 canonical 请求路径，属于遗留代码，我不会拿它当告警方案讲。判定依据见 [repository-truth-audit.md](repository-truth-audit.md#two-alerting-mechanisms-and-which-one-is-canonical)。
+- `monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，**没有**接入 canonical 请求路径，属于遗留代码，不应把它当作告警方案。判定依据见 [repository-truth-audit.md](repository-truth-audit.md#two-alerting-mechanisms-and-which-one-is-canonical)。
 
 ---
 
@@ -318,9 +318,9 @@
 
 ## 当前未验证边界
 
-**说**（这一节主动讲，不要等被问）
+**说**（这一节主动讲，不要等被追问）
 
-> 我把"实现了"和"验证过"分开标注，全仓库只用一套证据等级，并且用 `scripts/check_repo_consistency.py` 在 CI 里强制它不漂移。所以我先说清楚**这里还什么都没有**的部分：
+> 本项目把"实现了"和"验证过"分开标注，全仓库只用一套证据等级，并且用 `scripts/check_repo_consistency.py` 在 CI 里强制它不漂移。所以先说清楚**这里还什么都没有**的部分：
 >
 > - **性能数字**：仓库里没有可复现的 QPS / 延迟 benchmark artifact。一次都没测过。
 > - **检索质量**：benchmark 框架在，但没有任何 artifact，所以我不报任何 Recall / NDCG。
@@ -345,7 +345,7 @@
 
 ---
 
-## 附：高频追问
+## 附：常见技术追问
 
 | 追问 | 一句话回答 | 指向 |
 |---|---|---|
@@ -353,5 +353,5 @@
 | 「Evidence Gate 的阈值怎么来的？」 | 来自 `config.json` 的设计值，Rewrite 降级时自动进入保守模式抬高阈值。**没有用真实标注数据标定过**，所以我不给拒答率 | `config.json` · `retrieval/evidence_gate.py` |
 | 「ES 挂了会怎样？」 | 有效文档不足或 Qdrant 异常时走 BM25-only / 空结果走 dense，并把降级写进响应字段 | `retrieval/parallel_recall.py` · `core/pipeline.py` |
 | 「为什么不用微服务？」 | 当前主线是单体；微服务目录是保留组件，端到端生产验证没有做过。单体在这个规模下更容易证明正确性 | [repository-truth-audit.md](repository-truth-audit.md) |
-| 「你最大的技术收获是什么？」 | 不是 RAG 本身，是**把证据等级做成机器可校验的契约**：文档写错话会让 CI 失败，而不是等到有人发现 | `scripts/check_repo_consistency.py` |
+| 「这个项目最大的工程收获是什么？」 | 不是 RAG 本身，是**把证据等级做成机器可校验的契约**：文档写错话会让 CI 失败，而不是等到有人发现 | `scripts/check_repo_consistency.py` |
 | 「这个仓库能直接跑起来吗？」 | API 可以 `python3 app.py` 起，Docker Compose 是 canonical 形态；但真实模型权重、真实检索栈、真实 GPU 拓扑不在仓库里，**跑起来不等于验证过** | [Quick Start](../README.md#quick-start) |
