@@ -19,9 +19,9 @@ columns of the validation records. A document that needs a state this table does
 not define must extend this table (and the guard that reads it) rather than invent
 a local status word.
 
-| Level | Meaning | Reviewer-safe framing | Must not say |
+| Level | Meaning | Safe framing | Must not say |
 |---|---|---|---|
-| `HISTORICAL_PRODUCTION` | Work actually done in a former employer's production environment. Proprietary corpus, logs, models and dashboards are not in this repository. | "In my previous production system I ..." | "The repository proves this scale" |
+| `HISTORICAL_PRODUCTION` | Work actually done in a former employer's production environment. Proprietary corpus, logs, models and dashboards are not in this repository. | "This was done in a previous production environment" | "The repository proves this scale" |
 | `HISTORICAL` | A superseded implementation, configuration, design or compatibility artifact **in this repository**, retained only for historical lineage. It is not a current capability, and it is not evidence of former-employer production usage. | "This is a superseded repository path retained for historical/compatibility context" | "This is a current production capability" |
 | `REPO_VERIFIED` | Code/config exists and is covered by collected deterministic tests or CI in this repository. | "This is implemented and test-covered" | "This is production-validated" |
 | `LOCAL_REAL_VALIDATION` | Exercised in this repository against real external dependencies (Redis, nginx, authenticated Elasticsearch, authenticated Prometheus) on a single local host. | "Validated locally against the real dependency" | "Production cluster / HA / SLO verified" |
@@ -220,11 +220,12 @@ They do not license each other:
 Framing:
 
 > "The Qdrant writers are covered by deterministic tests against the in-process
-> Qdrant client, and during the work that landed in PR #6/#7 I also ran the same
-> writers against a real local Qdrant service alongside a real local Elasticsearch.
-> That earlier run is development history rather than a checked-in artifact, so
-> what this repository reproduces today is the in-memory coverage. Qdrant cluster,
-> HA, throughput and quality are separate work I have not validated here."
+> Qdrant client, and during the work that landed in PR #6/#7 the same
+> writers were also run against a real local Qdrant service alongside a real
+> local Elasticsearch. That earlier run is development history rather than a
+> checked-in artifact, so what this repository reproduces today is the in-memory
+> coverage. Qdrant cluster, HA, throughput and quality are separate work that has
+> not been validated here."
 
 Must not say, in either direction:
 
