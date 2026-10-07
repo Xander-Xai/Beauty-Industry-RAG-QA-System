@@ -14,7 +14,7 @@
 
 canonical 部署形态是 Docker Compose + FastAPI 单体。Kubernetes、Kafka、GraphRAG 与 Multi-Agent **不是**上线前置条件；如需引入，属于独立的架构变更，不能由本手册的上线检查默认视为已具备。
 
-仓库另有一套最小 Kubernetes manifest（`deploy/k8s/`，仅 API 网关），见 [Kubernetes 部署契约](deployment-guide-k8s.md)。它的证据等级只到 `REPO_VERIFIED`（静态检查），真实集群部署为 `PENDING`，不改变本手册的 canonical 推荐。
+仓库另有一套最小 Kubernetes manifest（`deploy/k8s/`，单个 workload = FastAPI 单体 `app.py`），见 [Kubernetes 部署契约](deployment-guide-k8s.md)。它的证据等级只到 `REPO_VERIFIED`（静态检查），真实集群部署为 `PENDING`，不改变本手册的 canonical 推荐。
 
 ## 2. 部署前必须确认
 

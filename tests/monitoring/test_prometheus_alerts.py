@@ -107,6 +107,39 @@ def test_every_referenced_metric_is_actually_emitted(all_rules):
     assert not unknown, f"rules reference metrics that are never emitted: {sorted(unknown)}"
 
 
+#: Series that the retained `monitoring-service/` microservice also exports under the
+#: same name as the canonical collector. Discovered by diffing the two exposition
+#: writers rather than hardcoded, so adding a series to either one re-derives this.
+def _legacy_component_metric_names() -> set[str]:
+    blob = ""
+    for name in ("metrics_collector.py", "main.py"):
+        path = REPO_ROOT / "monitoring-service" / name
+        if path.is_file():
+            blob += path.read_text(encoding="utf-8")
+    return set(re.findall(r"\brag_[A-Za-z0-9_]+", blob))
+
+
+def test_colliding_series_are_scoped_to_the_canonical_job(all_rules):
+    """A rule on a name two exporters share must scope on `job="rag-api"`.
+
+    `rag_redis_degraded_mode` and `rag_uptime_seconds` are exported by both the
+    canonical monolith and the optional `monitoring-service/` component, and
+    `deploy/prometheus.yml` scrapes the latter as a second target. Without a `job`
+    selector the expression evaluates both series, so a legacy value of 1 fires
+    `RagRedisDegraded` and blames the canonical API for the optional component's
+    state. The `job` label comes from the scrape config, not the application, so
+    this filters on scrape identity.
+    """
+    colliding = _collector_metric_names() & _legacy_component_metric_names()
+    assert colliding, "expected the legacy component to still export overlapping names"
+    unscoped: list[str] = []
+    for rule in all_rules:
+        referenced = {n.split("{")[0] for n in re.findall(r"\brag_[A-Za-z0-9_]+", rule["expr"])}
+        if referenced & colliding and "job=" not in rule["expr"]:
+            unscoped.append(f"{rule['alert']} -> {sorted(referenced & colliding)}")
+    assert not unscoped, f'rules on colliding series must scope on job="rag-api": {unscoped}'
+
+
 def test_inventory_covers_the_documented_metrics():
     """The header comment lists the inventory; keep it honest."""
     available = _collector_metric_names()

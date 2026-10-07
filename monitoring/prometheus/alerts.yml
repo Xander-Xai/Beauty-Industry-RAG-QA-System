@@ -24,6 +24,16 @@
 #   rag_uptime_seconds                       gauge
 #   up{job="rag-api"}                        provided by Prometheus itself
 #
+# TWO SERIES NAMES COLLIDE WITH THE OPTIONAL LEGACY COMPONENT:
+#   rag_redis_degraded_mode and rag_uptime_seconds are also exported by
+#   monitoring-service/, the retained microservice component. If that optional
+#   target is enabled alongside the monolith, an unscoped rule would evaluate
+#   both series and a legacy value of 1 could fire a canonical alert. Every rule
+#   that references a colliding name therefore scopes on `job="rag-api"`. The
+#   `job` label is added by the scrape config (deploy/prometheus.yml), not by the
+#   application, so this filters on scrape identity rather than on a metric the
+#   collector would have to emit.
+#
 # DELIBERATELY NOT ALERTED, because no metric exists for them:
 #   Qdrant down / Elasticsearch down. `/api/health` reports them as JSON, not as
 #   Prometheus series, and this repository emits no gauge for either. Writing a
@@ -52,7 +62,7 @@ groups:
             Prometheus cannot scrape {{ $labels.job }}. The API is down, or the
             bearer token on the scrape config is rejected (GET /api/metrics
             requires authentication and returns 401 without it).
-          runbook: docs/slo-runbook.md#high-error-rate
+          runbook: docs/slo-runbook.md#higherrorrate
 
       - alert: RagHighErrorRate
         expr: >-
@@ -73,7 +83,7 @@ groups:
             Server error ratio is {{ $value | humanizePercentage }} over 5
             minutes, against a DESIGN_TARGET of < 1%. Traffic is present, so
             this is a real error ratio rather than a single idle 500.
-          runbook: docs/slo-runbook.md#high-error-rate
+          runbook: docs/slo-runbook.md#higherrorrate
 
   - name: rag-latency
     interval: 30s
@@ -94,13 +104,13 @@ groups:
             request-count guard is load-bearing: a Prometheus summary keeps
             reporting its last quantile indefinitely, so without it a single
             slow request would keep this alert firing long after traffic stopped.
-          runbook: docs/slo-runbook.md#high-latency
+          runbook: docs/slo-runbook.md#highlatency
 
   - name: rag-dependencies
     interval: 30s
     rules:
       - alert: RagRedisDegraded
-        expr: rag_redis_degraded_mode == 1
+        expr: rag_redis_degraded_mode{job="rag-api"} == 1
         for: 5m
         labels:
           severity: warning
@@ -144,4 +154,4 @@ groups:
             {{ $value }} requests are in flight. The bound is a DESIGN_TARGET
             placeholder, not a measured capacity limit; this repository holds no
             load artifact that would justify a specific number.
-          runbook: docs/slo-runbook.md#high-latency
+          runbook: docs/slo-runbook.md#highlatency

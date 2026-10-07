@@ -1,47 +1,74 @@
 # Benchmark Reports
 
-## 目录说明
+> **This directory is not the performance evidence artifact.**
+> The canonical, guarded performance contract is the seven-file artifact under
+> [`artifacts/performance/<run-id>/`](../../artifacts/performance/README.md), written by
+> `tests/load/locustfile.py` through `benchmarks/performance.py::write_artifact`.
+> Nothing in this directory is a `REPO_VERIFIED` result, and no repository claim depends on it.
 
-`reports/benchmark/` 目录存放 Locust 压测产生的 JSON 格式报告。
+## What this directory holds
 
-## 报告文件命名
+Plain-Locust HTML/JSON reports produced by the standalone wrapper
+`tests/load/run_benchmark.py`. It runs `locust` directly and summarises whatever it finds in
+`REPORT_DIR` (`tests/load/locustfile.py` / `run_benchmark.py` both resolve it to
+`reports/benchmark/`).
+
+Use `python -m benchmarks.performance` when you want an artifact that can be cited as
+evidence — it is the path that records provenance, derives `EXECUTED`/`PARTIAL`/`BLOCKED`
+from what actually ran, and writes `null` rather than `0` for anything unmeasured.
+
+## Report file naming
 
 ```
 benchmark_YYYYMMDD_HHMMSS.json
 ```
 
-## 报告字段说明
+## Report field schema
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `benchmark.timestamp` | string | 压测结束时间 |
-| `benchmark.duration_seconds` | float | 压测持续时长 |
-| `benchmark.total_requests` | int | 总请求数 |
-| `benchmark.concurrent_users` | int | 并发用户数 |
-| `latency_ms.avg` | float | 平均延迟 (ms) |
-| `latency_ms.p50` | float | 中位延迟 (ms) |
-| `latency_ms.p95` | float | P95 延迟 (ms) |
-| `latency_ms.p99` | float | P99 延迟 (ms) |
-| `cache.client_cache_hit_rate_pct` | float | 客户端统计缓存命中率 (%) |
-| `system_stats.cache_hit_rate` | object | 系统级 L1/L2/L2_SESSION 命中率 |
-| `system_stats.prefix_cache_hit_rate` | float | Prefix Cache 命中率 |
-| `errors.total` | int | 错误请求数 |
-| `errors.error_rate_pct` | float | 错误率 (%) |
+Read-only, by `tests/load/run_benchmark.py`. This is the wrapper's own summary shape and is
+independent of the seven-file artifact contract.
 
-## 运行方式
+| Field | Type | Meaning |
+|------|------|---------|
+| `benchmark.timestamp` | string | run end time |
+| `benchmark.duration_seconds` | float | run duration |
+| `benchmark.total_requests` | int | total requests |
+| `benchmark.concurrent_users` | int | concurrent users |
+| `latency_ms.count` | int | latency sample count |
+| `latency_ms.avg` | float | mean latency (ms) |
+| `latency_ms.min` / `latency_ms.max` | float | latency bounds (ms) |
+| `latency_ms.p50` | float | median latency (ms) |
+| `latency_ms.p95` | float | P95 latency (ms) |
+| `latency_ms.p99` | float | P99 latency (ms) |
+| `cache.client_cache_hits` | int | client-side cache hits |
+| `cache.client_cache_misses` | int | client-side cache misses |
+| `cache.client_cache_hit_rate_pct` | float | client-side cache hit rate (%) |
+| `system_stats.cache_hit_rate` | object | server-side per-level hit rate (`L1`, `L2`, `L2_SESSION`) |
+| `errors.total` | int | failed requests |
+| `errors.error_rate_pct` | float | error rate (%) |
+
+## Running the wrapper
 
 ```bash
-# 安装依赖
 pip install -r requirements-loadtest.txt
 
-# 运行压测 (单机模式, 10 并发, 2/s 加速, 5 分钟)
+# headless, single host — canonical path
 cd tests/load
 locust --headless -u 10 -r 2 --run-time 5m --host http://localhost:8000
-
-# 运行压测 (Web UI 模式)
-locust -u 10 -r 2 --host http://localhost:8000
 ```
 
-## 分析
+**The wrapper does not produce a report in a clean checkout, and this is a known gap.**
+`tests/load/run_benchmark.py` runs `locust` and then looks for a `benchmark_*.json` in this
+directory, but the quit hook in `locustfile.py` writes the seven-file artifact to
+`artifacts/performance/<run-id>/` instead. Finding no file, `run_benchmark()` returns `None` and
+the wrapper exits `1` — the Locust run itself does complete, and its artifact *is* written.
 
-可编写脚本遍历 `benchmark_*.json` 文件，提取各次压测的 P50/P95/P99 延迟趋势和缓存命中率变化。
+So: use `python -m benchmarks.performance`, or the `locust` command above. Treat this wrapper's
+HTML summary as consuming reports placed here by hand (`--report-only` / `--compare` still work on
+files you supply). Resolving the wrapper to read the artifact it just wrote is tracked, not done —
+it would change load-test code rather than documentation.
+
+A run against an unreachable API or a missing bearer token records a `BLOCKED` reason in the
+canonical artifact rather than emitting a number. That path is `PENDING` until a real run is
+committed; see [`docs/deferred-runtime-validation.md`](../../docs/deferred-runtime-validation.md)
+(`VAL-PERF-001`) and [issue #32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32).

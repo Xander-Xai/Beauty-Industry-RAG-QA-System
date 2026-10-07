@@ -32,7 +32,8 @@ levels; see [Run outcomes that are not evidence levels](evidence-map.md#run-outc
 - [Project overview and quick start](../README.md)
 - [Deployment guide](deployment-guide.md)
 - [Kubernetes deployment contract](deployment-guide-k8s.md): the minimal second deployment form
-  (`deploy/k8s/`, API gateway only). Manifests are `REPO_VERIFIED` by static check only; any
+  (`deploy/k8s/`, one workload — the FastAPI monolith, not the `api-gateway/` component).
+  Manifests are `REPO_VERIFIED` by static check only; any
   real cluster deployment is `PENDING`. Docker Compose remains the canonical form.
 - [User guide](user-guide.md)
 - [Operations guide](operations-guide.md)
@@ -131,6 +132,10 @@ Every Markdown file under `docs/` is exactly one of two things:
 - **historical**, under `docs/archive/`, whose opening lines mark it as
   historical and state that it is not a source for current capability,
   architecture, metric or validation claims.
+
+`docs/demo/` is current/canonical but holds a generated demo, not a prose guide, so it
+is indexed as a single entry rather than file by file: see
+[the demo README](demo/README.md).
 
 The former `docs/superpowers/` directory was removed from the current branch and
 nothing replaced it; its files remain retrievable from this repository's Git

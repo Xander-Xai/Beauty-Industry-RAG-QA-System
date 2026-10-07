@@ -58,7 +58,7 @@
 - `core/pipeline.py` → `OnlineRAGPipeline.process()`，整条链路在一个方法里顺序展开
 - `docs/architecture-baseline.md` → 「当前主链路」代码块
 
-**边界**：**架构口径只认上面那份 baseline**。`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/` 目录是保留的代码组件，不代表端到端生产验证。
+**边界**：**架构口径只认上面那份 baseline**。`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/` 目录是保留的代码组件，不代表端到端生产验证。
 
 ---
 
@@ -282,7 +282,7 @@
 
 > **Docker Compose 是本仓库的 canonical 部署形态**。安全相关环境变量缺失时 Compose 会 fail-fast，这是有意行为：Redis 开 `requirepass`，Elasticsearch 开 `xpack.security.enabled`，还有 MinIO 凭据与服务间 token。
 >
-> `deploy/k8s/` 是**第二形态、非 canonical**，提供 API 网关的最小 Deployment / Service / ConfigMap / Secret 契约。探针是刻意分开的：startupProbe 打 `/api/health`（进程起来没有），livenessProbe 用 `tcpSocket`（依赖挂了不该触发重启），readinessProbe 打 `/api/ready`（依赖感知，不满足就 503 摘流量）。一个依赖在滚动更新期间不可用，不会把 Pod 拖进重启循环。
+> `deploy/k8s/` 是**第二形态、非 canonical**，提供 FastAPI 单体（`app.py`）的最小 Deployment / Service / ConfigMap / Secret 契约；它不部署 `api-gateway/` 那个保留的微服务组件。探针是刻意分开的：startupProbe 打 `/api/health`（进程起来没有），livenessProbe 用 `tcpSocket`（依赖挂了不该触发重启），readinessProbe 打 `/api/ready`（依赖感知，不满足就 503 摘流量）。一个依赖在滚动更新期间不可用，不会把 Pod 拖进重启循环。
 
 **打开这些文件**
 

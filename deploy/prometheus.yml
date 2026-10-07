@@ -1,5 +1,15 @@
 # Prometheus 配置 — 化妆品行业 RAG 问答系统
-# 抓取 monitoring-service 的 /metrics 端点
+#
+# 抓取目标（按顺序）：
+#   1. `rag-api`             -> canonical FastAPI 单体的 /api/metrics（需 Bearer token）
+#                              这是 6 条告警规则唯一依赖的 series 来源。
+#   2. `rag-monitoring-service` -> 可选的遗留微服务组件，不在 canonical 部署中，
+#                              不 emit 任何告警规则引用的 series。
+#
+# `job` 标签由本文件的 scrape 配置添加，不是应用 emit 的。注意 job 2 的
+# `rag_redis_degraded_mode` 与 job 1 同名（详见 monitoring/prometheus/alerts.yml
+# 顶部说明），所以引用该 series 的告警规则用 `job="rag-api"` 限定，避免遗留组件
+# 的值误触发 canonical 告警。启用 job 2 前请先确认这一点。
 
 global:
   scrape_interval: 15s

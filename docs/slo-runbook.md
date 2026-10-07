@@ -1,9 +1,9 @@
 # SLO and incident runbook
 
 Scope: the canonical deployment, which is **FastAPI monolith (`app.py`) + Docker
-Compose**. The `api-gateway/`, `retrieval-service/`, `generation-service/` and
-`monitoring-service/` directories are optional components and are not part of the
-availability target below.
+Compose**. The `api-gateway/`, `retrieval-service/`, `generation-service/`,
+`monitoring-service/`, `cache-service/` and `rewrite-service/` directories are
+optional components and are not part of the availability target below.
 
 This document is a **contract**, not a report. Every number in the SLO section is
 a `DESIGN_TARGET`. Nothing here states that the system has ever met a target.
@@ -600,7 +600,9 @@ grep "$REQUEST_ID" logs/*.log logs/audit/*.jsonl
 
 Recorded actions: `auth.login.success`, `auth.login.failure`,
 `auth.login.rate_limited`, `admin.user.create`, `admin.role.update`,
-`media.access.denied`, `knowledge.epoch.seal`.
+`media.access.denied`, `knowledge.epoch.seal`, `knowledge.source.trust_decision`,
+`knowledge.source.quarantine`. The canonical list is `common/audit.py`'s
+`KNOWN_ACTIONS`; [the evidence map](evidence-map.md) lists the same nine.
 
 There is deliberately **no** `knowledge.epoch.activate` event: this repository
 has no activate endpoint, so emitting one would imply an API that does not exist.

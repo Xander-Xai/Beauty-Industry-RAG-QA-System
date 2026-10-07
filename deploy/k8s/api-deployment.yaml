@@ -1,9 +1,11 @@
-# Minimal Kubernetes deployment contract for the RAG QA API gateway.
+# Minimal Kubernetes deployment contract for the RAG QA API.
 #
-# Scope: exactly one workload (the API gateway) plus its Service, ConfigMap and
-# Secret reference. vLLM inference, Qdrant, Elasticsearch, Redis and MinIO are
-# deliberately NOT included - the gateway expects them to exist as in-cluster
-# services, matching the docker-compose topology.
+# Scope: exactly one workload (the FastAPI monolith, `app.py`) plus its Service,
+# ConfigMap and Secret reference. This is NOT the retained `api-gateway/`
+# microservice component - the image is the repository root Dockerfile, whose
+# entrypoint is `python app.py`. vLLM inference, Qdrant, Elasticsearch, Redis and
+# MinIO are deliberately NOT included - the app expects them to exist as
+# in-cluster services, matching the docker-compose topology.
 #
 # Probe design note (verified against the running application):
 #   Two endpoints, two different questions. They are not interchangeable.

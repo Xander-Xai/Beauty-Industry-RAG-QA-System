@@ -1,4 +1,4 @@
-# Namespace for the RAG QA API gateway.
+# Namespace for the RAG QA API (FastAPI monolith).
 #
 # Evidence level: REPO_VERIFIED (statically validated by
 # tests/deploy/test_k8s_manifests.py only).

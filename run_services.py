@@ -216,7 +216,10 @@ def rerank_batch(req: RerankRequest):
         raise HTTPException(503, "Aggregator not initialized")
     try:
         from sentence_transformers import CrossEncoder
-        # 使用默认 CrossEncoder（实际部署时按配置加载）
+        # Legacy microservice path only. This literal is a hardcoded default and is NOT
+        # the canonical reranker: the online path reads `gpu1.models.cross_encoder_a` /
+        # `cross_encoder_b` from `config.json` via `retrieval/cross_encoder_ensemble.py`.
+        # Nothing in the canonical monolith uses this endpoint or this model id.
         model = CrossEncoder("cross-encoder-ms-marco-MiniLM-L-6")
         pairs = [tuple(p) for p in req.pairs]
         scores = _aggregator.batch_predict(model, pairs)
