@@ -118,6 +118,10 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   consolidation freeze record — repository state, core capabilities, evidence
   matrix, deferred validation, known boundaries, interview navigation and the
   final gate.
+- [Guangzhou interview application action plan](guangzhou-interview-action-plan-2026-10-07.md):
+  dated hiring-JD comparison, time-cost priorities, parallel-safe one-problem task
+  prompts, acceptance criteria and the explicit no-runtime-validation boundary.
+  It is job-search navigation, **not** a new source of architecture or runtime claims.
 
 ## Design
 
