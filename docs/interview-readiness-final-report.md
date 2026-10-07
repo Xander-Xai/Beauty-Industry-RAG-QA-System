@@ -79,8 +79,10 @@ criteria, failure interpretation and evidence-promotion rule. Every status is
 
 ## 5. Known boundaries (do not claim these)
 
-- No committed retrieval or performance benchmark artifact, so **no metric,
-  QPS, P95 or P99 is claimed anywhere**.
+- No committed retrieval or performance benchmark artifact, so **no
+  repository-measured metric, QPS, P95 or P99 is claimed**. Historical
+  production figures (e.g. 10–15 QPS) and design targets are labelled
+  `HISTORICAL_PRODUCTION` / `DESIGN_TARGET` and are not repository measurements.
 - No real RAGAS score; the harness is `REPO_VERIFIED`, the result is `PENDING`.
 - The 4B/14B vLLM topology has **never been executed here** (weights absent,
   `vllm` not installed).
