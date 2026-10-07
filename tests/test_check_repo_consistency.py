@@ -1006,7 +1006,7 @@ def test_tracing_default_is_not_misdescribed_as_local_memory_spans():
     """
     from pathlib import Path
 
-    text = Path("docs/interview-architecture-baseline.md").read_text(encoding="utf-8")
+    text = Path("docs/architecture-baseline.md").read_text(encoding="utf-8")
     assert "TracerProvider" in text
     assert "OTel SDK 未安装" in text and "初始化失败" in text
     assert "OTEL_EXPORT_ENABLED=false" in text
@@ -1567,7 +1567,7 @@ def test_evidence_documents_are_in_the_metric_reference_scope():
     """
     from scripts.check_repo_consistency import OPERATIONAL_METRIC_DOCS
 
-    for name in ("README.md", "docs/interview-evidence-map.md", "docs/repository-truth-audit.md"):
+    for name in ("README.md", "docs/evidence-map.md", "docs/repository-truth-audit.md"):
         assert name in OPERATIONAL_METRIC_DOCS, f"{name} cites rag_* series and must be scanned"
 
 
@@ -1938,8 +1938,8 @@ def test_missing_capability_section_is_flagged(tmp_path, monkeypatch):
     import scripts.check_repo_consistency as guard
 
     monkeypatch.setattr(guard, "ROOT", tmp_path)
-    (tmp_path / guard.INTERVIEW_EVIDENCE_MAP).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / guard.INTERVIEW_EVIDENCE_MAP).write_text("# Evidence\n\nNo table here.\n", encoding="utf-8")
+    (tmp_path / guard.EVIDENCE_MAP).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / guard.EVIDENCE_MAP).write_text("# Evidence\n\nNo table here.\n", encoding="utf-8")
 
     errors: list[str] = []
     guard.check_capability_rows_are_unique(errors)
@@ -2211,7 +2211,7 @@ def test_current_documents_are_the_ones_guarded():
     from scripts.check_repo_consistency import EVIDENCE_VOCABULARY_DOCS
 
     assert "docs/repository-truth-audit.md" in EVIDENCE_VOCABULARY_DOCS
-    assert "docs/interview-evidence-map.md" in EVIDENCE_VOCABULARY_DOCS
+    assert "docs/evidence-map.md" in EVIDENCE_VOCABULARY_DOCS
     # Historical plans are not evidence and must not be dragged into the taxonomy.
     assert not any(name.startswith("docs/superpowers/") for name in EVIDENCE_VOCABULARY_DOCS)
 
@@ -2964,7 +2964,7 @@ def test_lineage_anchor_requires_the_artifact_gap_and_upgrade_path():
 def test_current_evidence_documents_satisfy_the_lineage_anchor():
     from scripts.check_repo_consistency import ROOT, qdrant_lineage_errors
 
-    for name in ("docs/interview-evidence-map.md", "docs/repository-truth-audit.md"):
+    for name in ("docs/evidence-map.md", "docs/repository-truth-audit.md"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert qdrant_lineage_errors(name, text, artifact_exists=False) == []
 
@@ -3011,7 +3011,7 @@ def test_spurious_numbered_reference_is_not_an_enumerated_item():
     # "Q12" in prose and a "## Q12 ..." heading are references, not list items, so
     # the section carries no enumeration and the count rule never inspects it.
     text = "## Q12 标准回答\n\nThis answers the twelve questions asked.\n\n## Other\n\nNo list here.\n"
-    assert enumerated_count_errors("docs/interview-architecture-baseline.md", text) == []
+    assert enumerated_count_errors("docs/architecture-baseline.md", text) == []
 
 
 def test_prose_mentioning_a_count_without_an_enumeration_is_not_flagged():
@@ -4407,7 +4407,7 @@ def test_readme_and_evidence_map_agree_with_the_audit_on_the_ci_frontend_build()
     assert "`REPO_VERIFIED` (B CI build gate)" in audit
 
     # None of the three may imply the frontend is deployed or end-to-end validated.
-    for name in ("README.md", "docs/interview-evidence-map.md", "docs/repository-truth-audit.md"):
+    for name in ("README.md", "docs/evidence-map.md", "docs/repository-truth-audit.md"):
         text = (ROOT / name).read_text(encoding="utf-8").lower()
         for phrase in (
             "frontend is deployed",
@@ -4997,7 +4997,7 @@ def test_guarded_documents_keep_every_real_claim_in_scope():
     claiming = {
         "README.md",
         "docs/deployment-guide-k8s.md",
-        "docs/interview-walkthrough.md",
+        "docs/technical-walkthrough.md",
         "docs/repository-metadata.md",
         "docs/repository-truth-audit.md",
     }

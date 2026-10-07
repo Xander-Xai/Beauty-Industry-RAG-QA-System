@@ -41,7 +41,7 @@
   `tests/test_runtime_api_metadata.py` fails if the topology claim returns. No architecture,
   model routing, config or historical production record changed.
 - Recruiter-facing landing and interview walkthrough (PR #55): merged as `424f43f`. It reworked
-  the README top fold, added `docs/interview-walkthrough.md` and `docs/repository-metadata.md`,
+  the README top fold, added `docs/technical-walkthrough.md` and `docs/repository-metadata.md`,
   and reconciled the top-fold evidence strip with the canonical six-level taxonomy (the strip had
   rendered five rows under a three-level heading and omitted `HISTORICAL`). Documentation only.
 - Bounded vLLM generation resilience contract (PR #56): merged as `0c99724`. The contract and its
@@ -70,7 +70,7 @@ Post-reconciliation verification date: 2026-10-06.
 
 The `Status` column of the audit table below uses the **canonical evidence
 vocabulary** defined in
-[Interview evidence map → Classification vocabulary](interview-evidence-map.md#classification-vocabulary):
+[Interview evidence map → Classification vocabulary](evidence-map.md#classification-vocabulary):
 `HISTORICAL_PRODUCTION`, `HISTORICAL`, `REPO_VERIFIED`, `LOCAL_REAL_VALIDATION`,
 `DESIGN_TARGET`, `PENDING`. That table is the only source of evidence levels in this
 repository; this audit adds no status word of its own, and a retired vocabulary such

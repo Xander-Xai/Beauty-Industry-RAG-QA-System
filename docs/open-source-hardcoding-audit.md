@@ -5,7 +5,7 @@ Audit base: original `7b03267` (`origin/main`), refreshed at the 2026-10-02 v2.5
 ## Configuration sources
 
 The `Status` column uses the canonical evidence vocabulary from
-[Interview evidence map → Classification vocabulary](interview-evidence-map.md#classification-vocabulary).
+[Interview evidence map → Classification vocabulary](evidence-map.md#classification-vocabulary).
 
 | Area | Current source observation | Status |
 |---|---|---|

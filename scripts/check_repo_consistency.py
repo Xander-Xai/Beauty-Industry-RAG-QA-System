@@ -13,7 +13,7 @@ those checks, so a summary cannot keep counting the manifests after a check is
 added. It does not flag historical CHANGELOG text or historical implementation
 plans.
 
-It also enforces one evidence vocabulary. ``docs/interview-evidence-map.md``
+It also enforces one evidence vocabulary. ``docs/evidence-map.md``
 owns the canonical taxonomy, and every current interview-facing or
 repository-truth document must classify its claims with those levels and no
 others; the docs index inventory must equal that taxonomy exactly. A retired
@@ -198,7 +198,7 @@ HISTORICAL_MARKERS = re.compile(
 RAGAS_REQUIRED_DOCS = [
     "README.md",
     "docs/ragas-evaluation-guide.md",
-    "docs/interview-architecture-baseline.md",
+    "docs/architecture-baseline.md",
 ]
 
 # Historical exemption for the RAGAS zero-fallback scanner. Deliberately
@@ -288,7 +288,7 @@ RAGAS_FAILURE_CONDITION_RE = re.compile(
 # external topologies are still out of scope and remain valid to mark as
 # unverified, so lines that explicitly describe such a boundary are exempt.
 LOCAL_VALIDATION_DOCS = [
-    "docs/interview-architecture-baseline.md",
+    "docs/architecture-baseline.md",
     "docs/repository-truth-audit.md",
 ]
 
@@ -424,7 +424,7 @@ BENCHMARK_ARTIFACT_GLOB = "artifacts/benchmarks/*/metadata.json"
 BENCHMARK_CLASSIFICATION_DOCS = [
     "README.md",
     "docs/README.md",
-    "docs/interview-evidence-map.md",
+    "docs/evidence-map.md",
     "docs/repository-truth-audit.md",
     "artifacts/benchmarks/README.md",
 ]
@@ -668,7 +668,7 @@ def check_version_label_semantics(errors: list[str]) -> None:
         "CHANGELOG.md",
         "docs/README.md",
         "docs/repository-truth-audit.md",
-        "docs/interview-architecture-baseline.md",
+        "docs/architecture-baseline.md",
         "docs/deployment-guide.md",
         "docs/operations-guide.md",
     ):
@@ -919,10 +919,10 @@ def check_docs_index(errors: list[str]) -> None:
     required = [
         "Canonical / Current",
         "Evaluation",
-        "Interview / Architecture truth",
+        "Architecture & Evidence Truth",
         "Design",
         "Historical / Implementation Plans",
-        "interview-architecture-baseline.md",
+        "architecture-baseline.md",
         "ragas-evaluation-guide.md",
         "repository-truth-audit.md",
         # The index is where a reader looks to learn where a doc belongs, so it
@@ -1607,8 +1607,8 @@ def check_enterprise_readiness_contracts(errors: list[str]) -> None:
         "docs/pre-launch-checklist.md",
         "docs/slo-runbook.md",
         "docs/repository-truth-audit.md",
-        "docs/interview-evidence-map.md",
-        "docs/interview-architecture-baseline.md",
+        "docs/evidence-map.md",
+        "docs/architecture-baseline.md",
         "docs/deployment-guide.md",
     ):
         path = ROOT / name
@@ -1700,8 +1700,8 @@ _LEGACY_JAEGER_AGENT_SURFACES = (
     "docs/pre-launch-checklist.md",
     "docs/slo-runbook.md",
     "docs/repository-truth-audit.md",
-    "docs/interview-architecture-baseline.md",
-    "docs/interview-evidence-map.md",
+    "docs/architecture-baseline.md",
+    "docs/evidence-map.md",
 )
 
 
@@ -1810,8 +1810,8 @@ EXPORTER_TRUTH_DOCS = (
     "README.md",
     "docs/README.md",
     "docs/repository-truth-audit.md",
-    "docs/interview-architecture-baseline.md",
-    "docs/interview-evidence-map.md",
+    "docs/architecture-baseline.md",
+    "docs/evidence-map.md",
     "docs/operations-guide.md",
     "docs/slo-runbook.md",
     "docs/pre-launch-checklist.md",
@@ -1860,18 +1860,18 @@ _BASELINE_CLOSED_LOOP_PENDING_RE = re.compile(
 
 def check_interview_baseline_exporter_split(errors: list[str]) -> None:
     """The interview baseline must state exporter implementation AND pending loop."""
-    path = ROOT / "docs/interview-architecture-baseline.md"
+    path = ROOT / "docs/architecture-baseline.md"
     if not path.exists() or not otlp_exporter_implemented():
         return
     text = path.read_text(encoding="utf-8")
     if not _TRACING_SUBJECT_RE.search(text):
         return
     if not _BASELINE_EXPORTER_IMPLEMENTATION_RE.search(text):
-        fail(errors, "docs/interview-architecture-baseline.md: must name the OTLP exporter implementation")
+        fail(errors, "docs/architecture-baseline.md: must name the OTLP exporter implementation")
     if not _BASELINE_CLOSED_LOOP_PENDING_RE.search(text):
         fail(
             errors,
-            "docs/interview-architecture-baseline.md: must record the OTLP runtime closed loop as pending",
+            "docs/architecture-baseline.md: must record the OTLP runtime closed loop as pending",
         )
 
 
@@ -1883,7 +1883,7 @@ def check_interview_baseline_exporter_split(errors: list[str]) -> None:
 # quoting an arbitrary pick. This guard derives the capability names from the
 # table itself, so it holds for any capability, present or future.
 
-INTERVIEW_EVIDENCE_MAP = "docs/interview-evidence-map.md"
+EVIDENCE_MAP = "docs/evidence-map.md"
 _VOCABULARY_SECTION = "## Classification vocabulary"
 _CAPABILITY_SECTION = "## Capability evidence"
 
@@ -1965,10 +1965,10 @@ def duplicate_capability_errors(name: str, text: str) -> list[str]:
 
 def check_capability_rows_are_unique(errors: list[str]) -> None:
     """The interview evidence map must give each capability exactly one row."""
-    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    path = ROOT / EVIDENCE_MAP
     if not path.exists():
         return
-    errors.extend(duplicate_capability_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
+    errors.extend(duplicate_capability_errors(EVIDENCE_MAP, path.read_text(encoding="utf-8")))
 
 
 # ── 1c. capability rows may only use levels the vocabulary defines ──────────
@@ -2048,10 +2048,10 @@ def undefined_evidence_level_errors(name: str, text: str) -> list[str]:
 
 def check_evidence_levels_are_defined(errors: list[str]) -> None:
     """Every Capability evidence level must be defined by the classification vocabulary."""
-    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    path = ROOT / EVIDENCE_MAP
     if not path.exists():
         return
-    errors.extend(undefined_evidence_level_errors(INTERVIEW_EVIDENCE_MAP, path.read_text(encoding="utf-8")))
+    errors.extend(undefined_evidence_level_errors(EVIDENCE_MAP, path.read_text(encoding="utf-8")))
 
 
 # ── 1d. one canonical taxonomy for every current document ──────────────────
@@ -2128,7 +2128,7 @@ def _evidence_vocabulary_tokens(text: str, heading: str, first_column: str) -> s
 
 def canonical_evidence_levels() -> set[str]:
     """The evidence levels this repository defines, parsed from the canonical table."""
-    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    path = ROOT / EVIDENCE_MAP
     if not path.exists():
         return set()
     return _evidence_vocabulary_tokens(path.read_text(encoding="utf-8"), _VOCABULARY_SECTION, "level")
@@ -2136,7 +2136,7 @@ def canonical_evidence_levels() -> set[str]:
 
 def run_outcome_tokens() -> set[str]:
     """Tokens that describe one execution rather than an evidence level."""
-    path = ROOT / INTERVIEW_EVIDENCE_MAP
+    path = ROOT / EVIDENCE_MAP
     if not path.exists():
         return set()
     return _evidence_vocabulary_tokens(path.read_text(encoding="utf-8"), _RUN_OUTCOME_SECTION, "token")
@@ -2167,7 +2167,7 @@ def evidence_classification_errors(name: str, text: str, legal: set[str]) -> lis
     if not legal:
         return [
             f"{name}: cannot validate evidence classifications: the canonical vocabulary in "
-            f"{INTERVIEW_EVIDENCE_MAP} is missing or unparsable"
+            f"{EVIDENCE_MAP} is missing or unparsable"
         ]
 
     lines = text.splitlines()
@@ -2227,8 +2227,8 @@ def evidence_classification_errors(name: str, text: str, legal: set[str]) -> lis
 #: to open that directory, and so a reference to it cannot pass for a current
 #: document. See `check_removed_plan_path_is_historical`.
 EVIDENCE_VOCABULARY_DOCS = (
-    "docs/interview-evidence-map.md",
-    "docs/interview-architecture-baseline.md",
+    "docs/evidence-map.md",
+    "docs/architecture-baseline.md",
     "docs/repository-truth-audit.md",
     "docs/open-source-hardcoding-audit.md",
     "docs/validation/v2.5-runtime-security-validation.md",
@@ -2260,7 +2260,7 @@ def docs_index_vocabulary_errors(name: str, text: str, levels: set[str]) -> list
     if not levels:
         return [
             f"{name}: cannot check the vocabulary inventory: the canonical vocabulary in "
-            f"{INTERVIEW_EVIDENCE_MAP} is missing or unparsable"
+            f"{EVIDENCE_MAP} is missing or unparsable"
         ]
     lines = text.splitlines()
     section = _section_index(lines, _DOCS_INDEX_VOCABULARY_SECTION)
@@ -2283,7 +2283,7 @@ def docs_index_vocabulary_errors(name: str, text: str, levels: set[str]) -> list
     for token in sorted(listed - levels):
         errors.append(
             f"{name}: {_DOCS_INDEX_VOCABULARY_SECTION!r} lists {token!r}, which is not a canonical "
-            f"evidence level; the inventory must match the vocabulary in {INTERVIEW_EVIDENCE_MAP} exactly"
+            f"evidence level; the inventory must match the vocabulary in {EVIDENCE_MAP} exactly"
         )
     return errors
 
@@ -2380,7 +2380,7 @@ OPERATIONAL_METRIC_DOCS = (
     "docs/slo-runbook.md",
     "docs/pre-launch-checklist.md",
     "docs/deployment-guide.md",
-    "docs/interview-evidence-map.md",
+    "docs/evidence-map.md",
     "docs/repository-truth-audit.md",
 )
 
@@ -2668,7 +2668,7 @@ DELIVERED_AUDIT_AREAS = (
 #: Where the canonical classification vocabulary is defined. Named so the guard can
 #: point an author at the one place a new level must be declared, rather than
 #: holding a second, diverging copy of the vocabulary here.
-_CLASSIFICATION_SOURCE = "docs/interview-evidence-map.md → Classification vocabulary"
+_CLASSIFICATION_SOURCE = "docs/evidence-map.md → Classification vocabulary"
 
 #: Long-lived trackers for evidence that only an external environment can produce.
 #: None of this repository's own changes can close them, so the audit must keep
@@ -2950,7 +2950,7 @@ QDRANT_RUNTIME_ARTIFACT_GLOB = "artifacts/qdrant/*/metadata.json"
 #: The documents that classify Qdrant evidence. Both must keep recording the
 #: historical execution, so deleting the lineage cannot pass silently.
 QDRANT_EVIDENCE_LINEAGE_DOCS = (
-    "docs/interview-evidence-map.md",
+    "docs/evidence-map.md",
     "docs/repository-truth-audit.md",
 )
 
@@ -3251,8 +3251,8 @@ FRONTEND_E2E_ARTIFACT_GLOB = "artifacts/frontend-e2e/*/report.json"
 FRONTEND_EVIDENCE_DOCS = [
     "README.md",
     "docs/README.md",
-    "docs/interview-evidence-map.md",
-    "docs/interview-architecture-baseline.md",
+    "docs/evidence-map.md",
+    "docs/architecture-baseline.md",
     "docs/repository-truth-audit.md",
     "docs/main-branch-governance.md",
     "docs/pre-launch-checklist.md",
@@ -3755,7 +3755,7 @@ def check_truth_audit(errors: list[str], audit_path: Path | None = None) -> None
     if not legal:
         fail(
             errors,
-            f"repository truth audit cannot be validated: the canonical vocabulary in {INTERVIEW_EVIDENCE_MAP} "
+            f"repository truth audit cannot be validated: the canonical vocabulary in {EVIDENCE_MAP} "
             "is missing or unparsable",
         )
     # Only the contiguous run of `|` lines that starts at the audit header is the

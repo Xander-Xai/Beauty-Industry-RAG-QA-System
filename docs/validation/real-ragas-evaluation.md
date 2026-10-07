@@ -17,7 +17,7 @@ evaluation is not a production quality benchmark.
 
 `Stage outcome` records what one execution did. `Evidence level` uses the canonical
 vocabulary from
-[Interview evidence map → Classification vocabulary](../interview-evidence-map.md#classification-vocabulary);
+[Interview evidence map → Classification vocabulary](../evidence-map.md#classification-vocabulary);
 no score was produced here, so no quality level is claimed.
 
 | Stage | Stage outcome | Evidence level | Evidence basis |

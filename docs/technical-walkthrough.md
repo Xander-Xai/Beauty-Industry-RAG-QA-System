@@ -2,7 +2,7 @@
 
 按面试官会问的顺序，逐节给出**要说的话**与**要打开的真实代码文件**。目标：5 分钟内让对方知道具体做了什么，而不是让他读完 26,000+ 字 README。
 
-本文档**不建立任何新的事实来源**。架构口径唯一来自 [interview-architecture-baseline.md](interview-architecture-baseline.md)，证据等级唯一来自 [interview-evidence-map.md](interview-evidence-map.md)，逐能力审计唯一来自 [repository-truth-audit.md](repository-truth-audit.md)。本文只做**导航**与**话术**：每一节指向的那几个文件，才是答案本身。
+本文档**不建立任何新的事实来源**。架构口径唯一来自 [architecture-baseline.md](architecture-baseline.md)，证据等级唯一来自 [evidence-map.md](evidence-map.md)，逐能力审计唯一来自 [repository-truth-audit.md](repository-truth-audit.md)。本文只做**导航**与**话术**：每一节指向的那几个文件，才是答案本身。
 
 ## 怎么用这份脚本
 
@@ -19,7 +19,7 @@
 2. **打开这些文件**——真实路径，点开对应行号。
 3. **边界**——这一节哪些是 `REPO_VERIFIED`、哪些是 `PENDING`。等级词汇只使用上面三份文档里的那套，不引入第二种说法。
 
-**证据等级词汇**（完整定义见 [Classification vocabulary](interview-evidence-map.md#classification-vocabulary)）：`HISTORICAL_PRODUCTION` / `HISTORICAL` / `REPO_VERIFIED` / `LOCAL_REAL_VALIDATION` / `DESIGN_TARGET` / `PENDING`。`EXECUTED` / `PARTIAL` / `BLOCKED` / `PASS` / `NOT RUN` 是单次运行结果，不是证据等级。
+**证据等级词汇**（完整定义见 [Classification vocabulary](evidence-map.md#classification-vocabulary)）：`HISTORICAL_PRODUCTION` / `HISTORICAL` / `REPO_VERIFIED` / `LOCAL_REAL_VALIDATION` / `DESIGN_TARGET` / `PENDING`。`EXECUTED` / `PARTIAL` / `BLOCKED` / `PASS` / `NOT RUN` 是单次运行结果，不是证据等级。
 
 ---
 
@@ -33,7 +33,7 @@
 
 **打开这些文件**
 
-- `docs/interview-architecture-baseline.md` → Q12 标准回答（先看这一段，最省时间）
+- `docs/architecture-baseline.md` → Q12 标准回答（先看这一段，最省时间）
 - `PRD.md` → 顶部 runtime reconciliation 表
 - `frontend/src/App.jsx` → 演示里"点引用跳回来源文档"的交互
 
@@ -56,7 +56,7 @@
 - `app.py` → 单体入口，proxy 策略
 - `api/routes.py` → `/api/query` `/api/chat` `/api/continuation`
 - `core/pipeline.py` → `OnlineRAGPipeline.process()`，整条链路在一个方法里顺序展开
-- `docs/interview-architecture-baseline.md` → 「当前主链路」代码块
+- `docs/architecture-baseline.md` → 「当前主链路」代码块
 
 **边界**：**架构口径只认上面那份 baseline**。`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/` 目录是保留的代码组件，不代表端到端生产验证。
 
@@ -336,7 +336,7 @@
 **打开这些文件**
 
 - `scripts/check_repo_consistency.py` → 证据一致性守卫本体；**这是最能说明工程习惯的一个文件**
-- `docs/interview-evidence-map.md` → 逐能力分级 + benchmark artifact 验收标准 + 已知表述风险清单
+- `docs/evidence-map.md` → 逐能力分级 + benchmark artifact 验收标准 + 已知表述风险清单
 - `docs/repository-truth-audit.md` → 外部验证 tracker map；未验证项逐条列出
 - `docs/validation/v2.5-runtime-security-validation.md` → 唯一 `LOCAL_REAL_VALIDATION` 的 5 项证据
 - `tests/test_check_repo_consistency.py` → 守卫本身有测试
@@ -349,7 +349,7 @@
 
 | 追问 | 一句话回答 | 指向 |
 |---|---|---|
-| 「固定四路召回不是更简单？」 | 不是。简单问题只查 2 路，视觉问题才 4 路；多召回一路就多一路延迟和噪声，ES Fallback 是降级补召回不算一路 | [interview-architecture-baseline.md](interview-architecture-baseline.md) |
+| 「固定四路召回不是更简单？」 | 不是。简单问题只查 2 路，视觉问题才 4 路；多召回一路就多一路延迟和噪声，ES Fallback 是降级补召回不算一路 | [architecture-baseline.md](architecture-baseline.md) |
 | 「Evidence Gate 的阈值怎么来的？」 | 来自 `config.json` 的设计值，Rewrite 降级时自动进入保守模式抬高阈值。**没有用真实标注数据标定过**，所以我不给拒答率 | `config.json` · `retrieval/evidence_gate.py` |
 | 「ES 挂了会怎样？」 | 有效文档不足或 Qdrant 异常时走 BM25-only / 空结果走 dense，并把降级写进响应字段 | `retrieval/parallel_recall.py` · `core/pipeline.py` |
 | 「为什么不用微服务？」 | 当前主线是单体；微服务目录是保留组件，端到端生产验证没有做过。单体在这个规模下更容易证明正确性 | [repository-truth-audit.md](repository-truth-audit.md) |

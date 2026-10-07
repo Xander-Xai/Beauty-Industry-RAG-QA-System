@@ -14,7 +14,7 @@ breaking existing links.
 ## Evidence vocabulary
 
 One canonical taxonomy classifies every evidence claim in the current documentation:
-[Classification vocabulary](interview-evidence-map.md#classification-vocabulary). That
+[Classification vocabulary](evidence-map.md#classification-vocabulary). That
 table is the single source; this index does not extend it.
 
 - `HISTORICAL_PRODUCTION` — work actually done in a former employer's production environment.
@@ -25,7 +25,7 @@ table is the single source; this index does not extend it.
 - `PENDING` — implemented but the real asset/runtime/credential needed to validate it is missing here.
 
 `PARTIAL`, `EXECUTED`, `BLOCKED`, `PASS` and `NOT RUN` are **run outcomes**, not evidence
-levels; see [Run outcomes that are not evidence levels](interview-evidence-map.md#run-outcomes-that-are-not-evidence-levels).
+levels; see [Run outcomes that are not evidence levels](evidence-map.md#run-outcomes-that-are-not-evidence-levels).
 
 ## Canonical / Current
 
@@ -100,23 +100,23 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   Kubernetes, browser E2E), each with its required environment, procedure,
   expected artifact and evidence-promotion rule. Every entry is `NOT EXECUTED`.
 
-## Interview / Architecture truth
+## Architecture & Evidence Truth
 
-- [Interview architecture baseline](interview-architecture-baseline.md): the current
-  end-to-end retrieval/generation contract an interviewer can hold the code to.
-- [Interview walkthrough](interview-walkthrough.md): a 5-minute screen-share script that walks
-  the questions an interviewer actually asks — business context, architecture, one query end to
+- [Architecture baseline](architecture-baseline.md): the current
+  end-to-end retrieval/generation contract a reviewer can hold the code to.
+- [Technical walkthrough](technical-walkthrough.md): a 5-minute screen-share script that walks
+  the questions a reviewer typically asks — business context, architecture, one query end to
   end, hybrid retrieval, rerank, the two gates, multimodal ingestion, RBAC, cache, model routing,
   observability, evaluation, Docker/Kubernetes, degradation and the unvalidated boundary. Each
   section names the files to open. It is navigation only: the baseline, the evidence map and the
   truth audit remain the sole sources of truth.
-- [Interview evidence map](interview-evidence-map.md): the canonical evidence vocabulary
+- [Evidence map](evidence-map.md): the canonical evidence vocabulary
   and the classification of every claim. This map owns the taxonomy; the truth audit's
   `Status` column and the validation records' `Evidence level` columns use the same
   levels.
-- [Interview readiness final report](interview-readiness-final-report.md): the
+- [Repository readiness final report](interview-readiness-final-report.md): the
   consolidation freeze record — repository state, core capabilities, evidence
-  matrix, deferred validation, known boundaries, interview navigation and the
+  matrix, deferred validation, known boundaries, technical navigation and the
   final gate.
 
 ## Design
@@ -145,6 +145,6 @@ history, which is their only archive.
 
 Historical plan ≠ current implementation status, and a plan that has been executed is not a
 current capability statement. When a historical plan and a current document disagree, the
-current document wins: [interview architecture baseline](interview-architecture-baseline.md),
-[interview evidence map](interview-evidence-map.md) and the [repository truth
+current document wins: [architecture baseline](architecture-baseline.md),
+[evidence map](evidence-map.md) and the [repository truth
 audit](repository-truth-audit.md).

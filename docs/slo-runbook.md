@@ -25,7 +25,7 @@ Boundaries that hold everywhere in this document:
 - **Historical production is not a repository benchmark.** The 10–15 short-burst
   QPS and 1500+ daily request figures are `HISTORICAL_PRODUCTION` context and can
   never be cited as a measurement of this repository. See
-  [Interview evidence map](interview-evidence-map.md).
+  [Interview evidence map](evidence-map.md).
 - **A design target is not a measured result.** PRD latency/QPS figures remain
   `DESIGN_TARGET` until an artifact under `artifacts/performance/` recorded for
   the *same* workload says otherwise. No such artifact is committed, so every

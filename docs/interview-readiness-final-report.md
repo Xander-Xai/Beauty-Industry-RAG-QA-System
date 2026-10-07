@@ -64,7 +64,7 @@ capability.
 | `LOCAL_REAL_VALIDATION` | Exactly five: Redis multi-process session persistence, Redis cross-process login rate limiting, nginx/`TRUSTED_PROXIES` client-IP handling, authenticated Elasticsearch, authenticated Prometheus scrape. |
 | `PENDING` | Real retrieval benchmark result, real performance artifact, OTLP runtime export closure, live Grafana/alerts, real BGE/CLIP/PaddleOCR smokes, real Airflow run, real 4B/14B vLLM GPU topology, real RAGAS score, real Kubernetes run, browser→real-backend E2E. |
 
-Canonical source: [`docs/interview-evidence-map.md`](interview-evidence-map.md).
+Canonical source: [`docs/evidence-map.md`](evidence-map.md).
 
 ## 4. Deferred validation
 
@@ -103,9 +103,9 @@ criteria, failure interpretation and evidence-promotion rule. Every status is
 
 | Question | Open |
 |---|---|
-| Whole architecture | [`docs/interview-architecture-baseline.md`](interview-architecture-baseline.md) (canonical diagram) |
-| Five-minute walkthrough script | [`docs/interview-walkthrough.md`](interview-walkthrough.md) |
-| Claim → code → test → level → boundary | [`docs/interview-evidence-map.md`](interview-evidence-map.md) |
+| Whole architecture | [`docs/architecture-baseline.md`](architecture-baseline.md) (canonical diagram) |
+| Five-minute walkthrough script | [`docs/technical-walkthrough.md`](technical-walkthrough.md) |
+| Claim → code → test → level → boundary | [`docs/evidence-map.md`](evidence-map.md) |
 | Retrieval / rerank / gates | `retrieval/parallel_recall.py`, `retrieval/bi_encoder.py`, `retrieval/cross_encoder_ensemble.py`, `retrieval/evidence_gate.py`, `retrieval/answer_gate.py` |
 | RBAC / authentication | `common/auth.py`, `auth/bitmask_rbac.py`, `auth/jwt_auth.py` |
 | Ingestion trust / lifecycle | `offline/source_trust.py`, `offline/validator.py`, `offline/snapshot_builder.py` |
