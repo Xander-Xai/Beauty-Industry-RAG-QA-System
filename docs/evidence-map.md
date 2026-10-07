@@ -146,7 +146,7 @@ Rules:
 | Grafana dashboard | "A 10-panel dashboard uses only emitted metrics; it has never been imported into a live Grafana." | `REPO_VERIFIED` (JSON) / `PENDING` (live) | `monitoring/grafana/dashboards/rag-overview.json` | `tests/monitoring/` | none | No live stack | "Is the dashboard real?" |
 | OTLP exporter | "The exporter is implemented and disabled by default; the runtime closed loop is pending." | `REPO_VERIFIED` (implementation) / `PENDING` (closed loop) | `monitoring/otel_exporter.py` | `tests/monitoring/test_observability.py` | none | No span ever queried from a backend | "Is tracing live?" → not here |
 | Docker Compose | "Compose is the canonical deployment form; the app, Redis, Qdrant, MinIO and Elasticsearch come up together." | `REPO_VERIFIED` (configuration) | `docker-compose*.yml`, `Dockerfile` | CI Dockerfile + compose checks | none | Not a production HA topology | "Why Compose over K8s?" |
-| Kubernetes manifests | "A minimal K8s contract exists for the API gateway; static checks pass and a real cluster run is pending." | `REPO_VERIFIED` (manifests, statically checked) / `PENDING` (cluster) | `deploy/k8s/`, `api/readiness.py` | `tests/deploy/test_k8s_manifests.py` | none | Real cluster admission `PENDING` | "Did you run it on a cluster?" → not here |
+| Kubernetes manifests | "A minimal K8s contract exists for the FastAPI monolith (not the api-gateway/ component); static checks pass and a real cluster run is pending." | `REPO_VERIFIED` (manifests, statically checked) / `PENDING` (cluster) | `deploy/k8s/`, `api/readiness.py` | `tests/deploy/test_k8s_manifests.py` | none | Real cluster admission `PENDING` | "Did you run it on a cluster?" → not here |
 
 ## Capability evidence
 

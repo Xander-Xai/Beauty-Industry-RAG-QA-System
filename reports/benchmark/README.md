@@ -52,14 +52,21 @@ independent of the seven-file artifact contract.
 ```bash
 pip install -r requirements-loadtest.txt
 
-# headless, single host
+# headless, single host — canonical path
 cd tests/load
 locust --headless -u 10 -r 2 --run-time 5m --host http://localhost:8000
-
-# or via the wrapper, which also renders an HTML summary
-python tests/load/run_benchmark.py --users 10 --spawn-rate 2 --run-time 5m \
-  --host http://localhost:8000 --token "$SERVICE_AUTH_TOKEN"
 ```
+
+**The wrapper does not produce a report in a clean checkout, and this is a known gap.**
+`tests/load/run_benchmark.py` runs `locust` and then looks for a `benchmark_*.json` in this
+directory, but the quit hook in `locustfile.py` writes the seven-file artifact to
+`artifacts/performance/<run-id>/` instead. Finding no file, `run_benchmark()` returns `None` and
+the wrapper exits `1` — the Locust run itself does complete, and its artifact *is* written.
+
+So: use `python -m benchmarks.performance`, or the `locust` command above. Treat this wrapper's
+HTML summary as consuming reports placed here by hand (`--report-only` / `--compare` still work on
+files you supply). Resolving the wrapper to read the artifact it just wrote is tracked, not done —
+it would change load-test code rather than documentation.
 
 A run against an unreachable API or a missing bearer token records a `BLOCKED` reason in the
 canonical artifact rather than emitting a number. That path is `PENDING` until a real run is

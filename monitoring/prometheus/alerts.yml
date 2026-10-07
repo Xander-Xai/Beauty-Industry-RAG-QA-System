@@ -24,6 +24,16 @@
 #   rag_uptime_seconds                       gauge
 #   up{job="rag-api"}                        provided by Prometheus itself
 #
+# TWO SERIES NAMES COLLIDE WITH THE OPTIONAL LEGACY COMPONENT:
+#   rag_redis_degraded_mode and rag_uptime_seconds are also exported by
+#   monitoring-service/, the retained microservice component. If that optional
+#   target is enabled alongside the monolith, an unscoped rule would evaluate
+#   both series and a legacy value of 1 could fire a canonical alert. Every rule
+#   that references a colliding name therefore scopes on `job="rag-api"`. The
+#   `job` label is added by the scrape config (deploy/prometheus.yml), not by the
+#   application, so this filters on scrape identity rather than on a metric the
+#   collector would have to emit.
+#
 # DELIBERATELY NOT ALERTED, because no metric exists for them:
 #   Qdrant down / Elasticsearch down. `/api/health` reports them as JSON, not as
 #   Prometheus series, and this repository emits no gauge for either. Writing a
@@ -100,7 +110,7 @@ groups:
     interval: 30s
     rules:
       - alert: RagRedisDegraded
-        expr: rag_redis_degraded_mode == 1
+        expr: rag_redis_degraded_mode{job="rag-api"} == 1
         for: 5m
         labels:
           severity: warning

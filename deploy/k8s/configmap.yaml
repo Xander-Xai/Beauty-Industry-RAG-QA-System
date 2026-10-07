@@ -1,4 +1,4 @@
-# Non-secret runtime configuration for the API gateway.
+# Non-secret runtime configuration for the RAG QA API (FastAPI monolith).
 #
 # Only variables that the application actually reads are set here. The list was
 # verified against `os.environ.get(...)` call sites in api/, core/, common/,
