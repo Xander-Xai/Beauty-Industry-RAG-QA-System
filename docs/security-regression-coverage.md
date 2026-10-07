@@ -67,7 +67,10 @@ the same kind of object.
 
 A test that cannot fail when its control is removed is not regression coverage.
 Each newly added or repaired test was checked by disabling the production
-control it targets and confirming the test fails:
+control it targets and confirming the test fails. The recorded number is the
+count of *failing* tests in the targeted file or directory for that mutation;
+the pass count is deliberately omitted because it only restates the suite size
+at the moment of the run and drifts as tests are added.
 
 | Control disabled | Result |
 |---|---|
@@ -79,19 +82,19 @@ control it targets and confirming the test fails:
 | `common/auth.py` dev-header branch reverted while the walkthrough caption kept claiming the shared uint32 contract | 2 failed in `tests/test_demo_corpus_rbac_consistency.py` |
 | `offline/text_ingestion.py` stale-chunk deletion | 2 failed in `tests/offline/test_reconciliation_fixes.py` |
 | `core/pipeline.py` logical cache key `rm`/`dm` | 4 failed in `tests/test_cache.py` |
-| `offline/validator.py` seal trust gate removed from **both** paths (Qdrant points and Elasticsearch documents) | 1 failed, 140 passed in `tests/offline/` |
-| `offline/source_trust.py` `provenance_verdict` reduced to a passthrough (nothing is ever blocked) | 13 failed, 212 passed in `tests/offline/` |
-| `offline/source_trust.py` writer-side fail-closed on unusable provenance removed | 1 failed, 159 passed in `tests/offline/` |
-| `offline/source_trust.py` `TrustRegistry.resolve` auto-approves every untrusted source | 1 failed, 22 passed in `tests/offline/` |
-| `offline/source_trust.py` approval no longer bound to its content hash | 1 failed, 150 passed in `tests/offline/` |
-| `offline/source_trust.py` rejected sources staged instead of refused | 1 failed, 146 passed in `tests/offline/` |
-| `offline/source_trust.py` `may_be_staged` widened so a rejected source looks stageable | 1 failed, 146 passed in `tests/offline/` |
-| `offline/source_trust.py` `decide` no longer requires an attributable reviewer | 1 failed, 18 passed in `tests/offline/` |
-| `offline/snapshot_builder.py` builder stops refusing a rejected source | 1 failed, 155 passed in `tests/offline/` |
-| `offline/snapshot_builder.py` provenance no longer persisted onto chunks | 1 failed, 44 passed in `tests/offline/` |
-| `offline/snapshot_builder.py` epoch trust manifest no longer persisted | 1 failed, 139 passed in `tests/offline/` |
-| `offline/validator.py` seal gate stops recording which source blocked it | 1 failed, 156 passed in `tests/offline/` |
-| `offline/state_store.py` change detection ignores a recorded trust decision | 1 failed, 149 passed in `tests/offline/` |
+| `offline/validator.py` seal trust gate removed from **both** paths (Qdrant points and Elasticsearch documents) | 1 failed in `tests/offline/` |
+| `offline/source_trust.py` `provenance_verdict` reduced to a passthrough (nothing is ever blocked) | 13 failed in `tests/offline/` |
+| `offline/source_trust.py` writer-side fail-closed on unusable provenance removed | 1 failed in `tests/offline/` |
+| `offline/source_trust.py` `TrustRegistry.resolve` auto-approves every untrusted source | 1 failed in `tests/offline/` |
+| `offline/source_trust.py` approval no longer bound to its content hash | 1 failed in `tests/offline/` |
+| `offline/source_trust.py` rejected sources staged instead of refused | 1 failed in `tests/offline/` |
+| `offline/source_trust.py` `may_be_staged` widened so a rejected source looks stageable | 1 failed in `tests/offline/` |
+| `offline/source_trust.py` `decide` no longer requires an attributable reviewer | 1 failed in `tests/offline/` |
+| `offline/snapshot_builder.py` builder stops refusing a rejected source | 1 failed in `tests/offline/` |
+| `offline/snapshot_builder.py` provenance no longer persisted onto chunks | 1 failed in `tests/offline/` |
+| `offline/snapshot_builder.py` epoch trust manifest no longer persisted | 1 failed in `tests/offline/` |
+| `offline/validator.py` seal gate stops recording which source blocked it | 1 failed in `tests/offline/` |
+| `offline/state_store.py` change detection ignores a recorded trust decision | 1 failed in `tests/offline/` |
 
 All production files were restored afterwards and verified clean.
 

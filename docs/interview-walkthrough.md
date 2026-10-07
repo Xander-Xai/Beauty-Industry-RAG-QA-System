@@ -1,6 +1,6 @@
 # 5 分钟面试 Walkthrough（screen-share 脚本）
 
-按面试官会问的顺序，逐节给出**要说的话**与**要打开的真实代码文件**。目标：5 分钟内让对方知道具体做了什么，而不是让他读完 30,000+ 字 README。
+按面试官会问的顺序，逐节给出**要说的话**与**要打开的真实代码文件**。目标：5 分钟内让对方知道具体做了什么，而不是让他读完 26,000+ 字 README。
 
 本文档**不建立任何新的事实来源**。架构口径唯一来自 [interview-architecture-baseline.md](interview-architecture-baseline.md)，证据等级唯一来自 [interview-evidence-map.md](interview-evidence-map.md)，逐能力审计唯一来自 [repository-truth-audit.md](repository-truth-audit.md)。本文只做**导航**与**话术**：每一节指向的那几个文件，才是答案本身。
 

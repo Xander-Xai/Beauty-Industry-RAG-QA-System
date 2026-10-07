@@ -49,7 +49,7 @@ Changes present on `main` after the 2.3.0 release entry:
     inherit managed-content classification by omitting the default. Sources that
     declare no trust keep the previous managed behaviour as an explicit migration
     policy, and their provenance is still persisted and still gated.
-  - Twelve mutation checks recorded in
+  - Thirteen mutation checks recorded in
     `docs/security-regression-coverage.md`, including removal of the seal gate
     itself. Evidence level is `REPO_VERIFIED` for the deterministic contract and
     its tests only; human review of real documents, ingestion-time content

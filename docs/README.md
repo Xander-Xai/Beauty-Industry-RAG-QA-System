@@ -51,6 +51,10 @@ levels; see [Run outcomes that are not evidence levels](interview-evidence-map.m
   retrieval and L2 cache leakage, malformed JWT claims, deletion/stale chunks), the control
   and test behind each, and the bounded gaps that remain open.
 - [Open-source configuration and hardcoding audit](open-source-hardcoding-audit.md)
+- [Main-branch governance](main-branch-governance.md): the branch-protection and PR-only
+  merge policy, how it is applied and re-verified.
+- [Repository drift report](repository-drift-report.md): the point-in-time documentation
+  truth audit that recorded and resolved the P0/P1 conflicts across the canonical documents.
 - [Pre-launch checklist](pre-launch-checklist.md)
 
 ## Evaluation

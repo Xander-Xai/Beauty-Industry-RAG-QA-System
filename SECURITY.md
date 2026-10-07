@@ -76,7 +76,13 @@ These are stated plainly so nothing here is read as a stronger claim than it is.
   data-not-instructions policy in the system message. That is a message-structure
   property only. It does not demonstrate, and cannot demonstrate, that a model
   will refuse instructions found inside retrieved content. There is also no
-  ingestion-side content inspection, sanitization, or quarantine.
+  ingestion-side content inspection or sanitization. A separate, bounded
+  provenance-and-quarantine gate does exist (`offline/source_trust.py`, seal gate
+  in `offline/validator.py`): it bounds *where* content may come from and refuses
+  to activate an unapproved import, but it reads no document text and so
+  classifies no document as benign. See
+  [security-regression-coverage.md](docs/security-regression-coverage.md) rows B
+  and H.
 - **No ABAC.** Authorization is role/dept bitmask RBAC. Attribute-based policies
   are not implemented.
 - **No enterprise SSO.** There is no SAML, OIDC, or enterprise identity-provider
