@@ -16,7 +16,7 @@
 >
 > Each entry is written so that, once the environment exists, the procedure can be
 > run without re-deciding how to validate it. Evidence levels follow the canonical
-> vocabulary in [the interview evidence map](interview-evidence-map.md#classification-vocabulary).
+> vocabulary in [the interview evidence map](evidence-map.md#classification-vocabulary).
 
 ## Index
 

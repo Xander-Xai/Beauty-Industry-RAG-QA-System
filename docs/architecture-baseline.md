@@ -16,7 +16,7 @@ ES Fallback 不算第五路。它是 Qdrant 异常或有效文档不足时使用
 
 ## 事实等级
 
-本节的等级就是 [Interview evidence map → Classification vocabulary](interview-evidence-map.md#classification-vocabulary)
+本节的等级就是 [Interview evidence map → Classification vocabulary](evidence-map.md#classification-vocabulary)
 中的 canonical evidence vocabulary，本文件不另立一套状态词。下面只补充每个等级在当前主链路里的面试表述。
 
 | 等级 | 在当前主链路中的含义 | 面试表述 |

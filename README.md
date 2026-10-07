@@ -31,16 +31,16 @@
 |---|---|---|---|
 | 1 | **这是干什么的** | 把法规 / 成分 / 产品知识建成可检索资产，在线回答带引用的领域问题，证据不足就拒答 | [Architecture](#architecture) |
 | 2 | **解决什么业务问题** | 知识散在 PDF、图片、表格里，人工检索慢且回答容易编造；不同角色该看到的内容也不同 | [核心工程能力](#核心工程能力5-项) |
-| 3 | **RAG 架构的技术含量** | 动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/interview-walkthrough.md](docs/interview-walkthrough.md) |
+| 3 | **RAG 架构的技术含量** | 动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/technical-walkthrough.md](docs/technical-walkthrough.md) |
 | 4 | **企业工程化体现在哪** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook、Docker Compose + Kubernetes 双形态 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) |
 | 5 | **历史生产规模** | `HISTORICAL_PRODUCTION`（**上一家公司生产环境，不是本仓库 benchmark**）：3000+ 文档、5000+ 图片、200+ 用户、10–15 QPS、日均 1500+ 请求、RTX A5000 ×2 | [Historical Production Context](#historical-production-context) |
 | 6 | **哪些是 repo verified** | `REPO_VERIFIED`（代码 + 确定性测试覆盖）：主链路全流程、两级重排、双 Gate、RBAC、认证、指标端点、审计、告警规则、benchmark/性能**框架** | [Evidence Matrix](#evidence-matrix) |
 | 7 | **哪些还没有真实验证** | `PENDING`：真实 QPS/延迟产物、真实检索 benchmark 结果、真实 RAGAS 分数、OTLP 运行期闭环尚未跑通、告警在生产触发、真实 4B/14B vLLM GPU 部署、真实 BGE/CLIP/PaddleOCR smoke | [Repository-Reproducible Evidence](#repository-reproducible-evidence) |
-| 8 | **怎么进入架构 / 代码 / demo** | 架构：本页 Architecture 图 · 代码：`core/pipeline.py` + `retrieval/parallel_recall.py` · Demo：下方演示图与复现命令 · 5 分钟面试脚本：[docs/interview-walkthrough.md](docs/interview-walkthrough.md) | [Quick Start](#quick-start) |
+| 8 | **怎么进入架构 / 代码 / demo** | 架构：本页 Architecture 图 · 代码：`core/pipeline.py` + `retrieval/parallel_recall.py` · Demo：下方演示图与复现命令 · 5 分钟面试脚本：[docs/technical-walkthrough.md](docs/technical-walkthrough.md) | [Quick Start](#quick-start) |
 
 ### 六级证据，只用这一套词
 
-仓库的 canonical taxonomy 只有下面**六级**，与 [docs/interview-evidence-map.md → Classification vocabulary](docs/interview-evidence-map.md#classification-vocabulary) 完全一致；本表是它的完整呈现，不是子集，也不存在第二套证据词汇。
+仓库的 canonical taxonomy 只有下面**六级**，与 [docs/evidence-map.md → Classification vocabulary](docs/evidence-map.md#classification-vocabulary) 完全一致；本表是它的完整呈现，不是子集，也不存在第二套证据词汇。
 
 | 等级 | 一句话 | 在本仓库对应什么 |
 |---|---|---|
@@ -75,7 +75,7 @@
 2. **不得**用历史生产经验替代仓库验证：`config.json` 里 4B / 14B vLLM 拓扑**在本仓库从未执行过**（权重缺失、`vllm` 未安装），该项为 `PENDING`。
 3. **奖项不是运行时验证**，它不携带关于本仓库延迟、吞吐或正确性的任何证据。
 
-> **10–15 QPS 与 1500+ 日请求是生产观测值，不是本仓库 benchmark**——本仓库没有可复现的 QPS / 延迟 benchmark 结果。逐行边界与完整版见 [docs/interview-evidence-map.md](docs/interview-evidence-map.md) 的 *Business scale — historical production context* 一节。
+> **10–15 QPS 与 1500+ 日请求是生产观测值，不是本仓库 benchmark**——本仓库没有可复现的 QPS / 延迟 benchmark 结果。逐行边界与完整版见 [docs/evidence-map.md](docs/evidence-map.md) 的 *Business scale — historical production context* 一节。
 
 ---
 
@@ -93,7 +93,7 @@
 
 ## Architecture
 
-> 当前已验证架构是 **FastAPI 单体主链路**，不是已完成联调的微服务架构。完整事实基线（唯一的架构口径来源）见 [docs/interview-architecture-baseline.md](docs/interview-architecture-baseline.md)。
+> 当前已验证架构是 **FastAPI 单体主链路**，不是已完成联调的微服务架构。完整事实基线（唯一的架构口径来源）见 [docs/architecture-baseline.md](docs/architecture-baseline.md)。
 
 ```mermaid
 flowchart LR
@@ -107,13 +107,13 @@ flowchart LR
   GATES --> OUT["答案 + 引用 + 审计字段"]
 ```
 
-上图为**第一屏简化视图**。完整 canonical 架构图（含离线知识构建链路与 Qdrant / Elasticsearch / Redis / vLLM 依赖）见 [docs/interview-architecture-baseline.md](docs/interview-architecture-baseline.md)，它也是唯一的架构口径来源。微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。
+上图为**第一屏简化视图**。完整 canonical 架构图（含离线知识构建链路与 Qdrant / Elasticsearch / Redis / vLLM 依赖）见 [docs/architecture-baseline.md](docs/architecture-baseline.md)，它也是唯一的架构口径来源。微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。
 
 ---
 
 ## 核心工程能力（5 项）
 
-> 每一项的等级都是 `REPO_VERIFIED`（代码 + 确定性测试覆盖），**不是** `LOCAL_REAL_VALIDATION`，更不是生产验证。逐项的等级、代码位置、测试位置与升级路径见 [Evidence Matrix](#evidence-matrix) 与 [docs/interview-evidence-map.md](docs/interview-evidence-map.md)。
+> 每一项的等级都是 `REPO_VERIFIED`（代码 + 确定性测试覆盖），**不是** `LOCAL_REAL_VALIDATION`，更不是生产验证。逐项的等级、代码位置、测试位置与升级路径见 [Evidence Matrix](#evidence-matrix) 与 [docs/evidence-map.md](docs/evidence-map.md)。
 
 ### 1 · 动态 2–4 路召回 + 两级重排，而不是固定四路
 
@@ -255,7 +255,7 @@ python3 scripts/check_repo_consistency.py
 
 ## 5 分钟面试 Walkthrough
 
-**[→ docs/interview-walkthrough.md](docs/interview-walkthrough.md)** 是一份可 screen-share 的 5 分钟脚本：按「业务背景 → 整体架构 → 一次 Query 如何穿过系统 → Hybrid Retrieval → Rerank → 双 Gate → 多模态 ingestion → RBAC → Cache → 模型路由 → Observability → Evaluation → Docker/K8s → 失败与降级 → 未验证边界」逐节给出**要说的话**和**要打开的真实代码文件**。面试时按节跳，不用背。
+**[→ docs/technical-walkthrough.md](docs/technical-walkthrough.md)** 是一份可 screen-share 的 5 分钟脚本：按「业务背景 → 整体架构 → 一次 Query 如何穿过系统 → Hybrid Retrieval → Rerank → 双 Gate → 多模态 ingestion → RBAC → Cache → 模型路由 → Observability → Evaluation → Docker/K8s → 失败与降级 → 未验证边界」逐节给出**要说的话**和**要打开的真实代码文件**。面试时按节跳，不用背。
 
 技术面试官的精简问答，每条都标了证据等级——**这本身就是我想让你看到的能力：把"实现了"和"验证过"分开。**
 
@@ -292,11 +292,11 @@ FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE �
 
 ## Evidence Matrix
 
-完整逐条表格（能力 / 等级 / 代码证据 / 测试证据 / 升级路径）见 [docs/interview-evidence-map.md](docs/interview-evidence-map.md)；实现与证据状态的完整审计见 [docs/repository-truth-audit.md](docs/repository-truth-audit.md)。本节是摘要。
+完整逐条表格（能力 / 等级 / 代码证据 / 测试证据 / 升级路径）见 [docs/evidence-map.md](docs/evidence-map.md)；实现与证据状态的完整审计见 [docs/repository-truth-audit.md](docs/repository-truth-audit.md)。本节是摘要。
 
 ### Canonical 证据等级
 
-唯一权威定义在 [docs/interview-evidence-map.md → Classification vocabulary](docs/interview-evidence-map.md#classification-vocabulary)，全仓库（含本 README）不使用第二套词汇：
+唯一权威定义在 [docs/evidence-map.md → Classification vocabulary](docs/evidence-map.md#classification-vocabulary)，全仓库（含本 README）不使用第二套词汇：
 
 | 等级 | 含义 | 可以这样说 | 不能这样说 |
 |---|---|---|---|
@@ -315,7 +315,7 @@ FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE �
 
 | 能力 | 实现 | 结果 | 缺什么才能升级 |
 |---|---|---|---|
-| 检索 benchmark（Recall/NDCG/MRR…） | `REPO_VERIFIED` | `PENDING` | 一次真实 ES/Qdrant 运行并提交可复现 artifact（含 `git_sha` / 数据集 sha256 / 模型 revision / 硬件 / 样本数 / 延迟 / 命令 / 限制说明，见 [验收标准](docs/interview-evidence-map.md#benchmark-artifact-acceptance-criteria)） |
+| 检索 benchmark（Recall/NDCG/MRR…） | `REPO_VERIFIED` | `PENDING` | 一次真实 ES/Qdrant 运行并提交可复现 artifact（含 `git_sha` / 数据集 sha256 / 模型 revision / 硬件 / 样本数 / 延迟 / 命令 / 限制说明，见 [验收标准](docs/evidence-map.md#benchmark-artifact-acceptance-criteria)） |
 | 性能产物契约（七文件、`null` 不写 `0`） | `REPO_VERIFIED` | `PENDING` | 对真实 API + LLM + 检索栈执行既定负载并提交一份 artifact |
 | QPS / 延迟数字 | — | `PENDING` | 同上：**本仓库没有可复现的 QPS / 延迟 benchmark 结果**。性能数值仅在 `HISTORICAL_PRODUCTION` / `DESIGN_TARGET` / `SYNTHETIC DEMO` 语义下出现，均不表述为实测 |
 | SLO 目标（5 个） | `REPO_VERIFIED`（文档） | `DESIGN_TARGET` | 在真实环境达成该目标 |
@@ -327,7 +327,7 @@ FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE �
 | 4B / 14B vLLM GPU 拓扑 | `REPO_VERIFIED`（路由契约） | `PENDING` | 真实 GPU 部署与压测（权重不在仓库，`vllm` 未安装） |
 | QLoRA 微调 | `REPO_VERIFIED`（工具） | `PENDING` | 可复现训练运行 + adapter 产物 |
 | Airflow 调度 | `REPO_VERIFIED`（DAG 注册） | `PENDING` | 真实 Airflow DAG 执行 |
-| Qdrant 真实服务 | `REPO_VERIFIED`（当前回归覆盖 = 进程内 `QdrantClient(":memory:")`） | `PENDING`（真实服务 artifact） | 一次新的真实服务运行并提交产物。**开发沿革中确有 PR #6/#7 的真实本地 Qdrant + ES 集成运行记录，但那不是可复现 artifact**——两个方向都不能说错，详见 [Qdrant evidence: two states, kept apart](docs/interview-evidence-map.md#qdrant-evidence-two-states-kept-apart) |
+| Qdrant 真实服务 | `REPO_VERIFIED`（当前回归覆盖 = 进程内 `QdrantClient(":memory:")`） | `PENDING`（真实服务 artifact） | 一次新的真实服务运行并提交产物。**开发沿革中确有 PR #6/#7 的真实本地 Qdrant + ES 集成运行记录，但那不是可复现 artifact**——两个方向都不能说错，详见 [Qdrant evidence: two states, kept apart](docs/evidence-map.md#qdrant-evidence-two-states-kept-apart) |
 | 微服务（`api-gateway/` 等） | `REPO_VERIFIED`（组件） | `PENDING`（集成部署） | 与当前前端的端到端生产验证 |
 | 前端 CI 构建（`frontend-build`：lockfile 安装 + `npm run build`） | `REPO_VERIFIED` | —（构建产物不发布） | 无需升级：这是门禁，不是结果。**但构建成功只证明 bundle 能编译** |
 | 前端 + 真实后端端到端运行 | `REPO_VERIFIED`（客户端与 API metadata 契约） | `PENDING` | 一次真实浏览器运行：`frontend/` 对真实单体 + 真实 ES/Qdrant + 真实模型，并提交可复现 artifact。演示截图用 Playwright 驱动**真实 UI**，但后端是 `docs/demo/mock_api.py` 这个合成 mock，因此**不算**端到端证据 |
@@ -359,9 +359,9 @@ FastAPI 单体主链路 + React 前端。离线侧：解析 → 切块 → BGE �
 
 | 文档 | 作用 |
 |---|---|
-| [docs/interview-walkthrough.md](docs/interview-walkthrough.md) | **5 分钟 screen-share 脚本**：按面试问题分节，每节给出要说的话与要打开的代码文件 |
-| [docs/interview-architecture-baseline.md](docs/interview-architecture-baseline.md) | **架构唯一事实基线**：召回路数、重排、Gate、路由、版本语义 |
-| [docs/interview-evidence-map.md](docs/interview-evidence-map.md) | **证据等级唯一权威表** + 逐能力分级 + benchmark artifact 验收标准 + 已知表述风险 |
+| [docs/technical-walkthrough.md](docs/technical-walkthrough.md) | **5 分钟 screen-share 脚本**：按面试问题分节，每节给出要说的话与要打开的代码文件 |
+| [docs/architecture-baseline.md](docs/architecture-baseline.md) | **架构唯一事实基线**：召回路数、重排、Gate、路由、版本语义 |
+| [docs/evidence-map.md](docs/evidence-map.md) | **证据等级唯一权威表** + 逐能力分级 + benchmark artifact 验收标准 + 已知表述风险 |
 | [docs/repository-truth-audit.md](docs/repository-truth-audit.md) | 逐能力实现 / 证据 / 状态审计，含 Qdrant 两态、告警双机制、外部验证边界 |
 | [docs/repository-metadata.md](docs/repository-metadata.md) | 期望的 GitHub 仓库 About 配置（description / topics / homepage / social preview） |
 | [docs/security-regression-coverage.md](docs/security-regression-coverage.md) | 固定威胁清单、每项控制与测试、以及仍然开放的有界缺口 |
