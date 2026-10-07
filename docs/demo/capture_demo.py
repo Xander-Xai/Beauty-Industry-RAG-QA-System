@@ -3,7 +3,7 @@
 
 What this produces
 ------------------
-One image (`docs/assets/demo-request-evidence-flow.webp`) that a recruiter
+One image (`docs/assets/demo-request-evidence-flow.webp`) that a reader
 can read top-to-bottom as:
 
     用户 Query → 回答 → 引用证据 → 来源文档 → 权限 / 可信证据

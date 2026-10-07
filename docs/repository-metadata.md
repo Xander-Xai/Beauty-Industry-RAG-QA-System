@@ -8,7 +8,7 @@
 
 1. **不设置不存在的公网 Demo。** 本仓库没有公网部署、没有演示站点、没有演示视频。任何指向不存在地址的 homepage 都是伪造证据。
 2. **不把未验证的东西写进元数据。** 元数据是别人**不点进来就会读**的唯一文本，所以它必须比 README 更保守，而不是更漂亮。
-3. **不为了"做了修改"而修改。** 保留当前 live 值，除非存在明确的错误事实、未验证的运行时能力、与 README canonical positioning 冲突，或明显降低招聘搜索可发现性的设置。
+3. **不为了"做了修改"而修改。** 保留当前 live 值，除非存在明确的错误事实、未验证的运行时能力、与 README canonical positioning 冲突，或明显降低工程可检索性的设置。
 
 ---
 
@@ -28,17 +28,17 @@ Multimodal RAG QA for cosmetics regulation: hybrid retrieval, two-stage rerankin
 
 | 决策 | 理由 |
 |---|---|
-| **先说领域与形态，再报技术栈** | 读者第一眼要判断的是"这和我的岗位有没有关系"，不是"用了什么框架"。更早的一版以 `Enterprise multimodal RAG QA for cosmetics knowledge:` 开头，技术枚举占了 140 字符，后半段基本是名词列表 |
-| **写 `refuses unsupported answers`** | 这是本项目与"套模板 RAG"最可区分的一点，也是法务/合规类岗位真正在意的产品行为。更早的一版只有术语 `evidence gating`，没有行为 |
-| **写 `evidence levels separate implemented from production-validated`** | 主动把"实现了 ≠ 验证过"摆到最前面，并且**说清了划分的方向**，比 `graded by evidence level` 少一层追问——后者没有说是谁和谁分开。对招聘方这是加分信号，对技术面试官是筛掉幻觉型简历的成本最低方式 |
-| **补 `evaluation and observability`** | 招聘方搜的第二个维度是"有没有评测和可观测"。这两项在本仓库是 `REPO_VERIFIED`（harness / 指标端点 / 告警规则确实存在），属于可检索的真实能力，值得占字符 |
+| **先说领域与形态，再报技术栈** | 读者第一眼要判断的是"这和我的需求有没有关系"，不是"用了什么框架"。更早的一版以 `Enterprise multimodal RAG QA for cosmetics knowledge:` 开头，技术枚举占了 140 字符，后半段基本是名词列表 |
+| **写 `refuses unsupported answers`** | 这是本项目与"套模板 RAG"最可区分的一点，也是法务/合规类使用者真正在意的产品行为。更早的一版只有术语 `evidence gating`，没有行为 |
+| **写 `evidence levels separate implemented from production-validated`** | 主动把"实现了 ≠ 验证过"摆到最前面，并且**说清了划分的方向**，比 `graded by evidence level` 少一层追问——后者没有说是谁和谁分开。对读者这是清晰的工程信号，也便于 reviewer 快速核对真实性 |
+| **补 `evaluation and observability`** | 常见的第二个检索维度是"有没有评测和可观测"。这两项在本仓库是 `REPO_VERIFIED`（harness / 指标端点 / 告警规则确实存在），属于可检索的真实能力，值得占字符 |
 | **保留 `uint32 RBAC` 而不是 `bitmask RBAC`** | `uint32` 是可核对的实现事实（`common/auth.py` 的 `_MAX_UINT32 = 0xFFFFFFFF` 位掩码契约），`bitmask` 是同义但更含糊的通用词。仓库卡片没有篇幅做解释，所以只写能被搜索到、也能被代码对照的那一个 |
 | **删掉 `Qwen/vLLM` 与 GPU 型号** | 更早的一版以 `Qwen/vLLM` 结尾。当前生成拓扑是单一共享 4B 端点、复杂请求走 14B，**且该 GPU 拓扑在本仓库从未执行过**（权重缺失、`vllm` 未安装）。把模型名放进元数据会被读成"跑过这个栈"，这是本仓库最容易被误读的一处。模型名属于 README 与代码，不属于仓库卡片 |
 | **不写 `enterprise` 作为卖点前缀** | "enterprise" 单独出现容易被读成营销词。真正说明企业级的是 uint32 位掩码 RBAC 这个可验证的具体机制，所以保留机制、去掉形容词 |
 | **不写任何数字** | QPS、文档数、延迟都不进 description。唯一有意义的规模信息是 `HISTORICAL_PRODUCTION` 且无法复现，写进卡片等于把它变成仓库 benchmark |
 | **不写 `production validated` / `production ready`** | 越界词，禁止出现。`separate implemented from production-validated` 是**划界声明**（谁和谁分开），不是"已通过生产验证"；后续任何改写都不得让这句话可被读成后者 |
 
-### 备选（更强调证据治理，用于你认为读者是面试官时）
+### 备选（更强调证据治理）
 
 ```text
 Enterprise multimodal RAG QA for cosmetics regulation knowledge: hybrid retrieval, two-stage reranking, evidence gating that refuses unsupported answers, uint32 RBAC, and evidence levels that separate implemented from production-validated.
@@ -60,7 +60,7 @@ Enterprise multimodal RAG QA for cosmetics regulation knowledge: hybrid retrieva
 
 ## 2 · Topics（上限 20）
 
-GitHub 最多 20 个 topic；只能用小写字母、数字和连字符，单个不超过 35 字符。Topic 是**唯一影响可检索性**的字段，比 description 更接近"招聘方搜什么"的答案。
+GitHub 最多 20 个 topic；只能用小写字母、数字和连字符，单个不超过 35 字符。Topic 是**唯一影响可检索性**的字段，比 description 更接近"读者会搜什么"的答案。
 
 ### 生效清单（正好 20，2026-10-07 经 GitHub API 回读确认）
 
@@ -73,19 +73,19 @@ GitHub 最多 20 个 topic；只能用小写字母、数字和连字符，单个
 | 5 | `hybrid-search` | 核心机制：dense + BM25 + 视觉路融合 |
 | 6 | `reranking` | 两级重排是本项目实质技术点之一 |
 | 7 | `evidence-gating` | 最有区分度的主题词，指向 Evidence/Answer Gate |
-| 8 | `rbac` | 安全类岗位的直达词 |
-| 9 | `fastapi` | 后端框架类岗位的直达词 |
+| 8 | `rbac` | 安全方向的直达词 |
+| 9 | `fastapi` | 后端框架方向的直达词 |
 | 10 | `qdrant` | 向量存储 |
 | 11 | `elasticsearch` | 检索存储 |
 | 12 | `redis` | 会话 / 缓存 / 限流 / 审计流 |
 | 13 | `llm-evaluation` | 评测能力，可检索性高且真实存在 |
-| 14 | `llmops` | 生产化 / 运维侧岗位入口 |
+| 14 | `llmops` | 生产化 / 运维侧入口 |
 | 15 | `observability` | 指标、告警、审计、SLO runbook |
 | 16 | `docker` | 部署形态（canonical） |
 | 17 | `kubernetes` | 第二部署形态的清单契约 |
-| 18 | `python` | 语言入口词，岗位搜索的实际起点 |
+| 18 | `python` | 语言入口词 |
 | 19 | `cosmetics` | **领域词**：本仓库唯一的差异化来源。18 个通用词能把你送进"任何一个 RAG 项目"的池子，只有领域词能把你送进化妆品 / 美妆 / 法规科技的池子 |
-| 20 | `regulatory-compliance` | **领域词**：法务合规、监管科技、AI-for-Gov 岗位的直达词。`cosmetics` 描述行业，这一项描述**用途**，两者对应两种不同的搜索意图 |
+| 20 | `regulatory-compliance` | **领域词**：法务合规、监管科技、AI-for-Gov 方向的直达词。`cosmetics` 描述行业，这一项描述**用途**，两者对应两种不同的搜索意图 |
 
 **为什么必须留两个槽位给领域词**：一个 RAG 项目的技术栈与市面同类高度重合，`rag` + `fastapi` + `qdrant` 这一组之间的竞争是零和的——写得越"标准"，越无法被记住。真正形成检索差异的是"它服务哪个行业"。这也是为什么从 20 个里换掉的是 `bm25` 与 `vector-search`：它们的信息已被 `hybrid-search`（= dense + BM25）与 `qdrant` 完整覆盖，属于同一意图的重复占位。
 
@@ -105,7 +105,7 @@ GitHub 最多 20 个 topic；只能用小写字母、数字和连字符，单个
 | `hallucination-detection` | **移除** | 与 `evidence-gating` 重叠；且本仓库的行为是**拒答**，不是"检测到幻觉并标注"——挂这个词会暗示存在一个独立的幻觉检测器组件，而仓库里没有这样一个模块 |
 | `ai-engineering` | **移除** | 与 `rag` / `llmops` 语义重叠，重复占位 |
 | `enterprise-ai` | **移除** | 营销向、可信度低，替换为可验证的 `rbac` |
-| — | **新增** `python` | 语言入口词，岗位搜索的实际起点 |
+| — | **新增** `python` | 语言入口词 |
 | — | **新增** `cosmetics` / `regulatory-compliance` | 见上：通用技术词之间竞争零和，领域词才是差异 |
 | — | **不加** `open-telemetry` | OTLP exporter 已实现但**默认关闭**，运行期闭环为 `PENDING`。挂 `open-telemetry` topic 会被读成"tracing 已闭环"，而这是本仓库明确否认的表述 |
 

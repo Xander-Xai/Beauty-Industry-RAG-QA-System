@@ -10,7 +10,7 @@
 > link/anchor integrity, evidence vocabulary, retired topology, Python entrypoints
 > and derived counts; this report only lists what that guard does **not** cover.
 > Severity follows the repository's own scheme: **P0** factual falsehood,
-> **P1** interview-visible contradiction, **P2** stale operational/documentation
+> **P1** reviewer-visible contradiction, **P2** stale operational/documentation
 > issue, **P3** cosmetic.
 
 ## Findings
