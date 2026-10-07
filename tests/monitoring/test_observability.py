@@ -256,6 +256,77 @@ def test_dashboard_parses_and_has_panels(dashboard):
     assert dashboard["panels"]
 
 
+def _dashboard_json_files() -> list[Path]:
+    """Every Grafana dashboard JSON in the tree, wherever it is mounted from.
+
+    A single-path guard is not enough: an unwired second dashboard is exactly how a
+    panel promising latency percentiles or KV pressure survives in a repository that
+    otherwise refuses to publish a metric the collector does not emit. So this walks
+    the tree instead of trusting one known location.
+    """
+    skip = {"node_modules", ".git", ".claude", ".superpowers", "__pycache__"}
+    return sorted(
+        path for path in REPO_ROOT.rglob("*.json") if "dashboards" in path.parts and not (set(path.parts) & skip)
+    )
+
+
+def test_no_second_dashboard_json_exists():
+    """`monitoring/grafana/dashboards/` is the single dashboard contract.
+
+    It is the only directory the observability overlay mounts
+    (`docker-compose.observability.yml`), and it is the directory the docs and the
+    panel-count guard cite. A second copy is unreachable from the canonical
+    deployment, is cited by no document, and is the only place where a fabricated
+    panel can hide from the checks below — which is why it must not exist at all
+    rather than merely happen to be correct today.
+    """
+    found = _dashboard_json_files()
+    assert [p.relative_to(REPO_ROOT).as_posix() for p in found] == [
+        "monitoring/grafana/dashboards/rag-overview.json"
+    ], f"unexpected dashboard JSON: {[p.relative_to(REPO_ROOT).as_posix() for p in found]}"
+
+
+def test_every_dashboard_json_only_references_emitted_metrics():
+    """Tree-wide version of the emitted-metric contract, not just the canonical file."""
+    available = emitted_metrics()
+    offenders: dict[str, set[str]] = {}
+    for path in _dashboard_json_files():
+        panels = json.loads(path.read_text(encoding="utf-8")).get("panels") or []
+        referenced = {
+            match
+            for panel in panels
+            for target in panel.get("targets") or []
+            for match in re.findall(r"rag_[A-Za-z0-9_]+", target.get("expr") or "")
+        }
+        unknown = {n for n in referenced if n.rstrip("_") not in available and n not in available}
+        if unknown:
+            offenders[path.relative_to(REPO_ROOT).as_posix()] = unknown
+    assert not offenders, f"dashboards reference metrics that are never emitted: {offenders}"
+
+
+def test_no_dashboard_json_plots_non_rag_exporter_metrics():
+    """A panel may not plot a series from an exporter this repository never runs.
+
+    `nvidia_gpu_memory_used_bytes` (DCGM) is the concrete case: it is a real
+    Prometheus series, which is exactly why a fabricated GPU panel reads as
+    legitimate to a reviewer who does not know this deployment has no DCGM.
+    """
+    allowed_non_rag = {"up", "rate", "sum", "increase", "irate", "avg", "max", "min", "count"}
+    for path in _dashboard_json_files():
+        panels = json.loads(path.read_text(encoding="utf-8")).get("panels") or []
+        for panel in panels:
+            for target in panel.get("targets") or []:
+                expr = target.get("expr") or ""
+                for metric in re.findall(r"(?<![\w.])([a-zA-Z_][a-zA-Z0-9_]*)\s*[\(\{]", expr):
+                    if metric.startswith("rag_") or metric in allowed_non_rag:
+                        continue
+                    raise AssertionError(
+                        f"{path.relative_to(REPO_ROOT).as_posix()}: panel "
+                        f"{panel.get('title')!r} plots {metric!r}, which no exporter in this "
+                        f"repository produces"
+                    )
+
+
 def test_dashboard_only_references_emitted_metrics(dashboard):
     available = emitted_metrics()
     referenced = {
