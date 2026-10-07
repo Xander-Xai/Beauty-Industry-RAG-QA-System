@@ -204,6 +204,17 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Fixed
 
+- `retrieval/parallel_recall.py` described itself as "并行 4 路召回" / "并行执行 4 路
+  召回" in its module and class docstrings, while the code, the canonical architecture
+  baseline and `README.md` all state **dynamic 2–4 path** recall. A reader inspecting the
+  module that owns the recall topology would have concluded retrieval is fixed-four-path.
+  The docstrings now name the four *optional* channels with their actual trigger
+  conditions, state that the enabled set comes from the caller-supplied `top_k_per_path`
+  (omitted = disabled for that request, `None` = the full `config.json` topology), and
+  record that ES Fallback is appended after RRF outside `path_results`, so it is not a
+  fifth path. No behaviour changed; the same file's inline contract comment and
+  `tests/test_parallel_recall_partial_config.py` already pinned the dynamic topology.
+
 - `deploy/grafana/` held a second, unwired Grafana dashboard
   (`rag-cosmetics-overview`, 12 panels) whose panels plotted 14 `rag_*` series and two
   `nvidia_gpu_memory_used_bytes` series that **no exporter in this repository
