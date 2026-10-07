@@ -56,7 +56,10 @@ All performance figures below are **design targets or model estimates**, not ver
 > | §2 / §5 / §7 | 延迟/QPS/吞吐数字 | 无 benchmark artifact，均为**设计目标/模型估算**，不是实测生产结果 |
 > | §5.2.5 / §9 | KV 压力降级阈值 70% / 80% / 90% / 95% | `admission/kv_admission.py` 的实际常量是 `THRESHOLD_TRUNCATE=0.80`、`THRESHOLD_SOFT_STOP=0.90`、`THRESHOLD_CRITICAL=0.95`（另有更早的 `threshold_tighten`）。**以代码为准；本 PRD 这两个阈值区间已过时** |
 > | §6 | BLIP 触发率 < 5% | `models/blip_service.py` 的模块文档记录 ~15%，且触发信号是 `max(keyword_rule_score, bert_classifier_score, has_image_hit)` **三路**取最大——本 PRD 的「双路」表述已过时 |
-> | §10.2 | Prompt Registry 由 DB 管理版本 | 缓存键确实含 `pv`（`generation.prompt_version`），但版本存储是文件目录 `./data/feedback/rewrite/prompt_versions`（`rewrite/feedback.py`），不是 DB |
+> | §10.2 | Prompt Registry 由 DB 管理版本，自动递增 | **机制已实现，载体不是 DB**：版本存文件目录 `./data/feedback/rewrite/prompt_versions`，`save_prompt_version()` 自动生成版本号，`activate_prompt_version()` 自动改写 `config.json` 的 `generation.prompt_version` |
+> | §10.2 | embedding_version 用模型 commit SHA / revision 保证换权重即失效 | 缓存键只用 `embedding.text.model_path`；**不含** `model_revision`，**不含 CLIP 配置**。同路径换权重不会失效缓存——已知实现缺口 |
+> | §4.6 | 不做尾续写，采用「上下文重建 + 单次重生成」 | 实现是 **assistant 前缀回放 + 约束指令续写 + 两段拼接**（`generate_continuation()` → `merged_answer = a + b`）；`temperature=0` 已实现，`logit_bias` 未实现 |
+> | §12 | 指标清单 | `/api/metrics` 实际 emit 约 30 个 series（含 evidence/nli/blip/prefix-cache/admission/kv_pressure），比率一律是 `/api/stats` 计算字段或 PromQL 派生；但告警只引用 6 个、面板只引用 5 个，其余**无人消费** |
 >
 > **逐节状态索引**：下表给出每个章节的可引用状态，避免把设计稿整段读成当前实现。
 >
@@ -280,9 +283,22 @@ final_score = w_text * text_score + w_clip * clip_score + w_ocr * ocr_score
 ● ★ 设计目标：权重由历史日志（rerank 点击率与人工标注相关性）分析得出，并**每周**根据 A/B 实验更新；
   w_clip 的 2.0 / 1.0 / 0.0 来自线下网格搜索与线上验证。**学习与调参环节均未实现**，见 §12.2。
 ● 因此本系统**不是**「权重随检索价值自学习」的系统；它是「权重由配置驱动、随查询类型切换」的系统。
-4.6 长文本生成一致性保障（替代续写机制）
-【状态：`CURRENT`】
-为避免长文本被截断后导致语义不一致问题，系统不采用“基于上次输出尾部续写”的方式，而采用 “上下文重建 + 单次重生成” 机制，确保多次输出 ≈ 一次完整推理的拆分展示。
+4.6 长文本生成一致性保障
+【状态：`CURRENT`（已实现）——但实现方式与本节原始设计不同，见下】
+**实现事实**：首段生成被截断后走 `core/pipeline.py::_try_structured_continuation()` →
+`models/llm_client.py::generate_continuation()`。该函数把已生成内容作为 **assistant 消息回放进
+prompt**（`_escape_reserved_trust_boundary_markers()` 做信任边界转义），再追加一条约束指令
+（保持语义/语气/结构一致、不重复已输出、仅补充后续部分、引用来源必须与前文一致），
+以 `temperature=0` 重新请求，最后由调用方 **拼接** 两段：
+
+```python
+merged_answer = ctx.generation_result.answer + continuation.answer
+```
+
+> **与原始设计的差异**：本节原写「不采用基于上次输出尾部续写，采用上下文重建 + 单次重生成」。
+> 实际实现是 **前缀回放 + 指令续写 + 结果拼接**，即：它确实把上次输出放回上下文要求模型继续，
+> 只是在语义上要求「只补后续、不重复」。把它读成「一次完整推理的拆分展示」是不准确的。
+> 「可选 logit_bias / 确定性解码锁定前半部分」中的 `temperature=0` 已实现，`logit_bias` 未实现。
 ● 触发条件：当生成内容超过业务类型对应的最大输出 tokens（如法规 1024），返回 session_id 和 has_more=true，但不暴露中间生成结果作为续写输入。
 ● 续写请求处理流程：
   a. 重建完整上下文。
@@ -517,8 +533,16 @@ cache_key = hash(
     role_mask +                  # 权限进入 key 空间
     dept_mask
 )
-● embedding_version：BGE/CLIP 模型版本标识（`embedding.*.model_revision`），确保模型更新后旧缓存自然失效。
-● prompt_version：来自 `generation.prompt_version`（默认 `v2.1`），参与缓存键计算。★ 原文写的「由 Prompt Registry 管理、修改后自动递增」**未实现**：版本由配置文件声明，更新需人工改配置。
+● embedding_version：**实现只使用 `config["embedding"]["text"]["model_path"]`**（`core/pipeline.py::_build_cache_key()` 的 `"ev"` 字段）。
+  > **已知边界**：缓存键**不包含** `embedding.*.model_revision`，也**不包含** CLIP 的模型配置。
+  > 因此「模型更新后旧缓存自然失效」只在 model_path 变化时成立；同一个路径下替换权重（revision 变化）
+  > 或更换 CLIP 配置**不会**失效缓存，可能读到陈旧答案。若要真正失效，需要把 revision 与 CLIP 配置
+  > 一并纳入 key —— 这是实现缺口，不是本文的设计目标。
+● prompt_version：**已实现**。版本存储是文件目录 `./data/feedback/rewrite/prompt_versions`
+  （不是 DB）；`rewrite/feedback.py::save_prompt_version()` 自动生成 `v{YYYYMMDD}_{序号}` 形式的
+  版本号，`activate_prompt_version()` 标记该版本为 active 并调用 `_update_config_prompt_version()`
+  **自动改写 `config.json` 的 `generation.prompt_version`**，从而让缓存键随激活而变化、旧缓存自然失效。
+  > 本节原写「由 Prompt Registry（DB 控制）管理」——**载体不是 DB，是文件目录**；其余机制成立。
 ● schema_version：与 API 响应结构强绑定，结构变更时缓存隔离。
 ● 权限掩码直接参与 Key 计算，相同 query 对不同用户产生不同缓存分区。
 ● knowledge_version_epoch 是配置中的单一知识版本标识，文档发布/封存后由**人工**切换；旧 epoch 的缓存不再被访问，由 Redis LRU 自然淘汰。
@@ -550,32 +574,59 @@ L2 Private Cache	query_hash + version + role_mask + dept_mask	存储特定权限
 12. 可观测性与数据闭环
 ● 【当前实现】全链路追踪钩子接入在线主链路，走 OpenTelemetry SDK TracerProvider；span 导出为可选 OTLP 路径（`monitoring/otel_exporter.py`），默认关闭。
 ● 【历史/目标设计】原「OpenTelemetry + Jaeger」表述对应 Jaeger thrift agent 路径，该配置已从仓库移除且从未有 canonical 消费者。OTel SDK 已不再附带 Jaeger exporter，当前实现走 OTLP；collector/后端/可查询 span 的闭环仍为 `PENDING`，本仓库没有任何 span 被后端查询到。
-● **【当前实现】真实存在的指标**（`monitoring/otel_tracer.py::MetricsCollector`，由 `/api/metrics` 暴露）：
-  ○ `rag_http_requests`、`rag_http_responses_2xx/_4xx/_5xx`、`rag_http_rate_limited`
-  ○ `rag_http_active_requests`
-  ○ `rag_http_request_duration_seconds{quantile=...}` + `_count`（summary）
-  ○ `rag_cache_hit_L1` / `rag_cache_hit_L2` / `rag_cache_total`（原始计数器，**没有** 命中率 series）
-  ○ `rag_rewrite_fallback`
-  ○ `rag_redis_degraded_mode`、`rag_redis_degraded_events`
-  ○ `rag_otel_exporter_enabled`、`rag_uptime_seconds`
-  比率为派生量，需用已 emit 的计数器做 PromQL ratio，或读 `/api/stats` 的计算字段。
-  `6` 条告警规则（`monitoring/prometheus/alerts.yml`）与 `10` 面板 Grafana JSON 只引用上述真实 series。
-● **【设计目标】本节最初列出的下列指标没有实现**，仓库里不存在对应 series，不得据此排障：
-  ○ L1/L2 **命中率**（只有原始计数器）
-  ○ BLIP 触发率、CLIP 同步超时率与异步补充命中率
-  ○ Evidence Gate 分数分布与子项权重贡献
-  ○ Retrieval Agreement Score 分布
-  ○ NLI 矛盾比例
-  ○ KV Cache 占用率（Shared / Per-request 分类，见 §12.1）
-  ○ **有效并发数与 max_num_seqs**
-  ○ Admission Control 拒绝 / 排队次数
-  ○ 降级触发次数
-  ○ Prefix Caching 命中率
-  ○ Cache 版本切换次数
+● **【当前实现】`/api/metrics` 真实存在的 series**
+  （`monitoring/otel_tracer.py::MetricsCollector`，由 `record_request()` 在在线路径上记录；
+  下列清单由实际驱动 collector 得到，不是设计愿望）：
+
+  计数器：
+
+  ```
+  rag_http_requests            rag_http_responses_2xx / _4xx / _5xx
+  rag_http_rate_limited        rag_admission_total
+  rag_cache_total              rag_cache_hit_L1 / rag_cache_hit_L2 / rag_cache_hit_L2_SESSION
+  rag_rewrite_success          rag_rewrite_fail          rag_rewrite_fallback
+  rag_degradation_total        rag_blip_total             rag_blip_triggered
+  rag_nli_contradiction_high   rag_prefix_cache_hit / rag_prefix_cache_miss
+  rag_redis_degraded_events    rag_evidence_decision_<decision>
+  ```
+
+  直方图（summary，含 `_count`）：
+
+  ```
+  rag_http_request_duration_seconds        rag_evidence_score_seconds
+  rag_nli_contradiction_score_seconds
+  ```
+
+  Gauge：
+
+  ```
+  rag_http_active_requests   rag_redis_degraded_mode   rag_kv_pressure
+  rag_otel_exporter_enabled  rag_uptime_seconds
+  ```
+
+  vLLM 韧性契约另有 `rag_vllm_generation_*` 系列（`router/vllm_resilience.py`）。
+
+  **比率一律是派生量**，仓库不发布 `*_rate` series：用已 emit 的计数器做 PromQL ratio，
+  或读 `/api/stats` 的计算字段（`cache_hit_rate.{L1,L2,L2_SESSION}`、`rewrite_fallback_rate`、
+  `nli_contradiction_rate`、`prefix_cache_hit_rate`、`redis_degraded`）。
+  由此可知本节**已经可以**得到：L1/L2 命中率、Rewrite 降级率、NLI 矛盾比例、
+  Prefix Caching 命中率、降级触发次数、Admission 计数、Evidence Gate 分数分布
+  （用 `histogram_quantile`）、BLIP 触发率、KV Pressure。6 条告警规则与 10 面板 Grafana JSON
+  只引用其中一部分，且**不引用** `rag_kv_pressure`、`rag_blip_*`、`rag_evidence_*`、
+  `rag_nli_*`、`rag_prefix_cache_*`、`rag_admission_total` —— 这些 series 存在但**没有任何告警或面板**。
+
+● **【设计目标】本节最初列出的下列指标确实不存在**，不得据此排障：
+
+  ○ Evidence Score 的**各子项权重贡献**（只有合成分布，无 w1~w4 分解）
+  ○ Retrieval Agreement Score 分布（有计算，无 series）
+  ○ Shared KV 与 Per-request KV 的**分类**占用率（只有合并的 `rag_kv_pressure`）
+  ○ 有效并发数（动态值）与 `max_num_seqs`
   ○ Rerank Batch Aggregator 的 Batch 填充率、排队延迟 P50/P99、GPU 利用率
-  > 其中 `kv_pressure` 在 `/api/stats` 作为计算字段存在，但没有 Prometheus series，也没有对应告警。
+  ○ 任何 GPU / DCGM / vLLM 调度器 series（本部署没有 GPU exporter）
+
   > `monitoring/otel_tracer.py` 里的 `AlertingManager` 是一个更早的进程内阈值引擎，**未接入**
   > canonical 请求路径；喂它的 `config.json` → `alerting.rules` 配置块已移除。它不是告警契约。
+
 ● 告警：BLIP 触发率 >10%、缓存校验失败突增、KV Cache 持续 >85%、KV Pressure >0.9 持续 30s、Prefix Caching 命中率突降 >50%、Redis 降级持续 >5 分钟、L1/L2 命中率突降 >30%、Rerank Batch 排队延迟 >50ms 等。
 12.1 KV Cache 分类与监控
 vLLM Prefix Caching 按共享特性分为三类：
@@ -592,8 +643,13 @@ KV_Pressure = current_used_kv / max_kv_capacity
 > 训练导出）和回归候选人工审批；但**没有任何一条自动学习闭环在运行**，也没有配置过任何实验。
 > 下面每一条带 ★ 的都是**尚未实现**的设计，不得引用为「系统会每周自动优化」。
 
-● 日志采集：记录每次请求的 query、检索 doc_id 列表、Rerank 分数、最终 answer、用户行为信号（点击“有帮助”/追问/复制答案）。
-  ——**已实现**（结构化审计 + 指标端点；不含原文级别的全量行为日志）。
+● 日志采集：★ **本节所列的采集契约未实现**。记录每次请求的 query、检索 doc_id 列表、
+  Rerank 分数、最终 answer、用户行为信号（点击“有帮助”/追问/复制答案）——这五类**都没有**被持久化：
+  结构化审计写的是 `user_query` 的 **SHA-256 哈希**加上身份/过滤/拒绝字段，不含 doc 列表、
+  Rerank 分数或答案正文；`/api/metrics` 暴露的是聚合量；代码里不存在“有帮助 / 追问 / 复制”这三种
+  行为信号的采集，也没有任何在线路由把它们写入 `offline/feedback_loop.py`。
+  > 因此**不能**说本系统在积累可用于学习的反馈数据；`offline/feedback_loop.py` 处理的是另一条
+  > review 门控的反馈记录，不是在线请求日志的回流。
 ● 标注与评估：
   ○ ★ 每周采样 500 条日志进行人工标注（回答正确性、完整性、证据充分性）——**未实现，无调度**。
   ○ ★ 离线评估集包含 2000 条标注样本——**未实现**。当前唯一评测数据是
@@ -602,8 +658,9 @@ KV_Pressure = current_used_kv / max_kv_capacity
   ○ ★ RRF 融合权重（w_text/w_clip/w_ocr）基于点击率与人工标注相关性进行贝叶斯优化，每周更新
     ——**未实现**。权重初值与现值均来自 `config.json`，代码中没有权重学习逻辑。
   ○ ★ Evidence Gate 阈值与权重通过 ROC 曲线调整，以最大化 F2 分数——**未实现**。
-  ○ ★ Rewrite Prompt 模板根据意图识别准确率进行 A/B 测试迭代——**未实现**。版本机制存在
-    （`rewrite/feedback.py` 的 prompt 版本目录 + `generation.prompt_version`），但没有自动迭代。
+  ○ ★ Rewrite Prompt 模板根据意图识别准确率进行 A/B 测试迭代——**自动迭代未实现**。
+    版本机制本身已实现（`rewrite/feedback.py` 的文件版本目录 + 激活时自动改写
+    `generation.prompt_version`，见 §10.2），但没有基于准确率的自动迭代。
   ○ ★ Rerank Batch 聚合参数基于 GPU 利用率和排队延迟进行动态调优——**未实现**。
 ● A/B 实验平台：`common/ab_testing.py` 的分流、权重/阈值覆盖与指标记录**已实现并接入主链路**，
   但**未配置任何实验、未运行过一轮**。★「关键策略变更需经 1 周 A/B 实验后全量发布」是流程设计，
