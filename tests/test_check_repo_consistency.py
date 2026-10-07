@@ -4984,7 +4984,7 @@ def test_claim_windows_are_bounded_block_elements():
 def test_guarded_documents_keep_every_real_claim_in_scope():
     """The scoping must not have silently dropped a current document's claim.
 
-    Scope narrowing is only safe while the claims stay visible: six current
+    Scope narrowing is only safe while the claims stay visible: five current
     documents state the count, and each of them must still reach the comparison.
     """
     from scripts.check_repo_consistency import (
@@ -4997,7 +4997,6 @@ def test_guarded_documents_keep_every_real_claim_in_scope():
     claiming = {
         "README.md",
         "docs/deployment-guide-k8s.md",
-        "docs/technical-walkthrough.md",
         "docs/repository-metadata.md",
         "docs/repository-truth-audit.md",
     }

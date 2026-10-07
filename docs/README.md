@@ -104,13 +104,7 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
 ## Architecture & Evidence Truth
 
 - [Architecture baseline](architecture-baseline.md): the current
-  end-to-end retrieval/generation contract a reviewer can hold the code to.
-- [Technical walkthrough](technical-walkthrough.md): a 5-minute screen-share script that walks
-  the questions a reviewer typically asks — business context, architecture, one query end to
-  end, hybrid retrieval, rerank, the two gates, multimodal ingestion, RBAC, cache, model routing,
-  observability, evaluation, Docker/Kubernetes, degradation and the unvalidated boundary. Each
-  section names the files to open. It is navigation only: the baseline, the evidence map and the
-  truth audit remain the sole sources of truth.
+  end-to-end retrieval/generation contract the code can be held to.
 - [Evidence map](evidence-map.md): the canonical evidence vocabulary
   and the classification of every claim. This map owns the taxonomy; the truth audit's
   `Status` column and the validation records' `Evidence level` columns use the same
