@@ -304,7 +304,7 @@ curl -s http://localhost:8000/api/ready | python3 -m json.tool   # blockers[] na
 curl -s http://localhost:8000/api/metrics -H "Authorization: Bearer $TOKEN" | grep rag_
 curl -s http://localhost:8000/api/ready | python3 -m json.tool  # which endpoint blocks admission
 curl -s "$VLLM_4B_URL/v1/models"        # single shared 4B endpoint, port 8101
-curl -s "$VLLM_14B_URL/v1/models"       # 14B complex-generation endpoint, port 8100
+curl -s "$VLLM_GEN_14B_URL/v1/models"   # 14B complex-generation endpoint, port 8100
 nvidia-smi                                 # GPU present and busy?
 ```
 

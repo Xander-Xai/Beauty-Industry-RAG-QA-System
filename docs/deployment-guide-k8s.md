@@ -24,7 +24,7 @@
 
 ## 2. 应用事实（实测，非推断）
 
-以下三条决定了探针与配置形态，全部对运行中的应用验证过：
+以下三条决定了探针与配置形态。`/api/health` 与 `/api/metrics` 在真实运行实例上观测过；`/api/ready` 是进程内 ASGI 契约测试（`tests/test_readiness_endpoint.py`，TestClient），**真实集群流量准入仍为 `PENDING`**：
 
 ```text
 GET /api/health   -> 200   （公开，无需认证；诊断语义，依赖全挂仍返回 200）

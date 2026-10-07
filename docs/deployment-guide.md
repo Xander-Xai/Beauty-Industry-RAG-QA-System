@@ -55,7 +55,7 @@ cp .env.example .env
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run build
 cd ..
 ```
