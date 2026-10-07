@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from qdrant_client import QdrantClient
 
+from offline.source_trust import managed_record
 from offline.text_ingestion import (
     DeterministicTestEmbedder,
     DocumentProcessor,
@@ -15,6 +16,11 @@ from offline.text_ingestion import (
     TextChunk,
     TextIngestionService,
 )
+
+#: These fixtures are managed internal corpus content ingested from the operator's
+#: own data root, so they declare managed provenance explicitly: the text writer
+#: runs the ingestion trust gate and refuses a chunk with no provenance.
+_MANAGED = managed_record("doc.txt").to_payload()
 
 
 def _text_records(client, collection):
@@ -26,13 +32,13 @@ def test_processor_handles_short_bom_overlap_stability_and_changed_content(tmp_p
     path = tmp_path / "guide.txt"
     path.write_text("\ufeffAlpha beta gamma delta", encoding="utf-8")
     processor = DocumentProcessor(chunk_size=10, chunk_overlap=3)
-    first = processor.process(path, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
-    repeated = processor.process(path, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    first = processor.process(path, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
+    repeated = processor.process(path, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
     assert [item.chunk_id for item in first] == [item.chunk_id for item in repeated]
     assert [item.text for item in first][1].startswith(first[0].text[-3:])
     assert all(item.role_mask == item.dept_mask == 0 for item in first)
     path.write_text("Alpha beta gamma changed", encoding="utf-8")
-    changed = processor.process(path, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    changed = processor.process(path, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
     assert changed[0].content_hash != first[0].content_hash
     assert changed[0].chunk_id != first[0].chunk_id
 
@@ -41,15 +47,15 @@ def test_processor_empty_utf8_and_unsupported_or_malformed_input(tmp_path):
     processor = DocumentProcessor()
     empty = tmp_path / "empty.txt"
     empty.write_text(" \n", encoding="utf-8")
-    assert processor.process(empty, role_mask=0, dept_mask=0, doc_version_epoch="default") == []
+    assert processor.process(empty, role_mask=0, dept_mask=0, doc_version_epoch="default", provenance=_MANAGED) == []
     bad = tmp_path / "bad.txt"
     bad.write_bytes(b"\xff")
     with pytest.raises(ValueError, match="cannot read UTF-8"):
-        processor.process(bad, role_mask=0, dept_mask=0, doc_version_epoch="default")
+        processor.process(bad, role_mask=0, dept_mask=0, doc_version_epoch="default", provenance=_MANAGED)
     pdf = tmp_path / "unsupported.pdf"
     pdf.write_text("not a pdf", encoding="utf-8")
     with pytest.raises(ValueError, match="only .txt"):
-        processor.process(pdf, role_mask=0, dept_mask=0, doc_version_epoch="default")
+        processor.process(pdf, role_mask=0, dept_mask=0, doc_version_epoch="default", provenance=_MANAGED)
 
 
 def test_document_identity_is_stable_across_data_root_mounts_and_file_moves(tmp_path):
@@ -96,13 +102,13 @@ def test_document_size_limits_reject_before_embedding_or_qdrant_write(tmp_path):
     service = TextIngestionService(DocumentProcessor(max_document_bytes=8), embedder, writer)
     source = _write_source(tmp_path, "oversized.txt", "123456789")
     with pytest.raises(ValueError, match="8-byte ingestion limit"):
-        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1")
+        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1", provenance=_MANAGED)
     assert not embedder.called
     assert not client.collection_exists("size_limit")
 
     chunk_limited = DocumentProcessor(chunk_size=2, chunk_overlap=0, max_chunks=2)
     with pytest.raises(ValueError, match="2-chunk ingestion limit"):
-        chunk_limited.process(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1")
+        chunk_limited.process(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_1", provenance=_MANAGED)
 
 
 @pytest.mark.parametrize("role,dept", [(-1, 0), (0, 2**32), (True, 0), (0, "1")])
@@ -110,7 +116,9 @@ def test_invalid_permission_masks_fail_before_ingestion(tmp_path, role, dept):
     path = tmp_path / "restricted.txt"
     path.write_text("restricted content", encoding="utf-8")
     with pytest.raises(ValueError, match="uint32"):
-        DocumentProcessor().process(path, role_mask=role, dept_mask=dept, doc_version_epoch="default")
+        DocumentProcessor().process(
+            path, role_mask=role, dept_mask=dept, doc_version_epoch="default", provenance=_MANAGED
+        )
 
 
 def test_deterministic_embedder_contract_and_empty_input():
@@ -281,7 +289,7 @@ def test_txt_to_local_qdrant_query_authorization_and_idempotence(tmp_path):
         writer,
     )
     source = _write_source(tmp_path, "restricted.txt", "secret formula collagen moisturizer")
-    chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1", provenance=_MANAGED)
     assert len(chunks) == 1
     query_vector = DeterministicTestEmbedder(16).embed_texts(["secret formula"])[0]
     reader = EmbeddingService.__new__(EmbeddingService)
@@ -312,12 +320,12 @@ def test_txt_to_local_qdrant_query_authorization_and_idempotence(tmp_path):
     assert manager._apply_rbac_filter([candidate], 1, 2) == []
     assert manager._apply_rbac_filter([candidate.model_copy(update={"metadata": {"role_mask": 2}})], 2, 4) == []
 
-    repeated = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    repeated = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1", provenance=_MANAGED)
     assert [item.chunk_id for item in chunks] == [item.chunk_id for item in repeated]
     assert len(_text_records(client, "rag_text_16")) == 1
 
     with pytest.raises(ValueError, match="uint32"):
-        service.ingest(source, role_mask=2**32, dept_mask=4, doc_version_epoch="phase_1")
+        service.ingest(source, role_mask=2**32, dept_mask=4, doc_version_epoch="phase_1", provenance=_MANAGED)
 
 
 def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
@@ -330,12 +338,12 @@ def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
     service = TextIngestionService(DocumentProcessor(), embedder, writer)
     source = _write_source(tmp_path, "stable.txt", "shared collagen moisturizer content")
 
-    epoch_a = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_a")
+    epoch_a = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_a", provenance=_MANAGED)
     points_a = _text_records(client, "epoch_test")
     ids_a = {point.id for point in points_a}
     assert len(ids_a) == len(epoch_a)
 
-    epoch_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b")
+    epoch_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b", provenance=_MANAGED)
     points_b = _text_records(client, "epoch_test")
     ids_by_epoch = {
         epoch: {point.id for point in points_b if point.payload["doc_version_epoch"] == epoch}
@@ -359,7 +367,7 @@ def test_same_content_coexists_and_remains_queryable_across_epochs(tmp_path):
         assert hits
         assert {hit["metadata"]["doc_version_epoch"] for hit in hits} == {epoch}
 
-    repeated_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b")
+    repeated_b = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="epoch_b", provenance=_MANAGED)
     points_after_repeat = _text_records(client, "epoch_test")
     assert [chunk.chunk_id for chunk in repeated_b] == [chunk.chunk_id for chunk in epoch_b]
     assert len(points_after_repeat) == len(epoch_a) + len(epoch_b)
@@ -374,12 +382,12 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
         QdrantTextWriter(client, "replace_test", dimension=16),
     )
     source = _write_source(tmp_path, "mutable.txt", "old content that spans multiple chunks")
-    old_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    old_chunks = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1", provenance=_MANAGED)
     assert len(old_chunks) > 1
     original_ids = {record.id for record in _text_records(client, "replace_test")}
 
     source.write_text("new content", encoding="utf-8")
-    phase_1 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1")
+    phase_1 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_1", provenance=_MANAGED)
     phase_1_records = _text_records(client, "replace_test")
     phase_1_ids = {record.id for record in phase_1_records}
     assert len(phase_1) == 1
@@ -387,7 +395,7 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
     assert original_ids.isdisjoint(phase_1_ids)
     assert {record.payload["content"] for record in phase_1_records} == {"new content"}
 
-    phase_2 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
+    phase_2 = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2", provenance=_MANAGED)
     assert len(phase_2) == 1
     records = _text_records(client, "replace_test")
     phase_2_ids = {record.id for record in records if record.payload["doc_version_epoch"] == "phase_2"}
@@ -395,7 +403,7 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
     assert phase_1_ids.isdisjoint(phase_2_ids)
 
     source.write_text("replacement for B", encoding="utf-8")
-    replacement_b = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2")
+    replacement_b = service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2", provenance=_MANAGED)
     assert replacement_b
     records = _text_records(client, "replace_test")
     assert {record.id for record in records if record.payload["doc_version_epoch"] == "phase_1"} == phase_1_ids
@@ -406,14 +414,14 @@ def test_staging_epoch_replacement_preserves_other_epochs_and_sealed_epoch_is_im
     assert phase_2_ids.isdisjoint(replacement_b_ids)
 
     source.write_text(" \n", encoding="utf-8")
-    assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2") == []
+    assert service.ingest(source, role_mask=2, dept_mask=4, doc_version_epoch="phase_2", provenance=_MANAGED) == []
     records = _text_records(client, "replace_test")
     assert {record.payload["doc_version_epoch"] for record in records} == {"phase_1"}
 
     service.writer.seal_epoch("phase_2")
     another_source = _write_source(tmp_path, "late-addition.txt", "late addition")
     with pytest.raises(ValueError, match="is sealed"):
-        service.ingest(another_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_2")
+        service.ingest(another_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_2", provenance=_MANAGED)
 
 
 def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
@@ -448,11 +456,11 @@ def test_legacy_default_document_cannot_be_restricted_in_place(tmp_path):
         QdrantTextWriter(client, "legacy_default", dimension=16),
     )
 
-    service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default")
+    service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default", provenance=_MANAGED)
     assert len(_text_records(client, "legacy_default")) == 1
     service.writer.seal_epoch("default")
     with pytest.raises(ValueError, match="is sealed"):
-        service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default")
+        service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default", provenance=_MANAGED)
     active_points = [
         record
         for record in client.scroll("legacy_default", limit=10, with_payload=True)[0]
@@ -479,18 +487,18 @@ def test_same_content_with_changed_embedding_vector_requires_new_epoch(tmp_path)
     writer = QdrantTextWriter(client, "embedding_version", dimension=16)
     service = TextIngestionService(DocumentProcessor(), embedder, writer)
     source = _write_source(tmp_path, "same.txt", "same content")
-    service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
 
     embedder.marker = 0.75
     with pytest.raises(ValueError, match="stored embedding vectors differ"):
-        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
 
     # Changing the declared model revision also requires a distinct epoch.
     embedder.embedding_version = "new-model-revision"
     revised_service = TextIngestionService(DocumentProcessor(), embedder, writer)
     with pytest.raises(ValueError, match="embedding version changed"):
-        revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
-    assert revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_2")
+        revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
+    assert revised_service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_2", provenance=_MANAGED)
 
 
 def test_same_content_retry_accepts_qdrant_cosine_normalization(tmp_path):
@@ -508,8 +516,8 @@ def test_same_content_retry_accepts_qdrant_cosine_normalization(tmp_path):
     service = TextIngestionService(DocumentProcessor(), embedder, writer)
     source = _write_source(tmp_path, "cosine.txt", "same content")
 
-    first = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
-    retry = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    first = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
+    retry = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
 
     assert retry == first
     records, _ = client.scroll("cosine_normalized_retry", limit=10, with_payload=True, with_vectors=True)
@@ -543,9 +551,9 @@ def test_epoch_rejects_different_embedding_revision_across_documents(tmp_path):
         QdrantTextWriter(client, "epoch_embedding_version", dimension=16),
     )
 
-    first_service.ingest(first_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    first_service.ingest(first_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
     with pytest.raises(ValueError, match="embedding version changed within epoch"):
-        second_service.ingest(second_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+        second_service.ingest(second_source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
 
     points, _ = client.scroll("epoch_embedding_version", limit=100, with_payload=True)
     text_points = [point for point in points if point.payload.get("doc_type") == "text"]
@@ -576,7 +584,7 @@ def test_default_epoch_does_not_mix_untyped_legacy_vectors(tmp_path):
     )
 
     with pytest.raises(ValueError, match="embedding version is missing or mixed within epoch"):
-        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default")
+        service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="default", provenance=_MANAGED)
 
     points, _ = client.scroll("legacy_epoch_version", limit=10, with_payload=True)
     assert [point.id for point in points] == ["00000000-0000-0000-0000-000000000001"]
@@ -616,7 +624,7 @@ def test_default_epoch_replaces_untyped_legacy_points_for_same_document(tmp_path
         QdrantTextWriter(client, "legacy_source_replacement", dimension=16),
     )
 
-    service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default")
+    service.ingest(source, role_mask=8, dept_mask=0, doc_version_epoch="default", provenance=_MANAGED)
 
     points = _text_records(client, "legacy_source_replacement")
     assert len(points) == 1
@@ -642,7 +650,7 @@ def test_document_epoch_replacement_uses_injected_lock(tmp_path):
         QdrantTextWriter(client, "locked_test", dimension=16, replacement_lock=replacement_lock),
     )
     source = _write_source(tmp_path, "locked.txt", "serialized replacement")
-    chunks = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1")
+    chunks = service.ingest(source, role_mask=0, dept_mask=0, doc_version_epoch="phase_1", provenance=_MANAGED)
     assert lock_calls == [(chunks[0].doc_id, "phase_1")]
 
 
@@ -794,6 +802,7 @@ def test_concurrent_writers_tolerate_collection_create_race(tmp_path):
                 role_mask=0,
                 dept_mask=0,
                 doc_version_epoch="epoch_1",
+                provenance=_MANAGED,
             )
         except Exception as exc:  # surfaced after joining both concurrent writers
             failures.append(exc)

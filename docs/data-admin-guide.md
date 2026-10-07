@@ -8,7 +8,7 @@
 **已在代码与确定性测试中实现：** 多格式解析（TXT/PDF/DOCX/XLSX/图片）、扫描页 OCR 路由、
 确定性字符切块、稳定逻辑身份、BGE/CLIP embedding adapter、Qdrant 文本与图像 writer、
 Elasticsearch writer、内容哈希增量检测、snapshot carry-forward、全量重建、快照校验、
-epoch 封存、调度抽象与反馈导出。
+epoch 封存、调度抽象与反馈导出，以及来源可信度契约（provenance + 显式审批 + 隔离）。
 
 **需要外部运行时 / 资产：** 真实 BGE 模型、真实 CLIP 模型（视觉检索启用时）、
 PaddleOCR/PaddlePaddle（需要 OCR 时，见 `offline/requirements-ocr.txt`）、Airflow（可选）。
@@ -52,6 +52,76 @@ python3 -m pip install -r offline/requirements-ocr.txt
 - 单源 `ingest` 必须显式给出 `--role-mask` 与 `--dept-mask`；掩码必须是 uint32。缺少或非法掩码
   一律拒绝，绝不会默认公开。
 - 公开内容使用两个掩码 `0`；受限内容使用对应非零角色/部门掩码。
+
+## 4.1 来源可信度与隔离（import 需审批）
+
+离线 ingestion 记录一条**规范化来源溯源（provenance）**并写入每个 point / ES 文档 / 源状态行。
+这条记录有两个轴，gate 只读它们的派生值：
+
+| 字段 | 取值 | 含义 |
+|---|---|---|
+| `source_trust` | `MANAGED_INTERNAL` / `UNTRUSTED` | provenance **声明**，由 `config.json` 的 `source_trust.rules` 按路径 glob 解析（与 `permission_rules` 同样的先匹配先命中）。不从内容推断。 |
+| `approval_status` | `NOT_REQUIRED` / `PENDING_REVIEW` / `APPROVED` / `REJECTED` | 人工**审批决定**。`UNTRUSTED` 一律以 `PENDING_REVIEW` 起步；ingestion 自身永远不会产生 `APPROVED`。 |
+| `trust_class`（派生） | `MANAGED_INTERNAL` / `APPROVED_EXTERNAL` / `UNTRUSTED` | 上述两轴折叠出的唯一有界激活类别，只有前两类可被 seal。 |
+
+规则：
+
+- **未审批的 `UNTRUSTED` 可以解析、暂存，但不能 seal。** staging epoch 本身不可被检索，
+  所以 quarantine 的语义是"扣住并可供人工检查"，不是"删除"。`seal-epoch` 会因为它失败，
+  该 epoch 因此无法被激活；已封存的旧 epoch 继续服务。
+- **`REJECTED` 完全不写入。** 记录为"不导入"的决定，就不应该被暂存。
+- **缺 provenance 一律 fail closed。** 写入端（Qdrant 文本/图像 writer、ES writer）拒绝没有
+  可用溯源的记录，封存端也拒绝没有溯源的 point。**没有 legacy 豁免**：trust contract 之前写入的
+  point 同时缺少 `doc_version_epoch` 与 `embedding_version`，早就被既有的 epoch 校验挡在 seal 之外，
+  因此再开一个豁免只是无法触达的代码。`default` epoch 的 legacy **检索**兼容性不受影响。
+- **审批必须显式、可追溯、且绑定到具体字节。** `review-source` 需要 `--approve`/`--reject` 加一个
+  `--actor`，并把决定写进独立 SQLite 审批台账（`source_trust.approval_store_path`，与 ingestion
+  状态库分开，状态库重建不会丢失审批）。审批绑定它被批准时的 content hash：文件被修改后自动回到
+  `PENDING_REVIEW`，不会沿用旧决定。每次决定与每次拒绝都会写审计事件
+  （`knowledge.source.trust_decision` / `knowledge.source.quarantine`）。
+- **默认兼容既有托管数据。** `default_source_trust` 为 `MANAGED_INTERNAL`，且未显式声明可信度的
+  调用方按 `MANAGED_INTERNAL` 处理——这是**显式的**迁移策略，不是静默兜底：溯源仍然必须被持久化，
+  并且仍然受 seal gate 约束。缺少 `default_source_trust` 会 fail closed（与缺少默认权限掩码一致）。
+
+`config.json` 示例（首次匹配先命中）：
+
+```json
+"source_trust": {
+  "rules": [
+    { "path_pattern": "**/imports/**", "source_trust": "UNTRUSTED" },
+    { "path_pattern": "**/第三方/**", "source_trust": "UNTRUSTED" }
+  ],
+  "default_source_trust": "MANAGED_INTERNAL",
+  "approval_store_path": "./data/offline_source_trust.sqlite3"
+}
+```
+
+### 4.2 审批队列与决定
+
+```bash
+# 查看当前无法进入可激活快照的来源
+python3 run_offline.py review-source --list
+
+# 批准某个来源的**当前字节**
+python3 run_offline.py review-source ./data/imports/vendor-dossier.pdf \
+  --approve --actor alice@corp --note "已核对供应商资质"
+
+# 拒绝：此后该来源不会被导入
+python3 run_offline.py review-source ./data/imports/vendor-dossier.pdf \
+  --reject --actor alice@corp --note "第三方宣称无法核实"
+```
+
+- `--actor` 必填；缺少时命令失败（退出码 2）而不是默认批准。
+- 决定只覆盖当时的字节。改文件后需重新审批，并重新构建 epoch。
+- 已封存的 epoch 不可原地修改：审批后需要 `full-rebuild` 或 `incremental-build` 到新 epoch。
+  信任决定变化会被 `incremental-build` 识别为 `MODIFIED` 并重新处理，所以审批后无需手工干预。
+- 触发条件：把新文件放进匹配 `UNTRUSTED` 的目录；或把既有目录改成 import 路径。两者都会让下一次
+  `seal-epoch` 失败，直到做出决定。
+
+**边界（务必如实表述）**：这是 provenance / quarantine 控制，不是内容检测。它不读取文档内容，
+因此无法说明被批准的来源是"安全的"；`source_trust` 的可信度只取决于配置与该目录的写权限。
+它降低 ingestion poisoning 面，但**不消除 prompt injection**；真实对抗模型行为与
+prompt-injection 抗性仍为 `PENDING`，不在本仓库范围内。
 
 ## 5. 创建索引
 
@@ -116,7 +186,13 @@ python3 run_offline.py seal-epoch --epoch phase_2
 ```
 
 `seal-epoch` 默认先运行快照校验（Qdrant 文本、Qdrant 图像、Elasticsearch、RBAC 元数据、
-epoch、embedding version、重复逻辑 ID、孤儿图像），任何错误都会阻止封存。
+epoch、embedding version、重复逻辑 ID、孤儿图像、**来源溯源**），任何错误都会阻止封存。
+
+溯源校验从 point / ES 文档上**已持久化的** provenance 重新判定激活资格，因此：
+carry-forward 复制过来的 point 也一样受检（把未审批来源复制到新 epoch 不是绕过路径），
+Elasticsearch 的 BM25 路径与向量路径走同一个 gate。校验通过并封存时，会额外写入一份
+epoch 溯源清单（`SnapshotBuilder.trust_manifest(epoch)`），记录该快照的信任类别构成与审批人。
+封存失败时，`run_offline.py` 会为每个被隔离的来源单独写一条拒绝审计。
 
 ```bash
 python3 run_offline.py seal-epoch --epoch phase_2 --skip-validation
@@ -132,13 +208,19 @@ python3 run_offline.py seal-epoch --epoch phase_2 --skip-validation
 
 激活是明确的人工动作：封存并核对完整后，修改 `config.json` 的 `knowledge_version_epoch`
 为新 epoch 并重启在线服务。调度器最多 build/validate/seal，**不会**自动切换生产 epoch。
+来源溯源契约没有引入任何自动激活步骤：gate 决定的是"这个 epoch 能不能被封存"，
+"切换到哪个 epoch"仍然是一次人工改配置。
 
 回滚：把 `knowledge_version_epoch` 切回旧 epoch 并重启。旧 epoch 点保留，因此可回切。
 
 ## 11. 状态数据库
 
 - 位置：`knowledge_base.state_db_path`（默认 `./data/offline_state.sqlite3`）。
-- 记录 `source_id`、相对路径、大小、mtime、内容哈希、文档类型、最近成功 epoch、状态。
+- 记录 `source_id`、相对路径、大小、mtime、内容哈希、文档类型、最近成功 epoch、状态，
+  以及 `source_trust` / `approval_status`。这两个字段参与变更判定：审批或拒绝会被识别为
+  `MODIFIED` 并重新处理（否则旧 point 会一直带着过期的 `PENDING_REVIEW` 溯源导致封存一直失败）。
+- 审批决定存在**另一个**库 `source_trust.approval_store_path`，与状态库分开：重建状态库
+  不应该把已批准的来源重新打回隔离。
 - 使用 SQLite 事务，崩溃安全；测试使用临时数据库。运行库不提交到仓库（`.gitignore`）。
 
 ## 12. embedding version 契约
@@ -207,6 +289,11 @@ python3 run_offline.py export-regression-candidates
 | `role_mask must be an integer uint32` | 显式提供合法掩码 |
 | carry-forward `IncompatibleEmbeddingVersion` | 执行 `full-rebuild` 而非增量 |
 | 缺少默认权限 | 配置 `permission_rules.default_role_mask` / `default_dept_mask` |
+| `source trust rules must define default_source_trust` | 配置 `source_trust.default_source_trust`（缺失即 fail closed） |
+| `... is quarantined (imports/x.pdf): UNTRUSTED` | 该来源未审批；`python3 run_offline.py review-source --list` 后按 §4.2 审批 |
+| `... has no usable ingestion provenance` | point 缺少溯源；用当前代码重新写入该文档（新写入一律带溯源） |
+| `<source_id> was rejected in review` | 该来源已被拒绝，不导入；移出 `data_dir` 或撤销拒绝决定 |
+| `--actor` 缺失导致审批失败 | 审批必须可归属，补上 `--actor` 重试 |
 
 ## 18. 微调数据
 

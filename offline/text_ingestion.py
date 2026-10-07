@@ -7,11 +7,12 @@ import math
 import re
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from offline.file_lock import FileLockProvider
+from offline.source_trust import enforce_writable_provenance, persisted_trust_class
 
 _UINT32_MAX = 0xFFFFFFFF
 _EPOCH_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -57,6 +58,8 @@ class TextChunk:
     status: str
     doc_version_epoch: str
     metadata: dict[str, str]
+    #: Canonical ingestion provenance, persisted verbatim onto the point.
+    provenance: dict[str, str] = field(default_factory=dict)
 
 
 class TextEmbedder(Protocol):
@@ -134,6 +137,7 @@ class DocumentProcessor:
         dept_mask: int,
         doc_version_epoch: str,
         source_id: str | None = None,
+        provenance: dict | None = None,
     ) -> list[TextChunk]:
         _validate_permissions(role_mask, dept_mask)
         _validate_epoch(doc_version_epoch)
@@ -178,6 +182,7 @@ class DocumentProcessor:
                     status="active",
                     doc_version_epoch=doc_version_epoch,
                     metadata={"source_path": source_path, "format": "txt"},
+                    provenance=dict(provenance or {}),
                 )
             )
             if offset + self.chunk_size >= len(text):
@@ -364,6 +369,10 @@ class QdrantTextWriter:
                             "status",
                             "embedding_version",
                             "doc_version_epoch",
+                            # Provenance is part of the document signature below,
+                            # so it has to be selected explicitly: an explicit
+                            # ``with_payload`` list is a projection, not a filter.
+                            "provenance",
                         ],
                         with_vectors=True,
                         offset=offset,
@@ -426,6 +435,11 @@ class QdrantTextWriter:
                 payload.get("role_mask"),
                 payload.get("dept_mask"),
                 payload.get("status"),
+                # Provenance is part of the document's contract, so a changed
+                # trust decision is a changed document. Keeping it in the
+                # signature makes an approval recorded into an already-sealed
+                # epoch fail closed instead of being silently ignored.
+                persisted_trust_class(payload.get("provenance")),
             )
 
         return sorted((signature(payload) for payload in payloads), key=repr)
@@ -604,6 +618,16 @@ class QdrantTextWriter:
             _validate_epoch(chunk.doc_version_epoch)
             if chunk.status != "active":
                 raise ValueError("Phase 1 only writes active text chunks")
+            # Ingestion trust gate: a point is only written with usable, persisted
+            # provenance. A rejected source is refused outright; a quarantined
+            # (unapproved) source may be staged because a staging epoch is not
+            # queryable, and offline/validator.py refuses to seal it.
+            enforce_writable_provenance(
+                chunk.provenance,
+                label=f"text chunk {chunk.chunk_id!r}",
+                source_id=chunk.doc_id,
+                epoch=chunk.doc_version_epoch,
+            )
             payload = {
                 "doc_id": chunk.doc_id,
                 "chunk_id": chunk.chunk_id,
@@ -619,6 +643,7 @@ class QdrantTextWriter:
                 "status": chunk.status,
                 "doc_version_epoch": chunk.doc_version_epoch,
                 "metadata": chunk.metadata,
+                "provenance": dict(chunk.provenance),
             }
             points.append(PointStruct(id=_versioned_point_id(chunk), vector=vector, payload=payload))
         return points
@@ -645,6 +670,7 @@ class TextIngestionService:
         dept_mask: int,
         doc_version_epoch: str,
         source_id: str | None = None,
+        provenance: dict | None = None,
     ) -> list[TextChunk]:
         _, doc_id = self.processor.document_identity(source, source_id)
         chunks = self.processor.process(
@@ -653,6 +679,7 @@ class TextIngestionService:
             dept_mask=dept_mask,
             doc_version_epoch=doc_version_epoch,
             source_id=source_id,
+            provenance=provenance,
         )
         vectors = self.embedder.embed_texts([chunk.text for chunk in chunks])
         self.writer.replace_document(doc_id, doc_version_epoch, chunks, vectors)

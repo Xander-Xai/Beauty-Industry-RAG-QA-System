@@ -40,6 +40,7 @@ def run_smoke(model_path: str, dimension: int, batch_size: int, model_revision: 
 
     from offline.document_processor import DocumentProcessor
     from offline.embeddings import BGETextEmbedder
+    from offline.source_trust import managed_record
     from offline.text_ingestion import QdrantTextWriter, TextIngestionService
 
     embedder = BGETextEmbedder(model_path, dimension, batch_size, model_revision=model_revision)
@@ -75,7 +76,13 @@ def run_smoke(model_path: str, dimension: int, batch_size: int, model_revision: 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "smoke.txt"
         path.write_text("\n\n".join(documents), encoding="utf-8")
-        chunks = service.ingest(path, role_mask=0, dept_mask=0, doc_version_epoch="smoke_epoch")
+        chunks = service.ingest(
+            path,
+            role_mask=0,
+            dept_mask=0,
+            doc_version_epoch="smoke_epoch",
+            provenance=managed_record("smoke.txt").to_payload(),
+        )
         if not chunks:
             print("BGE smoke failed: ingestion produced no chunks")
             return 1

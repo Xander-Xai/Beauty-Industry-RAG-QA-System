@@ -13,6 +13,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from offline.source_trust import APPROVAL_NOT_REQUIRED, TRUST_MANAGED_INTERNAL
+
 NEW = "NEW"
 UNCHANGED = "UNCHANGED"
 MODIFIED = "MODIFIED"
@@ -30,13 +32,21 @@ CREATE TABLE IF NOT EXISTS source_state (
     last_processed_at TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     role_mask INTEGER NOT NULL DEFAULT 0,
-    dept_mask INTEGER NOT NULL DEFAULT 0
+    dept_mask INTEGER NOT NULL DEFAULT 0,
+    source_trust TEXT NOT NULL DEFAULT 'MANAGED_INTERNAL',
+    approval_status TEXT NOT NULL DEFAULT 'NOT_REQUIRED'
 )
 """
 
 _MIGRATION_COLUMNS = {
     "role_mask": "INTEGER NOT NULL DEFAULT 0",
     "dept_mask": "INTEGER NOT NULL DEFAULT 0",
+    # Existing rows describe content that was already managed and already
+    # activatable, so the migration seeds them with the managed/approved pair
+    # rather than leaving them unprovenanced. A row that was never trusted cannot
+    # exist here: before this contract there was no trust record to store.
+    "source_trust": f"TEXT NOT NULL DEFAULT '{TRUST_MANAGED_INTERNAL}'",
+    "approval_status": f"TEXT NOT NULL DEFAULT '{APPROVAL_NOT_REQUIRED}'",
 }
 
 
@@ -53,6 +63,8 @@ class SourceState:
     status: str
     role_mask: int = 0
     dept_mask: int = 0
+    source_trust: str = TRUST_MANAGED_INTERNAL
+    approval_status: str = APPROVAL_NOT_REQUIRED
 
 
 @dataclass(frozen=True)
@@ -110,8 +122,8 @@ class StateStore:
                 INSERT INTO source_state (
                     source_id, relative_path, file_size, mtime_ns, content_hash,
                     document_type, last_successful_epoch, last_processed_at, status,
-                    role_mask, dept_mask
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    role_mask, dept_mask, source_trust, approval_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id) DO UPDATE SET
                     relative_path = excluded.relative_path,
                     file_size = excluded.file_size,
@@ -122,7 +134,9 @@ class StateStore:
                     last_processed_at = excluded.last_processed_at,
                     status = excluded.status,
                     role_mask = excluded.role_mask,
-                    dept_mask = excluded.dept_mask
+                    dept_mask = excluded.dept_mask,
+                    source_trust = excluded.source_trust,
+                    approval_status = excluded.approval_status
                 """,
                 (
                     state.source_id,
@@ -136,6 +150,8 @@ class StateStore:
                     state.status,
                     state.role_mask,
                     state.dept_mask,
+                    state.source_trust,
+                    state.approval_status,
                 ),
             )
 
@@ -150,6 +166,8 @@ class StateStore:
         content_hash: str,
         role_mask: int | None = None,
         dept_mask: int | None = None,
+        source_trust: str | None = None,
+        approval_status: str | None = None,
     ) -> str:
         state = self.get(source_id)
         if state is None or state.status != "active":
@@ -160,13 +178,23 @@ class StateStore:
             return MODIFIED
         if dept_mask is not None and dept_mask != state.dept_mask:
             return MODIFIED
+        # A recorded approval or rejection is a change to the document's contract,
+        # not to its bytes. Without this, approving a quarantined source would
+        # leave it classified UNCHANGED, so its stored points would keep the old
+        # PENDING_REVIEW provenance and the seal would keep failing for a
+        # decision that was in fact made.
+        if source_trust is not None and source_trust != state.source_trust:
+            return MODIFIED
+        if approval_status is not None and approval_status != state.approval_status:
+            return MODIFIED
         return UNCHANGED
 
     def diff(self, current: dict[str, dict]) -> ChangeSet:
         """Classify the current source set against stored state.
 
         ``current`` maps ``source_id`` to a dict with ``content_hash`` and,
-        when available, the resolved ``role_mask``/``dept_mask`` so permission
+        when available, the resolved ``role_mask``/``dept_mask`` plus the
+        resolved ``source_trust``/``approval_status`` so permission and trust
         changes force reprocessing even when the file bytes are unchanged.
         """
         new, modified, unchanged = [], [], []
@@ -176,6 +204,8 @@ class StateStore:
                 content_hash=metadata["content_hash"],
                 role_mask=metadata.get("role_mask"),
                 dept_mask=metadata.get("dept_mask"),
+                source_trust=metadata.get("source_trust"),
+                approval_status=metadata.get("approval_status"),
             )
             if change == NEW:
                 new.append(source_id)
@@ -200,4 +230,6 @@ def _row_to_state(row: sqlite3.Row) -> SourceState:
         status=row["status"],
         role_mask=row["role_mask"] if "role_mask" in row.keys() else 0,
         dept_mask=row["dept_mask"] if "dept_mask" in row.keys() else 0,
+        source_trust=row["source_trust"] if "source_trust" in row.keys() else TRUST_MANAGED_INTERNAL,
+        approval_status=row["approval_status"] if "approval_status" in row.keys() else APPROVAL_NOT_REQUIRED,
     )

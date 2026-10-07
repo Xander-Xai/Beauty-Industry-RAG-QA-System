@@ -253,3 +253,264 @@ def test_export_regression_candidates_status_choices_match_the_module():
 
     assert set(status_action.choices) == {PENDING_REVIEW, ACCEPTED, REJECTED, "all"}
     assert CANDIDATE_REVIEW_STATUSES == {PENDING_REVIEW, ACCEPTED, REJECTED}
+
+
+# ── review-source (explicit ingestion trust decision) ────────────────────────
+
+
+def _trust_config(tmp_path):
+    return {
+        "knowledge_base": {"data_dir": str(tmp_path / "data")},
+        "permission_rules": {"rules": [], "default_role_mask": 0, "default_dept_mask": 0},
+        "source_trust": {
+            "rules": [{"path_pattern": "**/imports/**", "source_trust": "UNTRUSTED"}],
+            "default_source_trust": "MANAGED_INTERNAL",
+            "approval_store_path": str(tmp_path / "trust.sqlite3"),
+        },
+        "offline": {"scheduler": {}},
+    }
+
+
+def _imported_source(tmp_path, name="imports/vendor.txt", text="third-party dossier"):
+    data_dir = tmp_path / "data"
+    path = data_dir / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _patch_config(monkeypatch, tmp_path):
+    import common.config as config_module
+
+    config = _trust_config(tmp_path)
+    monkeypatch.setattr(config_module, "get_config_dict", lambda *args, **kwargs: config)
+    return config
+
+
+def test_review_source_records_an_attributed_approval(monkeypatch, tmp_path):
+    from offline.source_trust import APPROVAL_APPROVED, TrustRegistry
+
+    config = _patch_config(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path)
+
+    assert (
+        main(
+            [
+                "review-source",
+                str(source),
+                "--approve",
+                "--actor",
+                "steward@corp",
+                "--note",
+                "vendor dossier checked",
+            ]
+        )
+        == 0
+    )
+
+    registry = TrustRegistry(config["source_trust"]["approval_store_path"])
+    decision = registry.get("imports/vendor.txt")
+    assert decision.approval_status == APPROVAL_APPROVED
+    assert decision.decided_by == "steward@corp"
+    assert decision.note == "vendor dossier checked"
+
+
+def test_review_source_refuses_an_unattributed_approval(monkeypatch, tmp_path, caplog):
+    from offline.source_trust import TrustRegistry
+
+    config = _patch_config(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path)
+
+    assert main(["review-source", str(source), "--approve"]) == 2
+
+    registry = TrustRegistry(config["source_trust"]["approval_store_path"])
+    assert registry.get("imports/vendor.txt") is None
+
+
+def test_review_source_refuses_an_unknown_source(monkeypatch, tmp_path):
+    _patch_config(monkeypatch, tmp_path)
+    missing = tmp_path / "data" / "imports" / "absent.txt"
+    missing.parent.mkdir(parents=True, exist_ok=True)
+    assert main(["review-source", str(missing), "--approve", "--actor", "steward"]) == 2
+
+
+def test_review_source_requires_a_decision_flag(monkeypatch, tmp_path):
+    _patch_config(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path)
+    assert main(["review-source", str(source), "--actor", "steward"]) == 2
+
+
+def test_review_source_list_reports_the_quarantine_queue(monkeypatch, tmp_path, caplog):
+    _patch_config(monkeypatch, tmp_path)
+    _imported_source(tmp_path)
+    _imported_source(tmp_path, name="public/guide.txt", text="managed")
+
+    with caplog.at_level("WARNING"):
+        assert main(["review-source", "--list"]) == 0
+
+    assert "imports/vendor.txt" in caplog.text
+    assert "no approval decision yet" in caplog.text
+    assert "public/guide.txt" not in caplog.text
+
+
+def test_review_source_rejects_a_source(monkeypatch, tmp_path):
+    from offline.source_trust import APPROVAL_REJECTED, TrustRegistry
+
+    config = _patch_config(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path)
+
+    assert main(["review-source", str(source), "--reject", "--actor", "steward"]) == 0
+
+    registry = TrustRegistry(config["source_trust"]["approval_store_path"])
+    assert registry.get("imports/vendor.txt").approval_status == APPROVAL_REJECTED
+
+
+def test_ingest_trust_choices_match_the_module():
+    """The parser spells the levels out to keep `--help` import-free; keep them honest."""
+    from offline.source_trust import SOURCE_TRUST_LEVELS
+
+    parser = _build_parser()
+    command_action = next(item for item in parser._actions if item.dest == "command")
+    ingest_parser = command_action.choices["ingest"]
+    trust_action = next(item for item in ingest_parser._actions if item.dest == "source_trust")
+    assert set(trust_action.choices) == SOURCE_TRUST_LEVELS
+
+
+# ── ingest-text must not bypass the quarantine contract ──────────────────────
+
+
+def _capture_ingest_text_provenance(monkeypatch, config):
+    """Patch the TXT service and return a dict the provenance lands in."""
+    from offline import text_ingestion as text_ingestion_module
+
+    captured = {}
+
+    class FakeService:
+        def ingest(self, source, **kwargs):
+            captured.update(kwargs)
+            return []
+
+    monkeypatch.setattr(text_ingestion_module, "configured_text_ingestion_service", lambda: FakeService())
+    return captured
+
+
+def test_ingest_text_honors_an_explicit_untrusted_flag(monkeypatch, tmp_path):
+    """`ingest-text --source-trust UNTRUSTED` must persist UNTRUSTED, not MANAGED_INTERNAL."""
+    _patch_config(monkeypatch, tmp_path)
+    captured = _capture_ingest_text_provenance(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path)
+
+    assert (
+        main(
+            [
+                "ingest-text",
+                str(source),
+                "--role-mask",
+                "0",
+                "--dept-mask",
+                "0",
+                "--epoch",
+                "e1",
+                "--source-trust",
+                "UNTRUSTED",
+            ]
+        )
+        == 0
+    )
+
+    provenance = captured["provenance"]
+    assert provenance["source_trust"] == "UNTRUSTED"
+    assert provenance["trust_class"] == "UNTRUSTED"
+    assert provenance["approval_status"] == "PENDING_REVIEW"
+
+
+def test_ingest_text_resolves_trust_from_path_rules(monkeypatch, tmp_path):
+    """A TXT import matched by an UNTRUSTED rule is quarantined without restating it."""
+    _patch_config(monkeypatch, tmp_path)
+    captured = _capture_ingest_text_provenance(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path)
+
+    assert main(["ingest-text", str(source), "--role-mask", "0", "--dept-mask", "0", "--epoch", "e1"]) == 0
+
+    assert captured["provenance"]["trust_class"] == "UNTRUSTED"
+
+
+def test_ingest_text_honors_a_recorded_approval(monkeypatch, tmp_path):
+    """A ledger approval for these exact bytes makes ingest-text activatable again."""
+    from offline.source_trust import APPROVAL_APPROVED, TrustRegistry, file_content_hash
+
+    config = _patch_config(monkeypatch, tmp_path)
+    captured = _capture_ingest_text_provenance(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path)
+
+    registry = TrustRegistry(config["source_trust"]["approval_store_path"])
+    registry.decide(
+        "imports/vendor.txt",
+        content_hash=file_content_hash(source),
+        approval_status=APPROVAL_APPROVED,
+        actor="steward",
+    )
+    registry.close()
+
+    assert (
+        main(
+            [
+                "ingest-text",
+                str(source),
+                "--source-id",
+                "imports/vendor.txt",
+                "--role-mask",
+                "0",
+                "--dept-mask",
+                "0",
+                "--epoch",
+                "e1",
+            ]
+        )
+        == 0
+    )
+
+    assert captured["provenance"]["trust_class"] == "APPROVED_EXTERNAL"
+    assert captured["provenance"]["approval_actor"] == "steward"
+
+
+def test_review_source_refuses_a_managed_source(monkeypatch, tmp_path):
+    """A managed source needs no decision, so a stored one would be silently ignored."""
+    from offline.source_trust import TrustRegistry
+
+    config = _patch_config(monkeypatch, tmp_path)
+    source = _imported_source(tmp_path, name="public/guide.txt", text="managed")
+
+    assert main(["review-source", str(source), "--approve", "--actor", "steward"]) == 2
+
+    registry = TrustRegistry(config["source_trust"]["approval_store_path"])
+    assert registry.get("public/guide.txt") is None
+
+
+def test_review_source_accepts_an_out_of_tree_import_with_source_id(monkeypatch, tmp_path):
+    """An out-of-tree source staged with `--source-id` must be reviewable, not stuck in quarantine."""
+    from offline.source_trust import APPROVAL_APPROVED, TrustRegistry
+
+    config = _patch_config(monkeypatch, tmp_path)
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside" / "vendor.txt"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("out-of-tree dossier", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "review-source",
+                str(outside),
+                "--source-id",
+                "imports/vendor.txt",
+                "--approve",
+                "--actor",
+                "steward",
+            ]
+        )
+        == 0
+    )
+
+    registry = TrustRegistry(config["source_trust"]["approval_store_path"])
+    assert registry.get("imports/vendor.txt").approval_status == APPROVAL_APPROVED

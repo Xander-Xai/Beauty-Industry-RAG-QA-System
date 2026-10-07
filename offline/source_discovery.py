@@ -1,9 +1,9 @@
-"""Source discovery and path-based permission resolution.
+"""Source discovery and path-based permission and trust resolution.
 
 The relative path inside ``knowledge_base.data_dir`` is the default logical
 ``source_id``, so the same file tree mounted under a different root yields the
-same identities. Permission rules are evaluated first-match-wins and missing
-defaults fail closed.
+same identities. Permission and trust rules are both evaluated
+first-match-wins, and both fail closed on a missing default.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 from offline.document_processor import SUPPORTED_DOCUMENT_EXTENSIONS
 from offline.image_processor import SUPPORTED_IMAGE_EXTENSIONS
 from offline.snapshot_builder import IngestionSource, classify_source
+from offline.source_trust import resolve_source_trust
 
 SUPPORTED_SOURCE_EXTENSIONS = frozenset(SUPPORTED_DOCUMENT_EXTENSIONS) | frozenset(SUPPORTED_IMAGE_EXTENSIONS)
 
@@ -56,7 +57,16 @@ def discover_sources(
     *,
     permission_rules: dict,
     extensions: tuple[str, ...] | None = None,
+    trust_rules: dict | None = None,
 ) -> list[IngestionSource]:
+    """Discover every supported source and resolve its masks and trust claim.
+
+    ``trust_rules`` is the ``source_trust`` configuration block. When it is
+    omitted the resolver falls back to its own required default, so a caller
+    that forgets the block gets the same fail-closed behaviour as one that
+    supplies an incomplete block: a missing ``default_source_trust`` is an error
+    rather than a silent managed-content classification.
+    """
     root = Path(data_dir).resolve()
     if not root.is_dir():
         raise ValueError(f"knowledge base data directory does not exist: {root}")
@@ -72,6 +82,7 @@ def discover_sources(
             continue
         relative_path = path.relative_to(root).as_posix()
         role_mask, dept_mask = resolve_permission(relative_path, permission_rules)
+        source_trust = resolve_source_trust(relative_path, trust_rules or {})
         sources.append(
             IngestionSource(
                 source_id=relative_path,
@@ -80,6 +91,7 @@ def discover_sources(
                 role_mask=role_mask,
                 dept_mask=dept_mask,
                 relative_path=relative_path,
+                source_trust=source_trust,
             )
         )
     return sources

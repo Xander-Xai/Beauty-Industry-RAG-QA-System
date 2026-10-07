@@ -34,6 +34,12 @@ def _operator_name() -> str:
         return os.environ.get("USER") or "unknown"
 
 
+def _quarantined_sources(exc) -> list[str]:
+    """Return the source ids a failed validation refused, without string parsing."""
+    report = getattr(exc, "report", None)
+    return list(getattr(report, "quarantined_sources", []) or [])
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Offline knowledge base tools")
     parser.add_argument("--mode", choices=["rewrite-feedback"], help=argparse.SUPPRESS)
@@ -53,6 +59,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ingest.add_argument("--dept-mask", type=int, required=True)
         ingest.add_argument("--epoch", required=True)
         ingest.add_argument("--source-id", help="Stable source id when SOURCE is outside data_dir")
+        # Optional: omitting it resolves the same path rules discovery uses, so an
+        # import path is classified UNTRUSTED without the operator restating it.
+        ingest.add_argument(
+            "--source-trust",
+            choices=["MANAGED_INTERNAL", "UNTRUSTED"],
+            help="Provenance claim for this source (default: resolved from source_trust.rules)",
+        )
 
     incremental = subparsers.add_parser("incremental-build", help="Build a new epoch from changes")
     incremental.add_argument("--from-epoch", default=None)
@@ -66,6 +79,24 @@ def _build_parser() -> argparse.ArgumentParser:
     seal = subparsers.add_parser("seal-epoch", help="Validate and seal an epoch snapshot")
     seal.add_argument("--epoch", required=True)
     seal.add_argument("--skip-validation", action="store_true")
+
+    # Trust levels are spelled out here so `--help` stays free of offline imports;
+    # tests assert they match offline.source_trust.
+    review = subparsers.add_parser(
+        "review-source",
+        help="Record an explicit trust decision for an imported source, or list the quarantine queue",
+    )
+    review.add_argument("source", nargs="?", help="Path to the source file under review")
+    review.add_argument("--source-id", help="Stable source id when SOURCE is outside data_dir")
+    decision = review.add_mutually_exclusive_group()
+    decision.add_argument("--approve", action="store_true", help="Admit these exact bytes to activatable snapshots")
+    decision.add_argument("--reject", action="store_true", help="Refuse this source; it will not be ingested at all")
+    decision.add_argument("--list", action="store_true", dest="list_quarantined", help="List quarantined sources")
+    review.add_argument("--actor", help="Reviewer identity recorded with the decision (required to approve/reject)")
+    review.add_argument("--note", default="", help="Why this decision was made")
+    review.add_argument(
+        "--store-path", default=None, help="Approval ledger (default: source_trust.approval_store_path)"
+    )
 
     # Candidate review statuses are spelled out here so `--help` stays free of
     # offline imports; tests assert they match offline.regression_candidates.
@@ -110,42 +141,84 @@ def _handle_ingest(args) -> int:
     from pathlib import Path
 
     from offline.snapshot_builder import IngestionSource, classify_source, configured_snapshot_builder
+    from offline.source_trust import normalize_source_trust, resolve_source_trust
 
     document_type = classify_source(args.source)
     source_id = args.source_id
-    if not source_id:
-        from common.config import get_config_dict
+    from common.config import get_config_dict
 
-        data_dir = Path(get_config_dict().get("knowledge_base", {}).get("data_dir", "./data")).resolve()
+    config = get_config_dict()
+    data_dir = Path(config.get("knowledge_base", {}).get("data_dir", "./data")).resolve()
+    if not source_id:
         try:
             source_id = Path(args.source).resolve().relative_to(data_dir).as_posix()
         except ValueError:
             logger.error("source is outside knowledge_base.data_dir; provide --source-id")
             return 2
+    # Explicit declaration wins; otherwise the same path rules discovery applies,
+    # so a single-source ingest of an import path is quarantined by default too.
+    if args.source_trust:
+        source_trust = normalize_source_trust(args.source_trust)
+    else:
+        source_trust = resolve_source_trust(source_id, config.get("source_trust", {}) or {})
     source = IngestionSource(
         source_id=source_id,
         path=args.source,
         document_type=document_type,
         role_mask=args.role_mask,
         dept_mask=args.dept_mask,
+        source_trust=source_trust,
     )
     builder = configured_snapshot_builder()
     chunks, images = builder.ingest_source(source, args.epoch)
     logger.info("Ingested %d chunks and %d images into epoch %s", chunks, images, args.epoch)
+    logger.info(
+        "Source trust: %s (activation eligibility: %s)",
+        source_trust,
+        "sealed-and-activatable" if source_trust == "MANAGED_INTERNAL" else "quarantined until an explicit review",
+    )
     return 0
 
 
 def _handle_ingest_text(args) -> int:
+    from common.config import get_config_dict
+    from offline.scheduler import OfflineScheduler
+    from offline.source_trust import file_content_hash, normalize_source_trust, resolve_source_trust
     from offline.text_ingestion import configured_text_ingestion_service
 
+    config = get_config_dict()
+    source_id = args.source_id or args.source
+    # The legacy TXT slice resolves trust exactly like the full ingest path: an
+    # explicit --source-trust wins, otherwise the configured path rules classify
+    # it. Declaring managed provenance unconditionally would make this alias a
+    # direct bypass of the quarantine gate — a TXT import is quarantined by
+    # default too, and an approval recorded in the ledger is honored here.
+    if args.source_trust:
+        source_trust = normalize_source_trust(args.source_trust)
+    else:
+        source_trust = resolve_source_trust(source_id, config.get("source_trust", {}) or {})
+    scheduler = OfflineScheduler(config=config)
+    try:
+        provenance = scheduler.trust_registry.resolve(
+            source_id,
+            declared_trust=source_trust,
+            content_hash=file_content_hash(args.source),
+        ).to_payload()
+    finally:
+        scheduler.trust_registry.close()
     chunks = configured_text_ingestion_service().ingest(
         args.source,
         role_mask=args.role_mask,
         dept_mask=args.dept_mask,
         doc_version_epoch=args.epoch,
         source_id=args.source_id,
+        provenance=provenance,
     )
-    logger.info("Ingested %d text chunks", len(chunks))
+    logger.info(
+        "Ingested %d text chunks (source trust: %s)",
+        len(chunks),
+        "activatable" if provenance["trust_class"] == "MANAGED_INTERNAL" else "quarantined until review",
+    )
     return 0
 
 
@@ -172,9 +245,11 @@ def _handle_seal_epoch(args) -> int:
 
     Sealing is a release action: after it the epoch is immutable, and activation
     is a separate manual step. A seal performed with ``--skip-validation`` is
-    recorded distinctly because it bypasses the snapshot check.
+    recorded distinctly because it bypasses the snapshot check, and a seal refused
+    by the ingestion trust gate records each quarantined source separately.
     """
     from offline.snapshot_builder import configured_snapshot_builder
+    from offline.source_trust import audit_activation_refused
 
     builder = configured_snapshot_builder()
     if args.skip_validation:
@@ -211,6 +286,17 @@ def _handle_seal_epoch(args) -> int:
                 "operator": _operator_name(),
             },
         )
+        # Attribute the refusal per quarantined source. The report carries them
+        # as structured ids, so this never parses an error string, and only the
+        # bounded trust class reaches the audit record — never document content.
+        for source_id in _quarantined_sources(exc):
+            audit_activation_refused(
+                source_id=source_id,
+                trust_class="UNTRUSTED",
+                reason="source has no explicit review approval; epoch is not activatable",
+                actor_id=CLI_ACTOR_ID,
+                epoch=args.epoch,
+            )
         raise
     logger.info(
         "Validated and sealed epoch %s (Qdrant text/image + Elasticsearch); "
@@ -225,6 +311,135 @@ def _handle_seal_epoch(args) -> int:
         resource_id=args.epoch,
         metadata={"skip_validation": False, "validated": True, "operator": _operator_name()},
     )
+    return 0
+
+
+def _handle_review_source(args) -> int:
+    """Record or list explicit source trust decisions.
+
+    This is the *only* path that moves a source out of quarantine, and it is
+    deliberately not automatic: it needs an explicit ``--approve``/``--reject``
+    and a named ``--actor``, and it binds the decision to the content hash of
+    the bytes on disk. Approving a file therefore does not approve a later edit
+    of that file, and a review that omits the actor fails instead of defaulting
+    to approval. Both outcomes are audited.
+    """
+
+    from common.config import get_config_dict
+    from offline.scheduler import OfflineScheduler
+    from offline.source_trust import (
+        TrustRegistry,
+    )
+
+    config = get_config_dict()
+    # One ledger for reading and writing, so --list and the decision below can
+    # never disagree about which approvals exist.
+    scheduler = OfflineScheduler(config=config)
+    registry = TrustRegistry(args.store_path) if args.store_path else scheduler.trust_registry
+    try:
+        return _review_source(args, config, scheduler, registry)
+    finally:
+        registry.close()
+
+
+def _review_source(args, config: dict, scheduler, registry) -> int:
+    from pathlib import Path
+
+    from offline.source_trust import (
+        APPROVAL_APPROVED,
+        APPROVAL_REJECTED,
+        TRUST_MANAGED_INTERNAL,
+        SourceTrustError,
+        file_content_hash,
+    )
+
+    if args.list_quarantined:
+        queue = registry.quarantined_sources(scheduler.discover_sources())
+        if not queue:
+            logger.info("No quarantined sources: every discovered source is activatable.")
+            return 0
+        logger.warning("%d quarantined source(s) cannot be sealed or activated:", len(queue))
+        for entry in queue:
+            logger.warning(
+                "  %s  [%s]  content_hash=%s  — %s",
+                entry["source_id"],
+                entry["trust_class"],
+                entry["content_hash"][:16],
+                entry["reason"],
+            )
+        return 0
+
+    if not args.source:
+        logger.error("review-source needs a SOURCE path, or --list")
+        return 2
+    if not (args.approve or args.reject):
+        logger.error("review-source needs exactly one of --approve, --reject or --list")
+        return 2
+
+    data_dir = Path(config.get("knowledge_base", {}).get("data_dir", "./data")).resolve()
+    source_id = args.source_id
+    if not source_id:
+        try:
+            source_id = Path(args.source).resolve().relative_to(data_dir).as_posix()
+        except ValueError:
+            logger.error("source is outside knowledge_base.data_dir; provide --source-id")
+            return 2
+
+    matching = [source for source in scheduler.discover_sources() if source.source_id == source_id]
+    if matching:
+        source_path = matching[0].path
+        source_trust = matching[0].source_trust
+    elif args.source_id:
+        # An out-of-tree import is staged via `ingest SOURCE --source-id X`, so it
+        # is deliberately absent from discovery. The explicit id plus the file on
+        # disk is enough to review it, and trust is resolved by the same path
+        # rules the ingest path uses — otherwise such a source could be staged
+        # but never approved.
+        source_path = args.source
+        source_trust = scheduler.resolve_source_trust(source_id)
+    else:
+        logger.error(
+            "source %s is not a discovered ingestion source (unsupported type, filtered by "
+            "knowledge_base.supported_extensions, or missing from data_dir)",
+            source_id,
+        )
+        return 2
+
+    if source_trust == TRUST_MANAGED_INTERNAL:
+        # A managed source is NOT_REQUIRED by contract, so a stored decision could
+        # only be ignored by resolve(). Refuse it rather than audit a decision the
+        # pipeline will not honor.
+        logger.error(
+            "source %s resolves to MANAGED_INTERNAL; managed sources need no review decision",
+            source_id,
+        )
+        return 2
+
+    try:
+        decision = registry.decide(
+            source_id,
+            content_hash=file_content_hash(source_path),
+            approval_status=APPROVAL_APPROVED if args.approve else APPROVAL_REJECTED,
+            actor=args.actor or "",
+            note=args.note,
+        )
+    except SourceTrustError as exc:
+        logger.error("review decision refused (fail closed): %s", exc)
+        return 2
+
+    logger.info(
+        "Recorded %s for %s (content_hash=%s, revision %d, decided_by=%s)",
+        decision.approval_status,
+        decision.source_id,
+        decision.content_hash[:16],
+        decision.revision,
+        decision.decided_by,
+    )
+    if decision.approval_status == APPROVAL_APPROVED:
+        logger.info(
+            "This approval covers these bytes only. Re-run full-rebuild or incremental-build so the "
+            "stored provenance is refreshed; a sealed epoch cannot be changed in place."
+        )
     return 0
 
 
@@ -291,6 +506,7 @@ def main(argv=None) -> int:
         "incremental-build": _handle_incremental_build,
         "full-rebuild": _handle_full_rebuild,
         "seal-epoch": _handle_seal_epoch,
+        "review-source": _handle_review_source,
         "export-regression-candidates": _handle_export_regression_candidates,
     }
     handler = handlers.get(args.command)

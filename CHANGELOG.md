@@ -6,6 +6,56 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Added
 
+- Bounded ingestion trust and quarantine contract for offline knowledge
+  ingestion (`offline/source_trust.py`). This is a provenance/quarantine
+  control, not a content scanner, and it does not claim to eliminate prompt
+  injection:
+  - One canonical schema, persisted on every Qdrant text point, image point,
+    Elasticsearch document, source-state row and epoch trust manifest. Two stored
+    axes — `source_trust` (`MANAGED_INTERNAL` / `UNTRUSTED`, a path-glob claim
+    resolved from managed configuration) and `approval_status`
+    (`NOT_REQUIRED` / `PENDING_REVIEW` / `APPROVED` / `REJECTED`, an explicit
+    human decision) — plus one derived bounded activation class
+    (`MANAGED_INTERNAL` / `APPROVED_EXTERNAL` / `UNTRUSTED`). A managed source
+    cannot claim an approval and a stored class that contradicts its axes is
+    rejected, so one fact has one encoding.
+  - Untrusted content may be parsed and staged, because a staging epoch is not
+    queryable, but the snapshot validator refuses to **seal** it: an unapproved
+    source cannot enter an activatable snapshot. The gate re-derives eligibility
+    from provenance persisted on the stored points, so carry-forward is not a
+    bypass, and the Elasticsearch/BM25 path runs the same gate as the vector
+    paths.
+  - Rejected sources are refused outright, before parsing or embedding, so a
+    refused document costs no OCR or CLIP work.
+  - Missing or partial provenance fails closed at both the writers and the seal.
+    There is deliberately **no** legacy exemption: a pre-contract point already
+    lacks `doc_version_epoch` and `embedding_version` and is refused by the
+    pre-existing epoch checks, so an exemption would be unreachable code. Legacy
+    *retrieval* inside the sentinel `default` epoch is unchanged.
+  - Explicit approval path: `run_offline.py review-source` with mutually
+    exclusive `--approve` / `--reject` / `--list`. An approval requires a named
+    `--actor` and is bound to the content hash it was granted for, so editing an
+    approved file returns it to `PENDING_REVIEW` instead of inheriting a stale
+    decision. Decisions live in a SQLite ledger separate from the ingestion state
+    store, so rebuilding state cannot silently re-quarantine approved sources,
+    and a recorded trust change is detected as `MODIFIED` so an approval takes
+    effect on the next build.
+  - Audit events `knowledge.source.trust_decision` and
+    `knowledge.source.quarantine`; a refused seal records each quarantined source
+    individually, from structured report data rather than parsed error strings.
+    Audit records carry the bounded trust class only, never document content.
+  - Trust resolution mirrors `permission_rules`: first-match-wins path globs with
+    a required `default_source_trust` in `config.json`, so a deployment cannot
+    inherit managed-content classification by omitting the default. Sources that
+    declare no trust keep the previous managed behaviour as an explicit migration
+    policy, and their provenance is still persisted and still gated.
+  - Twelve mutation checks recorded in
+    `docs/security-regression-coverage.md`, including removal of the seal gate
+    itself. Evidence level is `REPO_VERIFIED` for the deterministic contract and
+    its tests only; human review of real documents, ingestion-time content
+    scanning, and adversarial-model / prompt-injection resistance remain
+    `PENDING` and out of scope.
+
 - Bounded vLLM generation resilience contract for the canonical generation path
   (`route_chat`), with the policy isolated in `router/vllm_resilience.py`:
   - Closed failure taxonomy (`timeout`, `connection`, `http_transient`,

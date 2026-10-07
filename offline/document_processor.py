@@ -87,6 +87,10 @@ class TextChunk:
     status: str
     doc_version_epoch: str
     metadata: dict = field(default_factory=dict)
+    #: Canonical ingestion provenance (``offline.source_trust.SourceTrustRecord``),
+    #: persisted verbatim onto the point. Empty means "not declared", which the
+    #: writer refuses rather than passing through as managed content.
+    provenance: dict = field(default_factory=dict)
 
 
 def _normalize_text(text: str) -> str:
@@ -382,6 +386,7 @@ class DocumentProcessor:
         role_mask: int,
         dept_mask: int,
         doc_version_epoch: str,
+        provenance: dict | None = None,
     ) -> list[TextChunk]:
         validate_permissions(role_mask, dept_mask)
         validate_epoch(doc_version_epoch)
@@ -418,6 +423,7 @@ class DocumentProcessor:
                         **processed.metadata,
                         **unit.metadata,
                     },
+                    provenance=dict(provenance or {}),
                 )
             )
         return chunks
@@ -430,6 +436,7 @@ class DocumentProcessor:
         dept_mask: int,
         doc_version_epoch: str,
         source_id: str | None = None,
+        provenance: dict | None = None,
     ) -> list[TextChunk]:
         validate_permissions(role_mask, dept_mask)
         validate_epoch(doc_version_epoch)
@@ -439,6 +446,7 @@ class DocumentProcessor:
             role_mask=role_mask,
             dept_mask=dept_mask,
             doc_version_epoch=doc_version_epoch,
+            provenance=provenance,
         )
 
 

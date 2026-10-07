@@ -61,6 +61,10 @@ class ProcessedImage:
     status: str
     doc_version_epoch: str
     metadata: dict = field(default_factory=dict)
+    #: Canonical ingestion provenance, persisted verbatim onto the point. An
+    #: image point is the retrievable representation of the same source as its
+    #: text chunks, so it carries the same trust decision.
+    provenance: dict = field(default_factory=dict)
 
 
 def image_identity(doc_id: str, content_hash: str, image_index: int) -> str:
@@ -205,6 +209,7 @@ class ImageProcessor:
         source_path: str,
         image_uri: str | None = None,
         extra_metadata: dict | None = None,
+        provenance: dict | None = None,
     ) -> ProcessedImage:
         validate_permissions(role_mask, dept_mask)
         validate_epoch(doc_version_epoch)
@@ -244,6 +249,7 @@ class ImageProcessor:
                 "page_number": image.page_number,
                 "image_index": image.image_index,
             },
+            provenance=dict(provenance or {}),
         )
 
     def process_standalone_image(
@@ -255,6 +261,7 @@ class ImageProcessor:
         doc_version_epoch: str,
         doc_id: str,
         image_index: int = 0,
+        provenance: dict | None = None,
     ) -> ProcessedImage:
         path = Path(source)
         if path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
@@ -276,4 +283,5 @@ class ImageProcessor:
             dept_mask=dept_mask,
             doc_version_epoch=doc_version_epoch,
             source_path=str(path.resolve()),
+            provenance=provenance,
         )

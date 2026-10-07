@@ -18,6 +18,8 @@ from common.audit import (
     ACTION_LOGIN_SUCCESS,
     ACTION_MEDIA_ACCESS_DENIED,
     ACTION_ROLE_UPDATE,
+    ACTION_SOURCE_TRUST_DECISION,
+    ACTION_SOURCE_TRUST_QUARANTINE,
     ACTION_USER_CREATE,
     ANONYMOUS_ACTOR,
     KNOWN_ACTIONS,
@@ -159,6 +161,8 @@ def test_registered_actions_all_exist_on_a_real_code_path():
         ACTION_ROLE_UPDATE,
         ACTION_MEDIA_ACCESS_DENIED,
         ACTION_EPOCH_SEAL,
+        ACTION_SOURCE_TRUST_DECISION,
+        ACTION_SOURCE_TRUST_QUARANTINE,
     }
 
 
@@ -414,6 +418,27 @@ def test_seal_epoch_audit_records_skip_validation_distinction():
 
 def test_audit_event_dataclass_field_order_is_stable():
     assert tuple(AuditEvent.__dataclass_fields__)[: len(CORE_FIELDS)] == CORE_FIELDS
+
+
+def test_ingestion_trust_audit_actions_exist_on_real_code_paths():
+    """An approval must be attributable, so both trust actions need real callers.
+
+    Registering an audit action is a claim that something in this repository
+    emits it. These two are emitted from ``offline/source_trust.py``: the
+    decision by the approval ledger, the quarantine by the writer/validator gate.
+    """
+    import inspect
+
+    from offline import source_trust
+
+    decision_source = inspect.getsource(source_trust._audit_decision)
+    quarantine_source = inspect.getsource(source_trust.audit_quarantine)
+    assert "ACTION_SOURCE_TRUST_DECISION" in decision_source
+    assert "ACTION_SOURCE_TRUST_QUARANTINE" in quarantine_source
+    # The decision event must stay attributable to the named reviewer.
+    assert "actor_id=decision.decided_by" in decision_source
+    assert ACTION_SOURCE_TRUST_DECISION in KNOWN_ACTIONS
+    assert ACTION_SOURCE_TRUST_QUARANTINE in KNOWN_ACTIONS
 
 
 # ── inbound correlation id hygiene ──────────────────────────────────────────

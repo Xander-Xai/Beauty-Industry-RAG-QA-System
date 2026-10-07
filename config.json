@@ -284,6 +284,17 @@
     "default_role_mask": 0,
     "default_dept_mask": 0
   },
+  "source_trust": {
+    "_comment": "Ingestion trust contract: a path-derived provenance claim plus an explicit human review decision. UNTRUSTED sources may be parsed and staged, but cannot be sealed or activated until `review-source` records an attributed approval bound to their exact content hash. Rules are first-match-wins and default_source_trust is required — omitting it fails closed.",
+    "rules": [
+      { "path_pattern": "**/imports/**", "source_trust": "UNTRUSTED" },
+      { "path_pattern": "**/第三方/**", "source_trust": "UNTRUSTED" },
+      { "path_pattern": "**/inbound/**", "source_trust": "UNTRUSTED" },
+      { "path_pattern": "**/公开/**", "source_trust": "MANAGED_INTERNAL" }
+    ],
+    "default_source_trust": "MANAGED_INTERNAL",
+    "approval_store_path": "./data/offline_source_trust.sqlite3"
+  },
   "minio": {
     "endpoint": "minio:9000",
     "access_key": "",

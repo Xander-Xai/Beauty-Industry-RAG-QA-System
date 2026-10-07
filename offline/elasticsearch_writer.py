@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
+from offline.source_trust import enforce_writable_provenance
 from offline.validation import validate_epoch, validate_permissions
 
 DEFAULT_INDEX_NAME = "cosmetics_docs"
@@ -33,6 +34,25 @@ INDEX_MAPPING = {
             "status": {"type": "keyword"},
             "doc_version_epoch": {"type": "keyword"},
             "metadata": {"type": "object", "dynamic": True},
+            # Ingestion provenance. The two decision axes are explicit keywords so
+            # BM25 retrieval and an operator's field-level query can filter on the
+            # trust contract; the remaining fields are recorded but never
+            # analyzed, exactly like role_mask/dept_mask.
+            "provenance": {
+                "type": "object",
+                "dynamic": True,
+                "properties": {
+                    "source_id": {"type": "keyword"},
+                    "source_trust": {"type": "keyword"},
+                    "approval_status": {"type": "keyword"},
+                    "approval_actor": {"type": "keyword"},
+                    "approval_decided_at": {"type": "keyword"},
+                    "approval_note": {"type": "text"},
+                    "approved_content_hash": {"type": "keyword"},
+                    "trust_class": {"type": "keyword"},
+                    "provenance_schema_version": {"type": "keyword"},
+                },
+            },
         }
     },
 }
@@ -51,6 +71,7 @@ REQUIRED_FIELD_TYPES = {
     "status": "keyword",
     "doc_version_epoch": "keyword",
     "metadata": "object",
+    "provenance": "object",
 }
 
 
@@ -68,6 +89,7 @@ class ElasticsearchDocument(Protocol):
     status: str
     doc_version_epoch: str
     metadata: dict
+    provenance: dict
 
 
 def document_id(logical_id: str, epoch: str) -> str:
@@ -113,6 +135,17 @@ class ElasticsearchWriter:
     def build_document(self, chunk) -> dict:
         validate_permissions(chunk.role_mask, chunk.dept_mask)
         validate_epoch(chunk.doc_version_epoch)
+        provenance = dict(getattr(chunk, "provenance", {}))
+        # Elasticsearch is the BM25 half of the same activatable snapshot, so the
+        # BM25 index gets the identical trust gate as the vector collections: a
+        # quarantined source must not become retrievable through the lexical path
+        # either.
+        enforce_writable_provenance(
+            provenance,
+            label=f"ES document {getattr(chunk, 'chunk_id', '<unknown>')!r}",
+            source_id=chunk.doc_id,
+            epoch=chunk.doc_version_epoch,
+        )
         return {
             "doc_id": chunk.doc_id,
             "chunk_id": chunk.chunk_id,
@@ -127,6 +160,7 @@ class ElasticsearchWriter:
             "status": chunk.status,
             "doc_version_epoch": chunk.doc_version_epoch,
             "metadata": getattr(chunk, "metadata", {}),
+            "provenance": provenance,
         }
 
     def upsert_documents(self, documents: list[dict]) -> None:
