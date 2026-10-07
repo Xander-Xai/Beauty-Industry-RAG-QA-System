@@ -77,10 +77,13 @@ These are stated plainly so nothing here is read as a stronger claim than it is.
   property only. It does not demonstrate, and cannot demonstrate, that a model
   will refuse instructions found inside retrieved content. There is also no
   ingestion-side content inspection or sanitization. A separate, bounded
-  provenance-and-quarantine gate does exist (`offline/source_trust.py`, seal gate
-  in `offline/validator.py`): it bounds *where* content may come from and refuses
-  to activate an unapproved import, but it reads no document text and so
-  classifies no document as benign. See
+  provenance-and-quarantine gate does exist (`offline/source_trust.py`, enforced
+  at seal in `offline/validator.py`): it bounds *where* content may come from and
+  refuses to **seal** an epoch that contains an unapproved import. It reads no
+  document text and so classifies no document as benign. Activation is a separate
+  manual step (`knowledge_version_epoch`); the query path filters by the active
+  epoch and does not itself re-verify the seal, so the gate's guarantee holds only
+  for the normal seal-then-activate lifecycle. See
   [security-regression-coverage.md](docs/security-regression-coverage.md) rows B
   and H.
 - **No ABAC.** Authorization is role/dept bitmask RBAC. Attribute-based policies
