@@ -20,7 +20,7 @@
 
 ## Index
 
-| ID | Capability | Current level | Issue | Status |
+| ID | Capability | Level | Issue | Execution |
 |---|---|---|---|---|
 | VAL-RETRIEVAL-001 | Real retrieval benchmark result | `PENDING` | [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) | `NOT EXECUTED` |
 | VAL-PERF-001 | Real performance artifact (QPS / P95 / P99) | `PENDING` | [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32) | `NOT EXECUTED` |
@@ -44,7 +44,8 @@
 - **Reason deferred:** no committed benchmark corpus with ground-truth passages and no real Qdrant/Elasticsearch run; a metric cannot be produced honestly without them.
 - **Required environment:** Qdrant and Elasticsearch populated from the same epoch; configured BGE and CrossEncoder assets.
 - **Required data / models:** an independent golden set with ground-truth passages; the configured text embedder.
-- **Exact procedure:** populate both stores, run the executor under `benchmarks/`, and commit the six-file artifact contract under `artifacts/benchmarks/<run-id>/`.
+- **Prerequisite:** a real retrieval executor wired into the benchmark CLI. `artifacts/benchmarks/README.md` records that `run_configuration` receives no `retriever_factory` from the CLI, so every real configuration currently stops with "no real retrieval executor is wired"; wiring that factory is part of this validation, not assumed by it.
+- **Exact procedure:** wire the executor, populate both stores, run the executor under `benchmarks/`, and commit the six-file artifact contract under `artifacts/benchmarks/<run-id>/`.
 - **Expected artifact:** `artifacts/benchmarks/<run-id>/` meeting the six-file contract in `artifacts/benchmarks/README.md`.
 - **Acceptance criteria:** the artifact records git SHA, dataset and config hashes, model name/revision, hardware, sample count, retrieval metrics, latency, success/failure counts, commands and limitations; the numbers are reproducible from the artifact.
 - **Failure interpretation:** a `BLOCKED` run with a `blocked_reason` is a failed attempt, not a zero; it produces no publishable metric.
@@ -164,10 +165,10 @@
 - **Capability:** a real RAGAS quality score over the golden set.
 - **Current evidence level:** `PENDING` (harness `REPO_VERIFIED`).
 - **Reason deferred:** no approved evaluator provider or credential.
-- **Required environment / data:** an approved evaluator dependency and credential; `tests/evaluation/golden_set.jsonl`.
-- **Exact procedure:** run the strict/real evaluator CLI with `--require-ragas` and a configured provider.
-- **Expected artifact:** a quality report bound to the git SHA and the golden-set hash.
-- **Acceptance criteria:** a report is produced (not the evaluator-unavailable fallback) with the configured evaluator.
+- **Required environment / data:** an approved evaluator dependency and credential; `tests/evaluation/golden_set.jsonl`; the live pipeline dependencies (vLLM/Qdrant/ES/Redis) for a real pipeline run.
+- **Exact procedure:** run `python -m tests.evaluation.ragas_eval --require-ragas --pipeline ...` with a configured provider and the live pipeline. `--require-ragas` alone evaluates the dataset reference answers (an evaluator smoke) and must not be accepted as a pipeline-quality result.
+- **Expected artifact:** a pipeline-quality report with pipeline provenance, bound to the git SHA and the golden-set hash.
+- **Acceptance criteria:** the `--pipeline` mode runs against the live pipeline and produces a report (not the evaluator-unavailable fallback) with the configured evaluator.
 - **Failure interpretation:** a missing dependency or credential fails fast with no report; that is not a score of zero.
 - **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with a real report; never claim a score without it.
 - **Related issue:** #12. **Status:** `NOT EXECUTED`.
