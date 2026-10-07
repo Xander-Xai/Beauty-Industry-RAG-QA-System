@@ -34,8 +34,11 @@ offline/*.onnx
 offline/data/
 offline/output/
 offline/.offline_state.sqlite3
-.superpowers/**/state/server.pid
-.superpowers/**/state/server-stopped
+# Agent-tool working directories. Everything under them is tool output — brainstorm
+# decks, session state, transcripts — not repository content. See the equivalent
+# `.claude/` entry below.
+.superpowers/
+.claude/
 
 # IDE
 .vscode/
@@ -70,9 +73,6 @@ logs/
 # Build artifacts (frontend)
 frontend/dist/
 static/
-
-# Claude Code internals (config, memory, transcripts)
-.claude/
 
 # E2E remote test configs (may contain API keys)
 tests/e2e_remote/
