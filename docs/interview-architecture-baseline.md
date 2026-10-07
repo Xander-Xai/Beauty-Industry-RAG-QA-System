@@ -1,6 +1,6 @@
 # 药妆助手面试架构唯一事实基线
 
-更新时间：2026-10-02（v2.5 working milestone 的运行时/安全 reconciliation；`v2.5` 不是正式发布版本）
+更新时间：2026-10-07（canonical 架构图收敛到本文件；README 仅保留第一屏简化视图）
 
 本文件是“整体架构”“几路召回”“如何重排”“如何控制幻觉”等面试问题的唯一事实基线。README、PRD、代码注释和历史面试稿发生冲突时，以当前主链路代码、配置和架构契约测试为准。
 
@@ -28,21 +28,63 @@ ES Fallback 不算第五路。它是 Qdrant 异常或有效文档不足时使用
 
 ## 当前主链路
 
-```text
-FastAPI API
-  -> 身份解析与 L1/L2 缓存
-  -> Query Rewrite 与复杂度判断并行执行
-  -> 动态 2 至 4 路召回
-  -> 权限过滤与动态加权 RRF
-  -> BiEncoder 宽保留
-  -> 双 CrossEncoder 精排
-  -> Evidence Gate
-  -> 4B/14B 模型路由与生成
-  -> Answer Gate
-  -> 返回答案、证据和审计信息
+下图是**唯一 canonical 架构图**。README 的第一屏只放它的简化在线视图；其他文档引用本图，不再各自维护独立的大型架构图。
+
+```mermaid
+flowchart TB
+  FE["React frontend<br/>frontend/"]
+
+  subgraph ONLINE["在线查询链路 — FastAPI 单体 · app.py"]
+    direction TB
+    AUTH["RS256 认证 + 登录限流<br/>api/routes_auth.py"]
+    API["api/routes.py<br/>/api/query · /api/chat"]
+    ID["身份解析<br/>uint32 role_mask / dept_mask"]
+    CACHE["L1 进程内 / L2 Redis<br/>key = 知识版本 + 权限指纹"]
+    RW["Query Rewrite + 复杂度判断<br/>并行执行"]
+    REC["动态 2–4 路召回<br/>dense_bge · bm25_es · rewrite_variant · clip_visual"]
+    RBAC["文档级 RBAC 二次过滤<br/>+ 加权 RRF 融合"]
+    RERANK["BiEncoder 宽保留 → 150<br/>+ 双 CrossEncoder 精排 → 10"]
+    EGATE["Evidence Gate<br/>正常 / 增强 / 拒答"]
+    GEN["模型路由<br/>共享 4B rewrite+简单 · 14B 复杂"]
+    AGATE["Answer Gate<br/>答案 vs 核心证据一致性"]
+    OUT["答案 + 证据 + 审计字段"]
+    AUTH --> API --> ID --> CACHE --> RW --> REC --> RBAC --> RERANK --> EGATE --> GEN --> AGATE --> OUT
+  end
+
+  subgraph OFFLINE["离线知识构建 — offline/ + run_offline.py"]
+    direction TB
+    SRC["来源<br/>TXT · PDF · DOCX · XLSX · 图片"]
+    PROC["解析 · 清洗 · 切块 500 字 / 10% 重叠<br/>OCR 路由 · CLIP 512d"]
+    EMB["BGE 文本向量<br/>统一池化 + 归一化契约"]
+    WRITE["写入 Qdrant + Elasticsearch<br/>按 epoch 版本化 point id"]
+    SEAL["快照校验 → seal<br/>激活是显式人工步骤"]
+    SRC --> PROC --> EMB --> WRITE --> SEAL
+  end
+
+  subgraph STORES["有状态依赖"]
+    QD[("Qdrant<br/>文本 + 图像向量")]
+    ES[("Elasticsearch<br/>cosmetics_docs · BM25")]
+    RD[("Redis<br/>会话 · L2 缓存 · 限流 · 审计流")]
+    VLLM["vLLM endpoints<br/>gpu1.models.vllm_4b · gpu0.models.gen_14b"]
+  end
+
+  FE --> AUTH
+  REC --> QD
+  REC --> ES
+  CACHE --> RD
+  AUTH --> RD
+  GEN --> VLLM
+  OUT -->|"结构化审计"| RD
+  OUT -.->|"rag_* metrics"| METRICS["/api/metrics<br/>外部 Prometheus 抓取"]
+
+  PROC -.->|"BGE / CLIP 向量"| QD
+  WRITE -.->|"文本 + mapping"| ES
+  SEAL -.->|"不可变 epoch"| QD
 ```
 
-默认联调入口是 FastAPI 单体后端和 React 前端。仓库中的微服务目录属于保留能力，尚不能替代当前单体主线来回答“现有系统架构”。
+读图约定：`CACHE`/`AUTH`/`OUT` 指向 Redis 的边表示**状态依赖**（会话、L2 缓存、限流计数、审计流），不是独立服务调用；`OUT` 的 `rag_* metrics` 只落在 `MetricsCollector` 并由 `/api/metrics` 暴露给外部 Prometheus（图中 `METRICS` 节点），不写入 Qdrant/Elasticsearch/vLLM。`OFFLINE` 到存储的虚线表示**离线写入**方向，与在线召回互不依赖。`vLLM endpoints` 是配置里的两个端点键，其真实 GPU 部署为 `PENDING`。`/api/continuation` 当前是返回空答案的 stub（见 [user guide](user-guide.md)），不在本链路内。
+
+默认联调入口是 FastAPI 单体后端和 React 前端。仓库中的微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`）属于保留能力，尚不能替代当前单体主线来回答“现有系统架构”，也不代表已与当前前端完成端到端生产验证。
 
 ## 离线知识构建
 

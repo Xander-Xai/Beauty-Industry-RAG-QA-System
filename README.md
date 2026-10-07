@@ -96,57 +96,18 @@
 > 当前已验证架构是 **FastAPI 单体主链路**，不是已完成联调的微服务架构。完整事实基线（唯一的架构口径来源）见 [docs/interview-architecture-baseline.md](docs/interview-architecture-baseline.md)。
 
 ```mermaid
-flowchart TB
-  FE["React frontend<br/>frontend/"]
-
-  subgraph ONLINE["Online query path — FastAPI monolith · app.py"]
-    direction TB
-    AUTH["RS256 auth + login rate limit<br/>api/routes_auth.py"]
-    API["api/routes.py<br/>/api/query · /api/chat · /api/continuation"]
-    ID["Identity resolution<br/>uint32 role_mask / dept_mask"]
-    CACHE["L1 in-process / L2 Redis<br/>key = knowledge epoch + permission fingerprint"]
-    RW["Query Rewrite + complexity judgement<br/>executed in parallel"]
-    REC["Dynamic 2–4 way recall<br/>dense_bge · bm25_es · rewrite_variant · clip_visual"]
-    RBAC["Document-level RBAC re-filter<br/>+ weighted RRF fusion"]
-    RERANK["BiEncoder wide keep → 150<br/>+ dual CrossEncoder ensemble → 10"]
-    EGATE["Evidence Gate<br/>normal / strengthen / refuse"]
-    GEN["Model routing<br/>shared 4B rewrite+simple · 14B complex"]
-    AGATE["Answer Gate<br/>answer vs core-evidence consistency"]
-    OUT["Answer + evidence + audit fields"]
-    AUTH --> API --> ID --> CACHE --> RW --> REC --> RBAC --> RERANK --> EGATE --> GEN --> AGATE --> OUT
-  end
-
-  subgraph OFFLINE["Offline knowledge build — offline/ + run_offline.py"]
-    direction TB
-    SRC["Sources<br/>TXT · PDF · DOCX · XLSX · images"]
-    PROC["Parse · clean · chunk 500 chars / 10% overlap<br/>OCR routing · CLIP 512d"]
-    EMB["BGE text embedding<br/>shared pooling + normalisation contract"]
-    WRITE["Write Qdrant + Elasticsearch<br/>epoch-versioned point ids"]
-    SEAL["Snapshot validation → seal<br/>activation stays a manual step"]
-    SRC --> PROC --> EMB --> WRITE --> SEAL
-  end
-
-  subgraph STORES["Stateful dependencies"]
-    QD[("Qdrant<br/>text + image vectors")]
-    ES[("Elasticsearch<br/>cosmetics_docs · BM25")]
-    RD[("Redis<br/>sessions · L2 cache · rate limit · audit stream")]
-    VLLM["vLLM endpoints<br/>gpu1.models.vllm_4b · gpu0.models.gen_14b"]
-  end
-
-  FE --> AUTH
-  REC --> QD
-  REC --> ES
-  CACHE --> RD
-  AUTH --> RD
-  GEN --> VLLM
-  OUT -->|"rag_* metrics + structured audit"| STORES
-
-  PROC -.->|"BGE / CLIP vectors"| QD
-  WRITE -.->|"text + mapping"| ES
-  SEAL -.->|"immutable epoch"| QD
+flowchart LR
+  FE["React frontend"] --> API["FastAPI 单体<br/>app.py"]
+  API --> ID["身份解析<br/>uint32 role_mask / dept_mask"]
+  ID --> CACHE["L1 进程内 / L2 Redis<br/>知识版本 + 权限指纹"]
+  CACHE --> REC["动态 2–4 路召回<br/>dense_bge · bm25_es · rewrite_variant · clip_visual"]
+  REC --> FUSE["文档级 RBAC 二次过滤 + 加权 RRF"]
+  FUSE --> RERANK["BiEncoder 宽保留 → 双 CrossEncoder 精排"]
+  RERANK --> GATES["Evidence Gate → 共享 4B / 14B 生成 → Answer Gate"]
+  GATES --> OUT["答案 + 引用 + 审计字段"]
 ```
 
-读图约定：`CACHE`/`AUTH`/`OUT` 指向 Redis 的边表示**状态依赖**（会话、L2 缓存、限流计数、审计流），不是独立服务调用；`OUT` 的 `rag_* metrics` 由 `/api/metrics` 暴露给外部 Prometheus，图中未画出 Prometheus 本身。`OFFLINE` 到存储的虚线表示**离线写入**方向，与在线召回互不依赖。微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上图这个单体应用。
+上图为**第一屏简化视图**。完整 canonical 架构图（含离线知识构建链路与 Qdrant / Elasticsearch / Redis / vLLM 依赖）见 [docs/interview-architecture-baseline.md](docs/interview-architecture-baseline.md)，它也是唯一的架构口径来源。微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。
 
 ---
 
