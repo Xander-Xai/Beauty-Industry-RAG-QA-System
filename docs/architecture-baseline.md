@@ -148,7 +148,7 @@ RRF 融合与去重之后，先由 BiEncoder 宽保留 Top 150，再由两个 Cr
 
 ## v2.5 运行时与安全契约
 
-> **版本语义**：`v2.5` 是本节契约的历史 working milestone / development-phase 标签，**不是**正式发布版本。当前 canonical runtime version 为 `config.json` → `system.version` = `2.3.0`；`CHANGELOG.md` 中存在 `2.3.0` release entry，其后的变更记在 `[Unreleased]`。当前 GitHub Release / tag 状态以仓库实际状态为准，详见[版本策略](repository-truth-audit.md#version-policy)。
+> **版本语义**：`v2.5` 是本节契约的历史 working milestone / development-phase 标签，**不是**正式发布版本。当前 canonical runtime version 为 `config.json` → `system.version` = `2.4.0`；`CHANGELOG.md` 中最新一条 dated release entry 为 `2.4.0`（2026-10-08），其后的变更记在 `[Unreleased]`。`docs/repository-truth-audit.md` 与 `docs/repository-drift-report.md` 中的 `2.3.0` 是它们各自核对日期上的**时间点快照**，不是当前版本声明。当前 GitHub Release / tag 状态以仓库实际状态为准，详见[版本策略](repository-truth-audit.md#version-policy)。
 
 - **会话状态**：`SessionState` 在配置 Redis 时跨 worker 持久化（TTL 7200s），Redis 不可用时降级进程内内存。序列化使用稳定 schema，`QueryRewriteResult`/`RecallResult` 会重建。真实 Redis 多进程行为已在本地完成 `LOCAL_REAL_VALIDATION`（写入进程 A、进程 B 类型化恢复、进程 C 观察到更新、TTL 刷新）；Redis Cluster/Sentinel 生产拓扑仍属外部验证边界。
 - **登录限流**：5 次/分钟；多 worker 走 Redis 计数，Redis 不可用降级单进程内存。仅当 TCP 对端属于 `TRUSTED_PROXIES` 时才信任 `X-Forwarded-For`，否则客户端伪造 XFF 无法绕过限流。真实 Redis 跨进程限流与真实 nginx 反向代理客户端 IP 解析均已完成 `LOCAL_REAL_VALIDATION`。

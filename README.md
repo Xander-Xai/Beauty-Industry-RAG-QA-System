@@ -1,6 +1,10 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
-> **一句话**：企业内部多模态 RAG 问答系统——把散落在 PDF、图片、表格里的化妆品法规 / 成分 / 产品知识变成可检索资产，在线返回**带引用、带出处、证据不足就拒答**的答案，并按角色与部门做权限隔离。
+> **一句话（EN）**: Enterprise multimodal RAG QA for cosmetics regulation — hybrid
+> retrieval, two-stage reranking, evidence gating that refuses unsupported answers,
+> uint32 RBAC, and evidence levels that separate implemented from production-validated.
+>
+> **一句话（中）**：企业内部多模态 RAG 问答系统——把散落在 PDF、图片、表格里的化妆品法规 / 成分 / 产品知识变成可检索资产，在线返回**带引用、带出处、证据不足就拒答**的答案，并按角色与部门做权限隔离。
 >
 > **不是普通向量检索 Demo 的地方**：在线链路是**动态 2–4 路召回 → 两级重排 → Evidence/Answer 双 Gate 拦截幻觉 → RBAC 纵深防御 → 4B/14B 模型路由**；离线侧是**多模态解析 + 知识版本封存 / 人工激活**的分发布纪律。
 >
@@ -19,11 +23,66 @@
 [![Lint](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions/workflows/lint.yml)
 [![Security](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions/workflows/security.yml)
 
-三个徽章是 GitHub Actions 动态徽章，直接读取 `main` 上的真实运行结果；工作流定义见 `.github/workflows/`。Runtime version `2.3.0`（`config.json` → `system.version`）。
+三个徽章是 GitHub Actions 动态徽章，直接读取 `main` 上的真实运行结果；工作流定义见 `.github/workflows/`。Runtime version `2.4.0`（`config.json` → `system.version`）。
+
+不是 demo：`python3 -m pytest -q` 全量回归、`ruff check .` 与证据一致性守卫
+`python3 scripts/check_repo_consistency.py` 三项在当前 commit 均为绿。
+
+| 事实项 | 当前值 | 真相源 |
+|---|---|---|
+| Runtime version | `2.4.0` | `config.json` → `system.version` |
+| 在线召回路数 | 动态 2–4 路（简单 2 / 复杂 3 / 视觉相关 4） | `retrieval/parallel_recall.py` |
+| 融合入口 | 加权 RRF，**唯一入口**，权重按查询感知 | `retrieval-service/rerank/rrf_fusion.py` |
+| 重排 | 两级：BiEncoder → 150 → 双 CrossEncoder ensemble → 10 | `retrieval/bi_encoder.py` · `retrieval/cross_encoder_ensemble.py` |
+| 生成拓扑 | `Qwen3-4B` / `Qwen3-14B`，vLLM 双端点，按复杂度路由 | `config.json` → `model_routing` |
+| 嵌入模型 | `bge-base-zh-v1.5`（768 维）/ `clip-vit-base-patch16`（512 维） | `config.json` → `embedding` |
+| 权限模型 | uint32 位掩码 RBAC（`role_mask` / `dept_mask`） | `common/auth.py` · `config.json` → `rbac` |
+| 一致性守卫 | `scripts/check_repo_consistency.py` 在 CI 中运行 | [Quick Start](#quick-start) → 开发与检查 |
+| 检索 benchmark 结果 | **结果 `PENDING`**（框架 `REPO_VERIFIED`） | [Evaluation](#evaluation) |
+| 生产上线验收 | **未完成**：11 项门禁全部 `NOT EXECUTED` | [Limitations](#limitations) |
+
+> 精确计数（测试用例数、代码行数、面板数）刻意不写死在此表，避免随迭代漂移成假声明；
+> 按 [Evidence Boundary → 复核方式](#复核方式) 给出的命令在当前 commit 现场计算。
 
 ---
 
-## Problem · 为什么化妆品行业需要 RAG
+## 30 秒读懂
+
+| # | 问题 | 答案 | 工程入口 |
+|---|---|---|---|
+| 1 | **这是干什么的** | 把法规 / 成分 / 产品知识建成可检索资产，在线回答带引用的领域问题，证据不足就拒答 | [Architecture](#architecture) |
+| 2 | **解决什么业务问题** | 知识散在 PDF、图片、表格里，人工检索慢且回答容易编造；不同角色该看到的内容也不同 | [Problem](#problem) · [Key Features](#key-features) |
+| 3 | **核心架构** | FastAPI 单体主链路；动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/architecture-baseline.md](docs/architecture-baseline.md) |
+| 4 | **企业工程化** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook、Docker Compose + Kubernetes 双形态 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) |
+| 5 | **怎么跑** | `pip install -r requirements.txt && cp .env.example .env && python3 app.py` → `http://localhost:8000/docs` | [Quick Start](#quick-start) |
+| 6 | **检索怎么做的、为什么这么做** | 动态 2–4 路 → 单入口加权 RRF → 两级重排 → 双 Gate；含「为什么不用微调 / 为什么 Hybrid / 为什么 Rerank」的设计取舍 | [Retrieval Pipeline](#retrieval-pipeline) |
+| 7 | **效果怎么评估** | 评测框架已实现（检索指标 + RAGAS + 性能产物契约）；**结果未产出**，golden set 缺稳定标识，相关性只能按规范化精确文本匹配 | [Evaluation](#evaluation) |
+| 8 | **已验证 / 未验证在哪看** | 边界一节讲清：[Evidence Boundary](#evidence-boundary)；逐项「已实现 / 未验证 + 升级判据」见 [Production Readiness](#production-readiness) | [docs/production-readiness.md](docs/production-readiness.md) |
+| 9 | **历史生产规模** | `HISTORICAL_PRODUCTION`，**不是**本仓库 benchmark | [Evidence Boundary](#evidence-boundary) |
+| 10 | **已知未收敛的实现细节** | 六个微服务目录中 5 个按现状不可启动 · 无 CrossEncoder 权重时全链路拒答 · 检索 benchmark 与性能产物均未执行 | [Production Readiness](#production-readiness) · issue [#84](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/84) |
+
+---
+
+## Contents
+
+- [Problem](#problem) — 为什么化妆品行业必须是 RAG 而不是微调
+- [Solution](#solution) — 三件事：知识可版本化 / 答案可追溯 / 可见性按角色收窄
+- [Architecture](#architecture) — 离线构建与在线问答两条链路
+- [Retrieval Pipeline](#retrieval-pipeline) — 七段链路、设计取舍、幻觉控制
+- [Key Features](#key-features) — 五项核心工程能力及其边界
+- [Demo](#demo) — 合成数据下的权限隔离与拒答演示
+- [Quick Start](#quick-start) — 最小可跑路径与检查命令
+- [Tech Stack](#tech-stack) — 选型一览
+- [Evaluation](#evaluation) — 框架已实现，结果未产出
+- [Limitations](#limitations) — **先读这一节**
+- [Roadmap](#roadmap) — 已登记的 P0 / P1 / P2 待办
+- [Documentation](#documentation) — 文档入口
+- [Repository Layout](#repository-layout) — 目录
+- [License](#license)
+
+---
+
+## Problem
 
 **业务问题**：化妆品行业的法规、成分、产品资料分散在 PDF 扫描件、成分表图片、Excel 规格表和内部 Word 手册里。法规专员、注册申报、市场和客服各自只该看到职责范围内的内容，而同一个问题（例如「某成分在儿童化妆品中的限量」）对不同角色的答案必须一致、可追溯到具体条款。
 
@@ -41,20 +100,27 @@
 
 ---
 
-## 30 秒读懂
+## Solution
 
-| # | 问题 | 答案 | 工程入口 |
-|---|---|---|---|
-| 1 | **这是干什么的** | 把法规 / 成分 / 产品知识建成可检索资产，在线回答带引用的领域问题，证据不足就拒答 | [Architecture](#architecture) |
-| 2 | **解决什么业务问题** | 知识散在 PDF、图片、表格里，人工检索慢且回答容易编造；不同角色该看到的内容也不同 | [Problem](#problem--为什么化妆品行业需要-rag) · [核心工程能力](#核心工程能力5-项) |
-| 3 | **核心架构** | FastAPI 单体主链路；动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/architecture-baseline.md](docs/architecture-baseline.md) |
-| 4 | **企业工程化** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook、Docker Compose + Kubernetes 双形态 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) |
-| 5 | **怎么跑** | `pip install -r requirements.txt && cp .env.example .env && python3 app.py` → `http://localhost:8000/docs` | [Quick Start](#quick-start) |
-| 6 | **检索怎么做的、为什么这么做** | 动态 2–4 路 → 单入口加权 RRF → 两级重排 → 双 Gate；含「为什么不用微调 / 为什么 Hybrid / 为什么 Rerank」的设计取舍 | [Retrieval Pipeline](#retrieval-pipeline) |
-| 7 | **效果怎么评估** | 评测框架已实现（检索指标 + RAGAS + 性能产物契约）；**结果未产出**，golden set 缺稳定标识，相关性只能按规范化精确文本匹配 | [Evaluation](#evaluation) |
-| 8 | **已验证 / 未验证在哪看** | 边界一节讲清：[Evidence Boundary](#evidence-boundary)；逐项「已实现 / 未验证 + 升级判据」见 [Production Readiness](#production-readiness) | [docs/production-readiness.md](docs/production-readiness.md) |
-| 9 | **历史生产规模** | `HISTORICAL_PRODUCTION`，**不是**本仓库 benchmark | [Evidence Boundary](#evidence-boundary) |
-| 10 | **已知未收敛的实现细节** | 六个微服务目录中 5 个按现状不可启动 · 无 CrossEncoder 权重时全链路拒答 · 检索 benchmark 与性能产物均未执行 | [Production Readiness](#production-readiness) · issue [#84](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/84) |
+问题要拆成三件必须同时成立的事：**知识要能版本化、答案要能追溯、可见性要按角色收窄**。
+这三件事都落在检索层与证据层；LLM 只负责在已给定证据内组织语言。
+
+| 层 | 做法 | 为什么这么选（代价 / 被否的备选） |
+|---|---|---|
+| 知识 | 离线多格式解析 → 内容哈希增量 → 快照校验 → epoch 封存与人工激活 | 微调把知识焊进权重：法规一改就要重训，答案无法指回条款，也无法按角色隔离可见性 |
+| 召回 | 动态 2–4 路：`dense_bge`（BGE + Qdrant）· `bm25_es`（BM25 + ES）· `rewrite_variants`（复杂问题）· `clip_visual`（视觉相关） | 纯向量在 INCI 名 / 限量数值 / CAS 号这类精确串上召回不稳；纯 BM25 又拿不到同义改写与图像语义 |
+| 融合 | **单入口**加权 RRF，权重按查询感知（法规类 BM25→`1.5`，视觉类 CLIP→`2.0`） | 多套加权逻辑并存会静默丢权重：路径名拼写不一致时 `rrf_fusion` 对未知路径名退化为等权 |
+| 重排 | 两级：BiEncoder → 150 → 双 CrossEncoder ensemble → 10 | 单级 CrossEncoder 或直接用向量分数排序，宽召回与精排不能兼得 |
+| 证据 | Evidence Gate（生成前）+ Answer Gate（生成后）双门控；证据不足、或法规类存在矛盾即拒答 | 法规场景下错误答案的代价远高于不回答 |
+| 权限 | RS256 + uint32 位掩码 RBAC：存储侧下推 + 融合前文档级二次过滤 + L2 缓存物理分区 | 只在生成时约束模型，等于越权内容已经进了 prompt |
+| 生成 | 4B / 14B 双端点按查询复杂度路由，失败降级到 `simple` tier | 简单问题不必付大模型成本；固定走大模型则每条 query 都付满价 |
+
+完整的七段链路、逐段代码位置、设计取舍表，以及「四道幻觉控制的失败方向并不一致」
+（其中只有 Evidence Gate 是真正 fail closed）见 [Retrieval Pipeline](#retrieval-pipeline)。
+
+**回答不了也是一种正确答案**：Evidence Gate 在证据分低于 `low_confidence` 时直接拒答，
+Answer Gate 对法规类矛盾拒答、非法规类带 warning 通过。这条边界是本项目区别于
+「给什么都答一句」Demo 的地方。
 
 ---
 
@@ -208,7 +274,7 @@ score(doc) = Σ_path  weight(path) / (k + rank_path(doc))
 
 ---
 
-## 核心工程能力（5 项）
+## Key Features
 
 > 每一项的等级都是 `REPO_VERIFIED`（代码 + 确定性测试覆盖），**不是** `LOCAL_REAL_VALIDATION`，更不是生产验证。逐项的等级、代码位置、测试位置与升级路径见 [Evidence Boundary](#evidence-boundary) 与 [docs/evidence-map.md](docs/evidence-map.md)。
 
@@ -246,7 +312,7 @@ score(doc) = Σ_path  weight(path) / (k + rank_path(doc))
 
 ---
 
-## 一次请求长什么样（合成数据演示）
+## Demo
 
 ![合成数据演示：用户 Query → 带引用的回答 → 引用证据 → 来源文档 → 权限与可信证据。左侧为本仓库前端在 Chromium 中的真实渲染，右侧为演示标注](docs/assets/demo-request-evidence-flow.webp)
 
@@ -255,202 +321,6 @@ score(doc) = Σ_path  weight(path) / (k + rank_path(doc))
 这处对照不是口头承诺：合成语料里每份文档的 `role_mask` / `dept_mask` 都由 `tests/test_demo_corpus_rbac_consistency.py` 用**真实的 `common.auth.is_allowed`** 逐份校验，mock 也按同一谓词逐份过滤，不会端出当前身份打不开的引用。这只证明演示数据与仓库的权限语义自洽，**不构成 RBAC 的运行时验证**。
 
 这张图的边界：左侧是真实 UI（`frontend/src/App.jsx`，由 Playwright 驱动真实输入与点击），后端是 `docs/demo/mock_api.py` 这个合成 mock；右侧两张卡片是演示标注，不是产品界面；全部数值是合成的（`docs/demo/synthetic_corpus.json`）——虚构文档号、占位 CAS 号、杜撰标准名，不含真实法规结论、历史生产语料、生产日志、凭据或流量数据。复现命令 `python3 docs/demo/capture_demo.py`（说明见 [docs/demo/README.md](docs/demo/README.md)）。本仓库**没有**公网 Demo 与演示视频，因此没有 Demo 链接可点。
-
----
-
-## Evidence Boundary
-
-这一节回答两个问题：**哪些结论本仓库能证明，哪些不能**。完整逐条表格（能力 / 等级 / 代码证据 / 测试证据 / 升级路径）在 [docs/evidence-map.md](docs/evidence-map.md)；实现与证据状态的完整审计在 [docs/repository-truth-audit.md](docs/repository-truth-audit.md)。本节是摘要，只出现一次。
-
-### Canonical 证据等级
-
-全仓库只用下面六级，与 [docs/evidence-map.md → Classification vocabulary](docs/evidence-map.md#classification-vocabulary) 完全一致；`EXECUTED` / `PARTIAL` / `BLOCKED` / `PASS` / `NOT RUN` 是**单次运行结果**，不是证据等级，永不出现在证据等级列。
-
-| 等级 | 含义 | 可以这样说 | 不能这样说 |
-|---|---|---|---|
-| `HISTORICAL_PRODUCTION` | 前雇主生产环境实际做过的工作；专有资产不在本仓库 | "我在上一套生产系统里……" | "本仓库证明了这个规模" |
-| `HISTORICAL` | 本仓库内被取代、只为追溯保留的实现 / 配置 / 设计 | "这是被取代的仓库路径，保留作为历史上下文" | "这是当前生产能力" |
-| `REPO_VERIFIED` | 代码/配置存在，并被本仓库收集到的确定性测试或 CI 覆盖 | "已实现且有测试覆盖" | "已通过生产验证" |
-| `LOCAL_REAL_VALIDATION` | 用真实外部依赖在单台本地主机上跑过 | "在本地对真实依赖验证过" | "生产集群 / HA / SLO 已验证" |
-| `DESIGN_TARGET` | 写进文档的目标 / 设计；无实现或无可复现 benchmark | "设计目标是……" | "运行中的系统达到……" |
-| `PENDING` | 代码可能在，但验证所需的真实资产 / 运行时 / 凭据在此不可得 | "已实现，真实验证待补" | "已经验证过了" |
-
-`HISTORICAL` 与 `HISTORICAL_PRODUCTION` 不可互换：前者说的是本仓库自己的历史代码，后者说的是历史生产系统，两者都不是当前能力。
-
-### Historical Production Context
-
-> 等级 `HISTORICAL_PRODUCTION`。下表全部是**历史生产环境**的业务规模与流量背景。本公开仓库**不包含**对应的专有语料、生产日志、模型权重、监控数据或流量切分配置，因此这些数字**不是** `REPO_VERIFIED`，**不是**本仓库的 benchmark，**也无法由本仓库复现**。
-
-| 维度 | 历史生产环境事实 |
-|---|---|
-| 知识资产 | 3000+ 文档 · 5000+ 图片 · 1500+ 产品 · 2000+ 成分 · 8 大法规体系 |
-| 用户与流量 | 200+ 内部用户 · 高峰短时 10–15 QPS · 日均 1500+ 请求 |
-| 生产推理硬件 | RTX A5000 ×2 |
-| 后续模型迁移 | Qwen2.5 → Qwen3-14B / Qwen3-4B 灰度迁移验证 |
-| 公司认可 | 年度技术创新奖 |
-
-三条不可跨越的边界：**不得**把上表任何一项归类为 `REPO_VERIFIED`；**不得**用历史生产经验替代仓库验证——`config.json` 里 4B / 14B vLLM 拓扑**在本仓库从未执行过**（权重缺失、`vllm` 未安装），该项为 `PENDING`；**奖项不是运行时验证**，它不携带关于本仓库延迟、吞吐或正确性的任何证据。
-
-### 框架已实现 ≠ 结果已产出
-
-这是本仓库最重要的一张表。**每一行都是"实现"与"结果"分开的**：
-
-| 能力 | 实现 | 结果 | 缺什么才能升级 |
-|---|---|---|---|
-| 检索 benchmark（Recall/HitRate@1/3/5/10、MRR@10、NDCG@10） | `REPO_VERIFIED` | `PENDING` | 一次真实 ES/Qdrant 运行并提交可复现 artifact（含 `git_sha` / 数据集 sha256 / 模型 revision / 硬件 / 样本数 / 延迟 / 命令 / 限制说明，见 [验收标准](docs/evidence-map.md#benchmark-artifact-acceptance-criteria)） |
-| 性能产物契约（七文件、未测量即 `null`） | `REPO_VERIFIED` | `PENDING` | 对真实 API + LLM + 检索栈执行既定负载并提交一份 artifact |
-| QPS / 延迟数字 | — | `PENDING` | 同上：**本仓库没有可复现的 QPS / 延迟 benchmark 结果** |
-| SLO 目标（5 个）与告警阈值 | `REPO_VERIFIED`（文档 / 配置） | `DESIGN_TARGET` | 在真实环境达成该目标 |
-| Prometheus 告警（6 条） | `REPO_VERIFIED`（配置） | `PENDING`（生产触发） | 一个真实 Prometheus 实例加载并触发这些规则 |
-| Grafana 仪表盘（10 面板） | `REPO_VERIFIED`（JSON） | `PENDING` | 导入运行中的 Grafana 并确认面板被真实数据填充 |
-| OTLP exporter | `REPO_VERIFIED`（实现，默认关闭） | `PENDING`（运行期闭环） | 应用 → exporter → collector → 后端 → 真的查到 span |
-| RAGAS 质量分 | `REPO_VERIFIED`（harness） | `PENDING` | 获批 evaluator provider + API key + 一次真实运行 |
-| BGE / CLIP / PaddleOCR 真实模型 | `REPO_VERIFIED`（adapter 契约） | `PENDING` | 真实权重与运行时的 smoke（当前 `EXTERNAL_MODEL_ASSET_REQUIRED`） |
-| 4B / 14B vLLM GPU 拓扑 | `REPO_VERIFIED`（路由契约） | `PENDING` | 真实 GPU 部署与压测（权重不在仓库，`vllm` 未安装） |
-| QLoRA 微调 | `REPO_VERIFIED`（工具） | `PENDING` | 可复现训练运行 + adapter 产物 |
-| Airflow 调度 | `REPO_VERIFIED`（DAG 注册） | `PENDING` | 真实 Airflow DAG 执行 |
-| Qdrant 真实服务 | `REPO_VERIFIED`（当前回归覆盖 = 进程内 `QdrantClient(":memory:")`） | `PENDING`（真实服务 artifact） | 一次新的真实服务运行并提交产物。**开发沿革中确有 PR #6/#7 的真实本地 Qdrant + ES 集成运行记录，但那不是可复现 artifact**——两个方向都不能说错，详见 [Qdrant evidence: two states](docs/evidence-map.md#qdrant-evidence-two-states-kept-apart) |
-| 微服务（六个目录） | `REPO_VERIFIED`（组件） | `PENDING`（集成部署） | 与当前前端的端到端生产验证 |
-| 前端 CI 构建（`npm ci` + `npm run build`） | `REPO_VERIFIED` | —（构建产物不发布） | 无需升级：这是门禁，不是结果。**但构建成功只证明 bundle 能编译** |
-| 前端 + 真实后端端到端运行 | `REPO_VERIFIED`（客户端与 API metadata 契约） | `PENDING` | 一次真实浏览器运行：`frontend/` 对真实单体 + 真实 ES/Qdrant + 真实模型。首屏那张图由 Playwright 驱动**真实 UI**、后端为合成 mock，属演示产出而非后端集成证据 |
-| 前端生产部署 | —（部署态在本仓库之外） | `PENDING` | 一次真实部署并记录环境。这是 deployment-specific 状态，本仓库不断言 |
-
-### 本地真实验证（`LOCAL_REAL_VALIDATION`，只有这 5 项）
-
-在本地单主机 + 真实依赖上实际跑过，证据见 [docs/validation/v2.5-runtime-security-validation.md](docs/validation/v2.5-runtime-security-validation.md)：
-
-1. Redis 7.4.9 多进程会话持久化（进程 A 写入 → 进程 B 类型化恢复 → 进程 C 观察到更新 → TTL 刷新）
-2. Redis 跨进程登录限流（跨两进程交替第 6 次 429、窗口过期、Redis 挂掉时降级单进程内存）
-3. 真实 nginx 单跳与多跳 `TRUSTED_PROXIES` 客户端 IP 解析
-4. 认证 Elasticsearch 8.11（匿名/错误凭据 401、writer mapping + `search_after`、在线 BM25 检索）
-5. 带 Bearer token 的 Prometheus 抓取（无 token 401、Bearer 200、target `up == 1`）
-
-**这不等于生产集群验证**：Redis Cluster/Sentinel、云负载均衡拓扑、多节点 ES/TLS、长期 Prometheus/Grafana 运维、生产 HA/SLO，以及 4B/14B vLLM GPU 部署，均未在本仓库验证。
-
-### 数值口径
-
-- **性能数字**只允许在三种语义下出现：`HISTORICAL_PRODUCTION`（上表）、`DESIGN_TARGET`（SLO / 告警阈值）、或合成 demo 夹具值；**均不得表述为本仓库实测结果**。
-- 排障时引用的 `rag_*` 指标必须真实存在。exporter 只暴露原始计数器与直方图（例如 `rag_cache_hit_L1`、`rag_cache_total`、`rag_evidence_score_seconds`），**没有** `rag_cache_hit_rate` 或 `rag_rewrite_fallback_rate` 这类 series；比率要么用基于已 emit counter 的 PromQL ratio，要么读 `/api/stats` 的计算字段。`scripts/check_repo_consistency.py` 强制这条契约。
-- 本仓库唯一的告警契约是 [`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)，由外部 Prometheus 加载评估。`monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，**没有**接入 canonical 请求路径，属于遗留代码，喂给它的 `config.json` → `alerting.rules` 配置块也已移除。
-- `/api/stats` 与 `/api/metrics` 需要身份认证（`require_identity`）；`/api/health` 公开；`/docs` 在 `deployment_mode=production` 时关闭。Prometheus 抓取需配置 Bearer token。
-- **评测的诚实边界**：golden set 301 条全部**没有** `doc_id` / `chunk_id` / `source_id`，相关性只能按规范化精确文本判定（Level 2），因此当前任何检索指标都**不可归因**到文档身份；框架刻意不用 LLM judge、embedding 相似度阈值或模糊匹配去补这个缺口。RAGAS harness / reporter / validator 存在（`validate_golden_set` 最小规模 300 条，实际 301 条），但**格式校验通过 ≠ 领域事实正确**；RAGAS 是隔离的可选 evaluator，不在默认依赖中，库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**；`--require-ragas` 在缺少 evaluator 依赖或凭据时 **fail fast**、返回非零且**不生成任何 quality report**——evaluator 不可用是"未成功"，不是"零分"。当前仓库**没有**经过验证的真实 RAGAS quality score。完整论证见 [Evaluation](#evaluation)。
-
-### 复核方式
-
-精确计数不在此静态写死（会随迭代漂移），按下列命令在当前 commit 现场计算：`git ls-files '*.py' | xargs wc -l`、`python3 -m pytest --collect-only -q`、`python3 scripts/check_repo_consistency.py`。CI 覆盖 Python 3.10 与 3.11。
-
----
-
-## Evaluation
-
-> **状态：Framework ready. Benchmark execution pending.**
-> 三套评测框架（检索指标 · RAGAS 质量 · 性能产物）的代码与 artifact 契约都是 `REPO_VERIFIED`；**本仓库没有任何一次真实评测的结果，也没有可复现的 artifact**。这一节给出的是「怎么评、评什么、缺什么才能出数」，不是分数。
-
-### 检索质量：框架与缺口
-
-```bash
-# 列出当前环境实际可执行的配置（实时探测后端，不用替身 retriever）
-python3 -m benchmarks.retrieval_benchmark --list-configs
-
-# 尝试真实运行；后端不可用时以 BLOCKED + 原因记录，不产出任何数字
-python3 -m benchmarks.retrieval_benchmark --config bm25 --limit 5
-```
-
-框架按五档递进配置对比单路与混合检索的收益：`bm25` · `dense` · `hybrid_rrf` · `hybrid_rrf_biencoder` · `hybrid_rrf_biencoder_crossencoder`；指标为 Recall@K、HitRate@{1,3,5,10}、MRR@10、NDCG@10，可按 `business_type` / `difficulty` 分桶。代码：`benchmarks/`（指标实现确定性，与后端无关的部分有完整单测）。
-
-### Golden set 的实测字段覆盖
-
-`tests/evaluation/golden_set.jsonl`，301 条：
-
-| 字段 | 覆盖 | 用途 |
-|---|---|---|
-| `question` / `answer` / `ground_truth` / `contexts` | 301 / 301 | 查询与参考答案 / ground-truth 段落 |
-| `business_type` | 301 / 301 | regulation 124 · ingredient 91 · formula 46 · general 20 · image 16 · product 4 |
-| `difficulty` | 301 / 301 | medium 135 · easy 102 · hard 64 |
-| `doc_id` / `chunk_id` / `source_id` | **0 / 301** | 无法按文档身份判定相关性 |
-| `visual_required` | **0 / 301** | 无视觉/非视觉分桶 |
-| `complexity` 标签 | **0 / 301** | 无复杂度分桶 |
-
-ground truth 规模：每条 1–4 段（共 1081 段），但只有 **262 个不同段落**被复用。
-
-### 关键诚实边界：没有稳定标识，相关性只能按文本精确匹配
-
-相关性判定分两级（`benchmarks/relevance.py`）：**Level 1 稳定标识**（`doc_id` / `chunk_id` / `source_id`）是精确且与语言无关的；**Level 2 规范化精确文本**（NFKC + 空白折叠 + trim）是当前唯一可用的路径——**golden set 的 301 条没有任何稳定标识**。
-
-这意味着三件事，缺一不可地说明为什么当前不能声称检索指标可信：
-
-1. 相关性只能靠字符串完全一致来判定。语料一旦重新切块、OCR 文本有细微差异、段落被合并，相关性就会静默归零——**Recall 的高低会由构建流程的偶然性决定，而不是由检索质量决定**。
-2. 因此动态 2–4 路的收益**目前无法度量**：`complexity` 与 `visual_required` 标签全缺，两个分桶都产不出来（跟踪于 issue [#86](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/86)）。
-3. 框架刻意**不**使用 LLM judge、embedding 相似度阈值、模糊/编辑距离匹配或人工映射来「补」这个缺口——那些做法会抬高 recall 且不可复现，属于把指标调成好看的形状，不是把检索调好。宁可报不出分，也不报不可归因的分。
-
-补齐路径很明确且成本不高：给 golden set 每条 ground truth 段落补 `doc_id` + `chunk_id`（离线构建时已生成这两个字段），再人工标注 `complexity` 与 `visual_required`。补齐后 Level 1 生效，指标才可归因。
-
-### RAGAS 质量分
-
-harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_golden_set.py`）与 golden set 均已实现，`validate_golden_set` 的最小规模约束是 300 条（实际 301 条）。
-
-- **格式校验通过 ≠ 领域事实正确**。校验器只检查结构、条数与字段完整性。
-- RAGAS 是**隔离的可选 evaluator**，不在默认依赖中。库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**。
-- 使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator 依赖或凭据会 **fail fast**：返回非零状态且**不生成任何 quality report**。evaluator 不可用是「未成功」，不是「零分」。
-- `data/eval/reports/` 下的历史 report 全部是 evaluator 缺失时的零值降级（`dataset_size: 2`，带 `_warning`），**不能当作质量分引用**。
-- 仓库**没有**经过验证的真实 RAGAS quality score。指南见 [docs/ragas-evaluation-guide.md](docs/ragas-evaluation-guide.md)。
-
-### 性能产物契约
-
-`artifacts/performance/` 的七文件契约已实现，规则是**未测量即 `null`，绝不写 `0`**；状态由实际观测推导，不手填。QPS / P95 / P99 在本仓库**一次都没测过**。契约见 [artifacts/performance/README.md](artifacts/performance/README.md)。
-
-### 要让这些数字变成可引用的证据，需要什么
-
-检索 benchmark artifact 的验收标准（数据集 sha256、`git_sha`、模型 revision、硬件、样本数、延迟、命令、限制说明）见 [docs/evidence-map.md → benchmark artifact 验收标准](docs/evidence-map.md#benchmark-artifact-acceptance-criteria)；artifact 契约见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。数据质量缺口的完整记录见 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)。
-
----
-
-## Production Readiness
-
-一句话：**代码状态与真实验证状态是两件事，本仓库在两者上都尽量说清楚。** 逐项详表在 [docs/production-readiness.md](docs/production-readiness.md)，未执行验证的完整清单在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md)。
-
-**已实现（`REPO_VERIFIED`：代码在主链路上，且被确定性测试或 CI 覆盖）**
-
-| 能力 | 代码 | 真实验证 |
-|---|---|---|
-| FastAPI 单体在线链路（`/api/query`、`/api/chat`、`/api/health`） | ✅ | `PENDING`（整条链路没有一次完整运行记录；五个 `LOCAL_REAL_VALIDATION` 项各自验证的是单个机制） |
-| RS256 认证 + uint32 权限掩码契约 + 畸形声明 fail closed | ✅ | 单项 `LOCAL_REAL_VALIDATION`（nginx 代理链解析、Redis 跨进程登录限流）；整条请求路径 `PENDING` |
-| Elasticsearch 8 BM25 稀疏检索 + Painless 位掩码过滤 | ✅ | `LOCAL_REAL_VALIDATION`（认证 ES 8.11：writer mapping、`search_after`、在线 BM25） |
-| 权限纵深：存储侧下推 + 融合前文档级过滤 + L2 缓存物理分区 | ✅ | `PENDING`（无真实 Qdrant/ES 多角色语料 artifact） |
-| 动态 2–4 路召回选择 | ✅ | `PENDING`（选择逻辑确定且有测试，但**收益无法度量**——golden set 缺 `complexity` / `visual_required` 标签，见 #86） |
-| 两级重排调用链（BiEncoder → 150 → CrossEncoder ensemble → 10） | ✅（调用链 + 确定性降级） | `PENDING`（权重不在仓库，实际只跑过降级路径） |
-| Evidence Gate / Answer Gate 判定（含法规类矛盾拒答） | ✅ | `PENDING`（降级后果见下） |
-| Prompt 信任边界（证据限数据区块、当前请求限指令区块、标记转义） | ✅ | `PENDING`（结构约束，**不是** prompt injection 免疫证明） |
-| 离线 ingestion（多格式解析、扫描页 OCR 路由、确定性切块、内容哈希增量、快照校验、epoch 封存） | ✅ | `PENDING`（无真实语料 ingestion artifact） |
-| 9 字段结构化审计双 sink（Redis Stream + 每日 JSONL） | ✅ | `PENDING` |
-| Prometheus 6 条告警（只引用真实 emit 指标）· Grafana 10 面板 · OTLP exporter（默认关闭） | ✅ | `PENDING`（阈值均为 `DESIGN_TARGET`；运行期闭环未验证） |
-| 检索 benchmark / 性能产物 / RAGAS 三套框架与 artifact 契约 | ✅ | `PENDING`（**结果**未产出，未测量一律 `null`） |
-
-**未验证（`PENDING` / `DESIGN_TARGET`：代码或设计存在，真实资产 / 环境 / 凭据不可得）**
-
-真实 Qdrant 服务运行（回归覆盖目前是进程内 `:memory:`）· 检索指标 Recall / HitRate@K / MRR@10 / NDCG@10 · QPS 与 P95/P99 延迟 · RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` 会 fail-fast 而不是给零分）· BGE / CLIP / PaddleOCR / CrossEncoder 真实权重 · 4B/14B vLLM GPU 拓扑 · Airflow 真实调度 · Kubernetes 真实集群部署 · 浏览器 → 真实后端端到端 · 告警在真实流量下的触发 · OTLP span 回读 · Redis Cluster/Sentinel、多节点 ES、TLS、外部负载均衡。
-
-**必须知道的一条降级事实**：仓库内没有 CrossEncoder 权重时，重排走确定性降级，`ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分 `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`（`config.json` → `retrieval.evidence_gate`）——**因此按当前仓库状态直接部署，所有查询都会被拒答**。这是 gate 降级时选择关闸的正确方向，但也说明缺失资产不是装饰性问题。目前没有测试断言这个端到端后果，也没有 artifact 证明它，见 `VAL-DEGRADE-001`。
-
-### Production Validation Checklist
-
-从「架构 Demo」走到「可上生产」还需要完成的验证，逐条在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md) 里有可执行的步骤与验收标准。**当前状态：全部 `NOT EXECUTED`。**
-
-| 门禁项 | 需要什么 | 状态 |
-|---|---|---|
-| 检索 benchmark 可归因 | golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required`（#86）；接真实检索执行器；跑五个配置 | ⬜ `VAL-RETRIEVAL-001` |
-| 真实 Qdrant 服务 | 单机容器 + 封存 epoch 语料；验证 epoch 过滤、epoch 级 point id、payload 过滤 | ⬜ `VAL-STORE-001` |
-| 降级行为可断言 | 无需环境：断言无权重时 Evidence Gate 必然拒答 | ⬜ `VAL-DEGRADE-001`（**最先做，零环境成本**） |
-| 两级重排收益 | 真实 CrossEncoder 权重；对比 `hybrid_rrf_biencoder` 与 `+_crossencoder` | ⬜ `VAL-RERANK-001` |
-| 真实模型权重 | BGE / CLIP / PaddleOCR smoke | ⬜ `VAL-MODEL-001/002/003` |
-| 质量分 | 获批 RAGAS evaluator 凭据 + 一次真实运行 | ⬜ `VAL-RAGAS-001` |
-| 性能数字 | 真实 API + LLM + 检索栈负载；七文件 artifact | ⬜ `VAL-PERF-001` |
-| 可观测闭环 | OTLP span 回读；Grafana 面板填充；真实 Prometheus 持续触发告警 | ⬜ `VAL-OBS-001/002` · `VAL-ALERT-001` |
-| GPU 生成拓扑 | 4B / 14B vLLM 部署与压测 | ⬜ `VAL-GPU-001` |
-| 端到端与部署 | 浏览器 → 真实后端；Airflow 调度；Kubernetes 集群部署与 readiness | ⬜ `VAL-E2E-001` · `VAL-SCHED-001` · `VAL-K8S-001` |
-| 生产基础设施拓扑 | Redis Cluster/Sentinel、多节点 ES + TLS、外部负载均衡 | ⬜ `VAL-TOPO-001` |
-
-⬜ = 未执行。**任何一项都不能凭框架、配置文件或计划关闭**——关闭条件是该条目自己写明的 artifact 加证据等级提升规则。
 
 ---
 
@@ -539,6 +409,288 @@ python3 scripts/check_repo_consistency.py
 
 ---
 
+## Tech Stack
+
+版本下界取自 `requirements.txt`，模型与端点取自 `config.json`，CI 矩阵取自
+`.github/workflows/ci.yml`。可用 `poetry.lock` 之外的锁定信息以依赖清单为准。
+
+| 层 | 选型 |
+|---|---|
+| 语言 / 运行时 | Python `3.10` · `3.11`（CI 矩阵）；前端 Node `20` |
+| API | FastAPI `>=0.110` · Uvicorn · Pydantic `>=2.6` |
+| 文本嵌入 | `bge-base-zh-v1.5`，768 维 → Qdrant `rag_text_768` |
+| 图像嵌入 | `clip-vit-base-patch16`，512 维 → Qdrant `rag_image_512` |
+| 稀疏检索 | Elasticsearch `8.x`（客户端 pin `>=8.14,<9`）· BM25 + Painless 位掩码过滤 |
+| 向量检索 | Qdrant `>=1.18`；`faiss-cpu` 供离线/降级路径 |
+| 生成端点 | vLLM · `Qwen3-4B`（`gen_4b`）/ `Qwen3-14B`（`gen_14b`），按查询复杂度路由 |
+| 缓存 / 会话 / 限流 | Redis `>=5.0`（L1/L2 缓存、会话持久化、登录限流、审计 Stream） |
+| 认证 / 权限 | PyJWT（RS256）· `cryptography` · `bcrypt` · uint32 位掩码 RBAC |
+| 文档解析 | PyMuPDF · `python-docx` · pandas · `openpyxl` · Pillow · `opencv-python` |
+| OCR | PaddleOCR（**可选**，不在默认依赖；仅在处理扫描件 / 成分表图片时安装） |
+| 存储 | MinIO（签名 URL）· SQLAlchemy `>=2.0` |
+| 前端 | React `18.3` · Vite `6` |
+| 调度 | Airflow DAG（**仅注册**，真实调度 `PENDING`） |
+| 可观测 | OpenTelemetry API / SDK（exporter 默认关闭）· Prometheus 规则 · Grafana 仪表盘 |
+| 评测 | 检索指标 harness · RAGAS（**隔离的可选 evaluator**）· Locust |
+| 微调工具链 | QLoRA：`peft` · `bitsandbytes` · `datasets` · `accelerate`（工具 `REPO_VERIFIED`，结果 `PENDING`） |
+| CPU 推理降级 | ONNX Runtime `>=1.17` |
+
+两项**不在默认依赖**里的组件各有原因：PaddleOCR 运行时属于外部模型资产，装在需要处理
+扫描件的环境（`offline/requirements-ocr.txt`）；RAGAS 当前可解析版本不安全，被隔离到
+`requirements-ragas.txt`，只能在一次性环境安装，evaluator 不可用时 `--require-ragas`
+**fail fast** 而非输出零分。
+
+---
+
+## Evaluation
+
+> **状态：Framework ready. Benchmark execution pending. Production validation pending.**
+> 三套评测框架（检索指标 · RAGAS 质量 · 性能产物）的代码与 artifact 契约都是 `REPO_VERIFIED`；**本仓库没有任何一次真实评测的结果，也没有可复现的 artifact**。这一节给出的是「怎么评、评什么、缺什么才能出数」，不是分数。
+
+### 检索质量：框架与缺口
+
+```bash
+# 列出当前环境实际可执行的配置（实时探测后端，不用替身 retriever）
+python3 -m benchmarks.retrieval_benchmark --list-configs
+
+# 尝试真实运行；后端不可用时以 BLOCKED + 原因记录，不产出任何数字
+python3 -m benchmarks.retrieval_benchmark --config bm25 --limit 5
+```
+
+框架按五档递进配置对比单路与混合检索的收益：`bm25` · `dense` · `hybrid_rrf` · `hybrid_rrf_biencoder` · `hybrid_rrf_biencoder_crossencoder`；指标为 Recall@K、HitRate@{1,3,5,10}、MRR@10、NDCG@10，可按 `business_type` / `difficulty` 分桶。代码：`benchmarks/`（指标实现确定性，与后端无关的部分有完整单测）。
+
+### Golden set 的实测字段覆盖
+
+`tests/evaluation/golden_set.jsonl`，301 条：
+
+| 字段 | 覆盖 | 用途 |
+|---|---|---|
+| `question` / `answer` / `ground_truth` / `contexts` | 301 / 301 | 查询与参考答案 / ground-truth 段落 |
+| `business_type` | 301 / 301 | regulation 124 · ingredient 91 · formula 46 · general 20 · image 16 · product 4 |
+| `difficulty` | 301 / 301 | medium 135 · easy 102 · hard 64 |
+| `doc_id` / `chunk_id` / `source_id` | **0 / 301** | 无法按文档身份判定相关性 |
+| `visual_required` | **0 / 301** | 无视觉/非视觉分桶 |
+| `complexity` 标签 | **0 / 301** | 无复杂度分桶 |
+
+ground truth 规模：每条 1–4 段（共 1081 段），但只有 **262 个不同段落**被复用。
+
+### 关键诚实边界：没有稳定标识，相关性只能按文本精确匹配
+
+相关性判定分两级（`benchmarks/relevance.py`）：**Level 1 稳定标识**（`doc_id` / `chunk_id` / `source_id`）是精确且与语言无关的；**Level 2 规范化精确文本**（NFKC + 空白折叠 + trim）是当前唯一可用的路径——**golden set 的 301 条没有任何稳定标识**。
+
+这意味着三件事，缺一不可地说明为什么当前不能声称检索指标可信：
+
+1. 相关性只能靠字符串完全一致来判定。语料一旦重新切块、OCR 文本有细微差异、段落被合并，相关性就会静默归零——**Recall 的高低会由构建流程的偶然性决定，而不是由检索质量决定**。
+2. 因此动态 2–4 路的收益**目前无法度量**：`complexity` 与 `visual_required` 标签全缺，两个分桶都产不出来（跟踪于 issue [#86](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/86)）。
+3. 框架刻意**不**使用 LLM judge、embedding 相似度阈值、模糊/编辑距离匹配或人工映射来「补」这个缺口——那些做法会抬高 recall 且不可复现，属于把指标调成好看的形状，不是把检索调好。宁可报不出分，也不报不可归因的分。
+
+补齐路径很明确且成本不高：给 golden set 每条 ground truth 段落补 `doc_id` + `chunk_id`（离线构建时已生成这两个字段），再人工标注 `complexity` 与 `visual_required`。补齐后 Level 1 生效，指标才可归因。
+
+### RAGAS 质量分
+
+harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_golden_set.py`）与 golden set 均已实现，`validate_golden_set` 的最小规模约束是 300 条（实际 301 条）。
+
+- **格式校验通过 ≠ 领域事实正确**。校验器只检查结构、条数与字段完整性。
+- RAGAS 是**隔离的可选 evaluator**，不在默认依赖中。库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**。
+- 使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator 依赖或凭据会 **fail fast**：返回非零状态且**不生成任何 quality report**。evaluator 不可用是「未成功」，不是「零分」。
+- `data/eval/reports/` 下的历史 report 全部是 evaluator 缺失时的零值降级（`dataset_size: 2`，带 `_warning`），**不能当作质量分引用**。
+- 仓库**没有**经过验证的真实 RAGAS quality score。指南见 [docs/ragas-evaluation-guide.md](docs/ragas-evaluation-guide.md)。
+
+### 性能产物契约
+
+`artifacts/performance/` 的七文件契约已实现，规则是**未测量即 `null`，绝不写 `0`**；状态由实际观测推导，不手填。QPS / P95 / P99 在本仓库**一次都没测过**。契约见 [artifacts/performance/README.md](artifacts/performance/README.md)。
+
+### 要让这些数字变成可引用的证据，需要什么
+
+检索 benchmark artifact 的验收标准（数据集 sha256、`git_sha`、模型 revision、硬件、样本数、延迟、命令、限制说明）见 [docs/evidence-map.md → benchmark artifact 验收标准](docs/evidence-map.md#benchmark-artifact-acceptance-criteria)；artifact 契约见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。数据质量缺口的完整记录见 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)。
+
+---
+
+## Limitations
+
+先读这一节。逐项状态表见 [Evidence Boundary](#evidence-boundary) 与
+[Production Readiness](#production-readiness)。
+
+本仓库区分「代码存在」与「证据支持」，全仓库只用六级 canonical 证据等级。一句话概括当前
+边界：**每一项能力都是 `REPO_VERIFIED`（代码在主链路上且被确定性测试或 CI 覆盖），但几乎
+每一项的真实验证结果都是 `PENDING`。**
+
+- **没有真实评测结果。** 检索 Recall / HitRate@1/3/5/10 / MRR@10 / NDCG@10、QPS、P95/P99
+  延迟、RAGAS 质量分，全部 `PENDING`。三套评测**框架**已实现且有测试覆盖，但框架 ≠ 结果；
+  golden set 缺稳定标识，当前任何检索指标都不可归因到文档身份。见 [Evaluation](#evaluation)。
+- **没有生产验证。** [Production Readiness](#production-readiness) 的 11 项门禁全部
+  `NOT EXECUTED`；没有生产部署、没有 HA/SLO 主张、没有生产延迟或吞吐证据。
+- **按当前仓库状态直接部署，所有查询都会被拒答。** 缺 CrossEncoder 权重时重排走确定性降级，
+  `ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分
+  `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`。
+- **微服务形态未联调。** 六个微服务目录中 5 个按现状不可启动；`dags/` 只有 DAG 注册，
+  无真实调度记录。
+- **历史规模数字不是本仓库的结果。** `HISTORICAL_PRODUCTION` 表格来自前雇主生产环境，
+  本仓库不含对应语料、日志、权重或流量切分配置，无法复现。
+
+---
+
+### Evidence Boundary
+
+这一节回答两个问题：**哪些结论本仓库能证明，哪些不能**。完整逐条表格（能力 / 等级 / 代码证据 / 测试证据 / 升级路径）在 [docs/evidence-map.md](docs/evidence-map.md)；实现与证据状态的完整审计在 [docs/repository-truth-audit.md](docs/repository-truth-audit.md)。本节是摘要，只出现一次。
+
+#### Canonical 证据等级
+
+全仓库只用下面六级，与 [docs/evidence-map.md → Classification vocabulary](docs/evidence-map.md#classification-vocabulary) 完全一致；`EXECUTED` / `PARTIAL` / `BLOCKED` / `PASS` / `NOT RUN` 是**单次运行结果**，不是证据等级，永不出现在证据等级列。
+
+| 等级 | 含义 | 可以这样说 | 不能这样说 |
+|---|---|---|---|
+| `HISTORICAL_PRODUCTION` | 前雇主生产环境实际做过的工作；专有资产不在本仓库 | "我在上一套生产系统里……" | "本仓库证明了这个规模" |
+| `HISTORICAL` | 本仓库内被取代、只为追溯保留的实现 / 配置 / 设计 | "这是被取代的仓库路径，保留作为历史上下文" | "这是当前生产能力" |
+| `REPO_VERIFIED` | 代码/配置存在，并被本仓库收集到的确定性测试或 CI 覆盖 | "已实现且有测试覆盖" | "已通过生产验证" |
+| `LOCAL_REAL_VALIDATION` | 用真实外部依赖在单台本地主机上跑过 | "在本地对真实依赖验证过" | "生产集群 / HA / SLO 已验证" |
+| `DESIGN_TARGET` | 写进文档的目标 / 设计；无实现或无可复现 benchmark | "设计目标是……" | "运行中的系统达到……" |
+| `PENDING` | 代码可能在，但验证所需的真实资产 / 运行时 / 凭据在此不可得 | "已实现，真实验证待补" | "已经验证过了" |
+
+`HISTORICAL` 与 `HISTORICAL_PRODUCTION` 不可互换：前者说的是本仓库自己的历史代码，后者说的是历史生产系统，两者都不是当前能力。
+
+#### Historical Production Context
+
+> 等级 `HISTORICAL_PRODUCTION`。下表全部是**历史生产环境**的业务规模与流量背景。本公开仓库**不包含**对应的专有语料、生产日志、模型权重、监控数据或流量切分配置，因此这些数字**不是** `REPO_VERIFIED`，**不是**本仓库的 benchmark，**也无法由本仓库复现**。
+
+| 维度 | 历史生产环境事实 |
+|---|---|
+| 知识资产 | 3000+ 文档 · 5000+ 图片 · 1500+ 产品 · 2000+ 成分 · 8 大法规体系 |
+| 用户与流量 | 200+ 内部用户 · 高峰短时 10–15 QPS · 日均 1500+ 请求 |
+| 生产推理硬件 | RTX A5000 ×2 |
+| 后续模型迁移 | Qwen2.5 → Qwen3-14B / Qwen3-4B 灰度迁移验证 |
+| 公司认可 | 年度技术创新奖 |
+
+三条不可跨越的边界：**不得**把上表任何一项归类为 `REPO_VERIFIED`；**不得**用历史生产经验替代仓库验证——`config.json` 里 4B / 14B vLLM 拓扑**在本仓库从未执行过**（权重缺失、`vllm` 未安装），该项为 `PENDING`；**奖项不是运行时验证**，它不携带关于本仓库延迟、吞吐或正确性的任何证据。
+
+#### 框架已实现 ≠ 结果已产出
+
+这是本仓库最重要的一张表。**每一行都是"实现"与"结果"分开的**：
+
+| 能力 | 实现 | 结果 | 缺什么才能升级 |
+|---|---|---|---|
+| 检索 benchmark（Recall/HitRate@1/3/5/10、MRR@10、NDCG@10） | `REPO_VERIFIED` | `PENDING` | 一次真实 ES/Qdrant 运行并提交可复现 artifact（含 `git_sha` / 数据集 sha256 / 模型 revision / 硬件 / 样本数 / 延迟 / 命令 / 限制说明，见 [验收标准](docs/evidence-map.md#benchmark-artifact-acceptance-criteria)） |
+| 性能产物契约（七文件、未测量即 `null`） | `REPO_VERIFIED` | `PENDING` | 对真实 API + LLM + 检索栈执行既定负载并提交一份 artifact |
+| QPS / 延迟数字 | — | `PENDING` | 同上：**本仓库没有可复现的 QPS / 延迟 benchmark 结果** |
+| SLO 目标（5 个）与告警阈值 | `REPO_VERIFIED`（文档 / 配置） | `DESIGN_TARGET` | 在真实环境达成该目标 |
+| Prometheus 告警（6 条） | `REPO_VERIFIED`（配置） | `PENDING`（生产触发） | 一个真实 Prometheus 实例加载并触发这些规则 |
+| Grafana 仪表盘（10 面板） | `REPO_VERIFIED`（JSON） | `PENDING` | 导入运行中的 Grafana 并确认面板被真实数据填充 |
+| OTLP exporter | `REPO_VERIFIED`（实现，默认关闭） | `PENDING`（运行期闭环） | 应用 → exporter → collector → 后端 → 真的查到 span |
+| RAGAS 质量分 | `REPO_VERIFIED`（harness） | `PENDING` | 获批 evaluator provider + API key + 一次真实运行 |
+| BGE / CLIP / PaddleOCR 真实模型 | `REPO_VERIFIED`（adapter 契约） | `PENDING` | 真实权重与运行时的 smoke（当前 `EXTERNAL_MODEL_ASSET_REQUIRED`） |
+| 4B / 14B vLLM GPU 拓扑 | `REPO_VERIFIED`（路由契约） | `PENDING` | 真实 GPU 部署与压测（权重不在仓库，`vllm` 未安装） |
+| QLoRA 微调 | `REPO_VERIFIED`（工具） | `PENDING` | 可复现训练运行 + adapter 产物 |
+| Airflow 调度 | `REPO_VERIFIED`（DAG 注册） | `PENDING` | 真实 Airflow DAG 执行 |
+| Qdrant 真实服务 | `REPO_VERIFIED`（当前回归覆盖 = 进程内 `QdrantClient(":memory:")`） | `PENDING`（真实服务 artifact） | 一次新的真实服务运行并提交产物。**开发沿革中确有 PR #6/#7 的真实本地 Qdrant + ES 集成运行记录，但那不是可复现 artifact**——两个方向都不能说错，详见 [Qdrant evidence: two states](docs/evidence-map.md#qdrant-evidence-two-states-kept-apart) |
+| 微服务（六个目录） | `REPO_VERIFIED`（组件） | `PENDING`（集成部署） | 与当前前端的端到端生产验证 |
+| 前端 CI 构建（`npm ci` + `npm run build`） | `REPO_VERIFIED` | —（构建产物不发布） | 无需升级：这是门禁，不是结果。**但构建成功只证明 bundle 能编译** |
+| 前端 + 真实后端端到端运行 | `REPO_VERIFIED`（客户端与 API metadata 契约） | `PENDING` | 一次真实浏览器运行：`frontend/` 对真实单体 + 真实 ES/Qdrant + 真实模型。首屏那张图由 Playwright 驱动**真实 UI**、后端为合成 mock，属演示产出而非后端集成证据 |
+| 前端生产部署 | —（部署态在本仓库之外） | `PENDING` | 一次真实部署并记录环境。这是 deployment-specific 状态，本仓库不断言 |
+
+#### 本地真实验证（`LOCAL_REAL_VALIDATION`，只有这 5 项）
+
+在本地单主机 + 真实依赖上实际跑过，证据见 [docs/validation/v2.5-runtime-security-validation.md](docs/validation/v2.5-runtime-security-validation.md)：
+
+1. Redis 7.4.9 多进程会话持久化（进程 A 写入 → 进程 B 类型化恢复 → 进程 C 观察到更新 → TTL 刷新）
+2. Redis 跨进程登录限流（跨两进程交替第 6 次 429、窗口过期、Redis 挂掉时降级单进程内存）
+3. 真实 nginx 单跳与多跳 `TRUSTED_PROXIES` 客户端 IP 解析
+4. 认证 Elasticsearch 8.11（匿名/错误凭据 401、writer mapping + `search_after`、在线 BM25 检索）
+5. 带 Bearer token 的 Prometheus 抓取（无 token 401、Bearer 200、target `up == 1`）
+
+**这不等于生产集群验证**：Redis Cluster/Sentinel、云负载均衡拓扑、多节点 ES/TLS、长期 Prometheus/Grafana 运维、生产 HA/SLO，以及 4B/14B vLLM GPU 部署，均未在本仓库验证。
+
+#### 数值口径
+
+- **性能数字**只允许在三种语义下出现：`HISTORICAL_PRODUCTION`（上表）、`DESIGN_TARGET`（SLO / 告警阈值）、或合成 demo 夹具值；**均不得表述为本仓库实测结果**。
+- 排障时引用的 `rag_*` 指标必须真实存在。exporter 只暴露原始计数器与直方图（例如 `rag_cache_hit_L1`、`rag_cache_total`、`rag_evidence_score_seconds`），**没有** `rag_cache_hit_rate` 或 `rag_rewrite_fallback_rate` 这类 series；比率要么用基于已 emit counter 的 PromQL ratio，要么读 `/api/stats` 的计算字段。`scripts/check_repo_consistency.py` 强制这条契约。
+- 本仓库唯一的告警契约是 [`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)，由外部 Prometheus 加载评估。`monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，**没有**接入 canonical 请求路径，属于遗留代码，喂给它的 `config.json` → `alerting.rules` 配置块也已移除。
+- `/api/stats` 与 `/api/metrics` 需要身份认证（`require_identity`）；`/api/health` 公开；`/docs` 在 `deployment_mode=production` 时关闭。Prometheus 抓取需配置 Bearer token。
+- **评测的诚实边界**：golden set 301 条全部**没有** `doc_id` / `chunk_id` / `source_id`，相关性只能按规范化精确文本判定（Level 2），因此当前任何检索指标都**不可归因**到文档身份；框架刻意不用 LLM judge、embedding 相似度阈值或模糊匹配去补这个缺口。RAGAS harness / reporter / validator 存在（`validate_golden_set` 最小规模 300 条，实际 301 条），但**格式校验通过 ≠ 领域事实正确**；RAGAS 是隔离的可选 evaluator，不在默认依赖中，库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**；`--require-ragas` 在缺少 evaluator 依赖或凭据时 **fail fast**、返回非零且**不生成任何 quality report**——evaluator 不可用是"未成功"，不是"零分"。当前仓库**没有**经过验证的真实 RAGAS quality score。完整论证见 [Evaluation](#evaluation)。
+
+#### 复核方式
+
+精确计数不在此静态写死（会随迭代漂移），按下列命令在当前 commit 现场计算：`git ls-files '*.py' | xargs wc -l`、`python3 -m pytest --collect-only -q`、`python3 scripts/check_repo_consistency.py`。CI 覆盖 Python 3.10 与 3.11。
+
+---
+
+### Production Readiness
+
+一句话：**代码状态与真实验证状态是两件事，本仓库在两者上都尽量说清楚。** 逐项详表在 [docs/production-readiness.md](docs/production-readiness.md)，未执行验证的完整清单在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md)。
+
+**已实现（`REPO_VERIFIED`：代码在主链路上，且被确定性测试或 CI 覆盖）**
+
+| 能力 | 代码 | 真实验证 |
+|---|---|---|
+| FastAPI 单体在线链路（`/api/query`、`/api/chat`、`/api/health`） | ✅ | `PENDING`（整条链路没有一次完整运行记录；五个 `LOCAL_REAL_VALIDATION` 项各自验证的是单个机制） |
+| RS256 认证 + uint32 权限掩码契约 + 畸形声明 fail closed | ✅ | 单项 `LOCAL_REAL_VALIDATION`（nginx 代理链解析、Redis 跨进程登录限流）；整条请求路径 `PENDING` |
+| Elasticsearch 8 BM25 稀疏检索 + Painless 位掩码过滤 | ✅ | `LOCAL_REAL_VALIDATION`（认证 ES 8.11：writer mapping、`search_after`、在线 BM25） |
+| 权限纵深：存储侧下推 + 融合前文档级过滤 + L2 缓存物理分区 | ✅ | `PENDING`（无真实 Qdrant/ES 多角色语料 artifact） |
+| 动态 2–4 路召回选择 | ✅ | `PENDING`（选择逻辑确定且有测试，但**收益无法度量**——golden set 缺 `complexity` / `visual_required` 标签，见 #86） |
+| 两级重排调用链（BiEncoder → 150 → CrossEncoder ensemble → 10） | ✅（调用链 + 确定性降级） | `PENDING`（权重不在仓库，实际只跑过降级路径） |
+| Evidence Gate / Answer Gate 判定（含法规类矛盾拒答） | ✅ | `PENDING`（降级后果见下） |
+| Prompt 信任边界（证据限数据区块、当前请求限指令区块、标记转义） | ✅ | `PENDING`（结构约束，**不是** prompt injection 免疫证明） |
+| 离线 ingestion（多格式解析、扫描页 OCR 路由、确定性切块、内容哈希增量、快照校验、epoch 封存） | ✅ | `PENDING`（无真实语料 ingestion artifact） |
+| 9 字段结构化审计双 sink（Redis Stream + 每日 JSONL） | ✅ | `PENDING` |
+| Prometheus 6 条告警（只引用真实 emit 指标）· Grafana 10 面板 · OTLP exporter（默认关闭） | ✅ | `PENDING`（阈值均为 `DESIGN_TARGET`；运行期闭环未验证） |
+| 检索 benchmark / 性能产物 / RAGAS 三套框架与 artifact 契约 | ✅ | `PENDING`（**结果**未产出，未测量一律 `null`） |
+
+**未验证（`PENDING` / `DESIGN_TARGET`：代码或设计存在，真实资产 / 环境 / 凭据不可得）**
+
+真实 Qdrant 服务运行（回归覆盖目前是进程内 `:memory:`）· 检索指标 Recall / HitRate@K / MRR@10 / NDCG@10 · QPS 与 P95/P99 延迟 · RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` 会 fail-fast 而不是给零分）· BGE / CLIP / PaddleOCR / CrossEncoder 真实权重 · 4B/14B vLLM GPU 拓扑 · Airflow 真实调度 · Kubernetes 真实集群部署 · 浏览器 → 真实后端端到端 · 告警在真实流量下的触发 · OTLP span 回读 · Redis Cluster/Sentinel、多节点 ES、TLS、外部负载均衡。
+
+**必须知道的一条降级事实**：仓库内没有 CrossEncoder 权重时，重排走确定性降级，`ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分 `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`（`config.json` → `retrieval.evidence_gate`）——**因此按当前仓库状态直接部署，所有查询都会被拒答**。这是 gate 降级时选择关闸的正确方向，但也说明缺失资产不是装饰性问题。目前没有测试断言这个端到端后果，也没有 artifact 证明它，见 `VAL-DEGRADE-001`。
+
+#### Production Validation Checklist
+
+从「架构 Demo」走到「可上生产」还需要完成的验证，逐条在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md) 里有可执行的步骤与验收标准。**当前状态：全部 `NOT EXECUTED`。**
+
+| 门禁项 | 需要什么 | 状态 |
+|---|---|---|
+| 检索 benchmark 可归因 | golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required`（#86）；接真实检索执行器；跑五个配置 | ⬜ `VAL-RETRIEVAL-001` |
+| 真实 Qdrant 服务 | 单机容器 + 封存 epoch 语料；验证 epoch 过滤、epoch 级 point id、payload 过滤 | ⬜ `VAL-STORE-001` |
+| 降级行为可断言 | 无需环境：断言无权重时 Evidence Gate 必然拒答 | ⬜ `VAL-DEGRADE-001`（**最先做，零环境成本**） |
+| 两级重排收益 | 真实 CrossEncoder 权重；对比 `hybrid_rrf_biencoder` 与 `+_crossencoder` | ⬜ `VAL-RERANK-001` |
+| 真实模型权重 | BGE / CLIP / PaddleOCR smoke | ⬜ `VAL-MODEL-001/002/003` |
+| 质量分 | 获批 RAGAS evaluator 凭据 + 一次真实运行 | ⬜ `VAL-RAGAS-001` |
+| 性能数字 | 真实 API + LLM + 检索栈负载；七文件 artifact | ⬜ `VAL-PERF-001` |
+| 可观测闭环 | OTLP span 回读；Grafana 面板填充；真实 Prometheus 持续触发告警 | ⬜ `VAL-OBS-001/002` · `VAL-ALERT-001` |
+| GPU 生成拓扑 | 4B / 14B vLLM 部署与压测 | ⬜ `VAL-GPU-001` |
+| 端到端与部署 | 浏览器 → 真实后端；Airflow 调度；Kubernetes 集群部署与 readiness | ⬜ `VAL-E2E-001` · `VAL-SCHED-001` · `VAL-K8S-001` |
+| 生产基础设施拓扑 | Redis Cluster/Sentinel、多节点 ES + TLS、外部负载均衡 | ⬜ `VAL-TOPO-001` |
+
+⬜ = 未执行。**任何一项都不能凭框架、配置文件或计划关闭**——关闭条件是该条目自己写明的 artifact 加证据等级提升规则。
+
+---
+
+## Roadmap
+
+只列**已登记**的待办，不列愿望。完整未执行验证清单（含每条的环境需求、产出物与通过标准）见
+[docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md)；逐项
+代码状态 / 验证状态 / 升级判据见 [docs/production-readiness.md](docs/production-readiness.md)。
+
+⬜ = 未执行。**任何一项都不能凭框架、配置文件或计划关闭**——关闭条件是该条目自己写明的
+artifact 加证据等级提升规则。
+
+| 优先级 | 事项 | 状态 |
+|---|---|---|
+| P0 | 断言「无 CrossEncoder 权重时 Evidence Gate 必然拒答」，把该端到端后果钉死 | ⬜ `VAL-DEGRADE-001`（**零环境成本，最先做**） |
+| P0 | 检索指标可归因：golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required` | ⬜ issue #86 · `VAL-RETRIEVAL-001` |
+| P0 | 跑一次真实 BM25 / Dense / Hybrid 检索 benchmark 并提交可复现 artifact | ⬜ issue #18 |
+| P0 | 真实 Qdrant 服务运行（当前回归覆盖是进程内 `:memory:`） | ⬜ `VAL-STORE-001` |
+| P1 | 真实模型权重 smoke：BGE / CLIP / PaddleOCR | ⬜ issue #8 · `VAL-MODEL-001/002/003` |
+| P1 | 两级重排收益度量：`hybrid_rrf_biencoder` vs `+_crossencoder` | ⬜ `VAL-RERANK-001` |
+| P1 | RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` fail fast） | ⬜ issue #12 之一部分 · `VAL-RAGAS-001` |
+| P1 | 4B / 14B vLLM GPU 拓扑部署与压测 | ⬜ issue #12 · `VAL-GPU-001` |
+| P1 | 性能数字：真实 API + LLM + 检索栈负载 + 七文件 artifact | ⬜ issue #32 · `VAL-PERF-001` |
+| P1 | 可观测闭环：OTLP span 回读 · Grafana 面板填充 · 真实 Prometheus 持续触发告警 | ⬜ `VAL-OBS-001/002` · `VAL-ALERT-001` |
+| P2 | 真实浏览器 → 真实后端端到端 smoke（当前 `PENDING`） | ⬜ issue #60 · `VAL-E2E-001` |
+| P2 | Airflow 真实调度 · Kubernetes 集群部署与 readiness | ⬜ issue #54 · `VAL-SCHED-001` · `VAL-K8S-001` |
+| P2 | 生产基础设施拓扑：Redis Cluster/Sentinel · 多节点 ES + TLS · 外部负载均衡 | ⬜ `VAL-TOPO-001` |
+| P2 | 文档与代码同步（5 处已确认漂移） | ⬜ issue #84 |
+| P2 | 外部验证索引与生产验证清单补齐 | ⬜ issue #85 |
+
+---
+
 ## Documentation
 
 请从 [docs/README.md](docs/README.md) 查找当前操作指南、设计文档与历史计划（历史计划不代表当前实现状态）。架构 / 真实性口径入口：
@@ -583,7 +735,7 @@ cache-service/  rewrite-service/  Microservice components; separate integration 
 tests/                    Deterministic unit/integration/contract/performance suites
 docs/                     User, operator, design, audit and evidence-truth documentation
 scripts/                  check_repo_consistency.py and validation helpers
-config.json               Runtime configuration; system.version is 2.3.0
+config.json               Runtime configuration; system.version is 2.4.0
 ```
 
 ---

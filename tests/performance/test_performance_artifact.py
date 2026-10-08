@@ -240,7 +240,7 @@ def test_metadata_records_system_version_from_config():
         duration_seconds=1.0,
         observed_users=1,
     )
-    assert metadata["system_version"] == "2.3.0"
+    assert metadata["system_version"] == "2.4.0"
 
 
 def test_environment_block_records_credential_presence_not_values():

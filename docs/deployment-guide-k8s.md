@@ -35,7 +35,7 @@ GET /api/metrics  -> 401   （需认证）
 **`/api/health` 在 Redis、Qdrant、Elasticsearch 全部不可达时仍返回 HTTP 200**，body 为：
 
 ```json
-{"status":"degraded","version":"2.3.0","dependencies":{"redis":false,"qdrant":false,"elasticsearch":false}}
+{"status":"degraded","version":"2.4.0","dependencies":{"redis":false,"qdrant":false,"elasticsearch":false}}
 ```
 
 推论（见 §3）：把 `httpGet /api/health` 当 liveness 探针，**这个探针永远不会失败**。
@@ -127,7 +127,7 @@ GET /api/metrics  -> 401   （需认证）
 - 已构建并推送的镜像。**本仓库不发布镜像**，镜像引用需替换为你自己的registry
 - 依赖服务已在集群内可解析：`qdrant`、`redis`、`elasticsearch`，以及推理侧 `vllm-4b:8101`、`vllm-gen-14b:8100`（对应 ConfigMap 的 `VLLM_4B_URL` / `VLLM_GEN_14B_URL`，端口取自 `config.json` 的 `gpu1.models.vllm_4b.port` / `gpu0.models.gen_14b.port`）
 
-镜像 tag 必须固定，且与 `config.json` → `system.version`（当前 `2.3.0`）一致 —— 这条由 `test_image_tag_matches_the_canonical_runtime_version` 强制。
+镜像 tag 必须固定，且与 `config.json` → `system.version`（当前 `2.4.0`）一致 —— 这条由 `test_image_tag_matches_the_canonical_runtime_version` 强制。
 
 ### 4.2 Secret（先于其余步骤）
 

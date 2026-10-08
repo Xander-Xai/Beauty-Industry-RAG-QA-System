@@ -99,7 +99,7 @@ spec:
           # This repository builds the image locally from the Dockerfile at the
           # repository root; no published image exists, so the operator must
           # build and push to their own registry and substitute the reference.
-          image: ghcr.io/example/beauty-industry-rag-qa:2.3.0
+          image: ghcr.io/example/beauty-industry-rag-qa:2.4.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

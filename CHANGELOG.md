@@ -2,7 +2,14 @@
 
 ## [Unreleased]
 
-Changes present on `main` after the 2.3.0 release entry:
+## [2.4.0] - 2026-10-08
+
+Everything present on `main` after the 2.3.0 release entry. This is the first
+dated release of the accumulated work; see
+[Known limitations](#known-limitations) for what this release does **not**
+claim, and the evidence levels in
+[`docs/repository-truth-audit.md`](docs/repository-truth-audit.md) for how strong
+each claim in this entry actually is.
 
 ### Added
 
@@ -625,6 +632,39 @@ Changes present on `main` after the 2.3.0 release entry:
   boundaries (`0`, `0xFFFFFFFF`) remain accepted, and the absent-claim named-role fallback is
   unchanged.
 
+### Known limitations
+
+Two things this release does **not** establish. Both are recorded as `PENDING`
+in [`docs/repository-truth-audit.md`](docs/repository-truth-audit.md), and both
+are stated here so that no reader can infer an evidence level this release never
+reached.
+
+- **Benchmark result — `PENDING`.** The evaluation *framework* is delivered and
+  is covered by deterministic tests: a retrieval-quality harness
+  (Recall@1/3/5/10, HitRate@1/3/5/10, MRR@10, binary NDCG@10) with a
+  provenance and artifact contract, plus the performance artifact contract
+  (`artifacts/performance/`, seven files, status derived from observation and
+  unmeasured values written as `null`, never `0`). What does not exist is a
+  **result**: no benchmark artifact is committed, and current configurations
+  report `BLOCKED` because there is no live Elasticsearch/Qdrant, no BGE
+  weights, and no corpus containing the ground truth. Consequently this release
+  publishes **no** Recall / HitRate / MRR / NDCG number, **no** QPS, and **no**
+  P95/P99 latency number. Load-test code under `tests/load/` is not a benchmark
+  result, and the PRD's P95/P99/QPS values remain `DESIGN_TARGET`, not
+  measurements. A number may only be published from a run that actually
+  executed, with `git_sha` / dataset sha256 / model revision / hardware /
+  sample count recorded.
+- **Production validation — `PENDING`.** "Implemented" is not "production
+  validated", and nothing in this release should be read as the latter. There is
+  no production deployment, no production HA/SLO claim, and no production
+  latency, throughput, or large-corpus evidence. The strongest evidence level
+  reached locally is `LOCAL_REAL_VALIDATION` (real Redis, Elasticsearch,
+  Prometheus and trusted-proxy runs recorded in
+  `docs/validation/v2.5-runtime-security-validation.md`), which explicitly
+  **is not** a production benchmark. Every component-level claim in this release
+  is `REPO_VERIFIED` — code, config and deterministic tests exist in this
+  repository — and that level says nothing about real-model answer quality.
+
 ### Correction — historical offline capability claim (superseded)
 
 The 2.3.0 entry below says `offline/document_processor.py` was added. At the repository
@@ -645,9 +685,9 @@ does not retroactively make the original 2.3.0 claim true.
 Repository docs and the filename `docs/validation/v2.5-runtime-security-validation.md` carry a
 `v2.5` label. It names a historical **working milestone / development phase** of the
 runtime-and-security reconciliation work. It is not a release, not the canonical runtime version,
-and not a tag. The canonical runtime version remains `2.3.0`; every change listed under
-`[Unreleased]` above happened after `2.3.0` without bumping it. Filenames and links are kept
-stable rather than renamed. See
+and not a tag. The canonical runtime version is `2.4.0`, released on 2026-10-08 from the changes
+that had accumulated under `[Unreleased]` since `2.3.0` without a version bump. Filenames and
+links are kept stable rather than renamed. See
 [`docs/repository-truth-audit.md`](docs/repository-truth-audit.md#version-policy).
 
 ## [2.3.0] - 2026-06-06
