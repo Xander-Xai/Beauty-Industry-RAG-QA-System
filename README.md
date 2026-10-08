@@ -113,7 +113,7 @@
 | 重排 | 两级：BiEncoder → 150 → 双 CrossEncoder ensemble → 10 | 单级 CrossEncoder 或直接用向量分数排序，宽召回与精排不能兼得 |
 | 证据 | Evidence Gate（生成前）+ Answer Gate（生成后）双门控；证据不足、或法规类存在矛盾即拒答 | 法规场景下错误答案的代价远高于不回答 |
 | 权限 | RS256 + uint32 位掩码 RBAC：存储侧下推 + 融合前文档级二次过滤 + L2 缓存物理分区 | 只在生成时约束模型，等于越权内容已经进了 prompt |
-| 生成 | 4B / 14B 双端点按查询复杂度路由，失败降级到 `simple` tier | 简单问题不必付大模型成本；固定走大模型则每条 query 都付满价 |
+| 生成 | 4B / 14B 双端点按查询复杂度路由；非 production 部署在**发请求前**把 14B 映射到 `simple` 端点，端点失败则对同一端点有界重试后上抛，**不跨 tier 降级** | 简单问题不必付大模型成本；固定走大模型则每条 query 都付满价 |
 
 完整的七段链路、逐段代码位置、设计取舍表，以及「四道幻觉控制的失败方向并不一致」
 （其中只有 Evidence Gate 是真正 fail closed）见 [Retrieval Pipeline](#retrieval-pipeline)。
