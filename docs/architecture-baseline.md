@@ -119,7 +119,8 @@ BLIP 不应描述为固定的离线建库步骤。当前主链路是在视觉查
 `core/pipeline.py` 的 `_union_dedup()` 只做去重（折叠 ES Fallback 追加的补召回），
 不重算分数、不重排。
 
-融合之后下游的任何一层都不得再按分数重排，否则会抵消上面的查询感知加权——这条由
+融合与去重这一步之后，任何一层都不得再引入第二套融合权重或重打分；下一步的 BiEncoder 与
+双 CrossEncoder 按自己的分数重排是重排层的职责，不是融合。这条边界由
 `test_query_aware_weights_survive_the_whole_online_path` 断言。
 
 权限采用双层控制：
@@ -141,7 +142,7 @@ RRF 融合与去重之后，先由 BiEncoder 宽保留 Top 150，再由两个 Cr
 - 多路召回一致性；
 - Top 3 文档间一致性。
 
-它给出正常生成、增强证据后生成或拒答三种决策。生成后的 Answer Gate 再检查答案与核心证据的一致性，法规类矛盾会拒答。
+它给出正常生成、增强证据后生成或拒答三种决策，是真正 fail closed 的一道。生成后的 Answer Gate 再检查答案与核心证据的一致性，但**只有法规类**在矛盾时拒答：低相似度快速路径的判定是 `passed = not is_regulation`，所以非法规类在同样的低相似度下是带 warning 通过，不是拒答。
 
 生成拓扑当前是**单一共享 4B vLLM 端点**（`gpu1.models.vllm_4b`，端口 8101）：Query Rewrite 与简单生成共用 `gen_4b`，复杂请求走 `gen_14b`（Qwen3-14B）。旧 PRD 中“独立的 vLLM-Rewrite + vLLM-Gen-4B 双实例”是历史/目标设计，不是当前实现。KV 压力过高时可以截断、降级或拒绝。当前 `development` 配置会把复杂模型端点降级到 4B，且仓库不包含完整模型权重，因此“双模型已完成生产压测”不属于当前事实。
 

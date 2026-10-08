@@ -152,7 +152,7 @@ flowchart TB
 
 | 阶段 | 做什么 | 代码 |
 |---|---|---|
-| ① Rewrite + 复杂度判别 | 并行执行；产出 `rewritten_query` 与 `business_type`（regulation / ingredient / formula / general / image / product） | `rewrite/` · `core/pipeline.py` |
+| ① Rewrite + 复杂度判别 | 并行执行；产出 `rewritten_query` 与 `business_type`（`rewrite/query_rewriter.py` 的 `REWRITE_SCHEMA` 枚举：`regulation` · `development` · `ingredient` · `product` · `general` · `short`） | `rewrite/` · `core/pipeline.py` |
 | ② 准入控制 | P0/P1/P2 优先级与拒绝路径 | `admission/` |
 | ③ Embedding 路由 | 文本走 BGE；CLIP 是否同步走由三档判别器决定 | `models/embedding_service.py` |
 | ④ 并行召回 | 动态 2–4 路；每路独立 `top_k`，线程池并发 | `retrieval/parallel_recall.py` |
@@ -197,12 +197,14 @@ score(doc) = Σ_path  weight(path) / (k + rank_path(doc))
 
 ### 如何降低幻觉
 
-四道闸门，全部 fail closed，任一道不过就拒答而不是生成：
+四道控制，作用点各不相同，**失败方向并不一致**——把它们的实际语义说清楚比笼统说「全部 fail closed」有用：
 
-1. **权限过滤先于融合**：越权内容不进候选集，也不进 L2 缓存。
-2. **Evidence Gate（生成前）**：综合 CrossEncoder Top 1、Top 3 均分、多路召回一致性、Top 3 文档间一致性，四项加权得到证据分，低于 `low_confidence` 直接拒答；中等区间走「增强证据后生成」。
-3. **Answer Gate（生成后）**：校验答案是否忠于核心证据；法规类出现矛盾直接拒答。
-4. **Prompt 信任边界**：检索证据限定在 `<retrieved_context>` 数据区块、当前请求限定在 `<user_query>` 区块，保留标记集中定义并在所有不可信通道转义。这是结构约束，**不是** prompt injection 免疫证明。
+1. **权限过滤先于融合**（过滤，不是打分）：越权内容不进候选集，也不进 L2 缓存。这一步没有「通过/拒绝」，只有「在集合内/不在集合内」。
+2. **Evidence Gate（生成前）**：综合 CrossEncoder Top 1、Top 3 均分、多路召回一致性、Top 3 文档间一致性，四项加权得到证据分；低于 `low_confidence` 直接拒答，中等区间走「增强证据后生成」。**这一道是真正 fail closed 的**：权重缺失时两项恒为 0，可得最高分 0.40 低于阈值 0.55，因此当前仓库状态下全部查询都会被拒答（见 [Production Readiness](#production-readiness)）。
+3. **Answer Gate（生成后）**：校验答案是否忠于核心证据，但**不是所有失败都拒答**。`retrieval/answer_gate.py` 有两条快速路径：高相似度（`jaccard > 0.6`）直接通过；低相似度（`jaccard < 0.15`）时 `passed = not is_regulation`——**法规类拒答，非法规类带 warning 通过**。只有法规类矛盾与 NLI 判定为矛盾时才拒答。所以「生成后校验」在法规场景是硬闸门，在一般场景是告警。
+4. **Prompt 信任边界**：检索证据限定在 `<retrieved_context>` 数据区块、当前请求限定在 `<user_query>` 区块，保留标记集中定义并在所有不可信通道转义。这是标记转义的结构约束，**不是** 通过/失败判定，更**不是** prompt injection 免疫证明。
+
+把这四点读成「证据不足时系统会拒答」是对的；读成「任何一道不过都拒答」是不对的。
 
 ---
 
@@ -219,7 +221,7 @@ score(doc) = Σ_path  weight(path) / (k + rank_path(doc))
 
 ### 2 · 双 Gate 把幻觉关在门外
 
-生成前 **Evidence Gate** 综合 Top 1 / Top 3 / 多路一致性 / 文档间一致性，输出「正常生成 / 增强证据后生成 / 拒答」；生成后 **Answer Gate** 校验答案与核心证据一致性，法规类矛盾直接拒答。拒答是业务需求，不是装饰。
+生成前 **Evidence Gate** 综合 Top 1 / Top 3 / 多路一致性 / 文档间一致性，输出「正常生成 / 增强证据后生成 / 拒答」；这一道 fail closed。生成后 **Answer Gate** 校验答案与核心证据一致性，**法规类**矛盾直接拒答；非法规类在低相似度下是带 warning 通过（`passed = not is_regulation`），所以它不是所有失败都关闸。拒答是业务需求，不是装饰。
 `retrieval/evidence_gate.py` · `retrieval/answer_gate.py`
 
 ### 3 · 权限与信任边界都是纵深的——但只是纵深防御

@@ -564,11 +564,16 @@ def test_rewrite_recall_path_is_named_identically_everywhere():
 
 
 def test_rewrite_path_qdrant_failure_diagnostic_is_reachable(monkeypatch, caplog):
-    """A failing Qdrant-backed rewrite path must produce the warning.
+    """A failing Qdrant-backed rewrite path must be named in the warning.
 
     The path is registered under `rewrite_variants`; the diagnostic matched the
     same spelling, so with the old singular spelling no `rewrite_variants` entry
     ever existed in `path_results` and this warning could not fire.
+
+    The warning must also *not* claim the ES fallback ran. A Qdrant path can
+    fail while the surviving paths still return enough documents, in which case
+    the fallback condition is false; a message saying "触发 ES Fallback" would
+    send an operator looking for a fallback log line that was never written.
     """
     import numpy as np
 
@@ -598,7 +603,82 @@ def test_rewrite_path_qdrant_failure_diagnostic_is_reachable(monkeypatch, caplog
             top_k_per_path={"rewrite_variants": {"enabled": True, "top_k": 10}},
         )
 
-    assert any("Qdrant 路径异常" in record.message for record in caplog.records), (
+    warnings = [record.message for record in caplog.records if "Qdrant 路径异常" in record.message]
+    assert warnings, (
         "the Qdrant-failure warning is unreachable for the rewrite recall path; "
         f"records={[record.message for record in caplog.records]}"
     )
+    assert any("rewrite_variants" in message for message in warnings), (
+        f"the warning must name the degraded path, got {warnings}"
+    )
+    assert not any("触发 ES Fallback" in message for message in warnings), (
+        f"the warning must not claim the fallback ran, got {warnings}"
+    )
+
+
+def test_qdrant_failure_does_not_trigger_the_es_fallback(monkeypatch, caplog):
+    """The fallback has exactly one trigger: too few unique documents.
+
+    A Qdrant path failing while the others return enough documents degrades
+    coverage without starting supplementary recall. Making a failure trigger
+    the fallback would be a retrieval-behaviour change, so the invariant is
+    asserted rather than altered.
+    """
+    import numpy as np
+
+    from retrieval.parallel_recall import FALLBACK_MIN_DOC_IDS, ParallelRecallManager
+
+    manager = ParallelRecallManager.__new__(ParallelRecallManager)
+    manager._dense_retriever = None
+    manager._bm25_retriever = None
+    manager._clip_retriever = None
+    manager._rewrite_variants_retriever = None
+    manager.max_workers = 2
+
+    fallback_calls: list = []
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("qdrant unavailable")
+
+    monkeypatch.setattr(ParallelRecallManager, "_recall_rewrite_variants", _boom)
+    monkeypatch.setattr(
+        ParallelRecallManager,
+        "_recall_bm25",
+        lambda *a, **kw: [
+            RecallResult(
+                doc_id=f"d{index}",
+                content="c",
+                score=1.0,
+                source="bm25_es",
+                # The RBAC filter fails closed on missing masks, so the synthetic
+                # documents need real ones to survive into the fused set.
+                metadata={"role_mask": 0x04, "dept_mask": 0x04},
+            )
+            for index in range(FALLBACK_MIN_DOC_IDS + 5)
+        ],
+    )
+    monkeypatch.setattr(
+        ParallelRecallManager,
+        "_recall_es_fallback",
+        lambda *a, **kw: fallback_calls.append(1) or [],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="retrieval.parallel_recall"):
+        results, _agreement = manager.execute(
+            query="防腐剂限量",
+            query_embedding=np.array([0.1]),
+            user_role_mask=0x04,
+            user_dept_mask=0x04,
+            use_clip=False,
+            clip_top_k=0,
+            top_k_per_path={
+                "bm25_es": {"enabled": True, "top_k": 100},
+                "rewrite_variants": {"enabled": True, "top_k": 10},
+            },
+        )
+
+    assert len({r.doc_id for r in results}) >= FALLBACK_MIN_DOC_IDS, (
+        "the surviving path must clear the fallback threshold for this test to mean anything"
+    )
+    assert fallback_calls == [], "a failing Qdrant path must not independently start the ES fallback"
+    assert any("rewrite_variants" in record.message for record in caplog.records)

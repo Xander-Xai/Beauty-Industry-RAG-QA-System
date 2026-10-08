@@ -243,6 +243,45 @@ Changes present on `main` after the 2.3.0 release entry:
   assert that the config topology keys, the registered path names and the weight
   keys are the same set, and that the rewrite-path Qdrant warning is reachable.
 
+- **The Qdrant-failure warning no longer claims a fallback ran.** It read
+  `Qdrant 路径异常: 触发 ES Fallback（Qdrant 可能不可用）`, but the fallback has
+  exactly one trigger — fewer than `FALLBACK_MIN_DOC_IDS` (50) unique documents
+  after fusion — so a Qdrant path failing while the surviving paths return enough
+  documents logged a fallback that never ran, and an operator chasing it would
+  find no such log line. The threshold is now the named module constant
+  `FALLBACK_MIN_DOC_IDS` instead of two inline `50`s that had to be kept in
+  agreement, the warning names which path degraded, and the failed-path set is
+  computed explicitly rather than as a boolean. The fallback trigger itself is
+  unchanged: making a path failure start supplementary recall would be a
+  retrieval-behaviour change, so a test now asserts the invariant instead
+  (a failing Qdrant path with 55 surviving documents must not invoke the
+  fallback).
+
+- `docs/architecture-baseline.md` stated that no downstream layer may reorder the
+  fused results. That contradicted the two-stage reranking described in the next
+  section, which sorts by its own scores by design. The invariant is now scoped to
+  the fusion/dedup step: no layer may introduce a second set of fusion weights or
+  re-score the fused list. Reranking by a rerank model is the next stage's job,
+  not a second fusion.
+
+- `README.md` claimed the four hallucination controls were "全部 fail closed，任一道
+  不过就拒答". Only the Evidence Gate is: it refuses whenever the weighted score
+  falls below `low_confidence`. `AnswerGate.verify()` returns
+  `passed = not is_regulation` on its low-similarity fast path, so a
+  non-regulation answer with low overlap is passed **with a warning**, and the
+  prompt boundary is marker escaping rather than a pass/fail gate. The section now
+  describes what each control actually does and where it does not refuse; the
+  related `核心工程能力` bullet and the architecture baseline were aligned to match.
+
+- The new `README.md` Retrieval Pipeline table listed the rewrite stage's
+  `business_type` values as `regulation / ingredient / formula / general / image /
+  product`. Those are the golden set's `business_type` labels, not the rewriter's
+  schema: `rewrite/query_rewriter.py`'s `REWRITE_SCHEMA` enum is `regulation`,
+  `development`, `ingredient`, `product`, `general`, `short`. A client or fixture
+  built from the wrong list would expect values the rewriter never emits. The table
+  now cites the enum and keeps the golden-set distribution where it belongs, in the
+  Evaluation section.
+
 - `retrieval/parallel_recall.py` described itself as "并行 4 路召回" / "并行执行 4 路
   召回" in its module and class docstrings, while the code, the canonical architecture
   baseline and `README.md` all state **dynamic 2–4 path** recall. A reader inspecting the

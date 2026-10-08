@@ -14,7 +14,8 @@ top_k_per_path 决定：省略的通道即本次禁用，传 None 表示使用 c
 
 ES Fallback 是一次降级补召回，不是新的一路：它在 RRF 之后直接追加到 all_results，
 不进入 path_results，因此既不参与融合也不计入路数。其触发条件**只有**融合后有效文档数
-< 50 这一个；Qdrant 路径异常（qdrant_failed）只记一条 warning，不会独立触发 fallback。
+< FALLBACK_MIN_DOC_IDS 这一个；Qdrant 路径异常只记一条说明「哪一路降级了」的 warning，
+不会独立触发 fallback，warning 里也不声称 fallback 已触发。
 
 融合只有这一个入口：下面的 `rrf_fusion` 调用。查询感知权重由 `rrf_weights` 传入并在此
 一次性消费；调用链下游（`core/pipeline.py` 的 `_union_dedup`）不再重算分数、不再重排。
@@ -42,6 +43,11 @@ from retrieval_service.rerank.rrf_fusion import rrf_fusion
 config = get_config_dict()
 
 logger = logging.getLogger(__name__)
+
+#: Unique documents below this count after fusion trigger the ES fallback.
+#: The only trigger for that supplementary recall; a failing Qdrant path is
+#: reported but does not start it.
+FALLBACK_MIN_DOC_IDS = 50
 
 
 class ParallelRecallManager:
@@ -231,22 +237,31 @@ class ParallelRecallManager:
         # ES Fallback — degraded supplementary recall, not a fifth path. It is
         # appended to all_results after RRF and never enters path_results, so it
         # neither participates in fusion nor counts as a recall path. Only the
-        # `len(all_doc_ids) < 50` condition below actually runs it; `qdrant_failed`
-        # is diagnostic only and does not independently trigger the fallback.
+        # `len(all_doc_ids) < FALLBACK_MIN_DOC_IDS` condition below actually runs
+        # it; a failing Qdrant path is reported separately and never triggers it.
         all_doc_ids = {r.doc_id for r in all_results}
         qdrant_paths = {"dense_bge", "clip_visual", "rewrite_variants"}
-        qdrant_failed = any(
-            path_name in qdrant_paths and path_name not in path_results
+        failed_qdrant_paths = {
+            path_name
             for path_name in qdrant_paths
-            if any(futures[f] == path_name for f in futures)
-        ) or (
-            len(all_doc_ids) < 10
-            and any(path_name in qdrant_paths for path_name in path_results if not path_results[path_name])
-        )
-        if qdrant_failed:
-            logger.warning("Qdrant 路径异常: 触发 ES Fallback（Qdrant 可能不可用）")
-        if len(all_doc_ids) < 50:
-            logger.info(f"召回有效文档数 {len(all_doc_ids)} < 50，触发 ES Fallback")
+            if any(futures[f] == path_name for f in futures) and path_name not in path_results
+        }
+        if len(all_doc_ids) < 10:
+            failed_qdrant_paths |= {
+                path_name for path_name in qdrant_paths if path_name in path_results and not path_results[path_name]
+            }
+        if failed_qdrant_paths:
+            # Reports which Qdrant-backed path degraded, and nothing about the
+            # fallback: the fallback runs only under the `len(all_doc_ids) < 50`
+            # condition below, and it may not run at all. Claiming here that it
+            # was triggered would send an operator looking for a fallback log
+            # line that was never written.
+            logger.warning(
+                f"Qdrant 路径异常，召回覆盖降级: {sorted(failed_qdrant_paths)}"
+                f"（ES Fallback 是否运行，由融合后有效文档数 <{FALLBACK_MIN_DOC_IDS} 单独决定）"
+            )
+        if len(all_doc_ids) < FALLBACK_MIN_DOC_IDS:
+            logger.info(f"召回有效文档数 {len(all_doc_ids)} < {FALLBACK_MIN_DOC_IDS}，触发 ES Fallback")
             try:
                 fallback_results = self._recall_es_fallback(query, user_role_mask, user_dept_mask, top_k_per_path)
                 if fallback_results:
