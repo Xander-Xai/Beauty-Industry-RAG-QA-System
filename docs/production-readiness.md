@@ -28,6 +28,22 @@ status. That is the normal state of this repository and it is not a defect: it
 is the difference between "implemented and covered" and "shown to work against
 the real thing".
 
+### Why the request path itself is `PENDING`
+
+The five `LOCAL_REAL_VALIDATION` items listed in
+[Architecture baseline → local real validation](architecture-baseline.md#可观测性与评测边界)
+are **individual mechanisms**, each exercised against its own real dependency:
+Redis session persistence, Redis cross-process login rate limiting, nginx
+`TRUSTED_PROXIES` client-IP resolution, authenticated Elasticsearch 8.11, and an
+authenticated Prometheus scrape.
+
+None of them is a run of `/api/query` or `/api/chat` through the whole stack. In
+that recorded run Qdrant was not exercised and the model stack was blocked, so
+claiming the complete request path as `LOCAL_REAL_VALIDATION` would credit it
+with evidence it does not have. The monolith path therefore stays
+`REPO_VERIFIED` / `PENDING`; closing it requires #60
+(`VAL-E2E-001`) plus `VAL-STORE-001` and `VAL-GPU-001`.
+
 ## Verified in code (no external dependency required)
 
 These are implemented on the canonical online path and covered by deterministic
@@ -36,8 +52,8 @@ whole story.
 
 | Capability | Code status | Real-environment status | Notes |
 |---|---|---|---|
-| FastAPI monolith request path (`app.py`, `/api/query`, `/api/chat`, `/api/health`) | `REPO_VERIFIED` | `LOCAL_REAL_VALIDATION` (HTTP + Redis + nginx + ES, single host) | Canonical deployment form. Docker Compose is the canonical form; `deploy/k8s/` is a second form, static-checked only |
-| RS256 authentication, uint32 permission-mask contract, malformed-claim fail-closed | `REPO_VERIFIED` | `LOCAL_REAL_VALIDATION` (nginx `TRUSTED_PROXIES` resolution, Redis-backed login rate limit) | HS256 `JWT_SECRET` remains an opt-in legacy fallback |
+| FastAPI monolith request path (`app.py`, `/api/query`, `/api/chat`, `/api/health`) | `REPO_VERIFIED` | `PENDING` (no recorded run of these endpoints through the full stack; see note) | Canonical deployment form. Docker Compose is the canonical form; `deploy/k8s/` is a second form, static-checked only |
+| RS256 authentication, uint32 permission-mask contract, malformed-claim fail-closed | `REPO_VERIFIED` | `PENDING` for the full request path; the two mechanisms below are individually `LOCAL_REAL_VALIDATION` | HS256 `JWT_SECRET` remains an opt-in legacy fallback. Individually validated: nginx `TRUSTED_PROXIES` resolution, Redis-backed cross-process login rate limit |
 | Layered RBAC: store-side pushdown + pre-fusion document filtering + L2 cache physical partitioning | `REPO_VERIFIED` | `PENDING` (no artifact against real Qdrant/ES with a real multi-role corpus) | Defence in depth, not a single control. See [Security regression coverage](security-regression-coverage.md) |
 | Elasticsearch 8 BM25 sparse retrieval with Painless bitmask filtering | `REPO_VERIFIED` | `LOCAL_REAL_VALIDATION` (authenticated ES 8.11: writer mapping, `search_after`, online BM25) | |
 | Dynamic 2–4 path recall selection driven by complexity and visual relevance | `REPO_VERIFIED` | `PENDING` | Selection logic is deterministic and tested; its measurable *benefit* is unmeasurable while `complexity` / `visual_required` are absent from the golden set (#86) |
@@ -121,9 +137,20 @@ and then import sibling modules by bare top-level name, so they fail with
 
 So the accurate statement is: five of the six are **not startable as
 configured**, which is stronger than "present but not integrated". This is
-tracked in #84; the fix is a two-line `sys.path` addition per service, matching
-the pattern `api-gateway/main.py` already uses, plus a contract test that imports
-each module so the compose commands cannot silently rot again.
+tracked in #84.
+
+The remedy is **not** only a two-line `sys.path` addition per service, and
+describing it that way would understate the work. Two of the five
+(`retrieval-service`, `generation-service`) import
+`monitoring_service.metrics_collector`, but the repository provides only the
+`retrieval_service` compatibility symlink — there is no importable
+`monitoring_service` package at all. Adding each service's own directory to
+`sys.path` fixes the bare-top-level-name failures listed above and leaves both of
+those two still failing on `monitoring_service`. Any fix therefore has to
+normalise that package/import as well (rename `monitoring-service/` with a
+compatibility symlink, as `retrieval-service/` already has, or change the
+imports), and a contract test must import each module so the compose commands
+cannot silently rot again.
 
 Also relevant: `retrieval_service` is a tracked **symlink** to
 `retrieval-service/`, created because a hyphenated directory cannot be imported
