@@ -62,9 +62,9 @@ Post-reconciliation verification date: 2026-10-06.
 - Version labelling: the string `v2.5` appears in current docs and in the filename
   `docs/validation/v2.5-runtime-security-validation.md`. It is a **historical working
   milestone / development-phase label**, not a repository release and not the canonical
-  runtime version. The canonical runtime version remains `2.3.0` with post-release changes
-  recorded under `[Unreleased]`. Filenames are deliberately not renamed so existing links
-  keep resolving.
+  runtime version. At this verification date the canonical runtime version was `2.3.0`
+  with post-release changes recorded under `[Unreleased]`; it is now `2.4.0`. Filenames
+  are deliberately not renamed so existing links keep resolving.
 - External validation boundary: see [External validation pending](#external-validation-pending).
   Code + deterministic tests are never evidence of real-model quality, production latency/QPS, or
   large-corpus throughput.
@@ -457,11 +457,22 @@ Several current docs and one filename carry a `v2.5` label (for example
 milestone / development phase** of the runtime-and-security reconciliation work. It is deliberately
 **not**:
 
-- a repository release — the newest dated release heading in `CHANGELOG.md` is `[2.3.0]`;
-- the canonical runtime version — `config.json` → `system.version` is `2.3.0`;
+- a repository release — the newest dated release heading in `CHANGELOG.md` is `[2.4.0]`;
+- the canonical runtime version — `config.json` → `system.version` is `2.4.0`;
 - a Git tag or GitHub Release — neither exists.
 
-Changes after `2.3.0` are recorded under `[Unreleased]` and do not bump the runtime version. The
+Changes after `2.4.0` are recorded under `[Unreleased]` and do not bump the runtime version. The
 filename and the `v2.5` label are retained rather than renamed so existing cross-document links keep
 resolving; a large rename would create link breakage for no truth gain. `scripts/check_repo_consistency.py`
 enforces that `v2.5` is never described as a formal runtime release.
+
+> **Scope of the version figures in this document.** The rows above and in
+> [Version labelling](#version-labelling) are current and track `config.json`. The
+> remaining `2.3.0` figures elsewhere in this file — the audit lineage block dated
+> 2026-10-06, the evidence-table row for the runtime-version invariant, and the
+> offline-capability correction — are **point-in-time records of the 2026-10-06
+> verification**, when `2.3.0` was the canonical runtime version and everything after
+> it sat under `[Unreleased]`. They are deliberately not rewritten by the 2.4.0
+> release; the same applies to `docs/repository-drift-report.md` and
+> `docs/final-canonical-runtime-audit.md`. Read them as history, not as the current
+> version.

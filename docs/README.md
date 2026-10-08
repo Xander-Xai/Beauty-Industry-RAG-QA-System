@@ -2,9 +2,9 @@
 
 ## Version labelling
 
-Canonical runtime version is `config.json` → `system.version` = `2.3.0`; the newest dated
-release heading in `CHANGELOG.md` is `[2.3.0]` and everything after it is recorded under
-`[Unreleased]`.
+Canonical runtime version is `config.json` → `system.version` = `2.4.0`; the newest dated
+release heading in `CHANGELOG.md` is `[2.4.0]` (2026-10-08) and everything after it is
+recorded under `[Unreleased]`.
 
 Where a doc or filename says **v2.5**, that is a **historical working milestone /
 development-phase label**, not a release and not the current runtime version — see
