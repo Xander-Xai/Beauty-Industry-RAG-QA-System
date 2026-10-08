@@ -5,8 +5,9 @@ BM25 关键词检索模块（readme 7.1 并行多路召回第 2 路）
 支持权限与版本过滤下推
 
 权限过滤策略：
-- ES >= 8.0: 使用 painless script_score 位运算过滤
-- ES < 8.0: 使用预计算的 role_bucket 字段 + terms 过滤（兜底）
+- 使用 painless script_score 位运算过滤，无条件启用，依赖 ES 7.10+ 的 painless
+  脚本能力（映射侧用 `role_mask` / `dept_mask` 位掩码字段）
+- 没有版本回退路径：位运算过滤是唯一的过滤实现
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ class BM25Retriever:
 
     ES Fallback 与稀疏权限兜底（readme 7.1）：
     - 向量库不可用或召回有效文档数 < 50 时自动切换
-    - 若 ES 版本不支持位运算脚本，使用预计算的 role_bucket 字段进行 terms 过滤
+    - 权限过滤统一走 painless 位运算，没有按 ES 版本分支的兜底实现
     """
 
     def __init__(self):

@@ -51,6 +51,12 @@ levels; see [Run outcomes that are not evidence levels](evidence-map.md#run-outc
   (retrieved-chunk injection, poisoned documents, forged boundary markers, cross-role
   retrieval and L2 cache leakage, malformed JWT claims, deletion/stale chunks), the control
   and test behind each, and the bounded gaps that remain open.
+- [Production readiness](production-readiness.md): the per-capability answer to "can this take
+  real traffic" — code status separated from real-environment status, each with the named
+  artifact that would promote it. Owns the condensed
+  [Production Readiness](../README.md#production-readiness) table, the fail-closed degradation
+  property under absent rerank weights, and the concrete boundary of the six retained
+  microservice components.
 - [Open-source configuration and hardcoding audit](open-source-hardcoding-audit.md)
 - [Main-branch governance](main-branch-governance.md): the branch-protection and PR-only
   merge policy, how it is applied and re-verified.

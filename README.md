@@ -23,17 +23,36 @@
 
 ---
 
+## 企业场景
+
+**业务问题**：化妆品行业的法规、成分、产品资料分散在 PDF 扫描件、成分表图片、Excel 规格表和内部 Word 手册里。法规专员、注册申报、市场和客服各自只该看到职责范围内的内容，而同一个问题（例如「某成分在儿童化妆品中的限量」）对不同角色的答案必须一致、可追溯到具体条款。
+
+**三类约束决定了这必须是 RAG 而不是微调**：
+
+| 约束 | 现实 | 对系统的要求 |
+|---|---|---|
+| 知识频繁更新 | 法规修订、限量调整、产品迭代 | 知识必须可版本化、可回滚，不能焊进模型权重 |
+| 答案必须可追溯 | 内部业务结论要能落到具体文档与条款 | 每个结论都要能指回原文，证据不足必须拒答 |
+| 可见性按角色收窄 | 配方、竞品、薪酬等文档按角色与部门隔离 | 过滤必须发生在**存储侧下推 + 融合前**，不能只靠生成时约束 |
+
+**四条用户主链路**：法规问答（「这个成分在中国备案有什么限量要求」）、成分/产品检索（「含视黄醇的产品线有哪些」）、图片检索与图文互查（成分表照片 → 对应文档）、多轮追问（同一话题继续深挖，复用已锁定的证据）。
+
+**为什么需要 RAG**：这些问题要求的是**查得到原文**而不是记住答案。法规限量数字变了，模型权重里的旧数字不会自己更新；答案要能被法务复核，就不能是模型「觉得」的内容。RAG 把「知识时效」「可追溯性」「按权限隔离」三件事放到检索与证据层解决，把 LLM 限制在它擅长的地方——在给定证据内组织语言。
+
+---
+
 ## 30 秒读懂
 
 | # | 问题 | 答案 | 工程入口 |
 |---|---|---|---|
 | 1 | **这是干什么的** | 把法规 / 成分 / 产品知识建成可检索资产，在线回答带引用的领域问题，证据不足就拒答 | [Architecture](#architecture) |
-| 2 | **解决什么业务问题** | 知识散在 PDF、图片、表格里，人工检索慢且回答容易编造；不同角色该看到的内容也不同 | [核心工程能力](#核心工程能力5-项) |
+| 2 | **解决什么业务问题** | 知识散在 PDF、图片、表格里，人工检索慢且回答容易编造；不同角色该看到的内容也不同 | [企业场景](#企业场景) · [核心工程能力](#核心工程能力5-项) |
 | 3 | **核心架构** | FastAPI 单体主链路；动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/architecture-baseline.md](docs/architecture-baseline.md) |
 | 4 | **企业工程化** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook、Docker Compose + Kubernetes 双形态 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) |
 | 5 | **怎么跑** | `pip install -r requirements.txt && cp .env.example .env && python3 app.py` → `http://localhost:8000/docs` | [Quick Start](#quick-start) |
-| 6 | **已验证 / 未验证在哪看** | 一节讲清：[Evidence Boundary](#evidence-boundary) | [docs/evidence-map.md](docs/evidence-map.md) |
+| 6 | **已验证 / 未验证在哪看** | 边界一节讲清：[Evidence Boundary](#evidence-boundary)；逐项「已实现 / 未验证 + 升级判据」见 [Production Readiness](#production-readiness) | [docs/production-readiness.md](docs/production-readiness.md) |
 | 7 | **历史生产规模** | `HISTORICAL_PRODUCTION`，**不是本仓库 benchmark** | [Evidence Boundary](#evidence-boundary) |
+| 8 | **已知未收敛的实现细节** | RRF 融合当前执行两次 · 六个微服务目录中 5 个按现状不可启动 · 无 CrossEncoder 权重时全链路拒答 | [核心工程能力 1](#核心工程能力5-项) · issue [#84](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/84) |
 
 ---
 
@@ -41,19 +60,68 @@
 
 > 当前已验证架构是 **FastAPI 单体主链路**，不是已完成联调的微服务架构。完整事实基线（唯一的架构口径来源）见 [docs/architecture-baseline.md](docs/architecture-baseline.md)。
 
+### 在线检索链路
+
 ```mermaid
 flowchart LR
   FE["React frontend"] --> API["FastAPI 单体<br/>app.py"]
   API --> ID["身份解析<br/>uint32 role_mask / dept_mask"]
   ID --> CACHE["L1 进程内 / L2 Redis<br/>知识版本 + 权限指纹"]
   CACHE --> REC["动态 2–4 路召回<br/>dense_bge · bm25_es · rewrite_variant · clip_visual"]
-  REC --> FUSE["文档级 RBAC 二次过滤 + 加权 RRF"]
+  REC --> FUSE["文档级 RBAC 二次过滤 + 加权 RRF<br/>（当前融合执行两次，见核心工程能力 1）"]
   FUSE --> RERANK["BiEncoder 宽保留 → 双 CrossEncoder 精排"]
   RERANK --> GATES["Evidence Gate → 共享 4B / 14B 生成 → Answer Gate"]
   GATES --> OUT["答案 + 引用 + 审计字段"]
 ```
 
-上图为**第一屏简化视图**。完整 canonical 架构图（含离线知识构建链路与 Qdrant / Elasticsearch / Redis / vLLM 依赖）见 [docs/architecture-baseline.md](docs/architecture-baseline.md)。六个微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/`）是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。
+上图为**第一屏简化视图**。完整 canonical 架构图（含 Qdrant / Elasticsearch / Redis / vLLM 依赖与离线链路）见 [docs/architecture-baseline.md](docs/architecture-baseline.md)。
+
+### 数据流程：离线知识构建 → 存储 → 在线检索
+
+```mermaid
+flowchart TB
+  subgraph SRC["知识来源"]
+    D1["PDF 文本页 / 扫描页"]
+    D2["DOCX / XLSX"]
+    D3["PNG / JPEG / WebP / BMP / TIFF"]
+    D4["TXT（UTF-8）"]
+  end
+
+  subgraph OFF["离线构建 run_offline.py / dags"]
+    P1["多格式解析<br/>扫描页路由 OCR"]
+    P2["清洗 + 确定性切块<br/>500 字符 / 10% 重叠"]
+    P3["metadata 装配<br/>doc_id / chunk_id / image_id<br/>status / knowledge_epoch<br/>role_mask / dept_mask"]
+    P4["向量化<br/>BGE 文本 / CLIP 图像"]
+  end
+
+  subgraph ST["存储（epoch 版本化）"]
+    S1["Qdrant<br/>text + image collection"]
+    S2["Elasticsearch<br/>BM25 索引"]
+  end
+
+  subgraph LIFE["发布纪律"]
+    V1["snapshot 校验<br/>Qdrant + ES 全量比对"]
+    V2["seal-epoch 封存<br/>epoch 不可变"]
+    V3["人工激活<br/>config.json 切换<br/>knowledge_version_epoch"]
+  end
+
+  SRC --> P1 --> P2 --> P3 --> P4
+  P4 --> S1
+  P3 --> S2
+  P3 --> V1
+  V1 --> V2 --> V3
+  V3 -.->|"在线服务按 epoch 过滤<br/>只检索 active + 当前版本"| ST
+```
+
+三个容易被忽略的点：
+
+1. **切块是确定性的**，不是模型切分：500 字符窗口 / 10% 重叠，边界由字符位置决定，同一输入永远得到同一批 `chunk_id`——这是 epoch 可比对、可回滚的前提。
+2. **逻辑身份与物理身份分离**：`doc_id` / `chunk_id` / `image_id` 是稳定逻辑身份，Qdrant point ID 按 epoch 版本化，因此同一份文档可以在新旧版本中并存而不冲突。
+3. **激活是人工步骤**。构建、校验、封存可自动化，但把 `config.json` 的 `knowledge_version_epoch` 切到新版本必须由人执行；调度器**从不**自动激活。DAG 代码存在不等于调度器在运行。
+
+`offline/` · `run_offline.py` · `dags/` · 操作细节见 [数据管理手册](docs/data-admin-guide.md)
+
+**微服务目录的状态**：`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/` 是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。已知边界：这 6 个目录中**只有 `api-gateway` 能被导入**，另外 5 个的 `main.py` 只把项目根加入 `sys.path` 却以裸顶层名导入同级模块，在其 `docker-compose.microservices.yml` 给定命令下直接 `ModuleNotFoundError`（见 [Production Readiness](docs/production-readiness.md#microservice-components) 与 issue #84）。
 
 ---
 
@@ -64,7 +132,9 @@ flowchart LR
 ### 1 · 动态 2–4 路召回 + 两级重排，而不是固定四路
 
 简单问题 2 路（`dense_bge` + `bm25_es`）；复杂问题 +1 路 `rewrite_variant`；复杂且视觉相关再 +1 路 `clip_visual`。ES Fallback 是降级补召回，不算一路。融合后 BiEncoder 宽保留 Top 150，再由双 CrossEncoder ensemble 精排到 Top 10（请求内批量预测）。加权 RRF 按问题类型调整权重：法规类提高 BM25，视觉类提高 CLIP。
-`retrieval/parallel_recall.py` · `retrieval/bi_encoder.py` · `retrieval/cross_encoder_ensemble.py`
+
+**一处必须说清的代码事实**：加权 RRF 目前执行了两次，而不是一次。第一次在 `retrieval/parallel_recall.py`，权重是**查询感知**的（法规类 BM25 1.5、视觉类 CLIP 2.0）；第二次在 `core/pipeline.py` 的 `_merge_and_dedup`，权重换成与查询无关的 `w_text` / `w_clip` / `w_ocr`（按 `embedding_type` 分流），并会重新排序。该函数上方第 429 行的注释写的是「RRF 已在并行召回管理器中完成」，与其函数体矛盾——**注释与实现不一致，以实现为准**。第二次融合会部分抵消第一次的查询感知加权。这是已知缺陷，已跟踪在 #84，计划收敛为「加权 RRF 只在 `parallel_recall` 内发生一次，`_merge_and_dedup` 退化为纯去重」。
+`retrieval/parallel_recall.py` · `retrieval/bi_encoder.py` · `retrieval/cross_encoder_ensemble.py` · `core/pipeline.py`
 
 ### 2 · 双 Gate 把幻觉关在门外
 
@@ -188,6 +258,35 @@ flowchart LR
 
 ---
 
+## Production Readiness
+
+一句话：**代码状态与真实验证状态是两件事，本仓库在两者上都尽量说清楚。** 逐项详表在 [docs/production-readiness.md](docs/production-readiness.md)，未执行验证的完整清单在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md)。
+
+**已实现（`REPO_VERIFIED`：代码在主链路上，且被确定性测试或 CI 覆盖）**
+
+| 能力 | 代码 | 真实验证 |
+|---|---|---|
+| FastAPI 单体在线链路（`/api/query`、`/api/chat`、`/api/health`） | ✅ | `LOCAL_REAL_VALIDATION`（单主机真实 HTTP + Redis + nginx + ES） |
+| RS256 认证 + uint32 权限掩码契约 + 畸形声明 fail closed | ✅ | `LOCAL_REAL_VALIDATION`（真实 nginx 代理链解析、Redis 跨进程登录限流） |
+| Elasticsearch 8 BM25 稀疏检索 + Painless 位掩码过滤 | ✅ | `LOCAL_REAL_VALIDATION`（认证 ES 8.11：writer mapping、`search_after`、在线 BM25） |
+| 权限纵深：存储侧下推 + 融合前文档级过滤 + L2 缓存物理分区 | ✅ | `PENDING`（无真实 Qdrant/ES 多角色语料 artifact） |
+| 动态 2–4 路召回选择 | ✅ | `PENDING`（选择逻辑确定且有测试，但**收益无法度量**——golden set 缺 `complexity` / `visual_required` 标签，见 #86） |
+| 两级重排调用链（BiEncoder → 150 → CrossEncoder ensemble → 10） | ✅（调用链 + 确定性降级） | `PENDING`（权重不在仓库，实际只跑过降级路径） |
+| Evidence Gate / Answer Gate 判定（含法规类矛盾拒答） | ✅ | `PENDING`（降级后果见下） |
+| Prompt 信任边界（证据限数据区块、当前请求限指令区块、标记转义） | ✅ | `PENDING`（结构约束，**不是** prompt injection 免疫证明） |
+| 离线 ingestion（多格式解析、扫描页 OCR 路由、确定性切块、内容哈希增量、快照校验、epoch 封存） | ✅ | `PENDING`（无真实语料 ingestion artifact） |
+| 9 字段结构化审计双 sink（Redis Stream + 每日 JSONL） | ✅ | `PENDING` |
+| Prometheus 6 条告警（只引用真实 emit 指标）· Grafana 10 面板 · OTLP exporter（默认关闭） | ✅ | `PENDING`（阈值均为 `DESIGN_TARGET`；运行期闭环未验证） |
+| 检索 benchmark / 性能产物 / RAGAS 三套框架与 artifact 契约 | ✅ | `PENDING`（**结果**未产出，未测量一律 `null`） |
+
+**未验证（`PENDING` / `DESIGN_TARGET`：代码或设计存在，真实资产 / 环境 / 凭据不可得）**
+
+真实 Qdrant 服务运行（回归覆盖目前是进程内 `:memory:`）· 检索指标 Recall / HitRate@K / MRR@10 / NDCG@10 · QPS 与 P95/P99 延迟 · RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` 会 fail-fast 而不是给零分）· BGE / CLIP / PaddleOCR / CrossEncoder 真实权重 · 4B/14B vLLM GPU 拓扑 · Airflow 真实调度 · Kubernetes 真实集群部署 · 浏览器 → 真实后端端到端 · 告警在真实流量下的触发 · OTLP span 回读 · Redis Cluster/Sentinel、多节点 ES、TLS、外部负载均衡。
+
+**必须知道的一条降级事实**：仓库内没有 CrossEncoder 权重时，重排走确定性降级，`ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分 `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`（`config.json` → `retrieval.evidence_gate`）——**因此按当前仓库状态直接部署，所有查询都会被拒答**。这是 gate 降级时选择关闸的正确方向，但也说明缺失资产不是装饰性问题。目前没有测试断言这个端到端后果，也没有 artifact 证明它，见 #84 与 #85。
+
+---
+
 ## Quick Start
 
 ### 依赖与配置
@@ -280,6 +379,7 @@ python3 scripts/check_repo_consistency.py
 | 文档 | 作用 |
 |---|---|
 | [docs/architecture-baseline.md](docs/architecture-baseline.md) | **架构唯一事实基线**：召回路数、重排、Gate、路由、版本语义 |
+| [docs/production-readiness.md](docs/production-readiness.md) | **能否上生产的逐项答案**：代码状态 / 真实验证状态 / 升级判据，含降级事实与微服务边界 |
 | [docs/evidence-map.md](docs/evidence-map.md) | **证据等级唯一权威表** + 逐能力分级 + benchmark artifact 验收标准 + 已知表述风险 |
 | [docs/repository-truth-audit.md](docs/repository-truth-audit.md) | 逐能力实现 / 证据 / 状态审计，含 Qdrant 两态、告警双机制、外部验证边界 |
 | [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md) | 未执行的运行时验证总索引：做什么、为什么做不了、需要什么环境、产出什么、通过标准 |
