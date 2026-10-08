@@ -87,7 +87,7 @@ def test_execute_with_rrf_weights_does_not_raise_type_error():
 
     results, agreement = _run(
         manager,
-        rrf_weights={"dense_bge": 1.0, "bm25_es": 1.5, "clip_visual": 2.0, "rewrite_variant": 1.0},
+        rrf_weights={"dense_bge": 1.0, "bm25_es": 1.5, "clip_visual": 2.0, "rewrite_variants": 1.0},
     )
 
     assert results == []
@@ -156,7 +156,7 @@ def test_query_aware_weights_reach_rrf_fusion(monkeypatch):
     manager = _manager()
     manager._recall_dense = lambda *args, **kwargs: []
 
-    dynamic = {"dense_bge": 1.0, "bm25_es": 1.5, "clip_visual": 2.0, "rewrite_variant": 1.0}
+    dynamic = {"dense_bge": 1.0, "bm25_es": 1.5, "clip_visual": 2.0, "rewrite_variants": 1.0}
     _run(manager, rrf_weights=dynamic)
 
     assert captured["weights"] == dynamic, (
@@ -283,7 +283,7 @@ def test_pipeline_builder_never_returns_empty_weights():
                 "dense_bge",
                 "bm25_es",
                 "clip_visual",
-                "rewrite_variant",
+                "rewrite_variants",
             }
 
 

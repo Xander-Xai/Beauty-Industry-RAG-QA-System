@@ -426,12 +426,9 @@ class OnlineRAGPipeline:
                         logger.debug(f"BLIP 触发跳过: {e}")
                 ctx.record_timing("blip_inference", (time.time() - t_blip) * 1000)
 
-                # ⑨ Union稳定去重（RRF已在并行召回管理器中完成）
-                ctx.union_recall_set = self._merge_and_dedup(
-                    ctx.recall_results,
-                    business_type=business_type,
-                    is_visual_relevant=clip_use and clip_top_k > 20,
-                )
+                # ⑨ Union 稳定去重：加权 RRF 已且仅已在 parallel_recall 内完成一次，
+                # 此处只折叠 ES Fallback 追加的补召回，不重算分数、不重排
+                ctx.union_recall_set = self._union_dedup(ctx.recall_results)
 
                 # ⑩ BiEncoder 宽保留（Top150）
                 t_bi = time.time()
@@ -860,61 +857,40 @@ class OnlineRAGPipeline:
         else:
             return False, 0  # 跳过
 
-    def _merge_and_dedup(
-        self, recall_results: list, business_type: str = "general", is_visual_relevant: bool = False
-    ) -> list:
+    @staticmethod
+    def _union_dedup(recall_results: list) -> list:
         """
-        Union 合并去冗 + 动态加权 RRF 融合（PRD §7.1 / §4.5 / §6）
+        Union 去重：保留 `parallel_recall` 融合结果的内容与排序（PRD §7.1）
 
-        RRF 公式: final_score = src_score / (k + rank)
-        动态权重（PRD §4.5 §6）:
-        - w_clip: 视觉相关查询时提升至 2.0，否则使用 config 默认值
-        - w_text: 法规查询时提升至 1.5（PRD §6 法规查询 ES 权重 1.5）
-        - 权重初始值由 config.json 设定，线上由 A/B 实验持续校准
+        融合只发生一次，在 `retrieval/parallel_recall.py` 的 `rrf_fusion` 里：
+        逐路查询感知权重（`_build_rrf_weights` 算出的法规类 BM25 1.5、视觉类 CLIP 2.0）
+        在那一步生效，之后不再有任何一层重算分数或重排。
+
+        此处唯一的职责是折叠 ES Fallback 的补召回结果：Fallback 在融合**之后**追加到
+        `all_results`，因此可能与已融合的 `doc_id` 重复。首次出现优先，所以融合结果一定
+        排在同 `doc_id` 的 Fallback 结果之前。
         """
-        rrf_cfg = config.get("retrieval", {}).get("rrf", {})
-        k = rrf_cfg.get("k", 60)
-        base_weights = rrf_cfg.get("weights", {"w_text": 1.0, "w_clip": 1.0, "w_ocr": 0.8})
-
-        # PRD §4.5 §6: 动态权重映射
-        weights = base_weights.copy()
-        if is_visual_relevant:
-            weights["w_clip"] = 2.0  # PRD §6: 视觉相关度高时 CLIP 权重提升至 2.0
-        if business_type == "regulation":
-            weights["w_text"] = 1.5  # PRD §6: 法规查询 ES 权重 1.5
-
-        seen_doc_ids: dict[str, dict] = {}  # doc_id → {result, best_score}
+        seen_doc_ids: set[str] = set()
+        deduped: list = []
         for r in recall_results:
-            # 按来源类型分配基础分数（归一化到 [0, 1] 区间用于 RRF）
-            embedding_type = getattr(r, "embedding_type", "") or ""
-            if "clip" in embedding_type:
-                src_score = weights.get("w_clip", 1.0)
-            elif "ocr" in embedding_type:
-                src_score = weights.get("w_ocr", 0.8)
-            else:
-                src_score = weights.get("w_text", 1.0)
-
-            # RRF: 1 / (k + rank)，rank 由首次出现顺序隐式决定
-            rrf_score = src_score / (k + len(seen_doc_ids))
-
-            if r.doc_id not in seen_doc_ids:
-                seen_doc_ids[r.doc_id] = {"result": r, "best_score": rrf_score}
-            else:
-                # 保留更高分数的版本
-                if rrf_score > seen_doc_ids[r.doc_id]["best_score"]:
-                    seen_doc_ids[r.doc_id]["result"] = r
-                    seen_doc_ids[r.doc_id]["best_score"] = rrf_score
-
-        # 按 RRF 分数降序排列
-        merged = [v["result"] for v in sorted(seen_doc_ids.values(), key=lambda x: x["best_score"], reverse=True)]
-        return merged
+            if r.doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(r.doc_id)
+            deduped.append(r)
+        return deduped
 
     @staticmethod
     def _build_rrf_weights(
         business_type: str,
         is_visual_relevant: bool,
     ) -> dict[str, float]:
-        """Map semantic config weights to concrete recall paths and apply query boosts."""
+        """Map semantic config weights to concrete recall paths and apply query boosts.
+
+        这是查询感知权重的**唯一**产生点，产出直接交给
+        `ParallelRecallManager.execute(rrf_weights=...)` → `rrf_fusion` 消费。
+        返回的 key 必须与 `retrieval/parallel_recall.py` 注册到 `path_results` 的
+        路径名逐字一致，否则该路的权重会被 `rrf_fusion` 静默忽略。
+        """
         base = (
             config.get("retrieval", {})
             .get("rrf", {})
@@ -928,7 +904,7 @@ class OnlineRAGPipeline:
             "dense_bge": base.get("dense_bge", text_weight),
             "bm25_es": base.get("bm25_es", text_weight),
             "clip_visual": base.get("clip_visual", base.get("w_clip", 1.0)),
-            "rewrite_variant": base.get("rewrite_variant", text_weight),
+            "rewrite_variants": base.get("rewrite_variants", text_weight),
         }
         if business_type == "regulation":
             weights["bm25_es"] = 1.5

@@ -204,6 +204,84 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Fixed
 
+- **Weighted RRF ran in two places; the second pass is removed.** The fusion in
+  `retrieval/parallel_recall.py` (`rrf_fusion`, with the query-aware per-path
+  weights produced by `core/pipeline.py::_build_rrf_weights`) is now the single
+  fusion entry. `_merge_and_dedup` is replaced by `_union_dedup`, which only
+  collapses duplicate `doc_id`s — the duplicates that ES Fallback can append
+  after fusion — and preserves the fused order and scores.
+
+  **The removed pass was not changing relevance, and this is recorded precisely
+  because an earlier description of it overstated the defect.** Verified
+  behaviour of the removed code: `rrf_fusion()` already returns unique documents,
+  `RecallResult` has no `embedding_type` field, so every result took the same
+  `w_text` multiplier; the rank term was derived from dict insertion order, which
+  made the score monotonically decreasing, and sorting descending therefore
+  preserved the incoming order exactly. Its only observable effect was dropping a
+  duplicate `doc_id` — which `_union_dedup` still does.
+
+  So the defect was a **misleading second weighting pass**: ~48 lines whose
+  docstring and call-site comment claimed query-aware fusion they never applied,
+  sitting directly downstream of the fusion that does apply it. Any future
+  change that made the pass non-uniform (a real `embedding_type`, a
+  query-dependent multiplier) would have silently reordered an already-fused list.
+  `tests/test_architecture_contract.py` now asserts the converged contract:
+  `_union_dedup` preserves order, scores and object identity; fusion runs exactly
+  once per request; and the query-aware weights reach `rrf_fusion` unchanged
+  through the whole online path.
+
+- **The rewrite recall path was spelled two different ways.** `config.json` →
+  `retrieval.parallel_paths` and the Qdrant-failure diagnostic used
+  `rewrite_variants` (plural), while the key registered into `path_results`, the
+  weight key in `_build_rrf_weights` and the `RecallResult.source` value used
+  `rewrite_variant` (singular). The mismatch was silent: the weight still
+  resolved (both singular sites agreed), but `qdrant_paths` never matched the
+  registered key, so a Qdrant failure on the rewrite path could not raise its
+  warning. One spelling — `rewrite_variants`, matching the config topology —
+  is now used in the config key, the `path_results` key, the weight key, the
+  result `source`, the recall method name and the docs. Three contract tests
+  assert that the config topology keys, the registered path names and the weight
+  keys are the same set, and that the rewrite-path Qdrant warning is reachable.
+
+- **The Qdrant-failure warning no longer claims a fallback ran.** It read
+  `Qdrant 路径异常: 触发 ES Fallback（Qdrant 可能不可用）`, but the fallback has
+  exactly one trigger — fewer than `FALLBACK_MIN_DOC_IDS` (50) unique documents
+  after fusion — so a Qdrant path failing while the surviving paths return enough
+  documents logged a fallback that never ran, and an operator chasing it would
+  find no such log line. The threshold is now the named module constant
+  `FALLBACK_MIN_DOC_IDS` instead of two inline `50`s that had to be kept in
+  agreement, the warning names which path degraded, and the failed-path set is
+  computed explicitly rather than as a boolean. The fallback trigger itself is
+  unchanged: making a path failure start supplementary recall would be a
+  retrieval-behaviour change, so a test now asserts the invariant instead
+  (a failing Qdrant path with 55 surviving documents must not invoke the
+  fallback).
+
+- `docs/architecture-baseline.md` stated that no downstream layer may reorder the
+  fused results. That contradicted the two-stage reranking described in the next
+  section, which sorts by its own scores by design. The invariant is now scoped to
+  the fusion/dedup step: no layer may introduce a second set of fusion weights or
+  re-score the fused list. Reranking by a rerank model is the next stage's job,
+  not a second fusion.
+
+- `README.md` claimed the four hallucination controls were "全部 fail closed，任一道
+  不过就拒答". Only the Evidence Gate is: it refuses whenever the weighted score
+  falls below `low_confidence`. `AnswerGate.verify()` returns
+  `passed = not is_regulation` on its low-similarity fast path, so a
+  non-regulation answer with low overlap is passed **with a warning**, and the
+  prompt boundary is marker escaping rather than a pass/fail gate. The section now
+  describes what each control actually does and where it does not refuse; the
+  related `核心工程能力` bullet and the architecture baseline were aligned to match.
+
+- The new `README.md` Retrieval Pipeline table listed the rewrite stage's
+  `business_type` values as `regulation / ingredient / formula / general / image /
+  product`. Those are the golden set's `business_type` labels, not the rewriter's
+  schema: `rewrite/query_rewriter.py`'s `REWRITE_SCHEMA` enum is `regulation`,
+  `development`, `ingredient`, `product`, `general`, `short`. A client or fixture
+  built from the wrong list would expect values the rewriter never emits. The table
+  now cites the enum and keeps the golden-set distribution where it belongs, in the
+  Evaluation section.
+
 - `retrieval/parallel_recall.py` described itself as "并行 4 路召回" / "并行执行 4 路
   召回" in its module and class docstrings, while the code, the canonical architecture
   baseline and `README.md` all state **dynamic 2–4 path** recall. A reader inspecting the
@@ -284,11 +362,43 @@ Changes present on `main` after the 2.3.0 release entry:
 
 ### Changed
 
+- `README.md` restructured around the five questions a reader arrives with:
+  `Problem` (why this domain needs RAG at all), `Architecture` (offline knowledge
+  build and online Q&A, split explicitly), `Retrieval Pipeline` (the seven online
+  stages, the recall paths, the single fusion entry, and a design-trade-off table
+  covering why retrieval over fine-tuning, why hybrid, why RRF, why two rerank
+  stages and how hallucination is contained), `Evaluation` and
+  `Production Readiness`. `核心工程能力` and `Evidence Boundary` are unchanged in
+  substance. A `Production Validation Checklist` now lists every gate between
+  "architecture demo" and "may take real traffic", each linked to its `VAL-*`
+  entry; all are `NOT EXECUTED`.
+- The `Evaluation` section states the framework/result split explicitly
+  ("Framework ready. Benchmark execution pending.") and documents why retrieval
+  metrics are currently **not attributable**: all 301 golden-set rows lack
+  `doc_id` / `chunk_id` / `source_id`, so relevance falls back to
+  normalized-exact-text matching (Level 2), and `complexity` / `visual_required`
+  are absent, so the dynamic-path and visual breakdowns cannot be produced. It
+  also records why the framework deliberately does not substitute an LLM judge,
+  an embedding-similarity threshold or fuzzy matching to hide that gap. No metric
+  value is stated anywhere, because none has been measured.
 - FastAPI `on_event` startup/shutdown hooks migrated to a `lifespan` context manager.
 - vLLM topology consolidated to a single shared 4B endpoint (`gpu1.models.vllm_4b`) that
   serves both Query Rewrite and simple generation; complex requests still route to the
   14B endpoint (`gen_14b`).
 - CLIP synchronous routing thresholds are now config-driven (`config.json` → `clip_sync`).
+- `docs/deferred-runtime-validation.md` gains the five production questions that
+  were previously only named in prose and therefore dropped out of the index
+  whenever someone asked what was left to do: `VAL-STORE-001` (real Qdrant —
+  the dense path, epoch-versioned point ids and payload filters have only ever
+  run against in-process `QdrantClient(":memory:")`, so the two storage engines
+  sit at different evidence levels), `VAL-DEGRADE-001` (fail-closed refusal with
+  no rerank weights — deterministic, needs **no** environment, and the highest
+  value item in the repository), `VAL-RERANK-001` (whether the second rerank stage
+  improves precision at all, including when the answer is negative),
+  `VAL-TOPO-001` (Redis Cluster/Sentinel, multi-node Elasticsearch with TLS,
+  external load balancer) and `VAL-ALERT-001` (sustained alert evaluation under
+  a real traffic shape, as opposed to the one-shot rule evaluation already
+  tracked). Every entry stays `NOT EXECUTED` until its named artifact exists.
 - Docs, README and PRD reconciled against the current code/config/test contracts
   (single 4B topology, manual epoch activation, authenticated stats/metrics, ES auth).
 - `.gitignore` no longer lists `PRD.md` as an internal document. It is tracked
