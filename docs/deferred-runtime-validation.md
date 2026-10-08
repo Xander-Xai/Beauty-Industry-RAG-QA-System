@@ -6,8 +6,9 @@
 > [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12),
 > [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18),
 > [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32),
-> [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54) and
-> [#60](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/60).
+> [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54),
+> [#60](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/60) and
+> [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85).
 >
 > **What it is not.** It is not evidence that anything below passed. Every entry's
 > status is `NOT EXECUTED`. Completing one means producing the named artifact and
@@ -34,6 +35,11 @@
 | VAL-RAGAS-001 | Real RAGAS quality evaluation | `PENDING` | [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) | `NOT EXECUTED` |
 | VAL-K8S-001 | Real Kubernetes deployment + readiness admission | `PENDING` | [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54) | `NOT EXECUTED` |
 | VAL-E2E-001 | Browser → real RAG backend end-to-end smoke | `PENDING` | [#60](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/60) | `NOT EXECUTED` |
+| VAL-STORE-001 | Real Qdrant service (dense path, epoch point ids, payload filters) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
+| VAL-DEGRADE-001 | Gate degradation with no rerank weights (deterministic, no environment) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
+| VAL-RERANK-001 | Real two-stage rerank contribution (BiEncoder → CrossEncoder) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
+| VAL-TOPO-001 | Redis Cluster/Sentinel, multi-node ES, TLS, external load balancer | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
+| VAL-ALERT-001 | Sustained alert evaluation under real traffic | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
 
 ---
 
@@ -198,3 +204,68 @@
 - **Failure interpretation:** a synthetic mock API capture is not this validation.
 - **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with the committed real-backend capture.
 - **Related issue:** #60. **Status:** `NOT EXECUTED`.
+
+## VAL-STORE-001 — Real Qdrant service
+
+- **Capability:** the dense recall path against the actual vector engine: epoch-versioned point ids, the payload filters built by `auth.bitmask_rbac.build_qdrant_filter` / `build_qdrant_image_filter`, and text/image collection separation.
+- **Current evidence level:** `PENDING` (adapter contract + writer `REPO_VERIFIED`).
+- **Reason deferred:** every regression run in this repository uses an in-process `QdrantClient(":memory:")`; no artifact from a real Qdrant server exists. Elasticsearch does have `LOCAL_REAL_VALIDATION` (authenticated ES 8.11), so the two storage engines currently sit at **different** evidence levels.
+- **Required environment / data:** a single host with a real Qdrant container; a corpus built by `run_offline.py` from one sealed epoch; at least two test identities with distinct `role_mask` / `dept_mask`.
+- **Exact procedure:** build and seal an epoch, point the online service at real Qdrant, then assert: (a) results only contain the active epoch, (b) a `role_mask` change removes documents before fusion, (c) text hits and image hits come from the expected collections, (d) a rebuilt epoch does not collide with the previous one.
+- **Expected artifact:** a capture tying the run to a git SHA and epoch id, with the four observations above and the commands used.
+- **Acceptance criteria:** all four observations hold against a real server, not `:memory:`.
+- **Failure interpretation:** an in-memory `QdrantClient` run, or a writer-only test against a real server, is not this validation.
+- **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with a captured real-server run.
+- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+
+## VAL-DEGRADE-001 — Gate degradation with no rerank weights
+
+- **Capability:** the end-to-end consequence of missing CrossEncoder weights on the Evidence Gate decision.
+- **Current evidence level:** `PENDING` (deterministic fallback path `REPO_VERIFIED`; the consequence is documented but not asserted by any test).
+- **Reason deferred:** nothing — this needs **no environment and no weights**. It is listed here because the consequence is the largest interpretation gap in the repository: without CrossEncoder weights `ce_top1_score` and `ce_top3_mean_score` stay `0`, so the Evidence Gate maximum becomes `0.2·agreement + 0.2·doc_consistency ≤ 0.40`, below `low_confidence = 0.55` (`config.json` → `retrieval.evidence_gate`), and **every query is refused**.
+- **Required environment / data:** none beyond the default test dependencies; a deterministic recall fixture whose rerank scores are produced by the fallback.
+- **Exact procedure:** drive `retrieval/evidence_gate.py::evaluate` with fallback-produced rerank results and assert the decision is refusal for every fixture, then assert the arithmetic identity against the configured weights and threshold.
+- **Expected artifact:** a test that fails if the ceiling ever rises above `low_confidence` without real weights.
+- **Acceptance criteria:** the fail-closed property is asserted, not narrated, and the assertion reads the thresholds from `config.json` rather than hardcoding them.
+- **Failure interpretation:** a passing unit test of `evaluate()` in isolation is not this validation; the point is the *mainline* consequence.
+- **Evidence promotion rule:** `PENDING` → `REPO_VERIFIED` once the assertion exists (no artifact required — the property is deterministic), and to `LOCAL_REAL_VALIDATION` only after observing a real deployment refuse queries for the same reason.
+- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+
+## VAL-RERANK-001 — Real two-stage rerank contribution
+
+- **Capability:** whether the second stage (CrossEncoder ensemble, Top 150 → Top 10) actually improves precision over the first stage (BiEncoder wide retention).
+- **Current evidence level:** `PENDING` (call chain `REPO_VERIFIED`, only the deterministic fallback has ever run).
+- **Reason deferred:** no CrossEncoder weights in the repository, so only the fallback path has been exercised and the Evidence Gate weight split (`w1..w4` = 0.4 / 0.2 / 0.2 / 0.2) stays uncalibrated.
+- **Required environment / data:** real CrossEncoder weights (overlaps `VAL-MODEL-001`); the same corpus and queries used for `VAL-RETRIEVAL-001`.
+- **Exact procedure:** run the five benchmark configurations and compare `hybrid_rrf_biencoder` against `hybrid_rrf_biencoder_crossencoder` on the same sample; report the metric delta and the Evidence Gate score distribution with and without the ensemble.
+- **Expected artifact:** the benchmark artifact plus a delta table.
+- **Acceptance criteria:** the delta is reported even when negative — an unmeasured negative result is the outcome, not a reason to skip.
+- **Failure interpretation:** a rerank call that completes is not a measured contribution.
+- **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with the committed comparison artifact.
+- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+
+## VAL-TOPO-001 — Production infrastructure topology
+
+- **Capability:** behaviour under the topologies a production deployment actually uses: Redis Cluster/Sentinel, multi-node Elasticsearch with TLS, and an external load balancer.
+- **Current evidence level:** `PENDING` (single-node behaviour `LOCAL_REAL_VALIDATION`).
+- **Reason deferred:** these topologies are named as an explicit boundary in the README and the evidence map but were not tracked as validation items, so they were lost whenever someone asked what was left to do.
+- **Required environment / data:** multi-node Redis, multi-node Elasticsearch with TLS enabled, and an external L4/L7 load balancer in front of the monolith.
+- **Exact procedure:** repeat the `LOCAL_REAL_VALIDATION` items (session persistence, login rate limiting, client IP resolution) and the degraded paths against each topology; capture failover behaviour for Redis and Elasticsearch independently.
+- **Expected artifact:** per-topology capture tied to a git SHA, including what degrades and what fails closed.
+- **Acceptance criteria:** rate limiting, session persistence and epoch-scoped retrieval still behave correctly under failover.
+- **Failure interpretation:** single-node runs, however many are repeated, are not this validation.
+- **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` per topology with a captured run; production HA remains outside the repository's reach either way.
+- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+
+## VAL-ALERT-001 — Sustained alert evaluation
+
+- **Capability:** the six rules in `monitoring/prometheus/alerts.yml` firing correctly under real traffic shapes, and their thresholds being sane.
+- **Current evidence level:** `PENDING` (rules `REPO_VERIFIED`, thresholds `DESIGN_TARGET`; one-shot evaluation is `VAL-OBS-002`).
+- **Reason deferred:** the threshold values have never met a real traffic shape, so they remain unvalidated numbers in a config file.
+- **Required environment / data:** a real Prometheus instance loading the rules, plus sustained load (overlaps `VAL-PERF-001`).
+- **Exact procedure:** drive sustained traffic until each rule's condition is met; record firing time, false positives, missing alerts and time-to-detect against the SLO targets.
+- **Expected artifact:** an alert-by-alert evaluation record with the traffic shape that triggered it.
+- **Acceptance criteria:** every rule fires under its stated condition, and no rule fires on a healthy run.
+- **Failure interpretation:** a one-shot rule evaluation (`VAL-OBS-002`) or a dashboard import is not this validation.
+- **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with the sustained-load capture; the thresholds themselves stay `DESIGN_TARGET` until measured.
+- **Related issue:** #85. **Status:** `NOT EXECUTED`.

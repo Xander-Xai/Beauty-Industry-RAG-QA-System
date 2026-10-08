@@ -42,7 +42,7 @@ class RetrievalError(PipelineError):
 
     def __init__(self, message: str = "Retrieval failed", path: str = ""):
         super().__init__(message, stage="retrieval", recoverable=True)
-        self.path = path  # dense_bge / bm25_es / clip_visual / rewrite_variant
+        self.path = path  # dense_bge / bm25_es / clip_visual / rewrite_variants
 
 
 class RerankError(PipelineError):

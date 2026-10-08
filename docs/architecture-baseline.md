@@ -41,8 +41,8 @@ flowchart TB
     ID["身份解析<br/>uint32 role_mask / dept_mask"]
     CACHE["L1 进程内 / L2 Redis<br/>key = 知识版本 + 权限指纹"]
     RW["Query Rewrite + 复杂度判断<br/>并行执行"]
-    REC["动态 2–4 路召回<br/>dense_bge · bm25_es · rewrite_variant · clip_visual"]
-    RBAC["文档级 RBAC 二次过滤<br/>+ 加权 RRF 融合"]
+    REC["动态 2–4 路召回<br/>dense_bge · bm25_es · rewrite_variants · clip_visual"]
+    RBAC["文档级 RBAC 二次过滤<br/>+ 加权 RRF 融合（唯一入口）"]
     RERANK["BiEncoder 宽保留 → 150<br/>+ 双 CrossEncoder 精排 → 10"]
     EGATE["Evidence Gate<br/>正常 / 增强 / 拒答"]
     GEN["模型路由<br/>共享 4B rewrite+简单 · 14B 复杂"]
@@ -106,16 +106,21 @@ BLIP 不应描述为固定的离线建库步骤。当前主链路是在视觉查
 | `dense_bge` | BGE + Qdrant 文本集合 | 所有问题 |
 | `bm25_es` | BM25 + Elasticsearch | 所有问题 |
 | `clip_visual` | CLIP + Qdrant 图像集合 | 复杂问题中被视觉判别器选中的请求 |
-| `rewrite_variant` | Query Rewrite 变体 + BGE + Qdrant | 复杂问题 |
+| `rewrite_variants` | Query Rewrite 变体 + BGE + Qdrant | 复杂问题 |
 
-结果通过加权 RRF 融合。法规问题提高 BM25 权重，视觉相关问题提高 CLIP 权重；配置中的 `w_text`、`w_clip` 会映射到实际路径名。
+路径名在三个地方必须逐字一致：`config.json` → `retrieval.parallel_paths` 的拓扑键、
+`retrieval/parallel_recall.py` 注册进 `path_results` 的键、以及 `core/pipeline.py`
+的 `_build_rrf_weights()` 产出的权重键。`tests/test_architecture_contract.py` 对三者做一致性断言。
 
-融合实际执行两次，这是当前实现的真实形态，不是文档简写：
+结果通过加权 RRF 融合，**融合只有这一个入口**：`retrieval/parallel_recall.py` 的
+`execute()` 里的 `rrf_fusion`（`k` 取自 `retrieval.rrf.k`）。查询感知权重由
+`core/pipeline.py` 的 `_build_rrf_weights()` 产生并直接交给它消费：法规问题 BM25 提到 1.5，
+视觉相关问题 CLIP 提到 2.0；配置里的 `w_text`、`w_clip` 别名映射到实际路径名。融合之后
+`core/pipeline.py` 的 `_union_dedup()` 只做去重（折叠 ES Fallback 追加的补召回），
+不重算分数、不重排。
 
-1. `retrieval/parallel_recall.py` 的 `execute()` 用查询感知的逐路权重做加权 RRF（`k` 取自 `retrieval.rrf.k`），这是设计意图所在的一层。
-2. `core/pipeline.py` 的 `_merge_and_dedup` 在其上再做一次 RRF 重打分，权重换成与查询无关的 `w_text` / `w_clip` / `w_ocr`（按 `embedding_type` 分流），且其 rank 项由首次出现顺序隐式决定，会重新排序。
-
-第 2 步会部分抵消第 1 步的查询感知加权。`core/pipeline.py` 中 `_merge_and_dedup` 调用点上方第 429 行的注释（"RRF 已在并行召回管理器中完成"）与其函数体矛盾；**以实现为准**。收敛方向是让 `_merge_and_dedup` 退化为纯去重、保留首次融合顺序，使「查询感知的加权 RRF 只发生一次」成为代码与测试共同支持的契约。跟踪见 issue #84。
+融合之后下游的任何一层都不得再按分数重排，否则会抵消上面的查询感知加权——这条由
+`test_query_aware_weights_survive_the_whole_online_path` 断言。
 
 权限采用双层控制：
 

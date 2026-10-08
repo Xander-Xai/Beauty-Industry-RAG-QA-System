@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -308,7 +309,7 @@ def test_pipeline_builds_query_aware_rrf_overrides():
     assert weights["bm25_es"] == 1.5
     assert weights["clip_visual"] == 2.0
     assert weights["dense_bge"] == 1.0
-    assert weights["rewrite_variant"] == 1.0
+    assert weights["rewrite_variants"] == 1.0
 
 
 def test_architecture_baseline_locks_the_recall_count_and_mainline():
@@ -319,3 +320,285 @@ def test_architecture_baseline_locks_the_recall_count_and_mainline():
     assert "FastAPI 单体主链路" in baseline
     assert "动态 2 至 4 路召回" in baseline
     assert "ES Fallback 不算第五路" in baseline
+
+
+# ---------------------------------------------------------------------------
+# Single-fusion contract
+#
+# Weighted RRF used to run twice: once in `parallel_recall` with query-aware
+# per-path weights, then again in `core/pipeline.py` over the already-fused list
+# with a query-independent `w_text` / `w_clip` / `w_ocr` set. The second pass
+# reordered results, which partially cancelled the first pass's boosts. These
+# tests pin the converged shape: fusion happens in exactly one layer.
+# ---------------------------------------------------------------------------
+
+
+def test_union_dedup_does_not_rescore_or_reorder():
+    """The post-fusion step is de-duplication only.
+
+    A descending input must come back in the same order with the same objects
+    and the same scores. Any re-scoring here would silently reintroduce a
+    second fusion whose weights are not query-aware.
+    """
+    from core.pipeline import OnlineRAGPipeline
+
+    results = [
+        RecallResult(doc_id="low_score_but_first", content="a", score=0.01, source="dense_bge"),
+        RecallResult(doc_id="high_score_second", content="b", score=0.99, source="bm25_es"),
+        RecallResult(doc_id="middle", content="c", score=0.5, source="clip_visual"),
+    ]
+
+    deduped = OnlineRAGPipeline._union_dedup(results)
+
+    assert [r.doc_id for r in deduped] == [r.doc_id for r in results]
+    assert [r.score for r in deduped] == [r.score for r in results]
+    assert all(a is b for a, b in zip(deduped, results, strict=True))
+
+
+def test_union_dedup_keeps_the_fused_copy_over_a_later_duplicate():
+    """ES Fallback runs after fusion, so it can re-offer an already-fused doc.
+
+    First occurrence wins: the fused entry carries the merged chunk payload and
+    the fused ordering, so it must be the one that survives.
+    """
+    from core.pipeline import OnlineRAGPipeline
+
+    fused = RecallResult(doc_id="doc1", content="merged", score=0.5, source="dense_bge")
+    fallback = RecallResult(doc_id="doc1", content="fallback", score=0.02, source="bm25_fallback")
+    other = RecallResult(doc_id="doc2", content="x", score=0.4, source="bm25_es")
+
+    deduped = OnlineRAGPipeline._union_dedup([fused, fallback, other])
+
+    assert [r.doc_id for r in deduped] == ["doc1", "doc2"]
+    assert deduped[0] is fused
+
+
+def test_query_aware_weights_survive_the_whole_online_path(monkeypatch):
+    """Acceptance for the convergence: nothing downstream may overwrite the boosts.
+
+    Drives the real `ParallelRecallManager.execute()` with the weights the
+    pipeline builds, captures what `rrf_fusion` receives, and then runs the
+    pipeline's post-fusion step over the fused output. The regulation and visual
+    boosts must still be the weights fusion saw.
+    """
+    import numpy as np
+
+    import retrieval.parallel_recall as recall_module
+    from core.pipeline import OnlineRAGPipeline
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    captured: dict = {}
+    real_fusion = recall_module.rrf_fusion
+
+    def counting_fusion(results_map, k=60, weights=None):
+        captured["calls"] = captured.get("calls", 0) + 1
+        captured["weights"] = weights
+        return real_fusion(results_map, k=k, weights=weights)
+
+    monkeypatch.setattr(recall_module, "rrf_fusion", counting_fusion)
+
+    manager = ParallelRecallManager.__new__(ParallelRecallManager)
+    manager._dense_retriever = None
+    manager._bm25_retriever = None
+    manager._clip_retriever = None
+    manager._rewrite_variants_retriever = None
+    manager.max_workers = 2
+
+    monkeypatch.setattr(
+        ParallelRecallManager,
+        "_recall_dense",
+        lambda *a, **kw: [RecallResult(doc_id="d1", content="c", score=1.0, source="dense_bge")],
+    )
+    monkeypatch.setattr(
+        ParallelRecallManager,
+        "_recall_bm25",
+        lambda *a, **kw: [RecallResult(doc_id="d2", content="c", score=1.0, source="bm25_es")],
+    )
+    monkeypatch.setattr(ParallelRecallManager, "_recall_es_fallback", lambda *a, **kw: [])
+
+    weights = OnlineRAGPipeline._build_rrf_weights(business_type="regulation", is_visual_relevant=True)
+    fused, _agreement = manager.execute(
+        query="防腐剂限量",
+        query_embedding=np.array([0.1]),
+        user_role_mask=0,
+        user_dept_mask=0,
+        use_clip=False,
+        clip_top_k=0,
+        top_k_per_path={
+            "dense_bge": {"enabled": True, "top_k": 5},
+            "bm25_es": {"enabled": True, "top_k": 5},
+        },
+        rrf_weights=weights,
+    )
+
+    assert captured["calls"] == 1, "weighted RRF must run exactly once per recall request"
+    assert captured["weights"] == weights
+    assert captured["weights"]["bm25_es"] == 1.5
+    assert captured["weights"]["clip_visual"] == 2.0
+
+    # The post-fusion step must leave that ranking alone.
+    assert OnlineRAGPipeline._union_dedup(fused) == fused
+
+
+def test_pipeline_no_longer_reimplements_rrf():
+    """No second re-scoring of an already fused list may live in the pipeline.
+
+    `rrf_score` was the local variable of the removed second fusion pass. Its
+    absence is a cheap structural guard against that pass coming back.
+    """
+    from core.pipeline import OnlineRAGPipeline
+
+    pipeline_source = (Path(__file__).resolve().parents[1] / "core" / "pipeline.py").read_text(encoding="utf-8")
+
+    assert "rrf_score" not in pipeline_source
+    assert not hasattr(OnlineRAGPipeline, "_merge_and_dedup")
+    assert hasattr(OnlineRAGPipeline, "_union_dedup")
+
+
+# ---------------------------------------------------------------------------
+# Recall-path naming contract
+#
+# The path name is one string used in three places: the `config.json`
+# `retrieval.parallel_paths` topology key, the key registered into
+# `path_results`, and the key `_build_rrf_weights` emits. A spelling mismatch is
+# silent — `rrf_fusion` falls back to equal weights for an unknown path, and the
+# Qdrant-failure diagnostic never fires for a path it cannot name.
+# ---------------------------------------------------------------------------
+
+
+#: path name in config / path_results / weights -> the `_recall_*` method that serves it.
+_RECALL_METHOD_BY_PATH = {
+    "dense_bge": "_recall_dense",
+    "bm25_es": "_recall_bm25",
+    "clip_visual": "_recall_clip",
+    "rewrite_variants": "_recall_rewrite_variants",
+}
+
+
+def _offline_manager(monkeypatch):
+    """A manager with no live backend: every path returns one synthetic document."""
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    manager = ParallelRecallManager.__new__(ParallelRecallManager)
+    manager._dense_retriever = None
+    manager._bm25_retriever = None
+    manager._clip_retriever = None
+    manager._rewrite_variants_retriever = None
+    manager.max_workers = 4
+
+    def _one(path):
+        def _recall(*args, **kwargs):
+            return [RecallResult(doc_id=path, content="c", score=1.0, source=path)]
+
+        return _recall
+
+    for path, method in _RECALL_METHOD_BY_PATH.items():
+        monkeypatch.setattr(ParallelRecallManager, method, _one(path))
+    monkeypatch.setattr(ParallelRecallManager, "_recall_es_fallback", lambda *a, **kw: [])
+    return manager
+
+
+def _execute_capturing_path_results(monkeypatch, manager, top_k_per_path):
+    """Run the real execute() and return the keys handed to rrf_fusion."""
+    import numpy as np
+
+    import retrieval.parallel_recall as recall_module
+
+    captured: dict = {}
+
+    def capture(results_map, k=60, weights=None):
+        captured["paths"] = sorted(results_map)
+        captured["weights"] = weights
+        return []
+
+    monkeypatch.setattr(recall_module, "rrf_fusion", capture)
+    manager.execute(
+        query="防腐剂限量",
+        query_embedding=np.array([0.1]),
+        user_role_mask=0,
+        user_dept_mask=0,
+        use_clip=True,
+        clip_top_k=20,
+        top_k_per_path=top_k_per_path,
+    )
+    return captured
+
+
+def test_config_topology_keys_are_the_recall_path_names(monkeypatch):
+    """config.json's parallel_paths keys must be exactly the registered path names."""
+    from common.config import get_config_dict
+    from core.pipeline import OnlineRAGPipeline
+
+    topology = get_config_dict()["retrieval"]["parallel_paths"]
+    manager = _offline_manager(monkeypatch)
+    captured = _execute_capturing_path_results(monkeypatch, manager, dict(topology))
+
+    assert captured["paths"] == sorted(topology), (
+        "the names registered into path_results drifted from the config topology keys: "
+        f"registered={captured['paths']}, config={sorted(topology)}"
+    )
+
+    # The same names must be the keys of the query-aware weight mapping, or the
+    # boosts computed per query would be dropped at the fusion boundary.
+    assert set(OnlineRAGPipeline._build_rrf_weights("general", False)) == set(topology)
+
+
+def test_rewrite_recall_path_is_named_identically_everywhere():
+    """The rewrite path is spelled the same way in config, weights and source.
+
+    It used to be `rewrite_variants` in the config topology and the Qdrant
+    diagnostic, but `rewrite_variant` everywhere else, which made the diagnostic
+    branch unreachable and left the two spellings to be reconciled by reading.
+    """
+    from common.config import get_config_dict
+    from core.pipeline import OnlineRAGPipeline
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    topology = get_config_dict()["retrieval"]["parallel_paths"]
+    assert "rewrite_variants" in topology
+
+    source = (Path(__file__).resolve().parents[1] / "retrieval" / "parallel_recall.py").read_text(encoding="utf-8")
+    assert '"rewrite_variants"' in source
+    assert "rewrite_variants" in OnlineRAGPipeline._build_rrf_weights("general", False)
+    assert hasattr(ParallelRecallManager, "_recall_rewrite_variants")
+
+
+def test_rewrite_path_qdrant_failure_diagnostic_is_reachable(monkeypatch, caplog):
+    """A failing Qdrant-backed rewrite path must produce the warning.
+
+    The path is registered under `rewrite_variants`; the diagnostic matched the
+    same spelling, so with the old singular spelling no `rewrite_variants` entry
+    ever existed in `path_results` and this warning could not fire.
+    """
+    import numpy as np
+
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    manager = ParallelRecallManager.__new__(ParallelRecallManager)
+    manager._dense_retriever = None
+    manager._bm25_retriever = None
+    manager._clip_retriever = None
+    manager._rewrite_variants_retriever = None
+    manager.max_workers = 2
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("qdrant unavailable")
+
+    monkeypatch.setattr(ParallelRecallManager, "_recall_rewrite_variants", _boom)
+    monkeypatch.setattr(ParallelRecallManager, "_recall_es_fallback", lambda *a, **kw: [])
+
+    with caplog.at_level(logging.WARNING, logger="retrieval.parallel_recall"):
+        manager.execute(
+            query="防腐剂限量",
+            query_embedding=np.array([0.1]),
+            user_role_mask=0,
+            user_dept_mask=0,
+            use_clip=False,
+            clip_top_k=0,
+            top_k_per_path={"rewrite_variants": {"enabled": True, "top_k": 10}},
+        )
+
+    assert any("Qdrant 路径异常" in record.message for record in caplog.records), (
+        "the Qdrant-failure warning is unreachable for the rewrite recall path; "
+        f"records={[record.message for record in caplog.records]}"
+    )

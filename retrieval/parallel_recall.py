@@ -16,6 +16,13 @@ ES Fallback 是一次降级补召回，不是新的一路：它在 RRF 之后直
 不进入 path_results，因此既不参与融合也不计入路数。其触发条件**只有**融合后有效文档数
 < 50 这一个；Qdrant 路径异常（qdrant_failed）只记一条 warning，不会独立触发 fallback。
 
+融合只有这一个入口：下面的 `rrf_fusion` 调用。查询感知权重由 `rrf_weights` 传入并在此
+一次性消费；调用链下游（`core/pipeline.py` 的 `_union_dedup`）不再重算分数、不再重排。
+
+路径名即 `path_results` 的 key，也是 `config.json` → `retrieval.parallel_paths` 的键、
+`_build_rrf_weights()` 产出权重的 key。三处必须逐字一致，否则该路的权重会被静默忽略、
+该路的失败诊断分支会永不可达。
+
 权限过滤在 Python 层执行（Qdrant pre-filter 处理状态+版本过滤）。
 RBAC 位掩码过滤在召回后通过 is_allowed() 二次校验，并在融合与 fallback 之后再兜底一次。
 """
@@ -174,6 +181,8 @@ class ParallelRecallManager:
                 futures[executor.submit(self._recall_clip, query, image_qdrant_filter, clip_top_k)] = "clip_visual"
 
             # ④ 改写泛化路（Query Rewrite 变体）
+            # 路径名与 config.json → retrieval.parallel_paths 的键一致，
+            # 也与 _build_rrf_weights 产出的权重 key 一致。
             rewrite_cfg = top_k_per_path.get("rewrite_variants")
             if rewrite_cfg is not None and rewrite_cfg.get("enabled", True):
                 futures[
@@ -184,7 +193,7 @@ class ParallelRecallManager:
                         qdrant_filter,
                         rewrite_cfg.get("top_k", 30),
                     )
-                ] = "rewrite_variant"
+                ] = "rewrite_variants"
 
             # 收集结果（各路独立存储，用于 RRF 融合）
             for future in as_completed(futures):
@@ -342,7 +351,7 @@ class ParallelRecallManager:
                         doc_id=h["doc_id"],
                         content=h["content"],
                         score=h["score"],
-                        source="rewrite_variant",
+                        source="rewrite_variants",
                         metadata={"variant_query": variant, **(h.get("metadata") or {})},
                     )
                     for h in hits

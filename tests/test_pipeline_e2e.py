@@ -179,8 +179,8 @@ class TestEndToEndPipeline:
         assert use_clip is False
         assert top_k == 0
 
-    def test_merge_and_dedup(self):
-        """pipeline 的 _merge_and_dedup 应正确去重。"""
+    def test_union_dedup(self):
+        """pipeline 的 _union_dedup 应折叠重复 doc_id 且保留融合顺序。"""
         from core.pipeline import OnlineRAGPipeline
         from core.pipeline_context import RecallResult
 
@@ -189,10 +189,12 @@ class TestEndToEndPipeline:
         results = [
             RecallResult(doc_id="doc1", content="content1", score=0.9, source="dense_bge"),
             RecallResult(doc_id="doc2", content="content2", score=0.8, source="bm25_es"),
-            RecallResult(doc_id="doc1", content="content1_dup", score=0.7, source="rewrite_variant"),
+            RecallResult(doc_id="doc1", content="content1_dup", score=0.7, source="rewrite_variants"),
             RecallResult(doc_id="doc3", content="content3", score=0.6, source="dense_bge"),
         ]
-        merged = pipeline._merge_and_dedup(results)
+        merged = pipeline._union_dedup(results)
         assert len(merged) == 3
         doc_ids = [r.doc_id for r in merged]
         assert doc_ids.count("doc1") == 1
+        # 首次出现优先：融合结果排在同 doc_id 的 Fallback / 重复结果之前。
+        assert doc_ids == ["doc1", "doc2", "doc3"]
