@@ -20,11 +20,23 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# This service imports sibling modules (complexity_evaluator, kv_admission,
+# llm_client) by their top-level names, so its own directory must be on the path.
+_SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SERVICE_DIR not in sys.path:
+    sys.path.insert(0, _SERVICE_DIR)
+
+# monitoring-service is a sibling component directory with a dash in its name;
+# add it to the path and import the shared collector as a top-level module.
+_MONITORING_SERVICE_DIR = os.path.join(PROJECT_ROOT, "monitoring-service")
+if _MONITORING_SERVICE_DIR not in sys.path:
+    sys.path.insert(0, _MONITORING_SERVICE_DIR)
+
 from complexity_evaluator import ComplexityEvaluator
 from fastapi import Depends, FastAPI, HTTPException
 from kv_admission import KVAdmissionControl
 from llm_client import LLMClient
-from monitoring_service.metrics_collector import MetricsCollector
+from metrics_collector import MetricsCollector
 from pydantic import BaseModel, Field
 
 from common.models import (

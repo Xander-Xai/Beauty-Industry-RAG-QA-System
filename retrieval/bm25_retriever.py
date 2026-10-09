@@ -34,7 +34,6 @@ class BM25Retriever:
     def __init__(self):
         self._es_client = None
         self.enabled = config.get("elasticsearch", {}).get("enabled", True)
-        self._es_version = None
         logger.info(f"BM25Retriever 初始化完成 (enabled={self.enabled})")
 
     @property
@@ -51,9 +50,12 @@ class BM25Retriever:
                 if username and password:
                     kwargs["basic_auth"] = (username, password)
                 self._es_client = Elasticsearch(**kwargs)
-                # 获取 ES 版本
-                self._es_version = tuple(map(int, self._es_client.info()["version"]["number"].split(".")[:2]))
-                logger.info(f"ES 连接成功: version={self._es_version}")
+                # Probe connectivity once so an unreachable/misconfigured cluster
+                # disables the lexical path instead of failing on every query.
+                # The ES version is intentionally not stored: there is no
+                # version-dependent query branch (see the class docstring).
+                self._es_client.info()
+                logger.info("ES 连接成功")
             except Exception as e:
                 logger.warning(f"ES 连接失败: {e}")
                 self.enabled = False
@@ -124,8 +126,9 @@ class BM25Retriever:
         """
         构建 ES Bool 查询（含权限过滤下推）
 
-        Role/dept bitmask checks use parameterized Painless filters on supported
-        Elasticsearch versions. Records missing either mask are excluded.
+        Role/dept bitmask checks use parameterized Painless filters. There is no
+        ES-version branch and no precomputed bucket fallback: this is the only
+        filter implementation, and records missing either mask are excluded.
         """
         must_filters = [
             {"term": {"status": "active"}},
@@ -208,9 +211,6 @@ class BM25Retriever:
             },
             "size": top_k,
         }
-
-    def _super_admin_mask(self) -> int:
-        return config.get("rbac", {}).get("super_admin_mask", 0xFFFFFFFF)
 
     def _build_es_fallback_query(
         self,

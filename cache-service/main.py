@@ -17,7 +17,15 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # Ensure project root is importable for common models
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+# This service imports its sibling redis_cache by top-level name, so its own
+# directory must be on the path.
+_SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SERVICE_DIR not in sys.path:
+    sys.path.insert(0, _SERVICE_DIR)
 
 from redis_cache import RedisCache
 

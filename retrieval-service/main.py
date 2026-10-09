@@ -25,9 +25,17 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 os.chdir(PROJECT_ROOT)
 
+# monitoring-service is a sibling component directory. Its name contains a dash,
+# so it is not importable as a package. Put it on the path and import the shared
+# collector as a top-level module, which is the same directory layout used by the
+# offline pipeline (retrieval-service/, generation-service/).
+_MONITORING_SERVICE_DIR = os.path.join(PROJECT_ROOT, "monitoring-service")
+if _MONITORING_SERVICE_DIR not in sys.path:
+    sys.path.insert(0, _MONITORING_SERVICE_DIR)
+
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException
-from monitoring_service.metrics_collector import MetricsCollector
+from metrics_collector import MetricsCollector
 from pydantic import BaseModel, Field
 
 from common.models import (

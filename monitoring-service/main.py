@@ -20,6 +20,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# This service imports sibling modules (alerting, metrics_collector) by their
+# top-level names, so its own directory must be on the path.
+_SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SERVICE_DIR not in sys.path:
+    sys.path.insert(0, _SERVICE_DIR)
+
 from alerting import AlertingManager
 from fastapi import Depends, FastAPI, HTTPException, Response
 from metrics_collector import MetricsCollector

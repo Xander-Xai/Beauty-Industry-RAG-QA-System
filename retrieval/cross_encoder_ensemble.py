@@ -19,6 +19,7 @@ import logging
 import math
 
 from common.config import get_config_dict
+from retrieval.rerank_status import rerank_weights_status
 
 config = get_config_dict()
 
@@ -87,6 +88,19 @@ class CrossEncoderEnsemble:
         self._ce_b = None  # CrossEncoder-B (通用)
         self._batch_aggregator = None
         self._platt_scaler = PlattScaler()
+        # Report the missing-weights state up front. When BLOCKED, rerank()
+        # falls back to the BiEncoder order with ce_score_ensemble == 0 and the
+        # Evidence Gate refuses every query; that is fail-closed by design.
+        self.rerank_status = rerank_weights_status()
+        if self.rerank_status["status"] == "BLOCKED":
+            logger.warning(
+                "CrossEncoder weights unavailable (%s). Rerank will fall back and the "
+                "Evidence Gate will refuse all queries: %s",
+                self.rerank_status["reason"],
+                self.rerank_status["evidence_gate"]["effect"],
+            )
+        else:
+            logger.info("CrossEncoder weights available; the ensemble will run")
         logger.info("CrossEncoderEnsemble 初始化完成")
 
     def _truncate_to_tokens(self, text: str, max_tokens: int) -> str:

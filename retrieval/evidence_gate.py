@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from common.config import get_config_dict
 from common.models import EvidenceGateResult
+from retrieval.rerank_status import rerank_weights_status
 
 if TYPE_CHECKING:
     from common.models import EvidenceGateResult
@@ -44,7 +45,28 @@ class EvidenceEnsembleGate:
         self.weights = config["retrieval"]["evidence_gate"]["weights"]
         self.thresholds = config["retrieval"]["evidence_gate"]["thresholds"]
         self._answer_gate = None
+        # Config precheck: report (do not silently mask) the missing-weights
+        # state. The decision path is unchanged and stays fail-closed.
+        self.rerank_status = rerank_weights_status()
+        if self.rerank_status["status"] == "BLOCKED":
+            logger.warning(
+                "Evidence Gate is fail-closed (no CrossEncoder weights). "
+                "Every query will be refused until weights are provided. %s",
+                self.rerank_status["evidence_gate"]["effect"],
+            )
         logger.info("EvidenceEnsembleGate 初始化完成")
+
+    def runtime_status(self) -> dict:
+        """Current CrossEncoder / Evidence-Gate precheck snapshot.
+
+        Returns the same structure as :func:`retrieval.rerank_status.rerank_weights_status`,
+        so an operator or health probe can read why the gate is (or is not)
+        refusing queries without loading a model.
+        """
+        return self.rerank_status
+
+    def _gate_mode(self) -> str:
+        return "fail_closed_no_rerank_weights" if self.rerank_status.get("status") == "BLOCKED" else "normal"
 
     @property
     def answer_gate(self):
@@ -88,6 +110,7 @@ class EvidenceEnsembleGate:
                 retrieval_agreement_score=0.0,
                 doc_consistency_score=0.0,
                 decision="reject",
+                gate_mode=self._gate_mode(),
                 top_docs=[],
             )
 
@@ -150,6 +173,7 @@ class EvidenceEnsembleGate:
             retrieval_agreement_score=retrieval_agreement_score,
             doc_consistency_score=doc_consistency_score,
             decision=decision,
+            gate_mode=self._gate_mode(),
             top_docs=rerank_results[:3],
         )
 
