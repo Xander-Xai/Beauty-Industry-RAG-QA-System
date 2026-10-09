@@ -2,6 +2,145 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Golden-set v2 data contract** (`benchmarks/golden_set_contract.py`,
+  `golden-set-contract/v2`; issue #86). Every sample must carry a stable
+  `sample_id`, a resolvable `(doc_id, chunk_id)` per annotated passage in a named
+  `corpus_version`, an explicit `visual_required` boolean, a `complexity_label`,
+  and annotation provenance (`annotator` / `method` / `annotated_at` /
+  `reviewed_by`). Missing fields are marked `INVALID` with a machine-readable
+  reason; nothing is guessed. Existence-only Qdrant/Elasticsearch resolvers prove
+  identifiers against a real index, so a retriever's own output can never become
+  ground truth.
+  - `scripts/validation/validate_golden_set_contract.py` fails closed (exit 1) on
+    any invalid row. The committed dataset measures **0 / 301 valid**.
+  - `python -m benchmarks.retrieval_benchmark --require-contract` refuses to run
+    on a non-attributable dataset, and every artifact now records
+    `dataset_contract` / `attributable`; `results_are_benchmark` is
+    `any_results AND attributable`, so normalized-text matching can never be
+    published as a benchmark result.
+  - `tests/evaluation/test_golden_set_contract.py` pins the fail-closed behaviour
+    for chunk-boundary changes, knowledge-epoch changes, wrong labels,
+    unresolvable identifiers and fabricated ids.
+- **Answer-level human-judged evaluation** (`tests/evaluation/answer_eval.py`,
+  `tests/evaluation/answer_eval_set.jsonl`): 12 hand-labeled samples across six
+  categories (sufficient evidence, insufficient evidence, conflicting regulation,
+  fabricated-source trap, unauthorized document, image/text conflict). Scores
+  answer evidence support rate (strict/inclusive), unsupported-answer rate,
+  refusal recall, false-refusal rate, RBAC-leak count and high-risk unsupported
+  rate from **human** judgments only. A record without a named reviewer and an
+  `evidence_support` label is rejected, so an LLM self-score cannot stand in for
+  a human label. Execution is `BLOCKED` without the live pipeline.
+- **`docs/validation/rag-eval-readiness.md`**: per-metric `VERIFIED` / `BLOCKED`
+  status, the environment checklist, and the exact reason Hit@5 / NDCG@10
+  ablation A–E, answer-quality metrics and QPS cannot be produced here.
+- **Real Qdrant store validation (`VAL-STORE-001` → `LOCAL_REAL_VALIDATION`):**
+  `scripts/validation/validate_qdrant_store.py` and the gated
+  `tests/integration/test_qdrant_store_runtime.py` run the dense/visual path
+  against a real Qdrant server (epoch point ids, payload filters, RBAC re-filter,
+  text+image `rrf_fusion` merge, Qdrant-down degradation) plus a real-Redis cache
+  key-isolation check. Capture in
+  `docs/validation/qdrant-local-real-validation.md`. The vectors are
+  deterministic; BGE/CLIP model quality is not measured.
+- **Benchmark publication-gate regression coverage**
+  (`tests/benchmark/test_publication_gate.py`). `results_are_benchmark` is
+  `any_results AND attributable`; only the first operand had coverage. The new
+  suite exercises all six release scenarios — no execution, executed-but-not-
+  attributable, text-only fallback matching, unresolvable identifiers or a wrong
+  `corpus_version`, partially annotated data, and a genuinely attributable
+  dataset — asserting exit code, report status, denominator, artifact flags and
+  the machine-readable reason for each.
+- **Document-evidence consistency checks**
+  (`tests/validation/test_golden_set_evidence_docs.py`). Re-measures the
+  Golden Set contract result and fails when a document drifts from it, so a
+  scoped `--limit` denominator cannot be quoted again as the dataset's state.
+
+### Fixed
+
+- **Qdrant validation no longer claims a 21st check that never ran.** The
+  `VAL-STORE-001` artifact reported `checks_run=21 / checks_passed=21` while the
+  script executes exactly 20 checks on a passing run (the 21st `_log` site is
+  the unreachable-server failure path). The count was a hand-written integer, so
+  nothing reconciled it with the run. `validate_qdrant_store.py` now appends a
+  structured record per check, derives `checks_run` / `checks_passed` /
+  `checks_failed` from the executed records via `check_counts()`, and writes them
+  with `--emit-checks`. `tests/validation/test_qdrant_validation_evidence.py`
+  fails when `metadata.json` and `checks.json` disagree. Re-run against real
+  Qdrant 1.12.0 + Redis: **20/20**, exit 0. All documents now say 20/20.
+- **Golden Set contract result is quoted at its true denominator.**
+  `docs/validation/rag-eval-readiness.md` quoted the benchmark CLI refusal as
+  `0/2 samples ... refusing to score`; that figure came from a `--limit 2` run
+  and was presented as the state of the 301-row dataset. The dataset is
+  unchanged and the result is unchanged — **0 / 301 valid**, validator exit 1,
+  CLI gate exit 2 — but the document now records the measured SHA-256, both exit
+  codes, and why a scoped denominator is not the dataset's state. The status is
+  stated as: evaluation toolchain `VERIFIED_CODE`, Golden Set data unusable for
+  official retrieval-quality scoring.
+- **A contract-valid dataset was still scored by text fallback.** The v2 contract
+  stores identity in `annotations[{doc_id, chunk_id, text}]`, but
+  `benchmarks.relevance` only read identifiers from the row's top level, so a
+  fully attributable dataset reported `level2_normalized_exact_text` and was
+  scored by normalized text while `results_are_benchmark` said `true` — the exact
+  contradiction the contract exists to prevent. `relevant_items_from_annotations()`
+  and `has_stable_identity()` now read both locations, and `load_queries()` /
+  `relevance_strategies()` use them, so the reported strategy always matches what
+  scoring actually does.
+- **Retained microservice entry points now import** (issue #84 item 1). Five of
+  the six `*/main.py` add only the project root to `sys.path` and then import
+  sibling modules by bare top-level name, so `python -m uvicorn <svc>.main:app`
+  failed with `ModuleNotFoundError`. Each broken service now adds its own
+  directory, and the shared collector is imported as the top-level
+  `metrics_collector` from `monitoring-service/` instead of a non-existent
+  `monitoring_service` package.
+  `tests/test_microservice_imports.py` imports every service `main` in its own
+  subprocess and asserts a FastAPI app with its health route. This is
+  `REPO_VERIFIED` at the "module imports" level only; container start and
+  end-to-end integration remain `PENDING`.
+- **Elasticsearch writer mapping validation now accepts a real ES object field.**
+  `ElasticsearchWriter.validate_mapping` compared `type == "object"` strictly,
+  but Elasticsearch omits `"type": "object"` for an object that declares
+  sub-properties. A real ES 8.11 therefore returned the correctly-created
+  `provenance` field without an explicit type, and `ensure_index` raised
+  `field 'provenance' must be 'object', found None`. This was reproduced against
+  a real authenticated ES 8.11 via `scripts/validation/validate_es_auth.py`
+  (which now passes) and fixed by accepting a `properties`/`dynamic` body as an
+  object; `tests/offline/test_elasticsearch_writer.py` pins both directions.
+- **Evidence Gate fail-closed consequence is now asserted** (issue #84 item 5,
+  `VAL-DEGRADE-001`). `retrieval/rerank_status.py` prechecks the configured
+  CrossEncoder weights and reports the `w3+w4 = 0.40 < low_confidence = 0.55`
+  ceiling without loading a model or lowering the threshold.
+  `tests/test_evidence_gate_degradation.py` drives the deterministic fallback
+  output through the gate and asserts refusal for every fixture, reading the
+  arithmetic from `config.json`. `EvidenceGateResult.gate_mode` and
+  `EvidenceEnsembleGate.runtime_status()` expose the state; the gate arithmetic
+  and thresholds are unchanged.
+
+### Changed
+
+- **Removed confirmed dead code in the BM25 retriever** (issue #84 item 4):
+  `_es_version` was assigned and never read, and `_super_admin_mask` was never
+  called. The ES connectivity probe is kept; the version is no longer stored
+  because there is no version-dependent query branch.
+- **Documentation synced with the code** (issue #84): the microservice status in
+  `README.md`, `docs/production-readiness.md` and the Qdrant evidence section of
+  `docs/evidence-map.md` now match the fixed imports and the new real-Qdrant run.
+- **`ruff.toml`** gained `rewrite-service/**/*.py` in the `E402` per-file ignores,
+  consistent with the other five service directories.
+- **Qdrant client/server version gap is recorded, not absorbed.** The validated
+  pair is `qdrant-client` 1.18.0 against `qdrant/qdrant:v1.12.0`. Qdrant documents
+  that major *and* minor should match and that backward compatibility is tested
+  across one minor only, so this pair is 6 minors outside the guaranteed window.
+  All 20 functional checks pass, which is an empirical result and not a support
+  guarantee. `qdrant_version_compatibility()` now classifies the pair on every
+  run and records it as a non-gating finding in the artifact; the supported
+  combination (`qdrant-client` 1.12.x with `v1.12.0`) is documented. The
+  dependency set is deliberately unchanged.
+- **Removed `tests/evaluation/golden_set.jsonl.bak`.** Checked before removal: 27
+  rows, every one byte-identical to a row in the current 301-row dataset (zero
+  unique rows), and no reference to it anywhere in the repository. It was a
+  gitignored artifact of an earlier edit, not a backup of anything unique.
+
 ## [2.4.0] - 2026-10-08
 
 Everything present on `main` after the 2.3.0 release entry. This is the first

@@ -7,8 +7,9 @@
   integration execution in their development record: the offline writers were run
   against a real local Qdrant service/container together with a real local
   Elasticsearch (PR #7 exists because `search_after` sorted on `_id` and failed
-  against real Elasticsearch 8). No artifact of that run is committed here, so it
-  is development lineage, not a reproducible artifact — see
+  against real Elasticsearch 8). That historical run's own artifact is not
+  committed; a separate current single-host real-service validation is now
+  committed under `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` — see
   [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
 - v2.5 working-milestone runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
@@ -254,10 +255,12 @@ These are implemented in code but not validated against real external assets/run
 - Real configured CLIP model smoke — `EXTERNAL_MODEL_ASSET_REQUIRED`.
 - Real PaddleOCR smoke — external runtime not installed.
 - Real Airflow DAG execution — Airflow not installed.
-- Real Qdrant service/container validation as a reproducible artifact — none is committed. The
-  PR #6/#7 development round ran the writers against a real local Qdrant service, but no artifact of
-  that run exists here, so it cannot be re-executed or verified from this repository. A **new**
-  current real-service run is required to upgrade the current evidence; see
+- Real Qdrant service/container validation as a reproducible artifact — **committed** at
+  `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json`, from a single-host run against
+  `qdrant/qdrant:v1.12.0` with deterministic vectors (epoch point ids, payload filters, RBAC
+  re-filter, text+image fusion, Qdrant-down degradation). This is `LOCAL_REAL_VALIDATION`; it is
+  not a cluster/HA/throughput result and does not measure model quality. The PR #6/#7 development
+  round remains separate lineage; see
   [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Production evaluation / benchmark — no reproducible artifact checked in. The benchmark framework
   exists and is `REPO_VERIFIED`; two structural blockers keep execution open: **no real retrieval
@@ -305,28 +308,26 @@ the drift this section exists to prevent.
 
 | State | What it is | What it is not |
 |---|---|---|
-| Current reproducible coverage | The deterministic tests use the in-process `QdrantClient` (`QdrantClient(":memory:")`) in `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py`, `tests/offline/test_snapshot_builder.py`, `tests/offline/test_image_processing.py`. Re-running the suite reproduces exactly this. | It is not a real-service test, and no collected test connects to a Qdrant service. |
-| Historical development execution | The PR #6/#7 development record states the writers ran against a real local Qdrant service/container, in the same round as the real local Elasticsearch run that produced PR #7 (`search_after` sorted on `_id`, which real Elasticsearch 8 rejects). | It is not a current, reproducible `LOCAL_REAL_VALIDATION`: no artifact of that run is committed, and nothing here re-runs it. |
+| Current deterministic coverage | The deterministic tests use the in-process `QdrantClient` (`QdrantClient(":memory:")`) in `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py`, `tests/offline/test_snapshot_builder.py`, `tests/offline/test_image_processing.py`. Re-running the suite reproduces exactly this. | It is not a real-service test, and no collected test connects to a Qdrant service by default. |
+| Current real-service validation | A single-host run against `qdrant/qdrant:v1.12.0` is committed at `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` and reproducible via `tests/integration/test_qdrant_store_runtime.py` / `scripts/validation/validate_qdrant_store.py`. It validates epoch point ids, payload (status/epoch) filters, RBAC re-filter before fusion, text+image `rrf_fusion` merge and Qdrant-down degradation, with deterministic vectors. Evidence level `LOCAL_REAL_VALIDATION`. | It is not a production cluster / HA / throughput result, and it does not measure BGE/CLIP model quality. |
+| Historical development execution | The PR #6/#7 development record states the writers ran against a real local Qdrant service/container, in the same round as the real local Elasticsearch run that produced PR #7 (`search_after` sorted on `_id`, which real Elasticsearch 8 rejects). | It is not itself a committed, reproducible artifact: no artifact of that specific run is committed, and nothing re-runs it. |
 
 Consequences, each of which is a boundary and not a goal:
 
-1. The historical execution is **development lineage**, not current reproducible evidence. It may be
-   described as "the offline writers were exercised against a real local Qdrant service during the
-   PR #6/#7 work"; it may not be described as "this repository validates Qdrant".
-2. It establishes **nothing** about production Qdrant HA, cluster topology or replication, cluster
-   or index performance, retrieval or model quality, QPS or latency. A single-host development run is
-   not a capacity or quality measurement.
+1. The historical execution is **development lineage**, and the current committed single-host run is a
+   local real-service validation. Neither may be described as production Qdrant validation.
+2. Neither establishes **anything** about production Qdrant HA, cluster topology or replication,
+   cluster or index performance, retrieval or model quality, QPS or latency. A single-host run with
+   deterministic vectors is not a capacity or quality measurement.
 3. The `LOCAL_REAL_VALIDATION` recorded for Elasticsearch comes from the separate 2026-10-02 round in
    [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md),
    not from the PR #6/#7 round. The two are separate records and must not be merged.
-4. Upgrading the current evidence requires a **new** real-service run whose artifact is committed and
-   whose command is re-runnable, exactly as `tests/integration/test_es_auth_runtime.py` is for
-   Elasticsearch. Until then the Qdrant rows stay `REPO_VERIFIED` (deterministic coverage) /
-   `PENDING` (real-service artifact).
-5. Do not assert either direction as the only truth: "Qdrant has only ever been tested
-   in memory" is false by the historical record, and "Qdrant is validated against a
-   real service" is unsupported with nothing committed. `scripts/check_repo_consistency.py`
-   rejects both claims, and rejects the repository holding them at the same time.
+4. Production Qdrant cluster, HA, throughput and TLS remain `PENDING`; the Qdrant rows are
+   `LOCAL_REAL_VALIDATION` (single-host real service) / `REPO_VERIFIED` (deterministic coverage).
+5. Claiming "Qdrant has only ever been tested in memory" is false by the historical record and the
+   committed run; claiming "Qdrant is production-validated" is unsupported because the committed run
+   is a single local host. `scripts/check_repo_consistency.py` rejects the erasure and the
+   repository-level contradiction.
 
 ## Known frontend dependency advisories (disclosed, not gating)
 

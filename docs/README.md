@@ -101,11 +101,18 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   (`v2.5` is a working-milestone label, not a release.)
 - [Real RAGAS evaluation](validation/real-ragas-evaluation.md): evaluator dependency
   isolation, correctness fixes, and the real-evaluation blockers.
+- [Real Qdrant store validation](validation/qdrant-local-real-validation.md): a single-host
+  run against a real Qdrant server (`VAL-STORE-001`) covering epoch point ids, payload
+  filters, RBAC re-filter, text+image RRF merge and Qdrant-down degradation, with
+  deterministic vectors (not BGE/CLIP).
+- [RAG evaluation readiness](validation/rag-eval-readiness.md): the golden-set v2 contract
+  coverage (0/301 valid), the answer-level harness, and the exact reason Hit@5/NDCG@10
+  ablation A–E, answer-quality metrics and QPS are `BLOCKED` here — with the environment
+  checklist that would promote them.
 - [Deferred runtime validation index](deferred-runtime-validation.md): the single
-  index of every runtime validation not yet executed (retrieval benchmark,
-  performance, OTLP runtime export closure, real model smokes, GPU topology, RAGAS,
-  Kubernetes, browser E2E), each with its required environment, procedure,
-  expected artifact and evidence-promotion rule. Every entry is `NOT EXECUTED`.
+  index of every runtime validation, each with its required environment, procedure,
+  expected artifact and evidence-promotion rule. `VAL-DEGRADE-001` and `VAL-STORE-001`
+  are executed; the rest are `NOT EXECUTED`.
 
 ## Architecture & Evidence Truth
 

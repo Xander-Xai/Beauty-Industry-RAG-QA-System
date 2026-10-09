@@ -110,9 +110,15 @@ unsupported. That is the intended failure direction — a gate that degrades by
 opening the gate is not a gate — and it is also the reason the missing assets are
 listed as `PENDING` rather than treated as cosmetic.
 
-No test currently asserts this end-to-end consequence, and no artifact demonstrates
-it. Both are tracked in #85 (`VAL-DEGRADE-001`), which needs no external
-environment, and the wording gap in the README is tracked in #84.
+This consequence is now asserted, not narrated:
+`tests/test_evidence_gate_degradation.py` drives the deterministic fallback
+output through the gate, checks the `0.40 < 0.55` ceiling against the configured
+values, and asserts refusal for every fixture (`VAL-DEGRADE-001`, promoted to
+`REPO_VERIFIED`). The precheck `python3 -m retrieval.rerank_status` reports the
+same state (`status: BLOCKED`, `failure_mode: fail_closed`, `no_ce_ceiling`,
+`low_confidence`) without loading a model; the gate logs it at construction and
+exposes it as `EvidenceEnsembleGate.runtime_status()` / `EvidenceGateResult.gate_mode`.
+The gate arithmetic and thresholds are deliberately unchanged.
 
 ## Microservice components
 
@@ -121,42 +127,43 @@ environment, and the wording gap in the README is tracked in #84.
 components. They are **not** the canonical deployment form and are **not**
 integrated with the current frontend.
 
-Concrete boundary, reproduced rather than inferred: of the six, **only
-`api-gateway` is importable**. The other five add the project root to `sys.path`
-and then import sibling modules by bare top-level name, so they fail with
-`ModuleNotFoundError` under the exact commands given in
-`docker-compose.microservices.yml`:
+Module-level import status, reproduced rather than inferred: **all six `main`
+modules now import** under the exact commands in
+`docker-compose.microservices.yml`. Issue #84 found that 5 of 6 previously failed
+with `ModuleNotFoundError` because each added only the project root to `sys.path`
+and then imported sibling modules by bare top-level name:
 
-| Service | Failing import |
-|---|---|
-| `rewrite-service` | `No module named 'metrics_collector'` |
-| `retrieval-service` | `No module named 'monitoring_service'` |
-| `generation-service` | `No module named 'complexity_evaluator'` |
-| `cache-service` | `No module named 'redis_cache'` |
-| `monitoring-service` | `No module named 'alerting'` |
+| Service | Previously failing import | Fix |
+|---|---|---|
+| `rewrite-service` | `No module named 'metrics_collector'` | own dir + `monitoring-service/` on `sys.path` |
+| `retrieval-service` | `No module named 'monitoring_service'` | `monitoring-service/` on `sys.path`; collector imported top-level |
+| `generation-service` | `No module named 'complexity_evaluator'` | own dir + `monitoring-service/` on `sys.path` |
+| `cache-service` | `No module named 'redis_cache'` | own dir on `sys.path` |
+| `monitoring-service` | `No module named 'alerting'` | own dir on `sys.path` |
 
-So the accurate statement is: five of the six are **not startable as
-configured**, which is stronger than "present but not integrated". This is
-tracked in #84.
+The fix normalises the shared collector: `retrieval-service` and
+`generation-service` now import it as the top-level `metrics_collector` from
+`monitoring-service/` instead of a non-existent `monitoring_service` package, and
+each service adds its own directory for its bare sibling imports. A contract test
+(`tests/test_microservice_imports.py`) imports every service `main` in its own
+subprocess and asserts a FastAPI app exposing the route its compose healthcheck
+calls, so the commands cannot silently rot again.
 
-The remedy is **not** only a two-line `sys.path` addition per service, and
-describing it that way would understate the work. Two of the five
-(`retrieval-service`, `generation-service`) import
-`monitoring_service.metrics_collector`, but the repository provides only the
-`retrieval_service` compatibility symlink — there is no importable
-`monitoring_service` package at all. Adding each service's own directory to
-`sys.path` fixes the bare-top-level-name failures listed above and leaves both of
-those two still failing on `monitoring_service`. Any fix therefore has to
-normalise that package/import as well (rename `monitoring-service/` with a
-compatibility symlink, as `retrieval-service/` already has, or change the
-imports), and a contract test must import each module so the compose commands
-cannot silently rot again.
+**Import is not deployment.** This is `REPO_VERIFIED` at the "module imports and
+constructs an app" level only. Whether each container starts with its real
+dependencies and whether the set works end to end against the current frontend
+remain `PENDING`; no `docker compose -f docker-compose.microservices.yml up` run
+is recorded. The six directories must not be presented as an assembled
+microservice architecture.
 
 Also relevant: `retrieval_service` is a tracked **symlink** to
 `retrieval-service/`, created because a hyphenated directory cannot be imported
 as a package, with roughly two dozen imports depending on it. Any checkout
 without symlink support (Windows without Developer Mode) cannot use the
-repository.
+repository. Removing it needs a real shim package, because the
+`retrieval-service/` code imports `retrieval_service.*` throughout, so it is
+recorded here as a **non-blocking** portability item rather than fixed in this
+pass.
 
 ## Deliberately not covered
 

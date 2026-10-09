@@ -192,7 +192,7 @@ flowchart LR
 
 在线链路每一段的细节、配置位置与已知边界见 [Retrieval Pipeline](#retrieval-pipeline) 与 [docs/architecture-baseline.md](docs/architecture-baseline.md)。
 
-**微服务目录的状态**：`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/` 是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。已知边界：这 6 个目录中**只有 `api-gateway` 能被导入**，另外 5 个的 `main.py` 只把项目根加入 `sys.path` 却以裸顶层名导入同级模块，在其 `docker-compose.microservices.yml` 给定命令下直接 `ModuleNotFoundError`（见 [Production Readiness](docs/production-readiness.md#microservice-components) 与 issue #84）。
+**微服务目录的状态**：`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/` 是保留的代码组件，**不代表**已与当前前端完成端到端生产验证；当前默认主线是上面的单体应用。已知边界：这 6 个 `main.py` 现在都能被导入，并由 `tests/test_microservice_imports.py` 逐一在子进程中断言（issue #84 曾记录 5 个直接 `ModuleNotFoundError`，已修复）；但"模块可导入"不等于"容器能启动"或"端到端联调通过"，后两者仍为 `PENDING`（见 [Production Readiness](docs/production-readiness.md#microservice-components)）。
 
 ---
 
@@ -396,6 +396,15 @@ python3 -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 
 框架为 `REPO_VERIFIED`；**结果为 `PENDING`**。缺少真实依赖时配置以 `BLOCKED` 与原因记录，**不会**产出数字。评估口径与数据质量缺口见 [Evaluation](#evaluation) 与 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 契约见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
 
+数据归属契约（`golden-set-contract/v2`，`benchmarks/golden_set_contract.py`）：所有样本都必须带稳定 `sample_id`、真实 `(doc_id, chunk_id)` + `corpus_version`、人工 `visual_required` / `complexity_label` 与标注溯源，否则判 `INVALID`。当前 301 条实测 **0/301 合规**；评测脚本会拒绝在无效数据上输出百分比：
+
+```bash
+python3 scripts/validation/validate_golden_set_contract.py --dataset tests/evaluation/golden_set.jsonl
+python3 -m benchmarks.retrieval_benchmark --require-contract --dataset tests/evaluation/golden_set.jsonl ...
+```
+
+答案级人工评测集与打分器见 `tests/evaluation/answer_eval.py`（12 条 / 6 类：证据充分、证据不足、法规冲突、虚构来源、无权限文档、图文冲突）。各指标的 `VERIFIED` / `BLOCKED` 状态与补齐清单见 [RAG 评测就绪度](docs/validation/rag-eval-readiness.md)。
+
 ### 开发与检查
 
 ```bash
@@ -581,7 +590,7 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 | 4B / 14B vLLM GPU 拓扑 | `REPO_VERIFIED`（路由契约） | `PENDING` | 真实 GPU 部署与压测（权重不在仓库，`vllm` 未安装） |
 | QLoRA 微调 | `REPO_VERIFIED`（工具） | `PENDING` | 可复现训练运行 + adapter 产物 |
 | Airflow 调度 | `REPO_VERIFIED`（DAG 注册） | `PENDING` | 真实 Airflow DAG 执行 |
-| Qdrant 真实服务 | `REPO_VERIFIED`（当前回归覆盖 = 进程内 `QdrantClient(":memory:")`） | `PENDING`（真实服务 artifact） | 一次新的真实服务运行并提交产物。**开发沿革中确有 PR #6/#7 的真实本地 Qdrant + ES 集成运行记录，但那不是可复现 artifact**——两个方向都不能说错，详见 [Qdrant evidence: two states](docs/evidence-map.md#qdrant-evidence-two-states-kept-apart) |
+| Qdrant 真实服务 | `LOCAL_REAL_VALIDATION`（单主机真实服务；确定性回归覆盖仍为进程内 `QdrantClient(":memory:")`） | `PENDING`（集群 / HA / 吞吐 / TLS） | 真实 Qdrant 集群与 HA、吞吐测量、真实 BGE/CLIP 向量。单主机真实服务运行记录见 [Qdrant validation record](docs/validation/qdrant-local-real-validation.md)；开发沿革中 PR #6/#7 的真实本地运行不是可复现 artifact，详见 [Qdrant evidence: two states](docs/evidence-map.md#qdrant-evidence-two-states-kept-apart) |
 | 微服务（六个目录） | `REPO_VERIFIED`（组件） | `PENDING`（集成部署） | 与当前前端的端到端生产验证 |
 | 前端 CI 构建（`npm ci` + `npm run build`） | `REPO_VERIFIED` | —（构建产物不发布） | 无需升级：这是门禁，不是结果。**但构建成功只证明 bundle 能编译** |
 | 前端 + 真实后端端到端运行 | `REPO_VERIFIED`（客户端与 API metadata 契约） | `PENDING` | 一次真实浏览器运行：`frontend/` 对真实单体 + 真实 ES/Qdrant + 真实模型。首屏那张图由 Playwright 驱动**真实 UI**、后端为合成 mock，属演示产出而非后端集成证据 |
