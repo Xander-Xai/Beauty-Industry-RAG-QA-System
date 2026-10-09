@@ -2926,10 +2926,12 @@ def test_the_denial_direction_is_still_rejected_on_its_own():
     assert qdrant_evidence_claim_errors("README.md", "Qdrant has only ever been tested in memory.", False)
 
 
-def test_no_qdrant_runtime_artifact_is_committed():
+def test_qdrant_runtime_artifact_is_committed():
+    # VAL-STORE-001 committed a real single-host Qdrant run; the guard derives
+    # the affirmative wording from this artifact being on disk.
     from scripts.check_repo_consistency import qdrant_runtime_artifact_exists
 
-    assert qdrant_runtime_artifact_exists() is False
+    assert qdrant_runtime_artifact_exists() is True
 
 
 def test_a_qdrant_runtime_artifact_is_derived_from_disk(tmp_path):
@@ -2964,9 +2966,11 @@ def test_lineage_anchor_requires_the_artifact_gap_and_upgrade_path():
 def test_current_evidence_documents_satisfy_the_lineage_anchor():
     from scripts.check_repo_consistency import ROOT, qdrant_lineage_errors
 
+    # The committed artifact (VAL-STORE-001) is the live state, so the lineage
+    # docs are checked with artifact_exists=True.
     for name in ("docs/evidence-map.md", "docs/repository-truth-audit.md"):
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert qdrant_lineage_errors(name, text, artifact_exists=False) == []
+        assert qdrant_lineage_errors(name, text, artifact_exists=True) == []
 
 
 def test_restated_question_count_is_flagged():

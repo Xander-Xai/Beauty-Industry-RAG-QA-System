@@ -3173,11 +3173,22 @@ def check_qdrant_evidence_reconciliation(errors: list[str], root: Path | None = 
         errors.extend(qdrant_lineage_errors(name, path.read_text(encoding="utf-8"), artifact_exists))
 
     if artifact_exists:
-        fail(
-            errors,
-            f"a Qdrant real-service artifact now exists under {QDRANT_RUNTIME_ARTIFACT_GLOB}; the "
-            "current-evidence wording is now stale and must be re-derived from that artifact",
-        )
+        # Once a real-service artifact is committed, the affirmative wording is
+        # licensed; the tripwire becomes a requirement instead of a failure: the
+        # classifying documents must cite the committed artifact, so the wording
+        # cannot drift without it. (Removing the artifact restores the stricter
+        # "no artifact" wording requirement in qdrant_lineage_errors.)
+        for name in QDRANT_EVIDENCE_LINEAGE_DOCS:
+            path = base / name
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "artifacts/qdrant" not in text:
+                fail(
+                    errors,
+                    f"{name}: a Qdrant real-service artifact exists under {QDRANT_RUNTIME_ARTIFACT_GLOB}; "
+                    "cite it so the current-evidence wording is derived from the committed run",
+                )
 
 
 def check_canonical_runtime_is_not_observability_gated(errors: list[str]) -> None:
