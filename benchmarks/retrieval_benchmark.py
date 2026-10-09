@@ -31,6 +31,11 @@ from benchmarks.dataset import (
     sample_ids_hash,
     sha256_file,
 )
+from benchmarks.golden_set_contract import (
+    DatasetContractError,
+    require_attributable,
+    validate_dataset,
+)
 from benchmarks.models import STATUS_EXECUTED
 from benchmarks.provenance import (
     collect_environment,
@@ -68,6 +73,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-results",
         action="store_true",
         help="exit non-zero when no configuration executed (useful to fail CI on blocked runs)",
+    )
+    parser.add_argument(
+        "--require-contract",
+        action="store_true",
+        help=(
+            "validate the selected samples against golden-set-contract/v2 and refuse to run "
+            "when any sample lacks a stable identifier, label or annotation provenance"
+        ),
+    )
+    parser.add_argument(
+        "--min-valid-fraction",
+        type=float,
+        default=1.0,
+        help="minimum contract-valid fraction required by --require-contract (default 1.0)",
     )
     parser.add_argument("--list-configs", action="store_true", help="print configuration availability and exit")
     return parser
@@ -157,6 +176,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dataset error: {exc}", file=sys.stderr)
         return 2
 
+    # The v2 contract is always measured so every artifact states whether its
+    # dataset is attributable. It is only a hard gate when --require-contract is
+    # set, so an exploratory blocked run still produces a diagnostic artifact.
+    contract_report = validate_dataset([query.raw for query in queries])
+    attributable = contract_report.total > 0 and contract_report.valid_count == contract_report.total
+    if args.require_contract:
+        try:
+            require_attributable(contract_report, args.min_valid_fraction)
+        except DatasetContractError as exc:
+            print(f"dataset contract error: {exc}", file=sys.stderr)
+            return 2
+
     run_id = new_run_id()
     effective_config = effective_retrieval_config()
     config_payload = {
@@ -185,6 +216,11 @@ def main(argv: list[str] | None = None) -> int:
         "top_k": args.top_k,
         "allow_dirty": bool(args.allow_dirty),
         "synthetic_retriever": False,
+        # Whether the scored samples satisfy golden-set-contract/v2. A run on a
+        # non-attributable dataset may still be executed, but it is never labeled
+        # a benchmark result below.
+        "dataset_contract": contract_report.as_dict(),
+        "attributable": attributable,
     }
     environment = render_environment(collect_environment())
     # Coverage describes the samples this run actually used, not the whole file.
@@ -192,9 +228,10 @@ def main(argv: list[str] | None = None) -> int:
 
     runs = [run_configuration(name, queries, top_k=args.top_k) for name in configs]
     summary = summarize_run(runs, available_buckets=coverage.get("available_buckets"))
-    # A blocked run contains no retrieval-quality result, so the artifact must
-    # not advertise itself as benchmark evidence.
-    metadata["results_are_benchmark"] = bool(summary.get("any_results"))
+    # A blocked run contains no retrieval-quality result, and a run on a dataset
+    # that fails the v2 contract is not attributable, so neither may advertise
+    # itself as benchmark evidence.
+    metadata["results_are_benchmark"] = bool(summary.get("any_results")) and attributable
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id

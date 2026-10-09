@@ -15,12 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.models import BenchmarkQuery, RelevantItem
-from benchmarks.relevance import STABLE_ID_FIELDS, relevant_items_from_texts, stable_id_from
+from benchmarks.relevance import (
+    has_stable_identity,
+    relevant_items_from_annotations,
+    relevant_items_from_texts,
+    stable_id_from,
+)
 
 DEFAULT_DATASET_PATH = "tests/evaluation/golden_set.jsonl"
-
-# Fields that would be required for Level-1 (stable id) relevance matching.
-_STABLE_ID_KEYS = tuple(field for field in STABLE_ID_FIELDS)
 
 # Labels reported by the loader so downstream artifacts can state honestly which
 # breakdowns exist and which do not.
@@ -68,12 +70,15 @@ def relevance_strategies(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
     ``load_queries`` falls back to normalized-text keys for the rows without one.
     Reporting a single strategy would overstate how much ground truth is matched
     by identifier.
+
+    A row counts as level 1 when identity is present *anywhere* it can be read —
+    a flat ``doc_id`` or a v2 ``annotations[]`` entry — so the reported strategy
+    always matches what ``load_queries`` will actually do.
     """
     with_id = 0
     without_id = 0
     for row in rows:
-        has_id = any(row.get(field) not in (None, "") for field in _STABLE_ID_KEYS)
-        if has_id:
+        if has_stable_identity(row):
             with_id += 1
         else:
             without_id += 1
@@ -146,7 +151,12 @@ def load_queries(
         if stable:
             relevant: list[RelevantItem] = [RelevantItem(key=stable, text=str(contexts[0]))]
         else:
-            relevant = relevant_items_from_texts([str(item) for item in contexts])
+            # A contract-valid row keeps identity in `annotations`, so it must be
+            # matched by stable id too; otherwise it would be scored by the very
+            # text fallback that `golden-set-contract/v2` exists to rule out.
+            relevant = relevant_items_from_annotations(row.get("annotations"))
+            if not relevant:
+                relevant = relevant_items_from_texts([str(item) for item in contexts])
         queries.append(
             BenchmarkQuery(
                 sample_id=sample_id,
