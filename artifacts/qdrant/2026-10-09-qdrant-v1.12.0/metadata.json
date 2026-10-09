@@ -2,9 +2,9 @@
   "run_id": "2026-10-09-qdrant-v1.12.0",
   "validation_id": "VAL-STORE-001",
   "artifact_contract": "real-service Qdrant store validation",
-  "git_sha": "6d2576e",
+  "git_sha": "62023e553967c5535dffaa9a4df06d22ec09f778",
   "branch": "fix/engineering-audit-p0",
-  "working_tree": "uncommitted changes on the branch above; the script and gated test are the committed evidence",
+  "working_tree": "clean at the commit named above; a re-run at that commit reproduces checks.json byte-for-byte (this artifact file itself is committed in the following commit)",
   "timestamp": "2026-10-09",
   "environment": {
     "host": "single local host",
@@ -33,7 +33,7 @@
   },
   "commands": [
     "docker run -d --name rag-validation-qdrant -p 127.0.0.1:6333:6333 qdrant/qdrant:v1.12.0",
-    "QDRANT_HOST=127.0.0.1 QDRANT_PORT=6333 python3 -u scripts/validation/validate_qdrant_store.py",
+    "QDRANT_HOST=127.0.0.1 QDRANT_PORT=6333 python3 -u scripts/validation/validate_qdrant_store.py --emit-checks artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json",
     "RUN_RUNTIME_VALIDATION=1 python3 -m pytest tests/integration/test_qdrant_store_runtime.py -q"
   ],
   "observations": {
@@ -60,6 +60,6 @@
     "Single host, single node. No Qdrant cluster, replica, HA, TLS or throughput measurement.",
     "Deterministic vectors, so no BGE/CLIP/PaddleOCR model-quality claim.",
     "Not a production-cluster result; production HA/SLO remain PENDING.",
-    "The capture reflects the working tree at commit 6d2576e plus the uncommitted changes on the branch; a re-run reproduces the same checks."
+    "The capture reflects the code at the commit named in git_sha; a re-run at that commit reproduces checks.json byte-for-byte."
   ]
 }
