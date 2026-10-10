@@ -13,7 +13,7 @@ Levels (canonical vocabulary: [`docs/evidence-map.md`](../evidence-map.md)):
 - **NEEDS_HUMAN** — requires a human decision that has not been made.
 - **NOT_VERIFIED** — claimed nowhere; no evidence either way.
 
-Commit: `61be8a9` · 2026-10-10 UTC. CI status: see [`ACCEPTANCE_MATRIX.md`](ACCEPTANCE_MATRIX.md).
+**Code commit under test:** `61be8a9`. The closeout documents themselves are committed on top of it, so the branch head (PR #92) advances past this SHA; the verification results below are for `61be8a9` (code unchanged by the doc commits). · 2026-10-10 UTC. CI status: see [`ACCEPTANCE_MATRIX.md`](ACCEPTANCE_MATRIX.md).
 
 ## 1. Retrieval benchmark integrity
 

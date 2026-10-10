@@ -3,7 +3,7 @@
 What may be written on a resume from this work, what must be framed as
 post-employment open-source work, and what must never be claimed.
 
-Commit: `61be8a9` · 2026-10-10 UTC. Subject to the same evidence rules as
+**Code commit under test:** `61be8a9`. The closeout documents themselves are committed on top of it, so the branch head (PR #92) advances past this SHA; the verification results below are for `61be8a9` (code unchanged by the doc commits). · 2026-10-10 UTC. Subject to the same evidence rules as
 [`EVIDENCE_MANIFEST.md`](EVIDENCE_MANIFEST.md).
 
 ## 0. The boundary that governs everything

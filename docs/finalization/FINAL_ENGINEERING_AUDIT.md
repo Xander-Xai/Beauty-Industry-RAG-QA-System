@@ -4,13 +4,14 @@
 |---|---|
 | Repository | `github.com/Xander-Xai/Beauty-Industry-RAG-QA-System` |
 | Branch | `finalize/engineering-closeout` |
-| Commit | `61be8a9` (this document is written at this SHA) |
+| Commit (code under test) | `61be8a9` (the doc commits follow on top; branch head is PR #92) |
 | Base | `origin/fix/rerank-gate-reliability-audit` (`7d30f38`, PR #91) |
 | Audit date (UTC) | 2026-10-10 |
 | Host | Linux 6.6 WSL2, 20 vCPU, 15 GiB RAM, Python 3.10.12 |
 | GPU present | 1× NVIDIA GeForce RTX 5060 Ti (torch 2.12.1+cu130) |
 | CrossEncoder weights | **absent** (`./models/cross-encoder-law`, `./models/cross-encoder-base`) |
 | Local suite | `2896 passed, 17 skipped` in 146 s — see [acceptance matrix](ACCEPTANCE_MATRIX.md) |
+| CI at `0a6b77a` (PR #92) | all 9 required checks passed |
 
 This audit records what was changed, why, and at what evidence level. It does not
 claim any retrieval-quality metric: no metric can be quoted from a host whose

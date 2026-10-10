@@ -17,4 +17,6 @@ work**, not an employer's production system, and no retrieval metric is claimed
 because no corpus or CrossEncoder weights are present. The host used for local
 verification has a single GPU (1× RTX 5060 Ti), not a dual-A5000 topology.
 
-Commit at time of writing: `61be8a9`.
+Code commit under test: `61be8a9` (the closeout doc commits follow on top; the
+branch head is PR #92). Local suite at that commit: `2896 passed, 17 skipped`;
+CI at `0a6b77a` (PR #92): all 9 required checks passed.

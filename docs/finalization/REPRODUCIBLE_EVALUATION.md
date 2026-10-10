@@ -4,7 +4,7 @@ How a third party with the right assets reproduces the retrieval evaluation —
 and, just as important, how the repository behaves when those assets are absent
 (it reports `BLOCKED`, it does not invent numbers).
 
-Commit: `61be8a9` · written 2026-10-10 UTC.
+**Code commit under test:** `61be8a9`. The closeout documents themselves are committed on top of it, so the branch head (PR #92) advances past this SHA; the verification results below are for `61be8a9` (code unchanged by the doc commits). · written 2026-10-10 UTC.
 
 ## 1. What is required (and what is missing here)
 
