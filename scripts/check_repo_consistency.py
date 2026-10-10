@@ -67,6 +67,9 @@ CANONICAL_DOCS = [
     # above exist to catch, so it is named here rather than left in a nested
     # directory where no glob would pick it up.
     *sorted((ROOT / "docs" / "demo").glob("*.md")),
+    # The finalization closeout records make evidence-level claims, so they are
+    # held to the same guards as the guides.
+    *sorted((ROOT / "docs" / "finalization").glob("*.md")),
     ROOT / "artifacts/benchmarks/README.md",
 ]
 
@@ -3173,11 +3176,22 @@ def check_qdrant_evidence_reconciliation(errors: list[str], root: Path | None = 
         errors.extend(qdrant_lineage_errors(name, path.read_text(encoding="utf-8"), artifact_exists))
 
     if artifact_exists:
-        fail(
-            errors,
-            f"a Qdrant real-service artifact now exists under {QDRANT_RUNTIME_ARTIFACT_GLOB}; the "
-            "current-evidence wording is now stale and must be re-derived from that artifact",
-        )
+        # Once a real-service artifact is committed, the affirmative wording is
+        # licensed; the tripwire becomes a requirement instead of a failure: the
+        # classifying documents must cite the committed artifact, so the wording
+        # cannot drift without it. (Removing the artifact restores the stricter
+        # "no artifact" wording requirement in qdrant_lineage_errors.)
+        for name in QDRANT_EVIDENCE_LINEAGE_DOCS:
+            path = base / name
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "artifacts/qdrant" not in text:
+                fail(
+                    errors,
+                    f"{name}: a Qdrant real-service artifact exists under {QDRANT_RUNTIME_ARTIFACT_GLOB}; "
+                    "cite it so the current-evidence wording is derived from the committed run",
+                )
 
 
 def check_canonical_runtime_is_not_observability_gated(errors: list[str]) -> None:
@@ -4615,6 +4629,184 @@ def k8s_static_check_count_errors(name: str, text: str, expected: int) -> list[s
     return errors
 
 
+#: Document that enumerates the golden-set contract's required fields. The list is
+#: a hand-maintained copy of a code list, so it drifts the moment the validator
+#: changes — which is exactly how a doc can promise a weaker provenance block than
+#: the code enforces.
+GOLDEN_SET_CONTRACT_DOC = "docs/benchmark-data-quality.md"
+
+#: Document that defines the publication-gate predicate.
+BENCHMARK_GATE_DOC = "docs/validation/rag-eval-readiness.md"
+
+_GOLDEN_SET_CONTRACT_FENCE_RE = re.compile(r"```text\n(?P<body>.*?)\n```", re.DOTALL)
+
+
+def _golden_set_contract_block(text: str) -> str | None:
+    """The fenced block that enumerates the contract's fields.
+
+    Documents contain several ```text blocks (bucket lists, exit codes), so the
+    contract block is identified by its own content rather than by position.
+    """
+    for match in _GOLDEN_SET_CONTRACT_FENCE_RE.finditer(text):
+        body = match.group("body")
+        if "sample_id" in body and "annotations" in body:
+            return body
+    return None
+
+
+def golden_set_contract_required_fields(root: Path | None = None) -> set[str]:
+    """The field names ``validate_row`` actually requires.
+
+    Derived by executing the validator against a row that is complete except for
+    each candidate field in turn, so the guard can never disagree with the code by
+    being out of date itself.
+    """
+    base = ROOT if root is None else root
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    from benchmarks.golden_set_contract import validate_row  # noqa: PLC0415 - optional import
+
+    complete = {
+        "sample_id": "s0",
+        "question": "q",
+        "business_type": "regulation",
+        "difficulty": "easy",
+        "visual_required": False,
+        "complexity_label": "simple",
+        "corpus_version": "corpus_2026_10",
+        "corpus_sha256": "a" * 64,
+        "annotations": [{"doc_id": "d", "chunk_id": "c", "text": "t"}],
+        "annotation": {
+            "annotator": "annotator-a",
+            "method": "manual",
+            "annotated_at": "2026-10-09",
+            "source": "human",
+            "review_status": "REVIEWED",
+            "reviewed_by": "reviewer-b",
+            "reviewed_at": "2026-10-10",
+        },
+    }
+    if validate_row(complete).reasons:
+        return set()
+    required: set[str] = set()
+    for field in complete:
+        candidate = {key: value for key, value in complete.items() if key != field}
+        # Removing a top-level field must produce a reason naming that field. A
+        # nested provenance key is removed on its own below.
+        if any(field in reason for reason in validate_row(candidate).reasons):
+            required.add(field)
+    provenance = complete["annotation"]
+    for field in provenance:
+        candidate = {**complete, "annotation": {k: v for k, v in provenance.items() if k != field}}
+        if any(f"annotation_{field}" in reason for reason in validate_row(candidate).reasons):
+            required.add(f"annotation.{field}")
+    return required
+
+
+def golden_set_contract_doc_errors(display: str, text: str, required: set[str]) -> list[str]:
+    """The documented field list must cover every field the validator requires."""
+    if not required:
+        return [
+            "could not derive the golden-set contract's required fields from "
+            "benchmarks/golden_set_contract.py; the doc/code guard has nothing to compare"
+        ]
+    body = _golden_set_contract_block(text)
+    if body is None:
+        return [f"{display}: no contract field block found to compare against the validator"]
+    # `annotations` contains the substring `annotation`, so match the provenance
+    # line by shape rather than by substring.
+    has_provenance_line = re.search(r"^annotation\s*\{", body, re.MULTILINE) is not None
+    if not has_provenance_line:
+        # The document does not enumerate the provenance block, so it makes no
+        # claim to check.
+        return []
+    documented = set(re.findall(r"^\s*([a-z_]+)", body, re.MULTILINE))
+    # The `annotation` line carries its sub-fields inline inside braces.
+    inline = re.search(r"^annotation\s*\{([^}]*)\}", body, re.MULTILINE)
+    if inline:
+        documented |= {f"annotation.{name.strip()}" for name in inline.group(1).split(",") if name.strip()}
+    missing = sorted(required - documented)
+    if missing:
+        return [f"{display}: the documented contract block omits field(s) the validator requires: {', '.join(missing)}"]
+    return []
+
+
+def golden_set_contract_prose_errors(display: str, text: str, required: set[str]) -> list[str]:
+    """A document that names provenance fields in prose must name them completely.
+
+    Used for documents that describe the contract without reproducing its field
+    block. If it enumerates no provenance fields at all, it makes no claim to check.
+    """
+    if "annotator" not in text:
+        return []
+    if not re.search(r"\breview_status\b", text):
+        return [
+            f"{display}: describes golden-set annotation provenance but never mentions "
+            "`review_status`, which the validator requires"
+        ]
+    return []
+
+
+def check_rerank_evidence_vocabulary(errors: list[str], root: Path | None = None) -> None:
+    """Keep the reranking-evidence vocabulary canonical across docs and code.
+
+    Two vocabularies must not drift:
+
+    * the **provenance** labels in ``benchmarks/rerank_validation.py`` — a doc
+      that names a third label (or invents a synonym) is describing a path the
+      harness cannot produce;
+    * the statement that ``deterministic_fallback`` is *not* reranking evidence —
+      the single most important sentence in that module, and the one a summary
+      would be most likely to drop.
+
+    Derived from the module's own constants, so it cannot fall out of date.
+    """
+    base = ROOT if root is None else root
+    module = base / "retrieval" / "rerank_validation.py"
+    doc = base / "docs" / "production-readiness.md"
+    if not module.exists() or not doc.exists():
+        return
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    from retrieval.rerank_validation import (  # noqa: PLC0415 - optional import
+        PROVENANCE_CROSS_ENCODER,
+        PROVENANCE_FALLBACK,
+    )
+
+    text = doc.read_text(encoding="utf-8")
+    for label in (PROVENANCE_CROSS_ENCODER, PROVENANCE_FALLBACK):
+        if label not in text:
+            errors.append(
+                f"{_display(doc)}: does not mention the rerank provenance label {label!r} defined in "
+                "retrieval/rerank_validation.py"
+            )
+    # The gate's numbers must never be described as measured.
+    if "gpu_metrics_measured" in text and "never measures throughput" not in text:
+        errors.append(
+            f"{_display(doc)}: reports gpu_metrics_measured without stating that the gate never measures throughput"
+        )
+
+
+def check_golden_set_contract_doc_fields(errors: list[str], root: Path | None = None) -> None:
+    """Keep the documented contract field list in sync with the validator."""
+    base = ROOT if root is None else root
+    required = golden_set_contract_required_fields(base)
+    if not required:
+        errors.append(
+            "could not derive the golden-set contract's required fields from "
+            "benchmarks/golden_set_contract.py; the doc/code guard has nothing to compare"
+        )
+        return
+    doc = base / GOLDEN_SET_CONTRACT_DOC
+    if doc.exists():
+        errors.extend(golden_set_contract_doc_errors(_display(doc), doc.read_text(encoding="utf-8"), required))
+    gate_doc = base / BENCHMARK_GATE_DOC
+    if gate_doc.exists():
+        errors.extend(
+            golden_set_contract_prose_errors(_display(gate_doc), gate_doc.read_text(encoding="utf-8"), required)
+        )
+
+
 def check_k8s_static_check_counts(errors: list[str], root: Path | None = None) -> None:
     """Every stated K8s static-check count must match the module that defines them."""
     base = ROOT if root is None else root
@@ -4752,6 +4944,8 @@ def main() -> int:
     check_enumerated_section_counts(errors)
     check_slo_objective_counts(errors)
     check_k8s_static_check_counts(errors)
+    check_golden_set_contract_doc_fields(errors)
+    check_rerank_evidence_vocabulary(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):

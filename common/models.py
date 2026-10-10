@@ -62,6 +62,9 @@ class EvidenceGateResult(BaseModel):
     retrieval_agreement_score: float = 0.0
     doc_consistency_score: float = 0.0
     decision: str = "reject"  # "pass" | "enhanced_generate" | "reject"
+    # "normal" when CrossEncoder weights are present; the fail-closed marker when
+    # they are not, so the degraded state is observable rather than silent.
+    gate_mode: str = "normal"
     top_docs: list[RerankResult] = Field(default_factory=list)
 
 

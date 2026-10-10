@@ -15,7 +15,21 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 # Ensure project root is importable for common models
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+# This service imports its sibling rewriter by top-level name, so its own
+# directory must be on the path.
+_SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SERVICE_DIR not in sys.path:
+    sys.path.insert(0, _SERVICE_DIR)
+
+# monitoring-service is a sibling component directory with a dash in its name;
+# add it to the path so the shared MetricsCollector is importable.
+_MONITORING_SERVICE_DIR = os.path.join(PROJECT_ROOT, "monitoring-service")
+if _MONITORING_SERVICE_DIR not in sys.path:
+    sys.path.insert(0, _MONITORING_SERVICE_DIR)
 
 from metrics_collector import MetricsCollector
 from rewriter import QueryRewriter

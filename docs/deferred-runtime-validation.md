@@ -10,10 +10,13 @@
 > [#60](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/60) and
 > [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85).
 >
-> **What it is not.** It is not evidence that anything below passed. Every entry's
-> status is `NOT EXECUTED`. Completing one means producing the named artifact and
-> promoting the evidence level exactly as the "Evidence promotion rule" says —
-> never by editing this document.
+> **What it is not.** It is not a blanket claim that anything below passed. Each
+> entry's `Execution` column says whether that validation was run. Completing one
+> means producing the named artifact and promoting the evidence level exactly as
+> the "Evidence promotion rule" says — never by editing this document. Two entries
+> have been executed since this index was created: `VAL-DEGRADE-001` (a
+> deterministic assertion, no environment) and `VAL-STORE-001` (a captured
+> real-Qdrant run). Everything else stays `NOT EXECUTED`.
 >
 > Each entry is written so that, once the environment exists, the procedure can be
 > run without re-deciding how to validate it. Evidence levels follow the canonical
@@ -35,8 +38,8 @@
 | VAL-RAGAS-001 | Real RAGAS quality evaluation | `PENDING` | [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) | `NOT EXECUTED` |
 | VAL-K8S-001 | Real Kubernetes deployment + readiness admission | `PENDING` | [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54) | `NOT EXECUTED` |
 | VAL-E2E-001 | Browser → real RAG backend end-to-end smoke | `PENDING` | [#60](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/60) | `NOT EXECUTED` |
-| VAL-STORE-001 | Real Qdrant service (dense path, epoch point ids, payload filters) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
-| VAL-DEGRADE-001 | Gate degradation with no rerank weights (deterministic, no environment) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
+| VAL-STORE-001 | Real Qdrant service (dense path, epoch point ids, payload filters) | `LOCAL_REAL_VALIDATION` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `EXECUTED` — [record](validation/qdrant-local-real-validation.md) |
+| VAL-DEGRADE-001 | Gate degradation with no rerank weights (deterministic, no environment) | `REPO_VERIFIED` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `EXECUTED` — `tests/test_evidence_gate_degradation.py` |
 | VAL-RERANK-001 | Real two-stage rerank contribution (BiEncoder → CrossEncoder) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
 | VAL-TOPO-001 | Redis Cluster/Sentinel, multi-node ES, TLS, external load balancer | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
 | VAL-ALERT-001 | Sustained alert evaluation under real traffic | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
@@ -208,7 +211,7 @@
 ## VAL-STORE-001 — Real Qdrant service
 
 - **Capability:** the dense recall path against the actual vector engine: epoch-versioned point ids, the payload filters built by `auth.bitmask_rbac.build_qdrant_filter` / `build_qdrant_image_filter`, and text/image collection separation.
-- **Current evidence level:** `PENDING` (adapter contract + writer `REPO_VERIFIED`).
+- **Current evidence level:** `LOCAL_REAL_VALIDATION` (adapter contract + writer `REPO_VERIFIED`; real-server run captured in [the Qdrant validation record](validation/qdrant-local-real-validation.md)).
 - **Reason deferred:** every regression run in this repository uses an in-process `QdrantClient(":memory:")`; no artifact from a real Qdrant server exists. Elasticsearch does have `LOCAL_REAL_VALIDATION` (authenticated ES 8.11), so the two storage engines currently sit at **different** evidence levels.
 - **Required environment / data:** a single host with a real Qdrant container; a corpus built by `run_offline.py` from one sealed epoch; at least two test identities with distinct `role_mask` / `dept_mask`.
 - **Exact procedure:** build and seal an epoch, point the online service at real Qdrant, then assert: (a) results only contain the active epoch, (b) a `role_mask` change removes documents before fusion, (c) text hits and image hits come from the expected collections, (d) a rebuilt epoch does not collide with the previous one.
@@ -216,20 +219,20 @@
 - **Acceptance criteria:** all four observations hold against a real server, not `:memory:`.
 - **Failure interpretation:** an in-memory `QdrantClient` run, or a writer-only test against a real server, is not this validation.
 - **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with a captured real-server run.
-- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+- **Related issue:** #85. **Status:** `EXECUTED` — [Qdrant validation record](validation/qdrant-local-real-validation.md).
 
 ## VAL-DEGRADE-001 — Gate degradation with no rerank weights
 
 - **Capability:** the end-to-end consequence of missing CrossEncoder weights on the Evidence Gate decision.
-- **Current evidence level:** `PENDING` (deterministic fallback path `REPO_VERIFIED`; the consequence is documented but not asserted by any test).
-- **Reason deferred:** nothing — this needs **no environment and no weights**. It is listed here because the consequence is the largest interpretation gap in the repository: without CrossEncoder weights `ce_top1_score` and `ce_top3_mean_score` stay `0`, so the Evidence Gate maximum becomes `0.2·agreement + 0.2·doc_consistency ≤ 0.40`, below `low_confidence = 0.55` (`config.json` → `retrieval.evidence_gate`), and **every query is refused**.
+- **Current evidence level:** `REPO_VERIFIED` (deterministic fallback path asserted end to end by `tests/test_evidence_gate_degradation.py`).
+- **Why it mattered:** this needs **no environment and no weights**. It was the largest interpretation gap in the repository: without CrossEncoder weights `ce_top1_score` and `ce_top3_mean_score` stay `0`, so the Evidence Gate maximum becomes `0.2·agreement + 0.2·doc_consistency ≤ 0.40`, below `low_confidence = 0.55` (`config.json` → `retrieval.evidence_gate`), and **every query is refused**. That is now asserted, and the precheck `python3 -m retrieval.rerank_status` reports the same state without loading a model.
 - **Required environment / data:** none beyond the default test dependencies; a deterministic recall fixture whose rerank scores are produced by the fallback.
 - **Exact procedure:** drive `retrieval/evidence_gate.py::evaluate` with fallback-produced rerank results and assert the decision is refusal for every fixture, then assert the arithmetic identity against the configured weights and threshold.
 - **Expected artifact:** a test that fails if the ceiling ever rises above `low_confidence` without real weights.
 - **Acceptance criteria:** the fail-closed property is asserted, not narrated, and the assertion reads the thresholds from `config.json` rather than hardcoding them.
 - **Failure interpretation:** a passing unit test of `evaluate()` in isolation is not this validation; the point is the *mainline* consequence.
 - **Evidence promotion rule:** `PENDING` → `REPO_VERIFIED` once the assertion exists (no artifact required — the property is deterministic), and to `LOCAL_REAL_VALIDATION` only after observing a real deployment refuse queries for the same reason.
-- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+- **Related issue:** #85. **Status:** `EXECUTED` — `tests/test_evidence_gate_degradation.py`; still `REPO_VERIFIED` (a real deployment observing the refusal would promote it to `LOCAL_REAL_VALIDATION`).
 
 ## VAL-RERANK-001 — Real two-stage rerank contribution
 

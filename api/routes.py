@@ -17,7 +17,7 @@ import os
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
 
@@ -90,6 +90,28 @@ def _decrement_active():
 # ─── POST /api/query ────────────────────────────────────────
 
 
+def _run_audit(ctx) -> dict | None:
+    """Build the per-request run audit, when the operator asked for it.
+
+    Off by default so the response shape is unchanged for existing clients. The
+    report is what makes a silent degradation visible: with the CrossEncoder
+    weights absent the run refuses at the Evidence Gate, and nothing in the
+    answer or the status code says the reranker was dead.
+
+    Never allowed to fail a request — an audit that breaks the endpoint would be
+    worse than no audit.
+    """
+    if os.environ.get("RAG_AUDIT_REPORT", "").strip().lower() not in ("1", "true", "yes"):
+        return None
+    try:
+        from core.run_report import build_run_report
+
+        return build_run_report(ctx).as_dict()
+    except Exception as exc:  # noqa: BLE001 - audit must never break the response
+        logger.warning("run audit unavailable: %s: %s", type(exc).__name__, exc)
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 @router.post(
     "/query",
     response_model=QueryResponse,
@@ -128,7 +150,15 @@ def query_handler(
     finally:
         _decrement_active()
 
-    cache_hit = ctx.cache_hit_level in ("L1", "L2")
+    cache_hit = ctx.cache_hit_level in ("L1", "L2", "L2_SESSION")
+
+    # A pipeline-level HTTP contract (e.g. P2 overload → 503) is returned here
+    # rather than through `QueryResponse`, whose `answer: str` cannot carry a
+    # status code. Without this the 503 branch fails response validation and the
+    # client receives a 500.
+    if ctx.http_status_override is not None:
+        status_code, content = ctx.http_status_override
+        return JSONResponse(status_code=status_code, content=content)
 
     return QueryResponse(
         answer=ctx.final_response,
@@ -138,6 +168,7 @@ def query_handler(
         evidence_doc_ids=ctx.evidence_locked_doc_ids,
         latency_ms=round(ctx.get_total_latency_ms(), 2),
         cache_hit=cache_hit,
+        audit=_run_audit(ctx),
     )
 
 
@@ -159,7 +190,7 @@ def chat_handler(
 
     维护会话状态（最近 6 轮对话历史），支持证据锁定续写。
     """
-    session_state = SessionState.get_or_create(req.session_id)
+    session_state = SessionState.get_or_create(req.session_id, owner_id=identity.user_id)
 
     ctx = RequestContext(
         user_input=req.message,
@@ -185,7 +216,7 @@ def chat_handler(
         history.append(ChatMessage(role="user", content=round_data["user_input"]))
         history.append(ChatMessage(role="assistant", content=round_data["response"]))
 
-    cache_hit = ctx.cache_hit_level in ("L1", "L2")
+    cache_hit = ctx.cache_hit_level in ("L1", "L2", "L2_SESSION")
 
     return ChatResponse(
         answer=ctx.final_response,
@@ -215,7 +246,7 @@ def continuation_handler(
 
     完整续写逻辑需要微服务架构支持，此处返回空桩响应。
     """
-    SessionState.get_or_create(req.session_id)
+    SessionState.get_or_create(req.session_id, owner_id=identity.user_id)
     return {
         "answer": "",
         "has_more": False,
@@ -238,7 +269,7 @@ def dialog_history_handler(
     """
     对话历史查询入口（单块模式简化版）。
     """
-    session = SessionState.get_or_create(session_id)
+    session = SessionState.get_or_create(session_id, owner_id=identity.user_id)
     return {
         "session_id": session_id,
         "rounds": session.dialog_rounds,

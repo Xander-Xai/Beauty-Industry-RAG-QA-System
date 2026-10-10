@@ -20,19 +20,49 @@ HIT_KS = (1, 3, 5, 10)
 MRR_K = 10
 NDCG_K = 10
 
+# Graded relevance levels. Defined here rather than in ``relevance`` so the
+# dataclass below can carry a default without importing the module that imports
+# it. ``NOT_RELEVANT`` lets an annotator record a candidate they considered and
+# rejected; it is dropped before scoring, never counted as retrievable evidence.
+RELEVANCE_NOT_RELEVANT = 0
+RELEVANCE_PARTIALLY_RELEVANT = 1
+RELEVANCE_HIGHLY_RELEVANT = 2
+
+RELEVANCE_GRADES = (
+    RELEVANCE_NOT_RELEVANT,
+    RELEVANCE_PARTIALLY_RELEVANT,
+    RELEVANCE_HIGHLY_RELEVANT,
+)
+
+#: Minimum grade treated as relevant at all. Binary Hit/Recall count every
+#: grade >= this as a relevant passage; graded NDCG uses the whole scale.
+GRADE_THRESHOLD_RELEVANT = RELEVANCE_PARTIALLY_RELEVANT
+
+RELEVANCE_GRADE_NAMES = {
+    RELEVANCE_NOT_RELEVANT: "not_relevant",
+    RELEVANCE_PARTIALLY_RELEVANT: "partially_relevant",
+    RELEVANCE_HIGHLY_RELEVANT: "highly_relevant",
+}
+
 
 @dataclass(frozen=True)
 class RelevantItem:
     """One ground-truth passage that a query is expected to retrieve.
 
-    ``key`` is the stable identifier when the dataset exposes one
-    (``doc_id`` / ``chunk_id`` / ``source_id``). When no stable identifier is
-    available the relevance layer derives a deterministic normalized key from
-    ``text`` instead.
+    ``key`` is the stable identifier when the dataset exposes one, resolved by
+    :func:`benchmarks.relevance.relevance_key` so that ``chunk_id`` is qualified
+    by ``doc_id``. When no stable identifier is available the relevance layer
+    derives a deterministic normalized key from ``text`` instead.
+
+    ``relevance`` is the graded-relevance level (see
+    :data:`benchmarks.relevance.RELEVANCE_GRADES`). It defaults to
+    ``RELEVANCE_HIGHLY_RELEVANT`` so a dataset with no grades keeps exactly the
+    binary behaviour it had before grades existed.
     """
 
     key: str
     text: str
+    relevance: int = RELEVANCE_HIGHLY_RELEVANT
 
 
 @dataclass(frozen=True)

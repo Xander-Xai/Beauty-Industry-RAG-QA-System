@@ -1908,6 +1908,7 @@ def test_config_probe_probes_each_backend_once(monkeypatch):
     from benchmarks import backends
 
     calls = []
+    seen_passages = []
 
     def make_probe(name, available):
         def probe():
@@ -1916,13 +1917,20 @@ def test_config_probe_probes_each_backend_once(monkeypatch):
 
         return probe
 
+    def fake_probe_corpus(count, golden_passages=None):
+        # The golden passages must reach the corpus check, otherwise it has
+        # nothing to compare the live index against and blocks unconditionally.
+        seen_passages.append(golden_passages)
+        return make_probe("corpus", True)()
+
     monkeypatch.setitem(backends.PROBES, "bm25", make_probe("bm25", True))
     # The corpus check is dispatched directly rather than through PROBES.
-    monkeypatch.setattr(backends, "probe_corpus", lambda count: make_probe("corpus", True)())
-    probed = backends.probe_config_backends("bm25", 1)
+    monkeypatch.setattr(backends, "probe_corpus", fake_probe_corpus)
+    probed = backends.probe_config_backends("bm25", 1, ["golden passage"])
     assert calls.count("bm25") == 1
     assert calls.count("corpus") == 1
     assert len(probed) == 2
+    assert seen_passages == [["golden passage"]]
 
 
 def test_evaluate_config_reuses_supplied_snapshot(monkeypatch):

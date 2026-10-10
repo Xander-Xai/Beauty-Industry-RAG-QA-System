@@ -7,8 +7,9 @@
   integration execution in their development record: the offline writers were run
   against a real local Qdrant service/container together with a real local
   Elasticsearch (PR #7 exists because `search_after` sorted on `_id` and failed
-  against real Elasticsearch 8). No artifact of that run is committed here, so it
-  is development lineage, not a reproducible artifact — see
+  against real Elasticsearch 8). That historical run's own artifact is not
+  committed; a separate current single-host real-service validation is now
+  committed under `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` — see
   [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Post-merge reconciliation: PR #9 (squash merge `b1479d8`).
 - v2.5 working-milestone runtime/security validation merged via PR #13; RAGAS correctness and dependency isolation merged via PR #14 (both are part of `main` at this audit point).
@@ -132,7 +133,7 @@ or credential is unavailable here, so the capability is not validated.
 | Cache | Cache implementations and metrics exist; full invalidation model not certified | `cache/`, cache service, metrics code | `tests/test_cache.py`, `tests/test_metrics_endpoint.py` | Cache settings in `config.json` | CI unit tests; no workload benchmark | `REPO_VERIFIED` (implementation) / `PENDING` (full invalidation model) | Keep full design behavior unverified |
 | Frontend contract | Four claims that must never be merged into one: **(A)** the React client reads auth/RBAC metadata and routes single-query, chat, session and stats panels to the monolith API; **(B)** GitHub Actions installs from the lockfile and builds the frontend on every push/PR; **(C)** frontend + real backend end-to-end runtime integration is not established; **(D)** production deployment is deployment-specific and not a repository claim | (A) `frontend/src/App.jsx`, `api/routes_auth.py` metadata endpoint. (B) `.github/workflows/ci.yml` job `frontend-build` (`npm ci` then `npm run build`). (C) `docs/demo/capture_demo.py` drives the real UI against the synthetic `docs/demo/mock_api.py`, never the monolith — a demo capture, not E2E | (A) `tests/test_auth_metadata.py`. (B) the build *is* the gate: `frontend-build` is a required check in `docs/main-branch-governance.md`, so there is no separate pytest target and none is implied. (C) no committed artifact shows a browser-rendered frontend against the real backend | `config.json` UI metadata; `frontend/package-lock.json` (lockfileVersion 3, so `npm ci` resolves nothing floating); `frontend/.gitignore` keeps `dist/` untracked | (B) `frontend-build` runs `npm ci` and `npm run build` and fails the merge gate if either fails; a separate `continue-on-error` `npm audit` step reports 4 transitive build-toolchain advisories non-blockingly (see [Known frontend dependency advisories](#known-frontend-dependency-advisories-disclosed-not-gating)). (C) PENDING — no browser run against the real monolith + real ES/Qdrant + real models has ever been recorded as an artifact here. (D) PENDING — deployment state lives outside this repository | `REPO_VERIFIED` (A client + metadata contract) / `REPO_VERIFIED` (B CI build gate) / `PENDING` (C end-to-end runtime integration) / `PENDING` (D production deployment) | Say "the frontend builds in CI". Never say the frontend is validated end-to-end, browser-verified against the real backend, or deployed. A green `frontend-build` proves the bundle compiles and nothing more |
 | Performance | PRD P95/P99/QPS values are design targets | Benchmark utilities exist under `tests/load/`; no reproducible artifact checked in | Load-test code is not a benchmark result | Target values in `config.json` / PRD | CI does not establish production latency/throughput/accuracy | `DESIGN_TARGET` (PRD objectives) / `PENDING` (measured result) | Label numbers as design targets |
-| Retrieval benchmark | Deterministic retrieval-quality harness exists (Recall@1/3/5/10, HitRate@1/3/5/10, MRR@10, binary NDCG@10) with provenance and artifact contract | `benchmarks/`, `artifacts/benchmarks/` | `tests/benchmark/` (deterministic tests, fixture retriever only) | Bucket support: overall / business_type / difficulty; `visual_required` and complexity labels absent (see `docs/benchmark-data-quality.md`) | Framework = REPO_VERIFIED; no real benchmark artifact exists, so the result is PENDING. Configurations currently report BLOCKED (no live Elasticsearch/Qdrant, no BGE weights, no corpus containing the ground truth) | `REPO_VERIFIED` (framework) / `PENDING` (result) | Never publish numbers from a blocked or fixture-retriever run |
+| Retrieval benchmark | Deterministic retrieval-quality harness exists (Recall@1/3/5/10, HitRate@1/3/5/10, MRR@10, NDCG@10 with optional graded relevance 0/1/2) with provenance and artifact contract. Corpus correspondence is measured, not assumed: store fingerprints plus the fraction of golden passages actually indexed | `benchmarks/`, `benchmarks/corpus.py`, `benchmarks/annotation.py`, `artifacts/benchmarks/` | `tests/benchmark/` (deterministic tests, fixture retriever only), `tests/evaluation/test_annotation_lifecycle.py`, `tests/integration/test_retrieval_benchmark_blocking.py`, `tests/runtime/test_live_corpus_probe.py` | Bucket support: overall / business_type / difficulty; `visual_required` and complexity labels absent (see `docs/benchmark-data-quality.md`) | Framework = REPO_VERIFIED; no real benchmark artifact exists, so the result is PENDING. Configurations currently report BLOCKED: no BGE weights, and the measured corpus correspondence is 0 of 60 sampled golden passages. The v2 annotation workspace holds 0 reviewed records | `REPO_VERIFIED` (framework) / `PENDING` (result) | Never publish numbers from a blocked or fixture-retriever run; `results_are_benchmark` is false for both |
 | Performance evidence | Deterministic seven-file artifact contract under `artifacts/performance/`; status `EXECUTED`/`PARTIAL`/`BLOCKED` derived from observation; unmeasured values are `null`, never `0`; unrun work is blocked with a reason | `benchmarks/performance.py`, `benchmarks/performance_cli.py`, `tests/load/locustfile.py` | `tests/performance/` (null-vs-zero, status derivation, provenance, redaction) | `artifacts/performance/README.md` documents the contract; generated runs are git/docker-ignored | Framework = REPO_VERIFIED. No artifact is committed, so no QPS/P95/P99 is measured: result = PENDING. A run against an unreachable target was executed and correctly recorded BLOCKED | `REPO_VERIFIED` (framework) / `PENDING` (result) | Never publish a number from a run that did not execute |
 | Structured audit trail | Business-action events with a stable 9-field schema; redaction enforced on every emit; request-id correlation via contextvar; Redis Stream + daily JSONL persistence; no activate event because no activate endpoint exists | `common/audit.py`, `api/routes_auth.py`, `api/routes.py`, `run_offline.py` | `tests/test_audit_log.py` (schema, three outcomes, key/value redaction, correlation, real login path) | `logs/audit/<date>.jsonl`; Redis Stream `audit:events` capped at 10000 | Implementation is REPO_VERIFIED. No SIEM forwarding and no production audit review; that is a deployment concern, not a repository claim | `REPO_VERIFIED` (implementation) | Keep audit stdout structured for external forwarding |
 | SLO + incident runbook | Five objectives and eight incident procedures written against the degradation paths that exist in code | `docs/slo-runbook.md` | Docs-consistency guards assert the objectives stay `DESIGN_TARGET` | Alert names map 1:1 to `monitoring/prometheus/alerts.yml` | Document is REPO_VERIFIED. Every objective is a `DESIGN_TARGET`; no SLO has been met and none has been measured | `REPO_VERIFIED` (document) / `DESIGN_TARGET` (objectives) | Do not restate a target as an achievement |
@@ -254,10 +255,12 @@ These are implemented in code but not validated against real external assets/run
 - Real configured CLIP model smoke — `EXTERNAL_MODEL_ASSET_REQUIRED`.
 - Real PaddleOCR smoke — external runtime not installed.
 - Real Airflow DAG execution — Airflow not installed.
-- Real Qdrant service/container validation as a reproducible artifact — none is committed. The
-  PR #6/#7 development round ran the writers against a real local Qdrant service, but no artifact of
-  that run exists here, so it cannot be re-executed or verified from this repository. A **new**
-  current real-service run is required to upgrade the current evidence; see
+- Real Qdrant service/container validation as a reproducible artifact — **committed** at
+  `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json`, from a single-host run against
+  `qdrant/qdrant:v1.12.0` with deterministic vectors (epoch point ids, payload filters, RBAC
+  re-filter, text+image fusion, Qdrant-down degradation). This is `LOCAL_REAL_VALIDATION`; it is
+  not a cluster/HA/throughput result and does not measure model quality. The PR #6/#7 development
+  round remains separate lineage; see
   [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Production evaluation / benchmark — no reproducible artifact checked in. The benchmark framework
   exists and is `REPO_VERIFIED`; two structural blockers keep execution open: **no real retrieval
@@ -305,28 +308,26 @@ the drift this section exists to prevent.
 
 | State | What it is | What it is not |
 |---|---|---|
-| Current reproducible coverage | The deterministic tests use the in-process `QdrantClient` (`QdrantClient(":memory:")`) in `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py`, `tests/offline/test_snapshot_builder.py`, `tests/offline/test_image_processing.py`. Re-running the suite reproduces exactly this. | It is not a real-service test, and no collected test connects to a Qdrant service. |
-| Historical development execution | The PR #6/#7 development record states the writers ran against a real local Qdrant service/container, in the same round as the real local Elasticsearch run that produced PR #7 (`search_after` sorted on `_id`, which real Elasticsearch 8 rejects). | It is not a current, reproducible `LOCAL_REAL_VALIDATION`: no artifact of that run is committed, and nothing here re-runs it. |
+| Current deterministic coverage | The deterministic tests use the in-process `QdrantClient` (`QdrantClient(":memory:")`) in `tests/test_offline_text_ingestion.py`, `tests/offline/test_offline_end_to_end.py`, `tests/offline/test_snapshot_builder.py`, `tests/offline/test_image_processing.py`. Re-running the suite reproduces exactly this. | It is not a real-service test, and no collected test connects to a Qdrant service by default. |
+| Current real-service validation | A single-host run against `qdrant/qdrant:v1.12.0` is committed at `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` and reproducible via `tests/integration/test_qdrant_store_runtime.py` / `scripts/validation/validate_qdrant_store.py`. It validates epoch point ids, payload (status/epoch) filters, RBAC re-filter before fusion, text+image `rrf_fusion` merge and Qdrant-down degradation, with deterministic vectors. Evidence level `LOCAL_REAL_VALIDATION`. | It is not a production cluster / HA / throughput result, and it does not measure BGE/CLIP model quality. |
+| Historical development execution | The PR #6/#7 development record states the writers ran against a real local Qdrant service/container, in the same round as the real local Elasticsearch run that produced PR #7 (`search_after` sorted on `_id`, which real Elasticsearch 8 rejects). | It is not itself a committed, reproducible artifact: no artifact of that specific run is committed, and nothing re-runs it. |
 
 Consequences, each of which is a boundary and not a goal:
 
-1. The historical execution is **development lineage**, not current reproducible evidence. It may be
-   described as "the offline writers were exercised against a real local Qdrant service during the
-   PR #6/#7 work"; it may not be described as "this repository validates Qdrant".
-2. It establishes **nothing** about production Qdrant HA, cluster topology or replication, cluster
-   or index performance, retrieval or model quality, QPS or latency. A single-host development run is
-   not a capacity or quality measurement.
+1. The historical execution is **development lineage**, and the current committed single-host run is a
+   local real-service validation. Neither may be described as production Qdrant validation.
+2. Neither establishes **anything** about production Qdrant HA, cluster topology or replication,
+   cluster or index performance, retrieval or model quality, QPS or latency. A single-host run with
+   deterministic vectors is not a capacity or quality measurement.
 3. The `LOCAL_REAL_VALIDATION` recorded for Elasticsearch comes from the separate 2026-10-02 round in
    [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md),
    not from the PR #6/#7 round. The two are separate records and must not be merged.
-4. Upgrading the current evidence requires a **new** real-service run whose artifact is committed and
-   whose command is re-runnable, exactly as `tests/integration/test_es_auth_runtime.py` is for
-   Elasticsearch. Until then the Qdrant rows stay `REPO_VERIFIED` (deterministic coverage) /
-   `PENDING` (real-service artifact).
-5. Do not assert either direction as the only truth: "Qdrant has only ever been tested
-   in memory" is false by the historical record, and "Qdrant is validated against a
-   real service" is unsupported with nothing committed. `scripts/check_repo_consistency.py`
-   rejects both claims, and rejects the repository holding them at the same time.
+4. Production Qdrant cluster, HA, throughput and TLS remain `PENDING`; the Qdrant rows are
+   `LOCAL_REAL_VALIDATION` (single-host real service) / `REPO_VERIFIED` (deterministic coverage).
+5. Claiming "Qdrant has only ever been tested in memory" is false by the historical record and the
+   committed run; claiming "Qdrant is production-validated" is unsupported because the committed run
+   is a single local host. `scripts/check_repo_consistency.py` rejects the erasure and the
+   repository-level contradiction.
 
 ## Known frontend dependency advisories (disclosed, not gating)
 

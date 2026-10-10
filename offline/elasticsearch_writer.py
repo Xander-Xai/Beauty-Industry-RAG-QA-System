@@ -128,9 +128,11 @@ class ElasticsearchWriter:
         mapping = self.client.indices.get_mapping(index=self.index_name)
         properties = _extract_properties(mapping, self.index_name)
         for field, expected in REQUIRED_FIELD_TYPES.items():
-            actual = properties.get(field, {}).get("type")
-            if actual != expected:
-                raise ValueError(f"index {self.index_name!r} field {field!r} must be {expected!r}, found {actual!r}")
+            actual = properties.get(field, {})
+            if not _mapping_matches_type(actual, expected):
+                raise ValueError(
+                    f"index {self.index_name!r} field {field!r} must be {expected!r}, found {actual.get('type')!r}"
+                )
 
     def build_document(self, chunk) -> dict:
         validate_permissions(chunk.role_mask, chunk.dept_mask)
@@ -251,3 +253,17 @@ def _extract_properties(mapping: dict, index_name: str) -> dict:
     if index_name in mapping:
         return mapping[index_name].get("mappings", {}).get("properties", {})
     return mapping.get("mappings", {}).get("properties", {})
+
+
+def _mapping_matches_type(actual: dict, expected: str) -> bool:
+    """Whether one returned mapping field satisfies the required type.
+
+    Elasticsearch omits ``"type": "object"`` when an object declares
+    sub-properties — it is implied by the ``properties``/``dynamic`` body — so an
+    object field is valid when it carries either form. A real ES 8.11 therefore
+    returns ``provenance`` without an explicit ``object`` type, while the
+    declared ``cosmetics_docs`` mapping is still correct.
+    """
+    if actual.get("type") == expected:
+        return True
+    return expected == "object" and ("properties" in actual or "dynamic" in actual)

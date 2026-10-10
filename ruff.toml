@@ -32,6 +32,7 @@ ignore = [
 "generation-service/**/*.py" = ["E402"]
 "monitoring-service/**/*.py" = ["E402"]
 "retrieval-service/**/*.py" = ["E402"]
+"rewrite-service/**/*.py" = ["E402"]
 "common/minio_client.py" = ["E402"]
 # FastAPI's Depends is designed for dependency injection in parameter defaults.
 "api/**/*.py" = ["B008"]

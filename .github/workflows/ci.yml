@@ -259,6 +259,21 @@ jobs:
           DEPLOYMENT_MODE: testing
         run: python -m pytest tests/evaluation/ -q
 
+      # The v2 annotation dataset is committed empty because the annotation pass
+      # is a human task that has not been performed. This step asserts that
+      # nothing slipped into it: a synthesized or LLM-generated record must not
+      # be able to enter the dataset unremarked. When a human starts annotating,
+      # --allow-empty is removed and the step becomes a real audit.
+      - name: Golden set v2 annotation dataset must stay unannotated
+        run: |
+          python scripts/validation/audit_annotations.py \
+            --dataset tests/evaluation/golden_set_v2/annotations_v1.jsonl \
+            --allow-empty
+
+      # Keeps the documented contract field list in sync with the validator.
+      - name: Repository consistency guard
+        run: python scripts/check_repo_consistency.py
+
   ragas-evaluator-smoke:
     name: RAGAS evaluator smoke（需显式启用）
     # Opt-in only. This is an evaluator smoke (reference answers), not a

@@ -1,0 +1,65 @@
+{
+  "run_id": "2026-10-09-qdrant-v1.12.0",
+  "validation_id": "VAL-STORE-001",
+  "artifact_contract": "real-service Qdrant store validation",
+  "git_sha": "62023e553967c5535dffaa9a4df06d22ec09f778",
+  "branch": "fix/engineering-audit-p0",
+  "working_tree": "clean at the commit named above; a re-run at that commit reproduces checks.json byte-for-byte (this artifact file itself is committed in the following commit)",
+  "timestamp": "2026-10-09",
+  "environment": {
+    "host": "single local host",
+    "qdrant_server_image": "qdrant/qdrant:v1.12.0",
+    "qdrant_server_endpoint": "127.0.0.1:6333",
+    "qdrant_client": "qdrant-client 1.18.0 (client major matches; minor is 6 ahead of the server — outside Qdrant's documented support window, see compatibility_risk)",
+    "redis": "redis:7-alpine, 127.0.0.1:6379 db 15 (disposable), for the cache-key isolation check"
+  },
+  "compatibility_risk": {
+    "client_version": "1.18.0",
+    "server_version": "1.12.0",
+    "minor_delta": 6,
+    "verdict": "OUTSIDE_GUARANTEED_WINDOW",
+    "within_documented_support": false,
+    "policy": "Qdrant documents that major and minor versions of the client and server are expected to match, and that backward compatibility is tested across one minor version only.",
+    "observed_behaviour": "All 20 functional checks pass against the 1.12.0 server with the 1.18.0 client.",
+    "risk": "Empirical success is not a support guarantee. An API or wire change in client 1.13-1.18 is not covered by Qdrant's stated compatibility window for a 1.12.0 server.",
+    "supported_combination": "qdrant-client 1.12.x with qdrant/qdrant:v1.12.0 (matched minor).",
+    "why_not_changed": "Aligning the client would be a dependency change beyond the scope of this evidence fix; the gap is recorded here and in docs/validation/qdrant-local-real-validation.md instead of being silently absorbed.",
+    "recorded_by": "scripts/validation/validate_qdrant_store.py --emit-checks (non-gating finding, excluded from checks_run)"
+  },
+  "embedding": {
+    "source": "offline/text_ingestion.py::DeterministicTestEmbedder (768d) and a constant 512d image vector",
+    "real_model_weights": false,
+    "note": "deterministic vectors validate the storage engine, filters and fusion contract only; BGE/CLIP model quality is not measured"
+  },
+  "commands": [
+    "docker run -d --name rag-validation-qdrant -p 127.0.0.1:6333:6333 qdrant/qdrant:v1.12.0",
+    "QDRANT_HOST=127.0.0.1 QDRANT_PORT=6333 python3 -u scripts/validation/validate_qdrant_store.py --emit-checks artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json",
+    "RUN_RUNTIME_VALIDATION=1 python3 -m pytest tests/integration/test_qdrant_store_runtime.py -q"
+  ],
+  "observations": {
+    "epoch_scoping": "every dense hit carries the active doc_version_epoch; the epoch-B filter returns only epoch-B points",
+    "rbac_before_fusion": "is_document_authorized yields different visible sets for two identities; role A cannot see role-B documents",
+    "collection_separation": "dense hits come from the text collection; the image hit comes from the image collection",
+    "text_image_fusion": "the real rrf_fusion merges text and image sources into one ranked list",
+    "epoch_point_id_isolation": "epoch-A and epoch-B point ids are disjoint and coexist",
+    "dependency_degradation": "the dense path logs the failure and returns empty when Qdrant is unreachable",
+    "cache_key_isolation": "the cache key changes with both the knowledge epoch and the permission fingerprint; a real Redis round-trip does not leak across identities"
+  },
+  "counts": {
+    "checks_run": 20,
+    "checks_passed": 20,
+    "checks_failed": 0
+  },
+  "counts_source": {
+    "file": "checks.json",
+    "method": "derived by check_counts() from the executed check records, not written by hand",
+    "guard": "tests/validation/test_qdrant_validation_evidence.py fails if these counts disagree with checks.json"
+  },
+  "commands_exit_status": "QDRANT STORE VALIDATION PASSED (exit 0)",
+  "limitations": [
+    "Single host, single node. No Qdrant cluster, replica, HA, TLS or throughput measurement.",
+    "Deterministic vectors, so no BGE/CLIP/PaddleOCR model-quality claim.",
+    "Not a production-cluster result; production HA/SLO remain PENDING.",
+    "The capture reflects the code at the commit named in git_sha; a re-run at that commit reproduces checks.json byte-for-byte."
+  ]
+}

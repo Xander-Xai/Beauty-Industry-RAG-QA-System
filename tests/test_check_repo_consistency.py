@@ -2926,10 +2926,12 @@ def test_the_denial_direction_is_still_rejected_on_its_own():
     assert qdrant_evidence_claim_errors("README.md", "Qdrant has only ever been tested in memory.", False)
 
 
-def test_no_qdrant_runtime_artifact_is_committed():
+def test_qdrant_runtime_artifact_is_committed():
+    # VAL-STORE-001 committed a real single-host Qdrant run; the guard derives
+    # the affirmative wording from this artifact being on disk.
     from scripts.check_repo_consistency import qdrant_runtime_artifact_exists
 
-    assert qdrant_runtime_artifact_exists() is False
+    assert qdrant_runtime_artifact_exists() is True
 
 
 def test_a_qdrant_runtime_artifact_is_derived_from_disk(tmp_path):
@@ -2964,9 +2966,11 @@ def test_lineage_anchor_requires_the_artifact_gap_and_upgrade_path():
 def test_current_evidence_documents_satisfy_the_lineage_anchor():
     from scripts.check_repo_consistency import ROOT, qdrant_lineage_errors
 
+    # The committed artifact (VAL-STORE-001) is the live state, so the lineage
+    # docs are checked with artifact_exists=True.
     for name in ("docs/evidence-map.md", "docs/repository-truth-audit.md"):
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert qdrant_lineage_errors(name, text, artifact_exists=False) == []
+        assert qdrant_lineage_errors(name, text, artifact_exists=True) == []
 
 
 def test_restated_question_count_is_flagged():
@@ -6216,3 +6220,171 @@ def test_all_thematic_break_spellings_are_boundaries():
     two = "The Kubernetes manifests are covered by\n__\n26 static checks.\n"
     assert _markdown_claim_windows(two) == ["The Kubernetes manifests are covered by __ 26 static checks."]
     assert len(k8s_static_check_count_errors("README.md", two, expected=31)) == 1
+
+
+# ── golden-set contract documentation guard ────────────────────────────────
+
+
+def test_golden_set_contract_required_fields_are_derived_from_the_validator():
+    """The guard must derive the field list by executing the validator."""
+    from scripts.check_repo_consistency import golden_set_contract_required_fields
+
+    required = golden_set_contract_required_fields()
+    assert "sample_id" in required
+    assert "annotations" in required
+    assert "visual_required" in required
+    assert "complexity_label" in required
+    assert "corpus_version" in required
+    # The provenance sub-fields the validator added are included, which is the
+    # whole point: a doc copy of this list is what went stale before.
+    assert "annotation.review_status" in required
+    assert "annotation.source" in required
+    assert "annotation.reviewed_by" in required
+
+
+def test_contract_doc_block_missing_a_required_field_is_reported():
+    """A doc that under-promises the contract must fail, as it did in the wild."""
+    from scripts.check_repo_consistency import golden_set_contract_doc_errors
+
+    required = {"sample_id", "annotations", "annotation.review_status", "annotation.reviewed_by"}
+    complete = """```text
+sample_id
+annotations        [{doc_id, chunk_id, text}, ...]
+annotation         {annotator, method, annotated_at, source, review_status, reviewed_by, reviewed_at}
+```"""
+    assert golden_set_contract_doc_errors("doc.md", complete, required) == []
+
+    stale = """```text
+sample_id
+annotations        [{doc_id, chunk_id, text}, ...]
+annotation         {annotator, method, annotated_at, reviewed_by}
+```"""
+    errors = golden_set_contract_doc_errors("doc.md", stale, required)
+    assert len(errors) == 1
+    assert "annotation.review_status" in errors[0]
+
+
+def test_contract_doc_block_is_found_regardless_of_position():
+    """Documents carry several fenced blocks; the contract one must be identified."""
+    from scripts.check_repo_consistency import golden_set_contract_doc_errors
+
+    required = {"annotation.review_status"}
+    document = """# Title
+
+## v1 breakdown
+
+```text
+overall
+business_type
+difficulty
+```
+
+## v2 contract
+
+```text
+sample_id
+annotations
+annotation         {annotator, review_status}
+```
+"""
+    assert golden_set_contract_doc_errors("doc.md", document, required) == []
+
+
+def test_contract_doc_that_omits_the_provenance_block_makes_no_claim():
+    from scripts.check_repo_consistency import golden_set_contract_doc_errors
+
+    required = {"annotation.review_status"}
+    document = """```text
+sample_id
+annotations
+```"""
+    assert golden_set_contract_doc_errors("doc.md", document, required) == []
+
+
+def test_prose_doc_naming_provenance_must_name_review_status():
+    from scripts.check_repo_consistency import golden_set_contract_prose_errors
+
+    assert golden_set_contract_prose_errors("d.md", "nothing relevant here", set()) == []
+    stale = "provenance requires `annotator`, `method` and `reviewed_by`."
+    errors = golden_set_contract_prose_errors("d.md", stale, set())
+    assert len(errors) == 1
+    assert "review_status" in errors[0]
+    good = "provenance requires `annotator`, `review_status` and `reviewed_by`."
+    assert golden_set_contract_prose_errors("d.md", good, set()) == []
+
+
+def test_the_repository_contract_docs_currently_agree_with_the_validator():
+    """The guard's own target documents must pass it."""
+    from scripts.check_repo_consistency import check_golden_set_contract_doc_fields
+
+    errors: list[str] = []
+    check_golden_set_contract_doc_fields(errors)
+    assert errors == []
+
+
+# ── rerank evidence vocabulary guard ────────────────────────────────────────
+
+
+def test_rerank_provenance_labels_are_canonical():
+    """The vocabulary the docs use must be the vocabulary the code defines."""
+    from retrieval.rerank_validation import PROVENANCE_CROSS_ENCODER, PROVENANCE_FALLBACK, PROVENANCE_VALUES
+
+    assert set(PROVENANCE_VALUES) == {PROVENANCE_CROSS_ENCODER, PROVENANCE_FALLBACK}
+    assert PROVENANCE_CROSS_ENCODER == "cross_encoder"
+    assert PROVENANCE_FALLBACK == "deterministic_fallback"
+
+
+def test_fallback_is_never_treated_as_reranking_evidence():
+    """The property the whole provenance label exists to protect."""
+    from retrieval.rerank_validation import (
+        PROVENANCE_FALLBACK,
+        ValidationReport,
+    )
+
+    fallback = ValidationReport(status="OK", reason="", provenance=PROVENANCE_FALLBACK)
+    assert fallback.is_reranking_evidence is False
+
+
+def test_rerank_vocabulary_guard_flags_a_renamed_label():
+    from scripts.check_repo_consistency import check_rerank_evidence_vocabulary
+
+    errors: list[str] = []
+    check_rerank_evidence_vocabulary(errors)
+    assert errors == []
+
+
+def test_rerank_vocabulary_guard_catches_removal(tmp_path, monkeypatch):
+    """Drift must fail: a doc that renames the label describes a path that cannot exist."""
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "production-readiness.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text("nothing relevant here\n", encoding="utf-8")
+    module = tmp_path / "retrieval" / "rerank_validation.py"
+    module.parent.mkdir(parents=True, exist_ok=True)
+    module.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_rerank_evidence_vocabulary(errors)
+    assert len(errors) == 2, "both provenance labels should be reported as missing"
+
+
+def test_rerank_vocabulary_guard_catches_a_throughput_claim(tmp_path, monkeypatch):
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "production-readiness.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(
+        "cross_encoder deterministic_fallback\ngpu_metrics_measured : True\n",
+        encoding="utf-8",
+    )
+    module = tmp_path / "retrieval" / "rerank_validation.py"
+    module.parent.mkdir(parents=True, exist_ok=True)
+    module.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_rerank_evidence_vocabulary(errors)
+    assert len(errors) == 1
+    assert "never measures throughput" in errors[0]

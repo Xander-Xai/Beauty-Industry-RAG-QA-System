@@ -108,6 +108,28 @@ def test_all_required_fields_present_in_mapping():
         assert properties[field]["type"] == expected
 
 
+def test_validate_mapping_accepts_object_without_explicit_type():
+    """Real Elasticsearch omits ``type: object`` for an object with sub-properties.
+
+    ES 8.11 returns ``provenance`` as ``{"dynamic": ..., "properties": {...}}``
+    with no ``type`` key, so a strict equality check on ``type`` wrongly rejected
+    the writer's own correctly-created index. The object type is implied by the
+    properties body and must be accepted.
+    """
+    _, writer = _writer()
+    writer.client.store["cosmetics_docs"]["mappings"]["properties"]["provenance"].pop("type", None)
+    writer.validate_mapping()  # must not raise
+
+
+def test_validate_mapping_still_rejects_a_scalar_for_an_object_field():
+    _, writer = _writer()
+    property_map = writer.client.store["cosmetics_docs"]["mappings"]["properties"]["provenance"]
+    property_map.clear()
+    property_map["type"] = "text"
+    with pytest.raises(ValueError, match="provenance"):
+        writer.validate_mapping()
+
+
 def test_provenance_subfields_are_keyword_typed():
     """The trust decision must be filterable, never analyzed into text."""
     _, writer = _writer()

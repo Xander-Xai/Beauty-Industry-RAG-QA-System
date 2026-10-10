@@ -160,7 +160,7 @@ Rules:
 | BGE text embedding | `PENDING` (adapter contract `REPO_VERIFIED`) | Adapter + pooling contract in `offline/embeddings.py`; deterministic tests only | Real configured BGE smoke on real weights |
 | CLIP image embedding | `PENDING` (adapter contract `REPO_VERIFIED`) | `offline/embeddings.py`; deterministic embedder tests | Real configured CLIP smoke on real weights |
 | OCR (PaddleOCR) | `PENDING` | `offline/image_processor.py` provider interface; deterministic provider tests | Real PaddleOCR runtime smoke |
-| Qdrant text/image | `REPO_VERIFIED` (current coverage); historical real-service run in the development lineage — see [Qdrant evidence: two states, kept apart](#qdrant-evidence-two-states-kept-apart) | `offline/text_ingestion.py`, `offline/qdrant_writer.py`; current deterministic regression coverage is the in-memory `QdrantClient` (`QdrantClient(":memory:")`) — that is what a re-run reproduces. PR #6/#7 also records a real local Qdrant service/container integration run performed together with Elasticsearch, and that record is retained as development lineage only | A new current real-service run that commits a reproducible artifact |
+| Qdrant text/image | `LOCAL_REAL_VALIDATION` (real-server run) / `REPO_VERIFIED` (deterministic coverage); historical real-service run in the development lineage — see [Qdrant evidence: two states, kept apart](#qdrant-evidence-two-states-kept-apart) | `offline/text_ingestion.py`, `offline/qdrant_writer.py`; current deterministic regression coverage is the in-memory `QdrantClient` (`QdrantClient(":memory:")`), and a current single-host real-server run is captured in [the Qdrant validation record](validation/qdrant-local-real-validation.md). PR #6/#7 also records a real local Qdrant service run performed together with Elasticsearch, retained as development lineage only | Qdrant cluster/HA/throughput remain `PENDING` |
 | Elasticsearch (writer + BM25) | `REPO_VERIFIED` | `offline/elasticsearch_writer.py`, `retrieval/bm25_retriever.py`; fake + real ES integration tests | Multi-node/TLS topology is deployment-specific |
 | Elasticsearch security | `LOCAL_REAL_VALIDATION` | `tests/integration/test_es_auth_runtime.py`; local authenticated ES 8.11 (unauth/wrong creds 401) | Multi-node ES/TLS + production credentials |
 | RBAC (uint32 bitmask) | `REPO_VERIFIED` | `common/auth.py`, `retrieval/parallel_recall.py`, `api/routes.py`; `tests/test_bitmask_rbac.py`, `tests/test_retrieval_authorization_contract.py` | Production policy audit is deployment-specific |
@@ -196,51 +196,57 @@ Rules:
 Qdrant has two independent evidence states in this repository's record. They are
 both true, and collapsing either into the other is a false statement:
 
-1. **Current, reproducible regression coverage is in-memory.** The deterministic
+1. **Current, reproducible evidence has two committed parts.** The deterministic
    Qdrant coverage in this repository uses the in-process `QdrantClient`
    (`QdrantClient(":memory:")`) in `tests/test_offline_text_ingestion.py`,
    `tests/offline/test_offline_end_to_end.py`, `tests/offline/test_snapshot_builder.py`
-   and `tests/offline/test_image_processing.py`. A contributor re-running the suite
-   reproduces exactly this and nothing more.
+   and `tests/offline/test_image_processing.py`. On top of that, a single-host run
+   against a real Qdrant server is captured under
+   `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` and recorded in
+   [the Qdrant validation record](validation/qdrant-local-real-validation.md)
+   (`VAL-STORE-001`, `LOCAL_REAL_VALIDATION`): epoch-versioned point ids, payload
+   filters, RBAC re-filter, text+image `rrf_fusion` merge and Qdrant-down
+   degradation, with deterministic vectors (not BGE/CLIP).
 2. **The development lineage recorded in PR #6/#7 includes a real local Qdrant
    service/container integration execution**, performed in the same round as the
    real local Elasticsearch execution (PR #7 exists because `search_after` sorted
    on `_id` and failed against a real Elasticsearch 8). That is part of how this
-   codebase was developed. It is a historical record of a past execution.
+   codebase was developed. It is a historical record of a past execution, with no
+   committed artifact.
 
 They do not license each other:
 
-- The historical execution is **not** a current reproducible
-  `LOCAL_REAL_VALIDATION` artifact. No artifact of that run is committed here, so
-  nobody can re-run or verify it from this repository, and the deterministic
-  suite does not depend on a Qdrant service.
-- It establishes **nothing** about production Qdrant HA or cluster topology, cluster
-  performance, retrieval or model quality, QPS or latency. A local development run
-  is not a capacity or quality measurement.
-- The Elasticsearch result recorded alongside it is likewise development lineage;
-  the *current* `LOCAL_REAL_VALIDATION` for Elasticsearch is the separate,
-  re-runnable authenticated-ES round recorded in
+- The historical execution is **not** itself a current reproducible artifact; the
+  current real-server evidence is state 1's second part, not PR #6/#7.
+- State 1 establishes the storage engine, the payload filters, the RBAC re-filter
+  and the fusion contract. It establishes **nothing** about production Qdrant HA
+  or cluster topology, cluster performance, retrieval or model quality, QPS or
+  latency. The query vectors are deterministic, so no embedding-model quality is
+  measured.
+- The Elasticsearch result recorded alongside the historical Qdrant run is likewise
+  development lineage; the *current* `LOCAL_REAL_VALIDATION` for Elasticsearch is
+  the separate, re-runnable authenticated-ES round recorded in
   [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md).
-- Upgrading the current reproducible state requires a **new** real-service run whose
-  artifact is committed. Until then the Qdrant row stays at its current level with
-  "real Qdrant service validation" as its upgrade path.
+- Production Qdrant cluster, HA, throughput and TLS remain `PENDING`.
 
 Framing:
 
 > "The Qdrant writers are covered by deterministic tests against the in-process
-> Qdrant client, and during the work that landed in PR #6/#7 the same
-> writers were also run against a real local Qdrant service alongside a real
-> local Elasticsearch. That earlier run is development history rather than a
-> checked-in artifact, so what this repository reproduces today is the in-memory
-> coverage. Qdrant cluster, HA, throughput and quality are separate work that has
-> not been validated here."
+> Qdrant client, and a current single-host run against a real Qdrant server
+> validates the epoch point ids, payload filters, RBAC re-filter and text+image
+> fusion. During the work that landed in PR #6/#7 the same writers were also run
+> against a real local Qdrant service alongside a real local Elasticsearch; that
+> earlier run is development history rather than a checked-in artifact. Neither
+> run says anything about Qdrant cluster, HA, throughput or model quality."
 
 Must not say, in either direction:
 
-- "Qdrant has only ever been tested in memory." The historical real-service run
-  happened; denying it is as inaccurate as claiming it is reproducible now.
-- "Qdrant is validated against a real service." No committed artifact supports that
-  today, and local development lineage is not `LOCAL_REAL_VALIDATION`.
+- Claiming "Qdrant has only ever been tested in memory" is wrong: a real local
+  service run happened in the development lineage, and a current real-server run
+  is now committed.
+- Claiming "Qdrant is validated in production / at cluster scale" is wrong: the
+  committed run is a single local host, cluster / HA / throughput / TLS are
+  `PENDING`, and no embedding-model quality is measured.
 
 ## Business scale — historical production context
 

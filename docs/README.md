@@ -78,6 +78,23 @@ artifact contract, covered by tests).
 Retrieval benchmark result: `PENDING` — no reproducible artifact exists, so no
 retrieval metric is claimed anywhere in the repository.
 
+### Finalization closeout
+
+- [Final engineering audit](finalization/FINAL_ENGINEERING_AUDIT.md): the six false-claim/
+  permission defects found and fixed in the closeout, the items deliberately not changed,
+  and the residual risks.
+- [Acceptance matrix](finalization/ACCEPTANCE_MATRIX.md): every check with its evidence path,
+  command and result, and the `PASS_*` / `BLOCKED_EXTERNAL` / `NEEDS_HUMAN` verdict per item.
+- [Reproducible evaluation](finalization/REPRODUCIBLE_EVALUATION.md): data prep, annotation
+  spec, model prep, commands and artifact formats.
+- [Evidence manifest](finalization/EVIDENCE_MANIFEST.md): capability → source → test → CI →
+  artifact → evidence level.
+- [Interview guide](finalization/INTERVIEW_GUIDE.md) and
+  [resume claims](finalization/RESUME_CLAIMS.md): what may and may not be claimed, with the
+  post-employment open-source boundary stated explicitly.
+- [Human annotation work package](../tests/evaluation/golden_set_v2/ANNOTATION_WORKPACKAGE.md):
+  the 70-row category-balanced worksheet (in-repo: `tests/evaluation/golden_set_v2/`).
+
 ## Operations / Observability
 
 - [SLO and incident runbook](slo-runbook.md): five objectives (all `DESIGN_TARGET`) plus
@@ -101,11 +118,18 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   (`v2.5` is a working-milestone label, not a release.)
 - [Real RAGAS evaluation](validation/real-ragas-evaluation.md): evaluator dependency
   isolation, correctness fixes, and the real-evaluation blockers.
+- [Real Qdrant store validation](validation/qdrant-local-real-validation.md): a single-host
+  run against a real Qdrant server (`VAL-STORE-001`) covering epoch point ids, payload
+  filters, RBAC re-filter, text+image RRF merge and Qdrant-down degradation, with
+  deterministic vectors (not BGE/CLIP).
+- [RAG evaluation readiness](validation/rag-eval-readiness.md): the golden-set v2 contract
+  coverage (0/301 valid), the answer-level harness, and the exact reason Hit@5/NDCG@10
+  ablation A–E, answer-quality metrics and QPS are `BLOCKED` here — with the environment
+  checklist that would promote them.
 - [Deferred runtime validation index](deferred-runtime-validation.md): the single
-  index of every runtime validation not yet executed (retrieval benchmark,
-  performance, OTLP runtime export closure, real model smokes, GPU topology, RAGAS,
-  Kubernetes, browser E2E), each with its required environment, procedure,
-  expected artifact and evidence-promotion rule. Every entry is `NOT EXECUTED`.
+  index of every runtime validation, each with its required environment, procedure,
+  expected artifact and evidence-promotion rule. `VAL-DEGRADE-001` and `VAL-STORE-001`
+  are executed; the rest are `NOT EXECUTED`.
 
 ## Architecture & Evidence Truth
 

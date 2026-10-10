@@ -19,6 +19,7 @@ import logging
 import math
 
 from common.config import get_config_dict
+from retrieval.rerank_status import rerank_weights_status
 
 config = get_config_dict()
 
@@ -87,6 +88,19 @@ class CrossEncoderEnsemble:
         self._ce_b = None  # CrossEncoder-B (通用)
         self._batch_aggregator = None
         self._platt_scaler = PlattScaler()
+        # Report the missing-weights state up front. When BLOCKED, rerank()
+        # falls back to the BiEncoder order with ce_score_ensemble == 0 and the
+        # Evidence Gate refuses every query; that is fail-closed by design.
+        self.rerank_status = rerank_weights_status()
+        if self.rerank_status["status"] == "BLOCKED":
+            logger.warning(
+                "CrossEncoder weights unavailable (%s). Rerank will fall back and the "
+                "Evidence Gate will refuse all queries: %s",
+                self.rerank_status["reason"],
+                self.rerank_status["evidence_gate"]["effect"],
+            )
+        else:
+            logger.info("CrossEncoder weights available; the ensemble will run")
         logger.info("CrossEncoderEnsemble 初始化完成")
 
     def _truncate_to_tokens(self, text: str, max_tokens: int) -> str:
@@ -143,6 +157,7 @@ class CrossEncoderEnsemble:
         query: str,
         candidates: list,
         top_k: int = 10,
+        ctx: object | None = None,
     ) -> list:
         """
         CrossEncoder Ensemble 重排
@@ -151,12 +166,23 @@ class CrossEncoderEnsemble:
             query: 查询文本
             candidates: RerankResult 列表（BiEncoder 输出）
             top_k: 最终保留数量
+            ctx: 可选的请求上下文。提供时，本阶段会把**运行时** provenance 写到
+                ``ctx.ce_stage_provenance``（``cross_encoder`` / ``deterministic_fallback``）
+                及 ``ctx.ce_stage_fallback_reason``。这使「真实精排是否执行」由本次
+                调用观测得到，而不是由磁盘上的权重文件猜测——权重存在但加载或推理
+                失败时，报告必须显示 fallback，而不是 cross_encoder。
 
         Returns:
             list[RerankResult] 按 ce_score_ensemble 降序排列
         """
 
+        def _record(provenance: str, reason: str | None) -> None:
+            if ctx is not None:
+                ctx.ce_stage_provenance = provenance
+                ctx.ce_stage_fallback_reason = reason
+
         if not candidates:
+            _record("not_run", "no candidates to rerank")
             return []
 
         try:
@@ -202,9 +228,12 @@ class CrossEncoderEnsemble:
                 )
 
             logger.info(f"CrossEncoder Ensemble 重排完成: {len(candidates)} → {len(results)}")
+            _record("cross_encoder", None)
             return results
 
         except Exception as e:
             logger.error(f"CrossEncoder Ensemble 重排失败: {e}")
-            # 降级：保留 BiEncoder 排序
+            # 降级：保留 BiEncoder 排序。这是一次真实的运行时降级，必须记录为
+            # deterministic_fallback，否则磁盘上存在权重时报告会误判为已精排。
+            _record("deterministic_fallback", f"{type(e).__name__}: {e}")
             return candidates[:top_k]

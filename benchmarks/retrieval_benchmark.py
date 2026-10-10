@@ -20,8 +20,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from benchmarks import backends, report
+from benchmarks.corpus import distinct_passages, inspect_correspondence
 from benchmarks.dataset import (
     DEFAULT_DATASET_PATH,
     DatasetError,
@@ -30,6 +32,11 @@ from benchmarks.dataset import (
     load_rows,
     sample_ids_hash,
     sha256_file,
+)
+from benchmarks.golden_set_contract import (
+    DatasetContractError,
+    require_attributable,
+    validate_dataset,
 )
 from benchmarks.models import STATUS_EXECUTED
 from benchmarks.provenance import (
@@ -45,6 +52,25 @@ from benchmarks.provenance import (
 from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
 
 DEFAULT_OUTPUT_DIR = "artifacts/benchmarks"
+
+
+def corpus_evidence_for(passages: list[str], dataset_queries: int) -> dict[str, Any]:
+    """Fingerprint the corpus and measure golden-set correspondence, defensively.
+
+    Provenance collection must never be able to fail a run: an unreachable store
+    is an expected state and is recorded as such. Anything unexpected is captured
+    as an error string rather than raised, because losing the run to an evidence
+    problem would be the opposite of the fail-closed behaviour this package wants.
+    """
+    try:
+        return inspect_correspondence(passages, total_passages=dataset_queries).as_dict()
+    except Exception as exc:  # noqa: BLE001 - evidence collection must not break the run
+        return {
+            "verdict": "unavailable",
+            "error": f"{type(exc).__name__}: {exc}",
+            "fingerprints": [],
+            "correspondence": None,
+        }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,6 +94,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-results",
         action="store_true",
         help="exit non-zero when no configuration executed (useful to fail CI on blocked runs)",
+    )
+    parser.add_argument(
+        "--require-contract",
+        action="store_true",
+        help=(
+            "validate the selected samples against golden-set-contract/v2 and refuse to run "
+            "when any sample lacks a stable identifier, label or annotation provenance"
+        ),
+    )
+    parser.add_argument(
+        "--min-valid-fraction",
+        type=float,
+        default=1.0,
+        help="minimum contract-valid fraction required by --require-contract (default 1.0)",
     )
     parser.add_argument("--list-configs", action="store_true", help="print configuration availability and exit")
     return parser
@@ -157,8 +197,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dataset error: {exc}", file=sys.stderr)
         return 2
 
+    # The v2 contract is always measured so every artifact states whether its
+    # dataset is attributable. It is only a hard gate when --require-contract is
+    # set, so an exploratory blocked run still produces a diagnostic artifact.
+    #
+    # `attributable` uses the same --min-valid-fraction the gate uses. It used to
+    # demand a perfect 1.0 while ignoring the flag, so a dataset an operator had
+    # explicitly waived to 0.9 was still labelled non-attributable in the
+    # artifact — the recorded verdict silently contradicted the enforced one.
+    contract_report = validate_dataset([query.raw for query in queries])
+    attributable = contract_report.total > 0 and contract_report.valid_fraction >= args.min_valid_fraction
+    if args.require_contract:
+        try:
+            require_attributable(contract_report, args.min_valid_fraction)
+        except DatasetContractError as exc:
+            print(f"dataset contract error: {exc}", file=sys.stderr)
+            return 2
+
     run_id = new_run_id()
     effective_config = effective_retrieval_config()
+    # Which corpus this run reads, and whether it actually contains the golden
+    # passages. Collected before the metadata literal so the artifact can carry
+    # it even when every configuration ends up blocked — "blocked because the
+    # corpus does not contain the ground truth" is only credible if the artifact
+    # shows what was inspected.
+    corpus_evidence = corpus_evidence_for(distinct_passages(queries), len(queries))
     config_payload = {
         "configs": configs,
         "top_k": args.top_k,
@@ -184,7 +247,19 @@ def main(argv: list[str] | None = None) -> int:
         "requested_configs": configs,
         "top_k": args.top_k,
         "allow_dirty": bool(args.allow_dirty),
-        "synthetic_retriever": False,
+        # Placeholder: overwritten below from what the runs actually did. It is
+        # left out of this literal so it can never be read as a verified fact
+        # before the runs have been summarized.
+        "synthetic_retriever": None,
+        # Whether the scored samples satisfy golden-set-contract/v2. A run on a
+        # non-attributable dataset may still be executed, but it is never labeled
+        # a benchmark result below.
+        "dataset_contract": contract_report.as_dict(),
+        "attributable": attributable,
+        # Which corpus this run read, and whether it actually contains the golden
+        # passages. Without it two runs against different indexes are
+        # indistinguishable in their provenance.
+        "corpus": corpus_evidence,
     }
     environment = render_environment(collect_environment())
     # Coverage describes the samples this run actually used, not the whole file.
@@ -192,9 +267,15 @@ def main(argv: list[str] | None = None) -> int:
 
     runs = [run_configuration(name, queries, top_k=args.top_k) for name in configs]
     summary = summarize_run(runs, available_buckets=coverage.get("available_buckets"))
-    # A blocked run contains no retrieval-quality result, so the artifact must
-    # not advertise itself as benchmark evidence.
-    metadata["results_are_benchmark"] = bool(summary.get("any_results"))
+    # Derived from the runs, never asserted by the CLI: the CLI itself wires no
+    # retriever, so this is False unless a caller injected one.
+    used_synthetic = bool(summary.get("any_synthetic"))
+    metadata["synthetic_retriever"] = used_synthetic
+    # A blocked run contains no retrieval-quality result, a run on a dataset that
+    # fails the v2 contract is not attributable, and a run scored against an
+    # injected retriever is a fixture: none of the three may advertise itself as
+    # benchmark evidence.
+    metadata["results_are_benchmark"] = bool(summary.get("any_results")) and attributable and not used_synthetic
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id
@@ -209,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         summary=summary,
         coverage=coverage,
         per_query_rows=rows_written,
-        synthetic_retriever=False,
+        synthetic_retriever=used_synthetic,
     )
 
     missing = report.verify_artifact_set(run_dir)
