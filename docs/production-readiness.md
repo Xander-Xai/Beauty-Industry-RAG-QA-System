@@ -54,15 +54,16 @@ whole story.
 |---|---|---|---|
 | FastAPI monolith request path (`app.py`, `/api/query`, `/api/chat`, `/api/health`) | `REPO_VERIFIED` | `PENDING` (no recorded run of these endpoints through the full stack; see note) | Canonical deployment form. Docker Compose is the canonical form; `deploy/k8s/` is a second form, static-checked only |
 | RS256 authentication, uint32 permission-mask contract, malformed-claim fail-closed | `REPO_VERIFIED` | `PENDING` for the full request path; the two mechanisms below are individually `LOCAL_REAL_VALIDATION` | HS256 `JWT_SECRET` remains an opt-in legacy fallback. Individually validated: nginx `TRUSTED_PROXIES` resolution, Redis-backed cross-process login rate limit |
-| Layered RBAC: store-side pushdown + pre-fusion document filtering + L2 cache physical partitioning | `REPO_VERIFIED` | `PENDING` (no artifact against real Qdrant/ES with a real multi-role corpus) | Defence in depth, not a single control. See [Security regression coverage](security-regression-coverage.md) |
+| Layered RBAC: store-side pushdown + pre-fusion document filtering + L2 cache physical partitioning | `REPO_VERIFIED` | `PENDING` (no artifact against real Qdrant/ES with a real multi-role corpus) | Defence in depth, not a single control. Cross-role / cross-department / cross-cache-partition regression is in-process only (`tests/test_rbac_cross_identity.py`) and constructs no store client — see [Security regression coverage](security-regression-coverage.md) |
 | Elasticsearch 8 BM25 sparse retrieval with Painless bitmask filtering | `REPO_VERIFIED` | `LOCAL_REAL_VALIDATION` (authenticated ES 8.11: writer mapping, `search_after`, online BM25) | |
 | Dynamic 2–4 path recall selection driven by complexity and visual relevance | `REPO_VERIFIED` | `PENDING` | Selection logic is deterministic and tested; its measurable *benefit* is unmeasurable while `complexity` / `visual_required` are absent from the golden set (#86) |
-| Two-stage rerank call chain (BiEncoder → Top 150 → CrossEncoder ensemble → Top 10) | `REPO_VERIFIED` (call chain + deterministic fallback) | `PENDING` (weights absent, so only the fallback path has ever run) | The second stage has never been exercised with real weights (#85 `VAL-RERANK-001`) |
-| Evidence Gate and Answer Gate decisions, including regulation-conflict rejection | `REPO_VERIFIED` | `PENDING` | See [Fail-closed degradation](#fail-closed-degradation-under-absent-rerank-weights) |
+| Two-stage rerank call chain (BiEncoder → Top 150 → CrossEncoder ensemble → Top 10) | `REPO_VERIFIED` (call chain + deterministic fallback) | `PENDING` (weights absent, so only the fallback path has ever run) | The second stage has never been exercised with real weights (#85 `VAL-RERANK-001`). A gated real-model entry point now exists — see [Rerank validation entry point](#rerank-validation-entry-point) |
+| Evidence Gate and Answer Gate decisions, including regulation-conflict rejection | `REPO_VERIFIED` | `PENDING` | See [Fail-closed degradation](#fail-closed-degradation-under-absent-rerank-weights). Degradation scenarios are pinned by `tests/test_gate_degradation_scenarios.py` |
+| Per-request run audit: stage executed / skipped / not-reached / degraded, rerank provenance, gate mode, outcome | `REPO_VERIFIED` | `PENDING` (no run against a real stack) | `core/run_report.py`, surfaced on `/api/query` behind `RAG_AUDIT_REPORT=1`. One real recorded request with a real reranker |
 | Prompt trust boundary: evidence confined to a marked data region, current request in a separate instruction region, boundary-marker escaping on every untrusted channel | `REPO_VERIFIED` | `PENDING` | Structural prompt constraint. **Not** prompt-injection immunity and **not** proof that jailbreaking is impossible |
 | Offline ingestion: multi-format parsing, OCR routing for scanned PDF pages, deterministic chunking, content-hash incremental state, snapshot carry-forward, full rebuild, snapshot verification, epoch sealing | `REPO_VERIFIED` | `PENDING` (no real-corpus ingestion artifact) | Epoch activation is an explicit human step; the scheduler never activates automatically |
 | Query rewriting and conversation history with evidence locking | `REPO_VERIFIED` | `PENDING` | |
-| 4B / 14B stateless routing and bounded generation retry contract | `REPO_VERIFIED` (routing contract) | `PENDING` (`vllm` not installed, weights absent) | The GPU topology in `config.json` has never been executed here |
+| 4B / 14B stateless routing and bounded generation retry contract | `REPO_VERIFIED` (routing contract) | `PENDING` (`vllm` not installed, weights absent) | The GPU topology in `config.json` has never been executed here. `python3 -m router.gpu_gate` measures it — see [GPU topology gate](#gpu-topology-gate-is-not-a-deployment) |
 | Structured 9-field business-action audit, dual sink (Redis Stream + daily JSONL) | `REPO_VERIFIED` | `PENDING` (no production audit-log inspection) | |
 | Prometheus alert rules (6) over metrics this application actually emits; Grafana dashboards (10 panels) | `REPO_VERIFIED` (config/JSON) | `PENDING` (rule evaluation under sustained real traffic; see #85 `VAL-ALERT-001`) | Every threshold is `DESIGN_TARGET`. An earlier in-process `AlertingManager` is legacy and is not on the request path |
 | OTLP span exporter | `REPO_VERIFIED` (implementation, **off by default**) | `PENDING` (runtime closure: app → exporter → collector → backend, then read a span back) | |
@@ -85,7 +86,7 @@ missing entries are tracked in #85.
 | BGE / CLIP / PaddleOCR real models | `REPO_VERIFIED` (adapter contracts) | `PENDING` | Real weights plus a smoke run (#8) |
 | QLoRA fine-tuning | `REPO_VERIFIED` (tooling) | `PENDING` | A reproducible training run plus adapter artifacts |
 | Airflow scheduling | `REPO_VERIFIED` (DAG registration) | `PENDING` | A real Airflow DAG execution. DAG code existing does not mean a scheduler is running |
-| 4B / 14B vLLM GPU topology | `REPO_VERIFIED` (routing contract) | `PENDING` | A real GPU deployment under load (#12) |
+| 4B / 14B vLLM GPU topology | `REPO_VERIFIED` (routing contract) | `PENDING` | A real GPU deployment under load (#12). Measured on this host: both endpoints unreachable, both weight directories absent, and **one** GPU visible against an assumed two (`router.gpu_gate`) |
 | Kubernetes deployment and readiness admission | `REPO_VERIFIED` (manifests + 31 static checks) | `PENDING` | A real cluster deployment with the readiness contract observed (#54) |
 | Browser → real RAG backend end-to-end run | `REPO_VERIFIED` (client + API metadata contract) | `PENDING` | One real browser run against the monolith with real ES/Qdrant and real models (#60) |
 | Frontend production deployment | — | `PENDING` | Deployment-specific state; this repository does not assert it |
@@ -119,6 +120,164 @@ same state (`status: BLOCKED`, `failure_mode: fail_closed`, `no_ce_ceiling`,
 `low_confidence`) without loading a model; the gate logs it at construction and
 exposes it as `EvidenceEnsembleGate.runtime_status()` / `EvidenceGateResult.gate_mode`.
 The gate arithmetic and thresholds are deliberately unchanged.
+
+## Rerank validation entry point
+
+The second-stage reranker has only ever run its deterministic fallback in this
+repository, and the risk that creates is specific: the fallback returns
+BiEncoder order with `ce_score_ensemble = 0`, so a run that fell back is
+*indistinguishable from one that reranked* unless something says otherwise.
+
+`python3 -m retrieval.rerank_validation` is that something. Every result carries
+a provenance label, and `is_reranking_evidence` is true only when **both**
+`status=OK` and `provenance=cross_encoder`.
+
+```bash
+python3 -m retrieval.rerank_validation --smoke                 # load + score smoke pairs
+python3 -m retrieval.rerank_validation --compare               # real vs deterministic fallback
+python3 -m retrieval.rerank_validation --smoke --require-real  # exit 3 unless real
+```
+
+Exit codes: `0` ok · `1` failed · `2` configuration error · `3` pending (an
+absent asset, not a failure).
+
+Measured on this host — `--smoke` and `--compare`:
+
+```text
+status      : PENDING
+provenance  : deterministic_fallback
+reranking evidence : False
+reason      : CE-A: path does not exist: ./models/cross-encoder-law;
+              CE-B: path does not exist: ./models/cross-encoder-base
+```
+
+The comparison side deliberately **omits** `top1_rate_delta` rather than
+reporting `0.0`: a fallback-vs-fallback comparison measures nothing, and a zero
+would read as "no improvement" instead of "not measured".
+
+The harness never downloads weights — loading is attempted only from the
+configured local paths, asserted by a source-level test. Nothing here is a
+reranking result, and no `CrossEncoder improved X` statement may be derived from
+a run in this repository. Promoting this row requires real weights plus a
+recorded run: `python3 -m retrieval.rerank_validation --compare` on a host that
+has them, with the artifact cited.
+
+## A silent degradation was invisible on the request path
+
+With the weights absent, every query is refused at the Evidence Gate — but the
+answer looked like any other refusal, the status code was `200`, and nothing
+recorded that the reranker was dead. `core/run_report.py` builds a per-request
+audit from the *observed* context and distinguishes four states a log line
+collapses into one:
+
+| status | meaning |
+|---|---|
+| `executed` | the stage ran and left a result |
+| `skipped` | routing bypassed it (e.g. CLIP on a text-only query) |
+| `not_reached` | an earlier gate refused, so it never ran |
+| `degraded` | it ran, but on a fallback (e.g. the CE ensemble) |
+
+Surfaced on `/api/query` as an optional `audit` field, gated behind
+`RAG_AUDIT_REPORT=1` so the default response shape is unchanged, and it never
+fails a request.
+
+The reranker state is recorded as `provenance: cross_encoder |
+deterministic_fallback`, and a run whose `rerank.provenance` is the fallback can
+never set `answered_with_real_rerank`.
+
+### Scope of the RBAC tests
+
+`tests/test_rbac_cross_identity.py` (31 tests) covers cross-role,
+cross-department and cross-cache-partition behaviour, including the fusion-order
+case that actually matters: a recall path returning a document from another
+department *as if the store-side pushdown had not applied*. The test asserts the
+leak is present after RRF fusion and is then removed by the post-fusion
+whole-list filter — the second filter is what closes the gap, so a test that only
+checked the clean case would not prove it.
+
+**It constructs no Qdrant client and no Redis connection**, and a test asserts
+that fact about the file itself. It therefore proves pipeline behaviour and
+cannot be cited as store-level RBAC validation; that remains `VAL-STORE-001`.
+
+**Status: `REPO_VERIFIED` (report construction, pinned by
+`tests/test_run_report.py`).** The report has not been emitted by a real request
+against a real stack, so the artifact itself is `PENDING`.
+
+## The Answer Gate's no-evidence branch is unreachable today
+
+`AnswerGate.verify` returns `passed=True` unconditionally when `top_doc is None`,
+with no check on the answer and none on `is_regulation`. On its face that reads
+as "no evidence, allow" — the wrong direction for a gate.
+
+It is **not reachable on the online path**, and the reason is structural rather
+than incidental: reaching the call at `core/pipeline.py:545` requires passing
+the Evidence Gate decision branch at `:493-505`, which returns early on
+`reject`; and `EvidenceEnsembleGate.evaluate` returns `reject` whenever
+`rerank_results` is falsy (`retrieval/evidence_gate.py:105-115`). So
+`ctx.rerank_results[0]` at `:547` is always a real document.
+
+Verified by execution, not by reading: an empty candidate list with any agreement
+score (0.0 / 0.35 / 0.9 / 1.0) produces `decision="reject"` and `top_docs=[]`.
+
+**The behaviour is deliberately left unchanged** — it is not an active leak, and
+rewriting it would change answers on a path that cannot currently be taken. What
+was added is the invariant:
+`tests/test_answer_gate_no_evidence_reachability.py` fails if the Evidence Gate
+ever becomes permissive about empty candidates. It also contains the positive
+control, so the invariant cannot be "satisfied" by a gate that refuses
+everything.
+
+### Two degradation behaviours recorded rather than changed
+
+Neither is a safety defect, so neither was "fixed":
+
+- **`_compute_agreement_score({})` returns `0.35`** — with no candidates the
+  KMeans branch never runs, so `clustering_score` keeps its neutral default of
+  `0.5` and Jaccard stays `0.0`. That is *higher* than a genuine single-path run
+  (`~0.19`), which is counter-intuitive but unreachable as a gate decision: all
+  paths empty means `rerank_results` is empty, and the gate rejects at
+  `evidence_gate.py:105` before this score is consulted. Changing it would alter
+  arithmetic on a path that cannot produce an answer.
+- **Losing a recall path is a real degradation**: agreement falls `0.49 → 0.19`
+  and, with a healthy reranker, the decision downgrades `pass` (0.839) →
+  `enhanced_generate` (0.779). Measured, asserted, and left as-is — refusing
+  every partially-degraded query would be a correctness cost, not a safety gain.
+  The test that pins this also asserts the score *falls*, so the signal cannot be
+  absorbed silently later.
+
+## GPU topology gate is not a deployment
+
+`config.json` declares a two-GPU topology: `gpu0` serves `Qwen3-14B` on 8100,
+`gpu1` serves `Qwen3-4B` on 8101. That is a plan. `python3 -m router.gpu_gate`
+measures it read-only:
+
+```text
+status : PENDING
+gpu metrics measured : False  (this gate never measures throughput)
+  [MISS] Qwen3-14B      http://localhost:8100   reachable=False weights=False
+  [MISS] Qwen3-4B       http://localhost:8101   reachable=False weights=False
+  topology: assumed=2 observed=1 cuda=True
+    gpu0: NVIDIA GeForce RTX 5060 Ti (16310 MiB)
+  routing: deployment_mode=development complex_tier_live=False
+```
+
+Three separate facts, each of which alone would overstate the system:
+
+1. **Both endpoints are unreachable and both weight directories are absent.**
+2. **One GPU is visible against an assumed two**, so the configured topology
+   cannot be exercised here at all. Serving a 14B model on a single 16 GB card
+   is a different deployment, and its numbers would say nothing about the
+   intended one.
+3. **The 14B path is never called even when configured**, because
+   `deployment_mode` is `development` and `models/llm_client.py:220-234`
+   downgrades the complex tier to simple. Reading the routing contract alone
+   suggests both tiers are live.
+
+The gate is **structurally incapable of emitting a throughput number**:
+`gpu_metrics_measured` is always `False`, the report carries no latency or QPS
+field, and `tests/test_gpu_topology_gate.py` asserts the module contains no
+timing or percentile construct. A real load run belongs in
+`benchmarks/performance.py` under its own artifact contract.
 
 ## Microservice components
 

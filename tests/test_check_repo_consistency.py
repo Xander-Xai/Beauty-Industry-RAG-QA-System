@@ -6320,3 +6320,71 @@ def test_the_repository_contract_docs_currently_agree_with_the_validator():
     errors: list[str] = []
     check_golden_set_contract_doc_fields(errors)
     assert errors == []
+
+
+# ── rerank evidence vocabulary guard ────────────────────────────────────────
+
+
+def test_rerank_provenance_labels_are_canonical():
+    """The vocabulary the docs use must be the vocabulary the code defines."""
+    from retrieval.rerank_validation import PROVENANCE_CROSS_ENCODER, PROVENANCE_FALLBACK, PROVENANCE_VALUES
+
+    assert set(PROVENANCE_VALUES) == {PROVENANCE_CROSS_ENCODER, PROVENANCE_FALLBACK}
+    assert PROVENANCE_CROSS_ENCODER == "cross_encoder"
+    assert PROVENANCE_FALLBACK == "deterministic_fallback"
+
+
+def test_fallback_is_never_treated_as_reranking_evidence():
+    """The property the whole provenance label exists to protect."""
+    from retrieval.rerank_validation import (
+        PROVENANCE_FALLBACK,
+        ValidationReport,
+    )
+
+    fallback = ValidationReport(status="OK", reason="", provenance=PROVENANCE_FALLBACK)
+    assert fallback.is_reranking_evidence is False
+
+
+def test_rerank_vocabulary_guard_flags_a_renamed_label():
+    from scripts.check_repo_consistency import check_rerank_evidence_vocabulary
+
+    errors: list[str] = []
+    check_rerank_evidence_vocabulary(errors)
+    assert errors == []
+
+
+def test_rerank_vocabulary_guard_catches_removal(tmp_path, monkeypatch):
+    """Drift must fail: a doc that renames the label describes a path that cannot exist."""
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "production-readiness.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text("nothing relevant here\n", encoding="utf-8")
+    module = tmp_path / "retrieval" / "rerank_validation.py"
+    module.parent.mkdir(parents=True, exist_ok=True)
+    module.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_rerank_evidence_vocabulary(errors)
+    assert len(errors) == 2, "both provenance labels should be reported as missing"
+
+
+def test_rerank_vocabulary_guard_catches_a_throughput_claim(tmp_path, monkeypatch):
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "production-readiness.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(
+        "cross_encoder deterministic_fallback\ngpu_metrics_measured : True\n",
+        encoding="utf-8",
+    )
+    module = tmp_path / "retrieval" / "rerank_validation.py"
+    module.parent.mkdir(parents=True, exist_ok=True)
+    module.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_rerank_evidence_vocabulary(errors)
+    assert len(errors) == 1
+    assert "never measures throughput" in errors[0]

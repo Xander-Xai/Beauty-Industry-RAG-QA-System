@@ -4744,6 +4744,46 @@ def golden_set_contract_prose_errors(display: str, text: str, required: set[str]
     return []
 
 
+def check_rerank_evidence_vocabulary(errors: list[str], root: Path | None = None) -> None:
+    """Keep the reranking-evidence vocabulary canonical across docs and code.
+
+    Two vocabularies must not drift:
+
+    * the **provenance** labels in ``benchmarks/rerank_validation.py`` — a doc
+      that names a third label (or invents a synonym) is describing a path the
+      harness cannot produce;
+    * the statement that ``deterministic_fallback`` is *not* reranking evidence —
+      the single most important sentence in that module, and the one a summary
+      would be most likely to drop.
+
+    Derived from the module's own constants, so it cannot fall out of date.
+    """
+    base = ROOT if root is None else root
+    module = base / "retrieval" / "rerank_validation.py"
+    doc = base / "docs" / "production-readiness.md"
+    if not module.exists() or not doc.exists():
+        return
+    if str(base) not in sys.path:
+        sys.path.insert(0, str(base))
+    from retrieval.rerank_validation import (  # noqa: PLC0415 - optional import
+        PROVENANCE_CROSS_ENCODER,
+        PROVENANCE_FALLBACK,
+    )
+
+    text = doc.read_text(encoding="utf-8")
+    for label in (PROVENANCE_CROSS_ENCODER, PROVENANCE_FALLBACK):
+        if label not in text:
+            errors.append(
+                f"{_display(doc)}: does not mention the rerank provenance label {label!r} defined in "
+                "retrieval/rerank_validation.py"
+            )
+    # The gate's numbers must never be described as measured.
+    if "gpu_metrics_measured" in text and "never measures throughput" not in text:
+        errors.append(
+            f"{_display(doc)}: reports gpu_metrics_measured without stating that the gate never measures throughput"
+        )
+
+
 def check_golden_set_contract_doc_fields(errors: list[str], root: Path | None = None) -> None:
     """Keep the documented contract field list in sync with the validator."""
     base = ROOT if root is None else root
@@ -4902,6 +4942,7 @@ def main() -> int:
     check_slo_objective_counts(errors)
     check_k8s_static_check_counts(errors)
     check_golden_set_contract_doc_fields(errors)
+    check_rerank_evidence_vocabulary(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):
