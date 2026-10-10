@@ -2,7 +2,62 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Real CrossEncoder rerank validation** (`retrieval/rerank_validation.py`).
+  The second-stage reranker has only ever run its deterministic fallback here,
+  and the fallback returns BiEncoder order with `ce_score_ensemble = 0` — so a
+  fallback run is indistinguishable from a reranking run unless something labels
+  it. Every result now carries `provenance`, and `is_reranking_evidence` is
+  true only when `status=OK` **and** `provenance=cross_encoder`.
+  - `python3 -m retrieval.rerank_validation --smoke | --compare`, with
+    `--require-real` exiting `3` (pending) when the weights are absent.
+  - The real-vs-fallback comparison **omits** `top1_rate_delta` rather than
+    reporting `0.0`: a fallback-vs-fallback comparison measures nothing, and a
+    zero would read as "no improvement" instead of "not measured".
+  - Never downloads weights; loading is attempted only from configured local
+    paths, asserted by a source-level test.
+- **Per-request run audit** (`core/run_report.py`, surfaced on `/api/query`
+  behind `RAG_AUDIT_REPORT=1` so the default response shape is unchanged).
+  Distinguishes `executed` / `skipped` / `not_reached` / `degraded` — a stage an
+  earlier gate prevented is not a stage routing omitted, and a log line cannot
+  tell them apart. Records rerank provenance, gate mode, outcome, git SHA and
+  hardware, and never fails a request.
+- **GPU topology acceptance gate** (`router/gpu_gate.py`). `config.json` declares
+  a two-GPU Qwen3-14B/4B topology; the gate measures endpoints, weights and
+  visible GPUs, and surfaces that `deployment_mode=development` means the 14B
+  path is never called. It is structurally incapable of emitting a throughput
+  number: `gpu_metrics_measured` is always `False` and a test asserts the module
+  contains no timing or percentile construct.
+- Cross-identity RBAC regression (`tests/test_rbac_cross_identity.py`, 31
+  tests) across role, department and cache partition, including the fusion-order
+  case where one path returns a document as if the store pushdown had not
+  applied. The file asserts its own scope: no store client is constructed.
+- Consistency guard `check_rerank_evidence_vocabulary`, keeping the provenance
+  labels and the "the GPU gate never measures throughput" statement in sync with
+  the code. Verified to fail on real drift.
+
 ### Fixed
+
+- `run_smoke`'s pending branch dropped `git_sha` and `hardware`, so the artifact
+  for the state this repository is actually in carried `git_sha: null`.
+
+### Recorded, not changed
+
+Three behaviours are pinned by tests and left alone, because none is a proven
+safety defect and a fix would cost correctness or change a public contract:
+
+- `AnswerGate.verify(top_doc=None)` returns `passed=True` unconditionally. It is
+  **unreachable** on the online path — reaching the call requires passing the
+  Evidence Gate, which rejects empty candidates — verified by execution.
+- `_compute_agreement_score({})` returns `0.35`, higher than a genuine
+  single-path run (`~0.19`). Not exploitable: all paths empty means
+  `rerank_results` is empty and the gate rejects first.
+- A vLLM timeout returns **HTTP 200**, not the documented 503, because
+  `VLLMGenerationError` does not inherit `InfrastructureError`. Changing the
+  HTTP contract is a deployment decision, so it is left to an operator.
+
+### Changed
 
 - **Retrieval benchmark: multi-passage ground truth is no longer collapsed to one
   passage.** `benchmarks/dataset.py` kept only `contexts[0]` whenever a row carried

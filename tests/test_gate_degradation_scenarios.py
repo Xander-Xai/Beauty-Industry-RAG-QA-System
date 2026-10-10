@@ -259,3 +259,78 @@ def test_nli_availability_is_reported_not_assumed():
     if not gate._use_nli:
         # Degraded, and it says so — the caller can record that fact.
         assert gate._nli_model is None
+
+
+# ── Scenario: generation model unreachable / timeout ────────────────────────
+
+
+def test_vllm_failure_is_not_classified_as_infrastructure():
+    """A dead generation endpoint currently produces HTTP 200, not 503.
+
+    `core/pipeline.py:578-584` documents "infrastructure failure → HTTP 503" and
+    re-raises so the API layer can answer 503. `VLLMGenerationError` inherits
+    from `GenerationError → ServiceError → Exception`, **not** from
+    `InfrastructureError`, so it falls through to the generic handler at
+    `:586-592` and the caller receives a 200 carrying a Chinese error string.
+
+    This is pinned rather than fixed: changing the exception hierarchy or the
+    handler would alter the HTTP contract of a public endpoint, which is a
+    deployment decision (does the frontend retry on 503?) rather than a
+    correctness fix. What matters here is that the divergence is recorded and
+    cannot drift unnoticed.
+    """
+    from core.exceptions import InfrastructureError
+    from router.vllm_resilience import VLLMGenerationError
+
+    assert not issubclass(VLLMGenerationError, InfrastructureError)
+    names = {cls.__name__ for cls in VLLMGenerationError.__mro__}
+    # The chain it actually follows — and the one that makes it a plain
+    # `Exception`, so `except InfrastructureError` never matches.
+    assert {"GenerationError", "ServiceError", "Exception"} <= names
+    assert "InfrastructureError" not in names
+
+
+def test_generation_failure_is_recorded_as_degraded_not_as_an_answer():
+    """Whatever the status code, the context must show it degraded."""
+    from core.pipeline_context import RequestContext
+
+    ctx = RequestContext(user_input="烟酰胺限量?", user_id="u1", user_role_mask=1, user_dept_mask=1)
+    ctx.degraded = True
+    ctx.fallback_reason = "vLLM endpoint gen_4b connection error"
+
+    from core.run_report import build_run_report
+
+    report = build_run_report(ctx, run_id="timeout-case")
+    assert report.outcome == "error"
+    assert report.degraded is True
+    assert "vLLM" in report.fallback_reason
+    assert report.as_dict()["answered_with_real_rerank"] is False
+
+
+def test_generation_failure_does_not_report_generation_as_executed():
+    """A stage that raised must not be counted as having run."""
+    from core.pipeline_context import RequestContext
+    from core.run_report import STATUS_NOT_REACHED, build_run_report
+
+    ctx = RequestContext(user_input="q", user_id="u1", user_role_mask=1, user_dept_mask=1)
+    ctx.degraded = True
+    ctx.fallback_reason = "timeout"
+
+    report = build_run_report(ctx, run_id="timeout-2")
+    assert _generation_stage(report).status == STATUS_NOT_REACHED
+
+
+def _generation_stage(report):
+    return next(stage for stage in report.stages if stage.stage == "generation")
+
+
+def test_vllm_error_classification_covers_timeout_and_connection():
+    """The retry decision depends on these classes being distinguished."""
+    import httpx
+
+    from router.vllm_resilience import FailureClass, classify_transport_exception
+
+    assert classify_transport_exception(httpx.ConnectTimeout("x")) is FailureClass.TIMEOUT
+    assert classify_transport_exception(httpx.ConnectError("x")) is FailureClass.CONNECTION
+    # An unclassified failure must not be silently retried as if it were transient.
+    assert classify_transport_exception(ValueError("something else")) is FailureClass.UNKNOWN

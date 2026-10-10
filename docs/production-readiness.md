@@ -245,6 +245,20 @@ Neither is a safety defect, so neither was "fixed":
   The test that pins this also asserts the score *falls*, so the signal cannot be
   absorbed silently later.
 
+A third divergence is recorded but **not** changed, because it would alter a
+public HTTP contract: `core/pipeline.py:578-584` documents "infrastructure
+failure → HTTP 503" and re-raises for the API layer to answer 503, but
+`VLLMGenerationError` inherits `GenerationError → ServiceError → Exception`,
+**not** `InfrastructureError`. A vLLM timeout or connection failure therefore
+falls through to the generic handler at `:586-592` and the caller receives
+**HTTP 200** carrying `"系统处理出现异常，请稍后重试。"`. Verified by MRO inspection in
+`tests/test_gate_degradation_scenarios.py`.
+
+Whether a generation outage *should* answer 503 is a deployment decision — it
+depends on whether the frontend retries on 503 — not a correctness fix, so it
+is left for an operator. The context does record `degraded=True` and the
+failure reason either way, and the run report renders it as `outcome: error`.
+
 ## GPU topology gate is not a deployment
 
 `config.json` declares a two-GPU topology: `gpu0` serves `Qwen3-14B` on 8100,
