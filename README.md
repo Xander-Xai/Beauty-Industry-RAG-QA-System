@@ -481,11 +481,11 @@ python3 -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 | `visual_required` | **0 / 301** | 无视觉/非视觉分桶 |
 | `complexity` 标签 | **0 / 301** | 无复杂度分桶 |
 
-ground truth 规模：每条 1–4 段（共 1081 段），但只有 **262 个不同段落**被复用。
+ground truth 规模：每条 1–4 段（共 1081 段），但只有 **262 个不同段落**被复用。评测时**每一段都会参与打分**——早先的实现只取 `contexts[0]`，会让 4 段 ground truth 变成按 1 段计分，Recall@5 直接虚高成 1.0。
 
 ### 关键诚实边界：没有稳定标识，相关性只能按文本精确匹配
 
-相关性判定分两级（`benchmarks/relevance.py`）：**Level 1 稳定标识**（`doc_id` / `chunk_id` / `source_id`）是精确且与语言无关的；**Level 2 规范化精确文本**（NFKC + 空白折叠 + trim）是当前唯一可用的路径——**golden set 的 301 条没有任何稳定标识**。
+相关性判定分两级（`benchmarks/relevance.py`）：**Level 1 稳定标识**，键为 `doc_id::chunk_id` 复合标识（`relevance_key()`），是精确且与语言无关的；**Level 2 规范化精确文本**（NFKC + 空白折叠 + trim）是当前唯一可用的路径——**golden set 的 301 条没有任何稳定标识**。
 
 这意味着三件事，缺一不可地说明为什么当前不能声称检索指标可信：
 
@@ -493,7 +493,9 @@ ground truth 规模：每条 1–4 段（共 1081 段），但只有 **262 个�
 2. 因此动态 2–4 路的收益**目前无法度量**：`complexity` 与 `visual_required` 标签全缺，两个分桶都产不出来（跟踪于 issue [#86](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/86)）。
 3. 框架刻意**不**使用 LLM judge、embedding 相似度阈值、模糊/编辑距离匹配或人工映射来「补」这个缺口——那些做法会抬高 recall 且不可复现，属于把指标调成好看的形状，不是把检索调好。宁可报不出分，也不报不可归因的分。
 
-补齐路径很明确且成本不高：给 golden set 每条 ground truth 段落补 `doc_id` + `chunk_id`（离线构建时已生成这两个字段），再人工标注 `complexity` 与 `visual_required`。补齐后 Level 1 生效，指标才可归因。
+补齐路径很明确且成本不高，但**必须按段落逐条补**：为**每一段** ground truth 补上它自己的 `doc_id` + `chunk_id`（离线构建时已生成这两个字段），再人工标注 `complexity` 与 `visual_required`。
+
+> ⚠️ **不能只给每行补一个 `doc_id`。** 一行携带单个扁平标识但有多个 ground truth 段落时，这个标识无法说明它指的是哪一段：只取第一段会抬高 Recall（1081 段的证据被当成 1 段），复用同一个标识则会把不同段落塌缩成一个键。因此这种行会被直接拒绝（`AmbiguousRelevanceIdentityError`），而不是被悄悄按 1 段计分。正确做法是每段一条 `annotations[{doc_id, chunk_id, text}]`，工作区见 [`tests/evaluation/golden_set_v2/`](tests/evaluation/golden_set_v2/README.md)。
 
 ### RAGAS 质量分
 

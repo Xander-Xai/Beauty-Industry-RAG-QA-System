@@ -6220,3 +6220,103 @@ def test_all_thematic_break_spellings_are_boundaries():
     two = "The Kubernetes manifests are covered by\n__\n26 static checks.\n"
     assert _markdown_claim_windows(two) == ["The Kubernetes manifests are covered by __ 26 static checks."]
     assert len(k8s_static_check_count_errors("README.md", two, expected=31)) == 1
+
+
+# ── golden-set contract documentation guard ────────────────────────────────
+
+
+def test_golden_set_contract_required_fields_are_derived_from_the_validator():
+    """The guard must derive the field list by executing the validator."""
+    from scripts.check_repo_consistency import golden_set_contract_required_fields
+
+    required = golden_set_contract_required_fields()
+    assert "sample_id" in required
+    assert "annotations" in required
+    assert "visual_required" in required
+    assert "complexity_label" in required
+    assert "corpus_version" in required
+    # The provenance sub-fields the validator added are included, which is the
+    # whole point: a doc copy of this list is what went stale before.
+    assert "annotation.review_status" in required
+    assert "annotation.source" in required
+    assert "annotation.reviewed_by" in required
+
+
+def test_contract_doc_block_missing_a_required_field_is_reported():
+    """A doc that under-promises the contract must fail, as it did in the wild."""
+    from scripts.check_repo_consistency import golden_set_contract_doc_errors
+
+    required = {"sample_id", "annotations", "annotation.review_status", "annotation.reviewed_by"}
+    complete = """```text
+sample_id
+annotations        [{doc_id, chunk_id, text}, ...]
+annotation         {annotator, method, annotated_at, source, review_status, reviewed_by, reviewed_at}
+```"""
+    assert golden_set_contract_doc_errors("doc.md", complete, required) == []
+
+    stale = """```text
+sample_id
+annotations        [{doc_id, chunk_id, text}, ...]
+annotation         {annotator, method, annotated_at, reviewed_by}
+```"""
+    errors = golden_set_contract_doc_errors("doc.md", stale, required)
+    assert len(errors) == 1
+    assert "annotation.review_status" in errors[0]
+
+
+def test_contract_doc_block_is_found_regardless_of_position():
+    """Documents carry several fenced blocks; the contract one must be identified."""
+    from scripts.check_repo_consistency import golden_set_contract_doc_errors
+
+    required = {"annotation.review_status"}
+    document = """# Title
+
+## v1 breakdown
+
+```text
+overall
+business_type
+difficulty
+```
+
+## v2 contract
+
+```text
+sample_id
+annotations
+annotation         {annotator, review_status}
+```
+"""
+    assert golden_set_contract_doc_errors("doc.md", document, required) == []
+
+
+def test_contract_doc_that_omits_the_provenance_block_makes_no_claim():
+    from scripts.check_repo_consistency import golden_set_contract_doc_errors
+
+    required = {"annotation.review_status"}
+    document = """```text
+sample_id
+annotations
+```"""
+    assert golden_set_contract_doc_errors("doc.md", document, required) == []
+
+
+def test_prose_doc_naming_provenance_must_name_review_status():
+    from scripts.check_repo_consistency import golden_set_contract_prose_errors
+
+    assert golden_set_contract_prose_errors("d.md", "nothing relevant here", set()) == []
+    stale = "provenance requires `annotator`, `method` and `reviewed_by`."
+    errors = golden_set_contract_prose_errors("d.md", stale, set())
+    assert len(errors) == 1
+    assert "review_status" in errors[0]
+    good = "provenance requires `annotator`, `review_status` and `reviewed_by`."
+    assert golden_set_contract_prose_errors("d.md", good, set()) == []
+
+
+def test_the_repository_contract_docs_currently_agree_with_the_validator():
+    """The guard's own target documents must pass it."""
+    from scripts.check_repo_consistency import check_golden_set_contract_doc_fields
+
+    errors: list[str] = []
+    check_golden_set_contract_doc_fields(errors)
+    assert errors == []

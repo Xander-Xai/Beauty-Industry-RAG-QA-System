@@ -2,7 +2,86 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Retrieval benchmark: multi-passage ground truth is no longer collapsed to one
+  passage.** `benchmarks/dataset.py` kept only `contexts[0]` whenever a row carried
+  a stable identifier, so a query with four supporting passages was scored against
+  one and `Recall@5` read `found / 1` instead of `found / 4` — a single hit read as
+  perfect recall. All ground-truth passages are now scored. A row that pairs one
+  flat `doc_id`/`chunk_id` with several passages cannot say which passage it names,
+  so it is refused with `AmbiguousRelevanceIdentityError` instead of being scored
+  against a subset; single-passage rows keep their previous behaviour.
+- **Relevance identity is now `doc_id::chunk_id`**, not `doc_id` alone
+  (`benchmarks/relevance.py::relevance_key`). Every chunk of a document shared one
+  key, so one retrieved chunk scored as a hit for all of them. Ground truth and
+  retrieval executors must both use this function — if they disagree about what
+  "the same passage" means, every metric silently reads zero.
+- **A fixture ranking can no longer be published as a benchmark result.**
+  `benchmarks/retrieval_benchmark.py` hardcoded `synthetic_retriever: false` and
+  `results_are_benchmark` ignored it, so a scripted ranking over a contract-valid
+  dataset carried `results_are_benchmark: true`. Both are now derived from what the
+  run actually did. Two tests asserted the old behaviour and are corrected.
+- **`attributable` honours `--min-valid-fraction`** instead of demanding 1.0 while
+  ignoring the flag, which recorded a dataset an operator had explicitly waived as
+  non-attributable.
+- **Relevance grades were discarded by the runner**, which passed bare keys to
+  `score_ranking` instead of `RelevantItem`.
+
 ### Added
+
+- **Corpus fingerprint and golden-set correspondence measurement**
+  (`benchmarks/corpus.py`). `probe_corpus` previously returned "unavailable"
+  without issuing a single query. It now fingerprints the configured Elasticsearch
+  index and Qdrant collection (document/point count plus an order-independent
+  content SHA-256) and reports what fraction of the golden passages they contain.
+  Read-only by construction: building a corpus from the golden passages would make
+  recall self-referential, and that shortcut is still refused. Every artifact
+  records the result under `metadata.json → corpus`, including blocked runs.
+  Measured on this host against the live services: **0 of 60** sampled golden
+  passages present; the run stays `BLOCKED` for a stated, reproducible reason.
+- **Annotation review lifecycle** (`benchmarks/annotation.py`,
+  `golden-set-annotation/v1`). `review_status` is required and has no default, so
+  a record cannot be an LLM proposal and a reviewed label at the same time.
+  `DRAFT_UNVERIFIED` is never scorable; promotion to `REVIEWED` requires a named
+  reviewer and, for a model candidate, records `promoted_by`. Self-review is
+  rejected, and records are bound to a `corpus_version` **and** its SHA-256.
+- **Graded relevance** (0 not relevant / 1 partially / 2 highly) with
+  `ndcg_graded`. Binary Recall/Hit/MRR are unchanged; a dataset with no grades
+  produces exactly the numbers it produced before.
+- **Golden-set v2 annotation workspace**
+  (`tests/evaluation/golden_set_v2/`): JSON Schema, work order and a generated
+  backlog of outstanding decisions. `annotations_v1.jsonl` is committed **empty** —
+  the annotation pass has not been performed and no record was synthesised.
+- `scripts/validation/audit_annotations.py` — audits a v2 annotation dataset,
+  fails closed on malformed / duplicate / unreviewed records, and can emit the
+  human work order.
+- Model identity is resolved instead of hardcoded `None`
+  (`benchmarks/provenance.py::model_identity`): a present weights directory yields
+  a revision, an absent one yields `present: false`, which distinguishes "not
+  installed" from "unknown".
+- Tests: `tests/benchmark/test_corpus.py`,
+  `tests/benchmark/test_multi_relevant_metrics.py`,
+  `tests/evaluation/test_annotation_lifecycle.py`,
+  `tests/integration/test_retrieval_benchmark_blocking.py`,
+  `tests/runtime/test_live_corpus_probe.py` (live probe under
+  `RUN_RUNTIME_VALIDATION=1`).
+
+### Changed
+
+- `benchmarks/golden_set_contract.py` additionally requires `review_status` and
+  `source` in the provenance block; a row that is not `REVIEWED` is `INVALID` with
+  reason `annotation_not_reviewed:<status>`, and an out-of-vocabulary relevance
+  grade is rejected. The committed dataset remains **0 / 301 valid**, so this does
+  not change the dataset's status.
+- `tests/benchmark/conftest.py` stubs the corpus probe by default so benchmark and
+  integration tests do not depend on a live index. Tests about the probe itself use
+  fake stores and opt out via the new `real_corpus_probe` marker.
+  - Note: 20 pre-existing tests still reach the network through
+    `probe_bm25`/`probe_dense`. Unchanged by this work — verified by comparing
+    against the parent tree under blocked sockets.
+
+### Added (earlier in this cycle)
 
 - **Golden-set v2 data contract** (`benchmarks/golden_set_contract.py`,
   `golden-set-contract/v2`; issue #86). Every sample must carry a stable
@@ -18,8 +97,9 @@
   - `python -m benchmarks.retrieval_benchmark --require-contract` refuses to run
     on a non-attributable dataset, and every artifact now records
     `dataset_contract` / `attributable`; `results_are_benchmark` is
-    `any_results AND attributable`, so normalized-text matching can never be
-    published as a benchmark result.
+    `any_results AND attributable AND NOT synthetic_retriever`, so neither
+    normalized-text matching nor a fixture ranking can be published as a benchmark
+    result.
   - `tests/evaluation/test_golden_set_contract.py` pins the fail-closed behaviour
     for chunk-boundary changes, knowledge-epoch changes, wrong labels,
     unresolvable identifiers and fabricated ids.
@@ -45,7 +125,8 @@
   deterministic; BGE/CLIP model quality is not measured.
 - **Benchmark publication-gate regression coverage**
   (`tests/benchmark/test_publication_gate.py`). `results_are_benchmark` is
-  `any_results AND attributable`; only the first operand had coverage. The new
+  `any_results AND attributable AND NOT synthetic_retriever`; only the first
+  operand originally had coverage. The new
   suite exercises all six release scenarios — no execution, executed-but-not-
   attributable, text-only fallback matching, unresolvable identifiers or a wrong
   `corpus_version`, partially annotated data, and a genuinely attributable

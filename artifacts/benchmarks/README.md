@@ -11,8 +11,12 @@ Runtime output of the reproducible retrieval benchmark lives here:
 
 ```text
 artifacts/benchmarks/<run-id>/
-├── metadata.json          # run_id, git_sha, dataset/config sha256, sample count
-├── environment.json       # python/torch/cuda/service versions (unavailable when absent)
+├── metadata.json          # run_id, git_sha, dataset/config sha256, sample count,
+│                          # dataset_contract, attributable, synthetic_retriever,
+│                          # results_are_benchmark, and `corpus` (store fingerprints
+│                          # + measured golden-passage correspondence)
+├── environment.json       # python/torch/cuda/service versions, plus each model's
+│                          # path/revision (or present=false when not installed)
 ├── retrieval_metrics.json # per-config metrics and BLOCKED/EXECUTED status
 ├── latency_metrics.json   # per-stage p50/p90/p95/p99 (null when a stage never ran)
 ├── per_query_results.jsonl# one row per query per executed config
@@ -43,12 +47,16 @@ real artifact:
    this configuration yet`. The metric, aggregation, provenance and artifact code
    is exercised; the BM25 / dense / RRF / BiEncoder / CrossEncoder executors that
    would call the real clients are not written.
-2. **No corpus can satisfy the `corpus` backend.** `probe_corpus` always reports
-   unavailable, because the repository contains no corpus holding the golden-set
-   passages (262 distinct passages across 301 queries) and indexing the ground
-   truth itself would make every configuration score recall 1.0 by construction.
-   Unblocking this needs an independently sourced corpus plus a way to register
-   and verify it; inventing either would produce a meaningless number.
+2. **No corpus can satisfy the `corpus` backend.** This is measured, not assumed:
+   `probe_corpus` fingerprints the configured Elasticsearch index and Qdrant
+   collection and reports how many of the sampled golden-set passages they
+   actually contain. On this host the answer is **0 of 60** (there are 262
+   distinct passages across 301 queries), so every configuration blocks on
+   `corpus_does_not_contain_ground_truth`. Indexing the ground truth itself would
+   make every configuration score recall 1.0 by construction, so the probe is
+   read-only and refuses that shortcut. Unblocking this needs an independently
+   sourced corpus plus a way to register and verify it; inventing either would
+   produce a meaningless number.
 
 Until both are resolved, `--list-configs` is the honest ceiling of what this
 harness can do, and no configuration may be reported as `EXECUTED`.
@@ -57,9 +65,11 @@ harness can do, and no configuration may be reported as `EXECUTED`.
 
 * A run in which **no** configuration executed contains **no** retrieval-quality
   result. `retrieval_metrics.json` records the blocking reasons instead.
-* A run whose `report.md` says it used a **synthetic fixture retriever** is a
-  metric self-check, not a benchmark. The CLI cannot produce such a run; only
-  tests inject a fixture retriever.
+* A run that used a **synthetic fixture retriever** is a metric self-check, not a
+  benchmark. `metadata.json` records `synthetic_retriever: true` and
+  `results_are_benchmark: false`, and `report.md` carries the warning. The CLI
+  wires no retriever of its own, so this state arises only when a caller injects
+  one — but the flag is derived from what the run did, never asserted.
 * `latency_metrics.json` uses `null` (never `0`) for stages that did not run.
 * Results in this directory are repository benchmark results. They are **not**
   historical production metrics.

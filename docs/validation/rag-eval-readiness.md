@@ -23,7 +23,9 @@ The v2 contract is `benchmarks/golden_set_contract.py`
 `sample_id`, a real `(doc_id, chunk_id)` per annotated passage in a named
 `corpus_version`, an explicit `visual_required` boolean, a `complexity_label`,
 and recorded annotation provenance (`annotator` / `method` / `annotated_at` /
-`reviewed_by`).
+`source` / `review_status` / `reviewed_by` / `reviewed_at`). A row whose
+`review_status` is not `REVIEWED` is `INVALID` — an unreviewed label, including an
+LLM proposal, cannot be scored.
 
 Measured against the dataset at `6d2576e` (SHA-256
 `36cdaf4452a573eb77856c7c406ac091898f9895c2d7b5cd034348f2c4aac7df`):
@@ -63,16 +65,30 @@ property of the selected subset, not of the dataset, and must never be quoted
 as the dataset's state. `tests/validation/test_golden_set_evidence_docs.py`
 re-measures these figures and fails if any document drifts from them.
 
-Every artifact also records `dataset_contract` and `attributable`, and
-`results_are_benchmark` is now `any_results AND attributable`, so normalized-exact-text
-matching can never be published as a benchmark result.
+Every artifact also records `dataset_contract`, `attributable` and
+`synthetic_retriever`, and `results_are_benchmark` is
+`any_results AND attributable AND NOT synthetic_retriever`, so neither
+normalized-exact-text matching nor a scripted fixture ranking can be published
+as a benchmark result. `synthetic_retriever` is derived from what the run
+actually did (`summary["any_synthetic"]`), not asserted by the CLI: it used to be
+hardcoded `false`, which let an injected fixture ranking carry
+`results_are_benchmark: true`.
 
 Identifier resolution against a real index is implemented
 (`--resolve-qdrant` / `--resolve-es`, existence-only via
-`qdrant_resolver` / `elasticsearch_resolver`) but cannot be executed here: there
-is **no committed corpus** whose chunks the golden passages map to. Building one
-from the golden-set passages themselves would be self-referential and is refused
-by design (`benchmarks/backends.py::probe_corpus`).
+`qdrant_resolver` / `elasticsearch_resolver`).
+
+Corpus correspondence is now **measured** rather than assumed.
+`benchmarks/corpus.py` fingerprints the configured Elasticsearch index and Qdrant
+collection (document/point count plus an order-independent content SHA-256) and
+reports what fraction of the golden passages they actually contain;
+`probe_corpus` blocks on that measurement instead of on a constant. Every
+artifact records the result under `metadata.json → corpus`, including blocked
+runs. Measured on this host: **0 of 60** sampled golden passages were found in
+the live Qdrant collections (262 distinct passages exist), and the configured
+Elasticsearch endpoint was unreachable. Building an index from the golden
+passages themselves would be self-referential and is refused by design — the
+probe is read-only by construction.
 
 **Status: `BLOCKED` (evaluation toolchain `VERIFIED_CODE` / repository vocabulary
 `REPO_VERIFIED`; Golden Set data unusable for official retrieval-quality
@@ -80,8 +96,13 @@ scoring).**
 
 The distinction matters: the contract validator, its fail-closed gate and the
 benchmark publication gate are implemented, executed and test-covered
-(`benchmarks/golden_set_contract.py`, `tests/evaluation/test_golden_set_contract.py`,
-`tests/benchmark/test_publication_gate.py`). The *data* it judges is not usable
+(`benchmarks/golden_set_contract.py`, `benchmarks/annotation.py`,
+`tests/evaluation/test_golden_set_contract.py`,
+`tests/evaluation/test_annotation_lifecycle.py`,
+`tests/benchmark/test_publication_gate.py`, `tests/benchmark/test_corpus.py`,
+`tests/benchmark/test_multi_relevant_metrics.py`,
+`tests/integration/test_retrieval_benchmark_blocking.py`,
+`tests/runtime/test_live_corpus_probe.py`). The *data* it judges is not usable
 for a retrieval-quality score. A working validator over an unusable dataset is
 not a partial retrieval result — it is a correct refusal.
 
@@ -100,18 +121,39 @@ The five configurations exist in `benchmarks/backends.py`:
 | D `hybrid_rrf_biencoder` | C + BiEncoder | corpus, services, BGE weights |
 | E `hybrid_rrf_biencoder_crossencoder` | D + CrossEncoder | corpus, services, BGE weights, CrossEncoder |
 
-All five report `BLOCKED`. The two unconditional blockers are:
+All five report `BLOCKED`. The unconditional blockers are:
 
-1. **No corpus.** No committed corpus contains the golden passages in a way that
-   is independent of the golden set, so recall would be self-referential.
+1. **No corpus contains the golden passages.** Measured, not assumed: the live
+   corpus holds **0 of 60** sampled golden passages, so a recall measured
+   against it would fall toward zero for reasons that have nothing to do with
+   retrieval quality. Building a corpus from the golden set itself is refused.
 2. **No model weights and no network to fetch them.** `models/bge-base-zh-v1.5`
    and the two configured CrossEncoder directories are absent, and
    `huggingface.co` is unreachable from this host (pypi is reachable).
 
-Consequently **Hit@5 / MRR@10 / NDCG@10 per configuration are not produced.**
-The harness will not record a CrossEncoder fallback as a two-stage rerank result:
-`probe_crossencoder` is hardwired unavailable until a validated weights path is
-wired, so config E can only be `BLOCKED`, never `EXECUTED` with a fallback.
+Consequently **Hit@5 / Recall@5 / MRR@10 / NDCG@10 per configuration are not
+produced.** The harness will not record a CrossEncoder fallback as a two-stage
+rerank result: `probe_crossencoder` is hardwired unavailable until a validated
+weights path is wired, so config E can only be `BLOCKED`, never `EXECUTED` with a
+fallback.
+
+A real run reproduces this. Executed on this host over all 301 samples:
+
+```text
+python3 -m benchmarks.retrieval_benchmark --configs bm25,dense,hybrid_rrf \
+  --dataset tests/evaluation/golden_set.jsonl --output-dir /tmp/bench_out \
+  --allow-dirty --require-results
+# -> executed: none
+# -> bm25: BLOCKED — unavailable backends: bm25=service_unreachable;
+#            corpus=corpus_does_not_contain_ground_truth
+# -> dense: BLOCKED — ...
+# -> hybrid_rrf: BLOCKED — ...
+# exit 5
+```
+
+The artifact records `results_are_benchmark: false`, `attributable: false`,
+`sample_count: 301` and the full corpus evidence, including the per-store
+fingerprints and the 0/60 correspondence ratio.
 
 **Status: `BLOCKED` (harness `REPO_VERIFIED`, results `PENDING`).**
 
@@ -176,12 +218,25 @@ a reachable canonical API plus live retrieval and model endpoints.
    - `models/bge-base-zh-v1.5` (BiEncoder / dense embedding)
    - `models/cross-encoder-law`, `models/cross-encoder-base` (two-stage rerank)
    - `models/clip-vit-base-patch16` (visual path)
+
+   Once present, the revision is recorded automatically: `model_identity()`
+   resolves a marker file, else a content fingerprint, and distinguishes "not
+   installed" from "unknown".
 2. **Corpus** — build and seal one epoch with the offline pipeline from a source
    set that is **independent** of the golden passages, then register it as the
    benchmark corpus and map each golden passage to a real `(doc_id, chunk_id)`
-   and that epoch's `corpus_version`.
-3. **Golden set v2** — fill the contract fields and pass
-   `validate_golden_set_contract.py`, then re-run with `--require-contract`.
+   and that epoch's `corpus_version`. Confirm the mapping with
+   `RUN_RUNTIME_VALIDATION=1 python3 -m pytest tests/runtime/test_live_corpus_probe.py`,
+   which reports the measured correspondence ratio and the store fingerprints.
+3. **Golden set v2** — fill the contract fields in
+   `tests/evaluation/golden_set_v2/annotations_v1.jsonl`, mapping **each** of the
+   1081 ground-truth passages to its own `(doc_id, chunk_id)` (a single
+   row-level identifier with several passages is rejected), record
+   `corpus_sha256`, set `review_status: REVIEWED` with a distinct `reviewed_by`,
+   then pass `validate_golden_set_contract.py` and re-run with
+   `--require-contract`. Audit with
+   `scripts/validation/audit_annotations.py`; the outstanding work is listed in
+   `tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md`.
 4. **Generation endpoints** — a reachable vLLM (or compatible) endpoint for
    answer-level and performance runs.
 5. **Load tooling** — a declared workload and a reachable API; then run
@@ -192,7 +247,9 @@ a reachable canonical API plus live retrieval and model endpoints.
 | Metric | Status |
 |---|---|
 | Golden-set contract coverage | `BLOCKED` — 0/301 valid (toolchain `VERIFIED_CODE`; data unusable for official scoring) |
-| Hit@5 / NDCG@10 ablation A–E | `BLOCKED` — no corpus, no weights |
+| Golden-set v2 annotation records | `BLOCKED` — 0 reviewed records; the annotation pass has not been performed |
+| Corpus fingerprint + golden-set correspondence | `BLOCKED` — measured 0/60 sampled passages present in the live corpus |
+| Hit@5 / Recall@5 / MRR@10 / NDCG@10 ablation A–E | `BLOCKED` — corpus correspondence 0%, no weights |
 | Real Qdrant store / epoch / RBAC isolation | `VERIFIED` — 20/20 real-server checks |
 | Real authenticated Elasticsearch path | `VERIFIED` — authenticated ES 8.11 run |
 | Cache epoch / permission isolation | `VERIFIED` — real Redis key round-trip |
@@ -201,4 +258,7 @@ a reachable canonical API plus live retrieval and model endpoints.
 | RAGAS quality score | `PENDING` — no evaluator credential |
 
 No `VERIFIED` row depends on a fabricated corpus or a stand-in model. Every
-`BLOCKED` row names the exact missing asset above.
+`BLOCKED` row names the exact missing asset above. The annotation rows are
+`BLOCKED` because a human has not done the work — not because a tool failed;
+`tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md` enumerates what is
+outstanding.

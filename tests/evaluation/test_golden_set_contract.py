@@ -195,3 +195,52 @@ def test_contract_json_is_serialisable():
     payload = json.loads(report_to_json(report))
     assert payload["valid_count"] == 1
     assert payload["contract_version"] == CONTRACT_VERSION
+
+
+def test_provenance_origin_is_required():
+    """`source` must be required, not merely validated when present.
+
+    It was documented as required and enforced by `benchmarks/annotation.py`,
+    but `validate_row` only checked it when non-empty — so a row could declare
+    neither a human nor a model origin and still be VALID.
+    """
+    row = _valid_row()
+    del row["annotation"]["source"]
+    verdict = validate_row(row)
+    assert verdict.status == "INVALID"
+    assert "missing_annotation_source" in verdict.reasons
+
+    row["annotation"]["source"] = "invented-origin"
+    verdict = validate_row(row)
+    assert verdict.status == "INVALID"
+    assert "invalid_annotation_source" in verdict.reasons
+
+
+def test_review_status_is_required_and_unreviewed_is_refused():
+    from benchmarks.annotation import REVIEW_STATUS_DRAFT
+
+    row = _valid_row()
+    del row["annotation"]["review_status"]
+    verdict = validate_row(row)
+    assert verdict.status == "INVALID"
+    assert "missing_annotation_review_status" in verdict.reasons
+
+    row["annotation"]["review_status"] = REVIEW_STATUS_DRAFT
+    verdict = validate_row(row)
+    assert verdict.status == "INVALID"
+    assert f"annotation_not_reviewed:{REVIEW_STATUS_DRAFT}" in verdict.reasons
+
+
+def test_an_out_of_vocabulary_relevance_grade_is_refused():
+    row = _valid_row()
+    row["annotations"][0]["relevance"] = 9
+    verdict = validate_row(row)
+    assert verdict.status == "INVALID"
+    assert any("invalid_relevance_grade" in reason for reason in verdict.reasons)
+
+
+def test_a_valid_relevance_grade_is_accepted():
+    for grade in (0, 1, 2):
+        row = _valid_row()
+        row["annotations"][0]["relevance"] = grade
+        assert validate_row(row).status == "VALID"

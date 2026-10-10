@@ -215,8 +215,12 @@ def validate_row(row: Mapping[str, Any], resolver: IdentifierResolver | None = N
             # A draft is a real annotation state, not an error — but it must
             # never be scored, so this row is refused from official runs.
             reasons.append(f"annotation_not_reviewed:{review_status}")
+        # Required for the same reason as review_status: without the origin of a
+        # label, an LLM proposal and a human decision cannot be told apart later.
         source = provenance.get("source")
-        if _is_nonempty_str(source) and source not in ANNOTATION_SOURCES:
+        if not _is_nonempty_str(source):
+            reasons.append("missing_annotation_source")
+        elif source not in ANNOTATION_SOURCES:
             reasons.append("invalid_annotation_source")
 
     # Relevance grades are optional; when present they must be a real level.
