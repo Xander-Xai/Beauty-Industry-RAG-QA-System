@@ -6,7 +6,7 @@ result. Levels: **PASS_CODE**, **PASS_LOCAL_REAL**, **PASS_CI**,
 
 - Commit: `61be8a9` on branch `finalize/engineering-closeout`
 - Local run (UTC): 2026-10-10, Linux 6.6 WSL2, 20 vCPU, 15 GiB RAM, Python 3.10.12, 1× RTX 5060 Ti
-- CI: the checks listed below run in `.github/workflows/{ci,lint,security}.yml`; PR head status is recorded in the PR conversation (this document is committed before the CI run for this SHA completes — treat the CI column as "job exists and runs this command", not "green"). **Do not read PASS_CI here as a claim about a specific run.**
+- CI: the checks below run in `.github/workflows/{ci,lint,security}.yml`, which trigger only on PRs whose **base is `main`**. This closeout is PR **#92** (Draft, base `main`). The CI column below means "the job exists and runs this command" — read the live status from the #92 checks, not from this document.
 
 ## 1. Engineering checks (run locally, all green)
 
