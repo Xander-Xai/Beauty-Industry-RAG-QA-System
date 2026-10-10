@@ -27,8 +27,8 @@ from benchmarks.metrics import (
 from benchmarks.models import (
     GRADE_THRESHOLD_RELEVANT,
     RELEVANCE_HIGHLY_RELEVANT,
-    RelevantItem,
     QueryBenchmarkResult,
+    RelevantItem,
 )
 
 FOUR = ["a", "b", "c", "d"]

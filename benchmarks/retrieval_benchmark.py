@@ -20,8 +20,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from benchmarks import backends, report
+from benchmarks.corpus import distinct_passages, inspect_correspondence
 from benchmarks.dataset import (
     DEFAULT_DATASET_PATH,
     DatasetError,
@@ -50,6 +52,25 @@ from benchmarks.provenance import (
 from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
 
 DEFAULT_OUTPUT_DIR = "artifacts/benchmarks"
+
+
+def corpus_evidence_for(passages: list[str], dataset_queries: int) -> dict[str, Any]:
+    """Fingerprint the corpus and measure golden-set correspondence, defensively.
+
+    Provenance collection must never be able to fail a run: an unreachable store
+    is an expected state and is recorded as such. Anything unexpected is captured
+    as an error string rather than raised, because losing the run to an evidence
+    problem would be the opposite of the fail-closed behaviour this package wants.
+    """
+    try:
+        return inspect_correspondence(passages, total_passages=dataset_queries).as_dict()
+    except Exception as exc:  # noqa: BLE001 - evidence collection must not break the run
+        return {
+            "verdict": "unavailable",
+            "error": f"{type(exc).__name__}: {exc}",
+            "fingerprints": [],
+            "correspondence": None,
+        }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -195,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
 
     run_id = new_run_id()
     effective_config = effective_retrieval_config()
+    # Which corpus this run reads, and whether it actually contains the golden
+    # passages. Collected before the metadata literal so the artifact can carry
+    # it even when every configuration ends up blocked — "blocked because the
+    # corpus does not contain the ground truth" is only credible if the artifact
+    # shows what was inspected.
+    corpus_evidence = corpus_evidence_for(distinct_passages(queries), len(queries))
     config_payload = {
         "configs": configs,
         "top_k": args.top_k,
@@ -229,6 +256,10 @@ def main(argv: list[str] | None = None) -> int:
         # a benchmark result below.
         "dataset_contract": contract_report.as_dict(),
         "attributable": attributable,
+        # Which corpus this run read, and whether it actually contains the golden
+        # passages. Without it two runs against different indexes are
+        # indistinguishable in their provenance.
+        "corpus": corpus_evidence,
     }
     environment = render_environment(collect_environment())
     # Coverage describes the samples this run actually used, not the whole file.

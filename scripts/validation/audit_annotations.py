@@ -4,11 +4,11 @@
 Usage
 -----
     python3 scripts/validation/audit_annotations.py \
-        --dataset data/eval/golden_set_v2/annotations_v1.jsonl
+        --dataset tests/evaluation/golden_set_v2/annotations_v1.jsonl
 
     # generate the backlog of decisions a human still has to make
     python3 scripts/validation/audit_annotations.py \
-        --backlog data/eval/golden_set_v2/annotations_v1.jsonl \
+        --backlog tests/evaluation/golden_set_v2/annotations_v1.jsonl \
         --source-dataset tests/evaluation/golden_set.jsonl
 
 Exit codes
@@ -172,7 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--dataset",
-        default="data/eval/golden_set_v2/annotations_v1.jsonl",
+        default="tests/evaluation/golden_set_v2/annotations_v1.jsonl",
         help="annotation dataset to audit",
     )
     parser.add_argument("--json", action="store_true", help="emit the full audit report as JSON")

@@ -57,6 +57,7 @@ def test_no_retriever_means_blocked_not_fabricated(make_query):
     assert run.executed is False
 
 
+@pytest.mark.real_corpus_probe
 def test_corpus_probe_without_ground_truth_is_unavailable():
     """With nothing to compare against, the corpus check must not claim a pass.
 

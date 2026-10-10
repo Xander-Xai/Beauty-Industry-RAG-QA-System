@@ -156,6 +156,58 @@ def credential_env_state() -> dict[str, bool]:
     return state
 
 
+def model_identity(path: str | Path | None) -> dict[str, Any]:
+    """Identify the weights an embedding/rerank model was loaded from.
+
+    A benchmark that does not record which weights produced its vectors cannot be
+    reproduced: swapping the BiEncoder changes every dense ranking while the
+    configuration hash stays identical, because the path did not change. When the
+    directory is absent this returns ``present: False`` rather than inventing a
+    revision — a real absence is the honest answer, and it is what keeps a blocked
+    run blocked.
+    """
+    if not path:
+        return {"present": False, "path": None, "revision": None}
+    resolved = Path(str(path))
+    if not resolved.exists():
+        return {"present": False, "path": str(resolved), "revision": None}
+
+    # Prefer an explicit revision pinned by the asset itself.
+    for marker in ("revision.txt", "REVISION", ".revision"):
+        candidate = resolved / marker
+        if candidate.is_file():
+            value = candidate.read_text(encoding="utf-8").strip()
+            if value:
+                return {"present": True, "path": str(resolved), "revision": value}
+
+    # Otherwise fingerprint the files that determine what the model computes.
+    digest = hashlib.sha256()
+    try:
+        for child in sorted(p for p in resolved.rglob("*") if p.is_file()):
+            stat = child.stat()
+            digest.update(str(child.relative_to(resolved)).encode("utf-8"))
+            digest.update(b"\x1f")
+            digest.update(str(stat.st_size).encode("utf-8"))
+            digest.update(b"\x1e")
+    except OSError:
+        return {"present": True, "path": str(resolved), "revision": None}
+    return {"present": True, "path": str(resolved), "revision": f"sha256:{digest.hexdigest()}"}
+
+
+def _model_identities() -> dict[str, Any]:
+    """Resolve every configured model path to a present/revision pair."""
+    from common.config import get_config_dict
+
+    config = get_config_dict() or {}
+    embedding = (config.get("embedding", {}) or {}).get("text", {}) or {}
+    gpu_models = (config.get("gpu1", {}) or {}).get("models", {}) or {}
+    return {
+        "embedding_model": model_identity(embedding.get("model_path") or embedding.get("path")),
+        "biencoder_model": model_identity((config.get("retrieval", {}) or {}).get("bi_encoder", {}).get("model_path")),
+        "crossencoder_model": model_identity(gpu_models.get("cross_encoder_a") or gpu_models.get("cross_encoder")),
+    }
+
+
 def collect_environment() -> dict[str, Any]:
     """Capture the environment facts that affect reproducibility."""
     environment: dict[str, Any] = {
@@ -174,15 +226,13 @@ def collect_environment() -> dict[str, Any]:
         "transformers_version": _module_version("transformers"),
         "sentence_transformers_version": _module_version("sentence_transformers"),
         "torch_version": _module_version("torch"),
-        "embedding_model": None,
-        "embedding_model_revision": None,
-        "biencoder_model": None,
-        "biencoder_model_revision": None,
-        "crossencoder_model": None,
-        "crossencoder_model_revision": None,
         "credential_env_state": credential_env_state(),
     }
     environment.update(_torch_info())
+    # Resolved rather than hardcoded None: when the weights are on disk the
+    # artifact carries a real revision, and when they are absent it records
+    # present=False instead of a bare "unavailable" that reads the same either way.
+    environment.update(_model_identities())
     return environment
 
 

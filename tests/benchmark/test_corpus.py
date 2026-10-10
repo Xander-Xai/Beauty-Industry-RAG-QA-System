@@ -23,6 +23,11 @@ from benchmarks.corpus import (
     inspect_correspondence,
 )
 
+# Every test in this module is about the corpus probe, so the suite-wide network
+# stub in conftest is opted out of. Each test still supplies its own fake store,
+# so none of them touches a real service.
+pytestmark = pytest.mark.real_corpus_probe
+
 GOLDEN = ["alpha passage", "beta passage"]
 
 

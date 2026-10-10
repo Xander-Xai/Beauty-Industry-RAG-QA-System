@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/data/eval/golden_set_v2/annotations.schema.json",
+  "title": "golden-set-annotation/v1 record",
+  "description": "One reviewed or draft annotation record for a single golden-set question. A record is only scorable when annotation.review_status is REVIEWED; DRAFT_UNVERIFIED records are candidates and must never contribute ground truth to an official run.",
+  "type": "object",
+  "required": [
+    "sample_id",
+    "question",
+    "business_type",
+    "difficulty",
+    "visual_required",
+    "complexity_label",
+    "corpus_version",
+    "corpus_sha256",
+    "annotations",
+    "annotation"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "sample_id": {
+      "type": "string",
+      "pattern": "^[0-9]{4}$",
+      "description": "1-based zero-padded line number in the source golden set. Deterministic, so a record always maps back to its question."
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Copied verbatim from the source golden set. Not reworded."
+    },
+    "business_type": {
+      "enum": ["ingredient", "regulation", "formula", "image", "general", "product"]
+    },
+    "difficulty": {
+      "enum": ["easy", "medium", "hard"]
+    },
+    "visual_required": {
+      "type": "boolean",
+      "description": "true ONLY when the question cannot be answered from text alone and requires reading an image, label, diagram or scanned page. A human decision. Never derive it from business_type == 'image', which marks a domain, not a visual dependency."
+    },
+    "complexity_label": {
+      "enum": ["simple", "complex"],
+      "description": "Whether a single retrieval hop suffices. A human/reference label. Never record a Router prediction here — that would measure the classifier against its own output."
+    },
+    "corpus_version": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.\\-]{2,64}$",
+      "description": "The sealed knowledge epoch the doc_id/chunk_id identifiers resolve in."
+    },
+    "corpus_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the corpus fingerprint this mapping was made against, from benchmarks.corpus.CorpusFingerprint.content_sha256. Binds the mapping to an exact index state so a chunk id cannot silently refer to a different revision."
+    },
+    "annotations": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Every supporting passage for this question. More than one is normal: 1081 ground-truth passages span the 301 committed questions.",
+      "items": {
+        "type": "object",
+        "required": ["doc_id", "chunk_id", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {"type": "string", "minLength": 1},
+          "chunk_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Chunk identity within the document. The evaluation key is 'doc_id::chunk_id', so two chunks of one document stay distinguishable."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The passage as it exists in the indexed corpus at corpus_version. Used for auditing the mapping, not as the match key."
+          },
+          "relevance": {
+            "enum": [0, 1, 2],
+            "default": 2,
+            "description": "0 not_relevant (a candidate that was considered and rejected; excluded from scoring), 1 partially_relevant, 2 highly_relevant. Binary Hit/Recall treat >=1 as relevant; graded NDCG uses the full scale."
+          }
+        }
+      }
+    },
+    "annotation": {
+      "type": "object",
+      "required": ["annotator", "method", "annotated_at", "source", "review_status"],
+      "additionalProperties": false,
+      "properties": {
+        "annotator": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Who produced this record. Required even for an LLM candidate: an unattributed record cannot be audited later."
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How the passages were mapped, e.g. manual-passage-mapping, manual-visual-review."
+        },
+        "annotated_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+        "source": {
+          "enum": ["human", "llm_candidate"],
+          "description": "llm_candidate means a model proposed the mapping. It stays DRAFT_UNVERIFIED until a person reviews it."
+        },
+        "review_status": {
+          "enum": ["DRAFT_UNVERIFIED", "REVIEWED"],
+          "description": "No default. A record that does not state its review state is rejected."
+        },
+        "reviewed_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required when review_status is REVIEWED. Must differ from annotator: self-review defeats the point."
+        },
+        "reviewed_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Required when review_status is REVIEWED."
+        },
+        "promoted_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required when an llm_candidate is promoted to REVIEWED, so the promotion itself is auditable."
+        },
+        "notes": {"type": "string"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"review_status": {"const": "REVIEWED"}}},
+          "then": {"required": ["reviewed_by", "reviewed_at"]}
+        }
+      ]
+    }
+  }
+}

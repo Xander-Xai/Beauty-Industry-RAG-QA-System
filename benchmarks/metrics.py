@@ -33,8 +33,8 @@ from benchmarks.models import (
     NDCG_K,
     RECALL_KS,
     RELEVANCE_HIGHLY_RELEVANT,
-    RelevantItem,
     QueryBenchmarkResult,
+    RelevantItem,
 )
 
 

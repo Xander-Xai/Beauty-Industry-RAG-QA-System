@@ -28,7 +28,7 @@ reviewer; there is no default annotator, no inferred ``reviewed_by`` and no
 
 This module only *describes and checks* records. It does not produce labels; the
 labeling work itself is a human task and is enumerated in
-``data/eval/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md``.
+``tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md``.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from benchmarks.models import RELEVANCE_GRADES, RELEVANCE_GRADE_NAMES
+from benchmarks.models import RELEVANCE_GRADE_NAMES, RELEVANCE_GRADES
 
 ANNOTATION_SCHEMA_VERSION = "golden-set-annotation/v1"
 

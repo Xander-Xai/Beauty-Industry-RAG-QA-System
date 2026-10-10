@@ -17,6 +17,67 @@ from benchmarks.models import BenchmarkQuery, RetrievedItem
 from benchmarks.relevance import relevant_items_from_texts
 
 
+@pytest.fixture(autouse=True)
+def stub_corpus_probe(monkeypatch, request):
+    """Keep corpus probing out of the test process by default.
+
+    ``probe_corpus`` and the CLI's corpus-evidence collection now issue real
+    Elasticsearch/Qdrant queries. That is the correct production behaviour, but a
+    test whose outcome depends on whether the host happens to have a live index is
+    not testing anything: it would pass or fail according to the environment.
+
+    The corpus logic itself is covered hermetically in ``test_corpus.py``, which
+    supplies fake stores. Here the probe is stubbed to the *available* state so a
+    test that injects a retriever actually reaches execution — the thing those
+    tests are about. A test that cares about blocking injects
+    ``force_block_reason`` or blocks a backend itself.
+    """
+    if "real_corpus_probe" in request.keywords:
+        return
+    from benchmarks import backends
+    from benchmarks.models import BackendAvailability
+
+    monkeypatch.setattr(
+        backends,
+        "probe_corpus",
+        lambda count, golden_passages=None: BackendAvailability(
+            "corpus", True, backends.REASON_OK, "stubbed in tests"
+        ),
+    )
+    monkeypatch.setattr(
+        backends,
+        "inspect_correspondence",
+        lambda *args, **kwargs: _stub_inspection(),
+    )
+    try:
+        from benchmarks import retrieval_benchmark as cli
+    except Exception:  # pragma: no cover - CLI always imports in practice
+        return
+    monkeypatch.setattr(cli, "corpus_evidence_for", lambda passages, count: _stub_inspection().as_dict())
+
+
+def _stub_inspection():
+    from benchmarks.corpus import (
+        CORRESPONDENCE_MET_FULL,
+        CorpusFingerprint,
+        CorpusInspection,
+        CorrespondenceReport,
+    )
+
+    fingerprint = CorpusFingerprint("stub", "stub", 0, 0, "0" * 64, True)
+    report = CorrespondenceReport(
+        passages_total=0,
+        passages_distinct=0,
+        passages_checked=0,
+        passages_matched=0,
+        ratio=0.0,
+        verdict=CORRESPONDENCE_MET_FULL,
+        sample_hash="0" * 64,
+        corpus=fingerprint,
+    )
+    return CorpusInspection(fingerprints=(fingerprint,), report=report)
+
+
 class FixtureRetriever:
     """Deterministic ranking built from a per-sample script.
 
