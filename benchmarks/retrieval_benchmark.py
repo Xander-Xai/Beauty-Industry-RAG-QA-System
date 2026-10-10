@@ -179,8 +179,13 @@ def main(argv: list[str] | None = None) -> int:
     # The v2 contract is always measured so every artifact states whether its
     # dataset is attributable. It is only a hard gate when --require-contract is
     # set, so an exploratory blocked run still produces a diagnostic artifact.
+    #
+    # `attributable` uses the same --min-valid-fraction the gate uses. It used to
+    # demand a perfect 1.0 while ignoring the flag, so a dataset an operator had
+    # explicitly waived to 0.9 was still labelled non-attributable in the
+    # artifact — the recorded verdict silently contradicted the enforced one.
     contract_report = validate_dataset([query.raw for query in queries])
-    attributable = contract_report.total > 0 and contract_report.valid_count == contract_report.total
+    attributable = contract_report.total > 0 and contract_report.valid_fraction >= args.min_valid_fraction
     if args.require_contract:
         try:
             require_attributable(contract_report, args.min_valid_fraction)
@@ -215,7 +220,10 @@ def main(argv: list[str] | None = None) -> int:
         "requested_configs": configs,
         "top_k": args.top_k,
         "allow_dirty": bool(args.allow_dirty),
-        "synthetic_retriever": False,
+        # Placeholder: overwritten below from what the runs actually did. It is
+        # left out of this literal so it can never be read as a verified fact
+        # before the runs have been summarized.
+        "synthetic_retriever": None,
         # Whether the scored samples satisfy golden-set-contract/v2. A run on a
         # non-attributable dataset may still be executed, but it is never labeled
         # a benchmark result below.
@@ -228,10 +236,17 @@ def main(argv: list[str] | None = None) -> int:
 
     runs = [run_configuration(name, queries, top_k=args.top_k) for name in configs]
     summary = summarize_run(runs, available_buckets=coverage.get("available_buckets"))
-    # A blocked run contains no retrieval-quality result, and a run on a dataset
-    # that fails the v2 contract is not attributable, so neither may advertise
-    # itself as benchmark evidence.
-    metadata["results_are_benchmark"] = bool(summary.get("any_results")) and attributable
+    # Derived from the runs, never asserted by the CLI: the CLI itself wires no
+    # retriever, so this is False unless a caller injected one.
+    used_synthetic = bool(summary.get("any_synthetic"))
+    metadata["synthetic_retriever"] = used_synthetic
+    # A blocked run contains no retrieval-quality result, a run on a dataset that
+    # fails the v2 contract is not attributable, and a run scored against an
+    # injected retriever is a fixture: none of the three may advertise itself as
+    # benchmark evidence.
+    metadata["results_are_benchmark"] = (
+        bool(summary.get("any_results")) and attributable and not used_synthetic
+    )
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id
@@ -246,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         summary=summary,
         coverage=coverage,
         per_query_rows=rows_written,
-        synthetic_retriever=False,
+        synthetic_retriever=used_synthetic,
     )
 
     missing = report.verify_artifact_set(run_dir)

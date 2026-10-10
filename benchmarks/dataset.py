@@ -17,9 +17,10 @@ from typing import Any
 from benchmarks.models import BenchmarkQuery, RelevantItem
 from benchmarks.relevance import (
     has_stable_identity,
+    relevance_key,
     relevant_items_from_annotations,
+    relevant_items_from_contexts,
     relevant_items_from_texts,
-    stable_id_from,
 )
 
 DEFAULT_DATASET_PATH = "tests/evaluation/golden_set.jsonl"
@@ -31,6 +32,18 @@ KNOWN_UNAVAILABLE_BUCKETS = ("visual_required", "complexity")
 
 class DatasetError(RuntimeError):
     """Raised when the dataset cannot support a trustworthy benchmark."""
+
+
+class AmbiguousRelevanceIdentityError(DatasetError):
+    """Raised when a row's ground truth cannot be given per-passage identity.
+
+    A row that carries one flat ``doc_id``/``chunk_id`` but several ground-truth
+    passages cannot say *which* passage that id refers to. Guessing is not an
+    option: keeping only the first passage inflates Recall@5 from ``found / N``
+    to a guaranteed 1.0, and reusing the same id for all passages collapses
+    distinct evidence into one key. Both make the benchmark report better
+    numbers than the system earns, so the row is refused instead.
+    """
 
 
 def sha256_file(path: str | Path) -> str:
@@ -101,6 +114,59 @@ def coverage(rows: Sequence[dict[str, Any]], keys: Sequence[str]) -> dict[str, i
     return {key: sum(1 for row in rows if row.get(key) not in (None, "", [])) for key in keys}
 
 
+def _relevant_items_for_row(
+    row: dict[str, Any],
+    contexts: list[Any],
+    sample_id: str,
+    path: str | Path,
+) -> list[RelevantItem]:
+    """Resolve one row's ground truth into per-passage relevant items.
+
+    Precedence, strongest identity first:
+
+    1. ``annotations`` — the ``golden-set-contract/v2`` shape, where every
+       annotated passage carries its own ``doc_id`` + ``chunk_id``. All
+       annotations are kept, because a query's evidence is a set.
+    2. ``contexts`` entries that are mappings with their own ids — identity is
+       per passage, so no ambiguity is possible.
+    3. plain-string ``contexts`` with **no** row-level id — level 2, matched by
+       normalized exact text for every passage.
+    4. a row-level id with exactly one context — unambiguous, kept for
+       backward compatibility with single-passage rows.
+    5. a row-level id with several contexts — refused
+       (:class:`AmbiguousRelevanceIdentityError`).
+    """
+    annotated = relevant_items_from_annotations(row.get("annotations"))
+    if annotated:
+        return annotated
+
+    if any(isinstance(item, Mapping) for item in contexts):
+        return relevant_items_from_contexts(contexts)
+
+    # A non-string or blank entry would either become the bogus ground truth
+    # "None" or raise an uncaught ValueError deep inside normalization.
+    for position, item in enumerate(contexts):
+        if not isinstance(item, str) or not item.strip():
+            raise DatasetError(
+                f"{path}: sample {sample_id} context {position} must be a non-empty string, "
+                f"got {type(item).__name__}"
+            )
+
+    row_id = relevance_key(row)
+    if row_id is None:
+        # Level 2 fallback. Every passage is scored, not just the first.
+        return relevant_items_from_texts([str(item) for item in contexts])
+    if len(contexts) > 1:
+        raise AmbiguousRelevanceIdentityError(
+            f"{path}: sample {sample_id} carries a single row-level identifier ({row_id!r}) but "
+            f"{len(contexts)} ground-truth passages; the identifier cannot say which passage it "
+            "refers to, so scoring would either drop the other passages or collapse them into one "
+            "key. Give each passage its own annotation with doc_id + chunk_id, or remove the "
+            "row-level identifier and let the passages match by normalized text."
+        )
+    return [RelevantItem(key=row_id, text=str(contexts[0]))]
+
+
 def load_queries(
     path: str | Path = DEFAULT_DATASET_PATH,
     limit: int | None = None,
@@ -139,24 +205,7 @@ def load_queries(
         contexts = row.get("contexts")
         if not isinstance(contexts, list) or not contexts:
             raise DatasetError(f"{path}: sample {sample_id} has no contexts (ground truth)")
-        # A non-string or blank entry would either become the bogus ground truth
-        # "None" or raise an uncaught ValueError deep inside normalization.
-        for position, item in enumerate(contexts):
-            if not isinstance(item, str) or not item.strip():
-                raise DatasetError(
-                    f"{path}: sample {sample_id} context {position} must be a non-empty string, "
-                    f"got {type(item).__name__}"
-                )
-        stable = stable_id_from(row)
-        if stable:
-            relevant: list[RelevantItem] = [RelevantItem(key=stable, text=str(contexts[0]))]
-        else:
-            # A contract-valid row keeps identity in `annotations`, so it must be
-            # matched by stable id too; otherwise it would be scored by the very
-            # text fallback that `golden-set-contract/v2` exists to rule out.
-            relevant = relevant_items_from_annotations(row.get("annotations"))
-            if not relevant:
-                relevant = relevant_items_from_texts([str(item) for item in contexts])
+        relevant = _relevant_items_for_row(row, contexts, sample_id, path)
         queries.append(
             BenchmarkQuery(
                 sample_id=sample_id,

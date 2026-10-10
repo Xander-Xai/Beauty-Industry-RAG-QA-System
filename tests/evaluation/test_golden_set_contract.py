@@ -43,9 +43,11 @@ def _valid_row(**overrides):
             {"doc_id": "doc-1", "chunk_id": "doc-1#0", "text": "备案所需材料包括产品配方表。"},
         ],
         "annotation": {
-            "annotator": "reviewer-a",
+            "annotator": "annotator-a",
             "method": "manual-read-and-map",
             "annotated_at": "2026-10-09",
+            "review_status": "REVIEWED",
+            "source": "human",
             "reviewed_by": "reviewer-b",
         },
     }

@@ -31,6 +31,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse, urlunsplit
 
+from benchmarks.corpus import (
+    CORRESPONDENCE_MET_FULL,
+    DEFAULT_CORRESPONDENCE_SAMPLE,
+    inspect_correspondence,
+)
 from benchmarks.models import BackendAvailability
 
 PROBE_TIMEOUT_SECONDS = 2.0
@@ -453,21 +458,67 @@ def probe_crossencoder() -> BackendAvailability:
     )
 
 
-def probe_corpus(dataset_queries: int) -> BackendAvailability:
-    """The benchmark corpus must contain the ground-truth passages.
+def probe_corpus(
+    dataset_queries: int,
+    golden_passages: Sequence[str] | None = None,
+    sample_size: int = DEFAULT_CORRESPONDENCE_SAMPLE,
+) -> BackendAvailability:
+    """Check that a live corpus actually contains the ground-truth passages.
 
-    The repository ships no corpus fixture built from the golden set passages.
-    Constructing one from the ground truth itself would make recall trivially
-    perfect and meaningless, so that shortcut is deliberately not taken.
+    This used to return ``available=False`` unconditionally without issuing a
+    single query. That was honest about *this* repository (no committed corpus
+    maps the golden passages to indexed chunks) but it answered nothing for an
+    operator with a real index, and it left the artifact with no record of what
+    was inspected.
+
+    It now measures the real thing: it reads the configured Elasticsearch index
+    and Qdrant collection, fingerprints them, and reports what fraction of the
+    golden-set passages they actually contain. The check is strictly read-only —
+    it never writes, and in particular never builds a corpus from the golden
+    passages, which would make every configuration score recall 1.0 by
+    construction.
+
+    When ``golden_passages`` is not supplied (no dataset loaded, e.g. a bare
+    ``--list-configs``) the corpus cannot be judged against anything and the
+    backend stays unavailable with a reason that says so.
     """
+    if not golden_passages:
+        return BackendAvailability(
+            "corpus",
+            False,
+            REASON_CORPUS_UNRESOLVED,
+            (
+                f"no ground-truth passages were supplied for {dataset_queries} golden-set samples, "
+                "so corpus correspondence cannot be measured"
+            ),
+        )
+
+    inspection = inspect_correspondence(golden_passages, total_passages=dataset_queries, sample_size=sample_size)
+    report = inspection.report
+    if report.verdict == CORRESPONDENCE_MET_FULL:
+        return BackendAvailability(
+            "corpus",
+            True,
+            REASON_OK,
+            (
+                f"all {report.passages_checked}/{report.passages_distinct} distinct golden passages are "
+                f"present in the configured corpus (fingerprint "
+                f"{(report.corpus.content_sha256 or '')[:16] if report.corpus else 'unavailable'})"
+            ),
+        )
+    sources = ", ".join(
+        f"{fingerprint.system}:{fingerprint.name}"
+        + ("" if fingerprint.reachable else f" (unreachable: {fingerprint.error})")
+        for fingerprint in inspection.fingerprints
+    )
     return BackendAvailability(
         "corpus",
         False,
         REASON_CORPUS_UNRESOLVED,
         (
-            f"no reproducible corpus fixture is registered for {dataset_queries} golden-set samples; "
-            "the operator corpus does not contain the golden-set passages, and building one from the "
-            "ground truth would be self-referential"
+            f"{report.passages_matched}/{report.passages_checked} sampled golden passages were found in the "
+            f"configured corpus ({report.ratio:.0%}); inspected: {sources}. Building a corpus from the golden "
+            "passages themselves would make recall self-referential and is refused."
         ),
     )
 
@@ -525,7 +576,11 @@ class ConfigAvailability:
         return "; ".join(self.reasons)
 
 
-def probe_config_backends(config_name: str, dataset_queries: int) -> tuple[BackendAvailability, ...]:
+def probe_config_backends(
+    config_name: str,
+    dataset_queries: int,
+    golden_passages: Sequence[str] | None = None,
+) -> tuple[BackendAvailability, ...]:
     """Probe each backend a configuration requires exactly once.
 
     The caller reuses this single snapshot for both the availability verdict and
@@ -537,7 +592,7 @@ def probe_config_backends(config_name: str, dataset_queries: int) -> tuple[Backe
     probed: list[BackendAvailability] = []
     for backend_name in REQUIRED_BACKENDS[config_name]:
         if backend_name == "corpus":
-            probed.append(probe_corpus(dataset_queries))
+            probed.append(probe_corpus(dataset_queries, golden_passages))
         else:
             probed.append(PROBES[backend_name]())
     return tuple(probed)
@@ -547,6 +602,7 @@ def evaluate_config(
     config_name: str,
     dataset_queries: int,
     probed: Sequence[BackendAvailability] | None = None,
+    golden_passages: Sequence[str] | None = None,
 ) -> ConfigAvailability:
     """Whether a configuration's backends are usable, without executing retrieval.
 
@@ -554,16 +610,26 @@ def evaluate_config(
     """
     if config_name not in REQUIRED_BACKENDS:
         return ConfigAvailability(config_name, False, (f"unknown configuration: {config_name}",), None)
-    probed = tuple(probed) if probed is not None else probe_config_backends(config_name, dataset_queries)
+    probed = (
+        tuple(probed) if probed is not None else probe_config_backends(config_name, dataset_queries, golden_passages)
+    )
     reasons = [f"{item.name}={item.reason}" for item in probed if not item.available]
     details = [f"{item.name}: {item.detail}" for item in probed if not item.available and item.detail]
     return ConfigAvailability(config_name, not reasons, tuple(reasons), "; ".join(details) or None)
 
 
-def backend_manifest(config_name: str, dataset_queries: int) -> list[dict[str, Any]]:
+def backend_manifest(
+    config_name: str,
+    dataset_queries: int,
+    golden_passages: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
     """Full probe record for a configuration, including its stages."""
     manifest: list[dict[str, Any]] = []
     for backend_name in REQUIRED_BACKENDS[config_name]:
-        availability = probe_corpus(dataset_queries) if backend_name == "corpus" else PROBES[backend_name]()
+        availability = (
+            probe_corpus(dataset_queries, golden_passages)
+            if backend_name == "corpus"
+            else PROBES[backend_name]()
+        )
         manifest.append(availability.as_dict())
     return manifest

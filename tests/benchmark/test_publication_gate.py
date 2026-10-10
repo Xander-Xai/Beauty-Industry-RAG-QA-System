@@ -52,9 +52,10 @@ CONTRACT_IDS = {"0000": "doc-0", "0001": "doc-1", "0002": "doc-2"}
 class ContractFixtureRetriever:
     """Deterministic retriever that returns items keyed by stable identifier.
 
-    Mirrors what a production retriever yields: a payload carrying ``doc_id``,
-    from which :func:`benchmarks.relevance.stable_id_from` derives the key.
-    Ranking is scripted, so the numbers prove the *gate*, not retrieval quality.
+    Mirrors what a production retriever yields: a payload carrying ``doc_id`` and
+    ``chunk_id``, from which :func:`benchmarks.relevance.relevance_key` derives
+    the same composite key the ground-truth annotation uses. Ranking is scripted,
+    so the numbers prove the *gate*, not retrieval quality.
     """
 
     name = "contract-fixture"
@@ -68,13 +69,14 @@ class ContractFixtureRetriever:
 
         items = []
         for rank, text in enumerate(self.texts.get(query.sample_id, [])[:top_k], start=1):
-            payload = {"doc_id": self.doc_ids.get(query.sample_id, ""), "text": text}
-            from benchmarks.relevance import stable_id_from
+            doc_id = self.doc_ids.get(query.sample_id, "")
+            payload = {"doc_id": doc_id, "chunk_id": f"{doc_id}-chunk-0", "text": text}
+            from benchmarks.relevance import relevance_key
 
             items.append(
                 RetrievedItem(
                     rank=rank,
-                    key=stable_id_from(payload),
+                    key=relevance_key(payload),
                     score=1.0 / rank,
                     source="contract-fixture",
                     text=text,
@@ -99,6 +101,8 @@ def _valid_row(sample_id: str, doc_id: str, chunk_id: str, text: str, **override
             "annotator": "annotator-a",
             "method": "manual-passage-mapping",
             "annotated_at": "2026-10-09",
+            "review_status": "REVIEWED",
+            "source": "human",
             "reviewed_by": "reviewer-b",
         },
     }
@@ -325,6 +329,8 @@ def test_labels_without_identifiers_do_not_make_a_row_attributable(tmp_path, run
             "annotator": "a",
             "method": "manual",
             "annotated_at": "2026-10-09",
+            "review_status": "REVIEWED",
+            "source": "human",
             "reviewed_by": "b",
         },
     }
@@ -354,14 +360,22 @@ def test_annotations_make_the_row_match_by_stable_id_not_by_text(tmp_path, run_c
     from benchmarks.dataset import bucket_coverage, load_queries
 
     queries = load_queries(path)
-    assert [item.key for item in queries[0].relevant_items] == ["doc-0"]
+    # Identity is the composite doc+chunk key, not the bare doc_id: two chunks of
+    # one document must stay distinguishable.
+    assert [item.key for item in queries[0].relevant_items] == ["doc-0::doc-0-chunk-0"]
 
     coverage = bucket_coverage([row])
     assert coverage["relevance_level"] == "level1_stable_id"
 
     out = tmp_path / "out"
     run_cli.main(["--config", "bm25", "--dataset", str(path), "--output-dir", str(out)])
-    assert _metadata(out)["results_are_benchmark"] is True
+    metadata = _metadata(out)
+    # The dataset is genuinely attributable ...
+    assert metadata["attributable"] is True
+    # ... but the ranking came from an injected fixture, so the run is not a
+    # benchmark result and the artifact must say so.
+    assert metadata["synthetic_retriever"] is True
+    assert metadata["results_are_benchmark"] is False
     assert "relevance matching: level1_stable_id" in _report(out)
 
 
@@ -478,8 +492,9 @@ def test_attributable_dataset_publishes(tmp_path, run_cli, attributable_dataset)
     """Scenario 6: the gate must be passable, or it is not a gate.
 
     The fixture ranking is deterministic and proves the *decision logic* only.
-    Its numbers are not a model-quality result and the artifact is never
-    presented as one.
+    Its numbers are not a model-quality result and the artifact never presents
+    them as one: with an injected retriever the run records
+    ``synthetic_retriever: true`` and ``results_are_benchmark: false``.
     """
     out = tmp_path / "out"
     exit_code = run_cli.main(["--config", "bm25", "--dataset", str(attributable_dataset), "--output-dir", str(out)])
@@ -487,16 +502,42 @@ def test_attributable_dataset_publishes(tmp_path, run_cli, attributable_dataset)
     assert exit_code == 0
     metadata = _metadata(out)
     assert metadata["attributable"] is True
-    assert metadata["results_are_benchmark"] is True
+    # The dataset clears the contract; the *ranking* is a fixture, so the run is
+    # deliberately not a benchmark result.
+    assert metadata["synthetic_retriever"] is True
+    assert metadata["results_are_benchmark"] is False
     assert metadata["dataset_contract"]["valid_count"] == 3
     assert metadata["dataset_contract"]["invalid_count"] == 0
     assert metadata["sample_count"] == 3
 
     summary = json.loads((_run_dir(out) / "retrieval_metrics.json").read_text(encoding="utf-8"))
     assert summary["any_results"] is True
+    assert summary["any_synthetic"] is True
     assert summary["executed_configs"] == ["bm25"]
     assert summary["configs"]["bm25"]["metrics"]["overall"]["sample_count"] == 3
     assert summary["configs"]["bm25"]["metrics"]["overall"]["recall_at_10"] == 1.0
+    assert summary["configs"]["bm25"]["synthetic_retriever"] is True
+    # The report must carry the warning a reader would rely on.
+    assert "synthetic" in _report(out).lower()
+
+
+def test_injected_retriever_can_never_be_published_as_a_benchmark(tmp_path, run_cli, attributable_dataset):
+    """A fixture ranking must fail the publication gate on its own.
+
+    This is the regression guard for a real defect: the CLI hardcoded
+    ``synthetic_retriever: False`` and ``results_are_benchmark`` ignored it, so a
+    scripted ranking over a contract-valid dataset was labelled a benchmark.
+    """
+    out = tmp_path / "out"
+    run_cli.main(["--config", "bm25", "--dataset", str(attributable_dataset), "--output-dir", str(out)])
+    metadata = _metadata(out)
+    # The only operand that can be true here is the dataset's attributability.
+    assert metadata["attributable"] is True
+    assert metadata["results_are_benchmark"] is False
+    summary = json.loads((_run_dir(out) / "retrieval_metrics.json").read_text(encoding="utf-8"))
+    # Results still exist — they are just not publishable evidence.
+    assert summary["any_results"] is True
+    assert summary["any_synthetic"] is True
 
 
 def test_attributable_dataset_passes_the_explicit_contract_gate(tmp_path, run_cli, attributable_dataset):
@@ -512,8 +553,13 @@ def test_attributable_dataset_passes_the_explicit_contract_gate(tmp_path, run_cl
             str(out),
         ]
     )
+    # The contract gate is about the *dataset* and passes; the fixture ranking
+    # still keeps the run out of the published-result column.
     assert exit_code == 0
-    assert _metadata(out)["results_are_benchmark"] is True
+    metadata = _metadata(out)
+    assert metadata["attributable"] is True
+    assert metadata["synthetic_retriever"] is True
+    assert metadata["results_are_benchmark"] is False
 
 
 def test_published_denominator_matches_the_contract_valid_rows(tmp_path, run_cli, attributable_dataset):

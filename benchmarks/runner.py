@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from benchmarks import backends
+from benchmarks.corpus import distinct_passages
 from benchmarks.latency import new_latency_record, stage_availability, summarize_latency, timed_stage
 from benchmarks.metrics import aggregate_results, score_ranking
 from benchmarks.models import (
@@ -65,6 +66,10 @@ class ConfigRun:
     results: list[QueryBenchmarkResult] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
     requested_sample_count: int = 0
+    #: True when the metrics came from an injected ``retriever_factory`` rather
+    #: than a real retrieval backend. Propagated to the artifacts so a scripted
+    #: or empty-index ranking can never be published as a benchmark result.
+    synthetic: bool = False
 
     @property
     def executed(self) -> bool:
@@ -120,7 +125,9 @@ def run_configuration(
         return ConfigRun(outcome)
 
     # One probe snapshot feeds both the availability verdict and the manifest.
-    probed = _probe_backends(backends.probe_config_backends(config_name, len(queries)))
+    probed = _probe_backends(
+        backends.probe_config_backends(config_name, len(queries), distinct_passages(queries))
+    )
     availability = backends.evaluate_config(config_name, len(queries), probed=probed)
 
     if retriever_factory is None:
@@ -163,8 +170,10 @@ def run_configuration(
             )
             continue
         deduped = dedupe_preserving_rank(items)[:top_k]
+        # The RelevantItem objects are passed whole, not reduced to keys: that
+        # is what carries the annotator's relevance grade into graded NDCG.
         scored = score_ranking(
-            [item.key for item in query.relevant_items],
+            list(query.relevant_items),
             [item.key for item in deduped],
         )
         # Only end-to-end retrieval is timed. Per-stage values stay None unless a
@@ -198,7 +207,13 @@ def run_configuration(
         )
         return ConfigRun(outcome, [], failures, requested_sample_count=len(queries))
     outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "synthetic fixture retriever (not a benchmark)", probed)
-    return ConfigRun(outcome, results, failures, requested_sample_count=len(queries))
+    return ConfigRun(
+        outcome,
+        results,
+        failures,
+        requested_sample_count=len(queries),
+        synthetic=True,
+    )
 
 
 def summarize_run(
@@ -214,6 +229,7 @@ def summarize_run(
     latency: dict[str, Any] = {}
     for run in runs:
         entry = run.outcome.as_dict()
+        entry["synthetic_retriever"] = run.synthetic
         if run.failures:
             entry["failures"] = run.failures
             entry["failure_count"] = len(run.failures)
@@ -238,6 +254,9 @@ def summarize_run(
         "blocked_configs": [run.outcome.config_name for run in runs if not run.executed],
         "latency": latency,
         "any_results": bool(executed),
+        # True when at least one configuration scored against an injected
+        # retriever. A run can execute and still be nothing but a fixture.
+        "any_synthetic": any(run.synthetic for run in runs),
     }
 
 

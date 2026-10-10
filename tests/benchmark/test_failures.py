@@ -57,10 +57,18 @@ def test_no_retriever_means_blocked_not_fabricated(make_query):
     assert run.executed is False
 
 
-def test_backend_probe_reports_unavailable_in_offline_env():
+def test_corpus_probe_without_ground_truth_is_unavailable():
+    """With nothing to compare against, the corpus check must not claim a pass.
+
+    `probe_corpus` now measures real correspondence against a live index, so it
+    needs the golden passages. Without them it has no evidence, so it stays
+    unavailable — and it does so without touching the network, which keeps this
+    test hermetic.
+    """
     availability = backends.probe_corpus(10)
     assert availability.available is False
     assert availability.reason == backends.REASON_CORPUS_UNRESOLVED
+    assert "ground-truth passages were supplied" in availability.detail
 
 
 def test_crossencoder_backend_is_not_claimed_available():
