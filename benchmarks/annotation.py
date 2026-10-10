@@ -232,17 +232,12 @@ def validate_annotation(record: Mapping[str, Any], index: int = 0) -> Annotation
 
 def audit_dataset(records: Sequence[Mapping[str, Any]]) -> AnnotationReport:
     """Audit every record and summarize the review state of the dataset."""
-    verdicts = [
-        validate_annotation(record, index)
-        for index, record in enumerate(records)
-    ]
+    verdicts = [validate_annotation(record, index) for index, record in enumerate(records)]
     corpus_versions = sorted(
         {str(record.get("corpus_version")) for record in records if _is_nonempty_str(record.get("corpus_version"))}
     )
     corpus_hashes = {
-        str(record.get("corpus_sha256")).lower()
-        for record in records
-        if _is_nonempty_str(record.get("corpus_sha256"))
+        str(record.get("corpus_sha256")).lower() for record in records if _is_nonempty_str(record.get("corpus_sha256"))
     }
 
     # A dataset mapped against two different corpus states cannot be scored as
@@ -332,9 +327,7 @@ def promote_to_reviewed(
     if not isinstance(provenance, Mapping):
         raise AnnotationError("record has no annotation provenance to promote")
     if not _is_nonempty_str(provenance.get("annotator")):
-        raise AnnotationError(
-            "record has no named annotator; promotion would attribute it to an unknown origin"
-        )
+        raise AnnotationError("record has no named annotator; promotion would attribute it to an unknown origin")
     if provenance.get("reviewed_by") not in (None, "") and str(provenance.get("reviewed_by")) == reviewer:
         raise AnnotationError(f"{reviewer} already recorded as the reviewer of this record")
 

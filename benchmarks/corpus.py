@@ -180,7 +180,9 @@ def unreachable_fingerprint(system: str, name: str, error: str) -> CorpusFingerp
     )
 
 
-def fingerprint_elasticsearch(client: Any, index_name: str, limit: int = DEFAULT_FINGERPRINT_SAMPLE) -> CorpusFingerprint:
+def fingerprint_elasticsearch(
+    client: Any, index_name: str, limit: int = DEFAULT_FINGERPRINT_SAMPLE
+) -> CorpusFingerprint:
     """Fingerprint an Elasticsearch index by sampling its documents.
 
     Uses ``_search`` with ``_source: false`` plus the stored fields so the digest
@@ -282,7 +284,9 @@ def check_correspondence(
     ratio = (len(matched) / len(sample)) if sample else 0.0
     # A sampled scan is never enough to declare a corpus complete: the sample is
     # a subset, so "all sampled passages matched" does not prove the rest do.
-    verdict = CORRESPONDENCE_MET_FULL if (is_full_scan and ratio >= REQUIRED_CORRESPONDENCE) else CORRESPONDENCE_MET_SAMPLED
+    verdict = (
+        CORRESPONDENCE_MET_FULL if (is_full_scan and ratio >= REQUIRED_CORRESPONDENCE) else CORRESPONDENCE_MET_SAMPLED
+    )
     return CorrespondenceReport(
         passages_total=passages_total,
         passages_distinct=len(distinct),
@@ -415,7 +419,7 @@ def _qdrant_collection_name() -> str:
         from common.config import get_config_dict
 
         config = get_config_dict()
-        text_config = ((config.get("embedding") or {}).get("text") or {})
+        text_config = (config.get("embedding") or {}).get("text") or {}
         return str(text_config.get("collection") or "rag_text_768")
     except Exception:  # noqa: BLE001
         return "rag_text_768"

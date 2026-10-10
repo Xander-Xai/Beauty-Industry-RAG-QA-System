@@ -125,9 +125,7 @@ def run_configuration(
         return ConfigRun(outcome)
 
     # One probe snapshot feeds both the availability verdict and the manifest.
-    probed = _probe_backends(
-        backends.probe_config_backends(config_name, len(queries), distinct_passages(queries))
-    )
+    probed = _probe_backends(backends.probe_config_backends(config_name, len(queries), distinct_passages(queries)))
     availability = backends.evaluate_config(config_name, len(queries), probed=probed)
 
     if retriever_factory is None:

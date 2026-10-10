@@ -259,9 +259,7 @@ def test_annotations_keep_every_passage(tmp_path):
         "business_type": "regulation",
         "difficulty": "medium",
         "contexts": FOUR,
-        "annotations": [
-            {"doc_id": "d1", "chunk_id": f"c{index}", "text": text} for index, text in enumerate(FOUR)
-        ],
+        "annotations": [{"doc_id": "d1", "chunk_id": f"c{index}", "text": text} for index, text in enumerate(FOUR)],
     }
     path = tmp_path / "ann.jsonl"
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")

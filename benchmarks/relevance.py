@@ -212,9 +212,7 @@ def relevant_items_from_contexts(contexts: Sequence) -> list[RelevantItem]:
         if not key or key in seen:
             continue
         if not isinstance(grade, int) or isinstance(grade, bool) or grade not in RELEVANCE_GRADES:
-            raise ValueError(
-                f"context {position}: relevance grade {grade!r} is not one of {list(RELEVANCE_GRADES)}"
-            )
+            raise ValueError(f"context {position}: relevance grade {grade!r} is not one of {list(RELEVANCE_GRADES)}")
         if grade < GRADE_THRESHOLD_RELEVANT:
             continue
         seen.add(key)
@@ -264,9 +262,7 @@ def relevant_items_from_annotations(annotations: Sequence) -> list[RelevantItem]
         if grade < GRADE_THRESHOLD_RELEVANT:
             continue
         seen.add(key)
-        items.append(
-            RelevantItem(key=key, text=str(annotation.get("text") or ""), relevance=grade)
-        )
+        items.append(RelevantItem(key=key, text=str(annotation.get("text") or ""), relevance=grade))
     return items
 
 

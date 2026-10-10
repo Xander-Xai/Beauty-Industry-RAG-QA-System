@@ -67,9 +67,7 @@ def stub_corpus_inspection(monkeypatch, request):
     monkeypatch.setattr(
         backends,
         "probe_corpus",
-        lambda count, golden_passages=None: BackendAvailability(
-            "corpus", True, backends.REASON_OK, "stubbed"
-        ),
+        lambda count, golden_passages=None: BackendAvailability("corpus", True, backends.REASON_OK, "stubbed"),
     )
 
 
@@ -105,9 +103,7 @@ def test_committed_golden_set_is_blocked_and_exits_nonzero(tmp_path, monkeypatch
 def test_blocked_artifact_still_records_the_corpus_inspection(tmp_path, monkeypatch):
     """'Blocked because the corpus lacks the ground truth' needs evidence attached."""
     monkeypatch.setattr(cli, "git_provenance", lambda root: ("abc123", False))
-    cli.main(
-        ["--config", "bm25", "--dataset", COMMITTED, "--output-dir", str(tmp_path), "--allow-dirty"]
-    )
+    cli.main(["--config", "bm25", "--dataset", COMMITTED, "--output-dir", str(tmp_path), "--allow-dirty"])
 
     metadata = json.loads((_run_dir(tmp_path) / "metadata.json").read_text(encoding="utf-8"))
     assert "corpus" in metadata, "a blocked run must still record what it inspected"

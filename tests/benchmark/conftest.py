@@ -40,9 +40,7 @@ def stub_corpus_probe(monkeypatch, request):
     monkeypatch.setattr(
         backends,
         "probe_corpus",
-        lambda count, golden_passages=None: BackendAvailability(
-            "corpus", True, backends.REASON_OK, "stubbed in tests"
-        ),
+        lambda count, golden_passages=None: BackendAvailability("corpus", True, backends.REASON_OK, "stubbed in tests"),
     )
     monkeypatch.setattr(
         backends,

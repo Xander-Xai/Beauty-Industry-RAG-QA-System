@@ -627,9 +627,7 @@ def backend_manifest(
     manifest: list[dict[str, Any]] = []
     for backend_name in REQUIRED_BACKENDS[config_name]:
         availability = (
-            probe_corpus(dataset_queries, golden_passages)
-            if backend_name == "corpus"
-            else PROBES[backend_name]()
+            probe_corpus(dataset_queries, golden_passages) if backend_name == "corpus" else PROBES[backend_name]()
         )
         manifest.append(availability.as_dict())
     return manifest

@@ -148,8 +148,7 @@ def _relevant_items_for_row(
     for position, item in enumerate(contexts):
         if not isinstance(item, str) or not item.strip():
             raise DatasetError(
-                f"{path}: sample {sample_id} context {position} must be a non-empty string, "
-                f"got {type(item).__name__}"
+                f"{path}: sample {sample_id} context {position} must be a non-empty string, got {type(item).__name__}"
             )
 
     row_id = relevance_key(row)

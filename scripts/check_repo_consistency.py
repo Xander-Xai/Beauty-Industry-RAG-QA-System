@@ -4724,10 +4724,7 @@ def golden_set_contract_doc_errors(display: str, text: str, required: set[str]) 
         documented |= {f"annotation.{name.strip()}" for name in inline.group(1).split(",") if name.strip()}
     missing = sorted(required - documented)
     if missing:
-        return [
-            f"{display}: the documented contract block omits field(s) the validator requires: "
-            f"{', '.join(missing)}"
-        ]
+        return [f"{display}: the documented contract block omits field(s) the validator requires: {', '.join(missing)}"]
     return []
 
 
@@ -4762,7 +4759,9 @@ def check_golden_set_contract_doc_fields(errors: list[str], root: Path | None = 
         errors.extend(golden_set_contract_doc_errors(_display(doc), doc.read_text(encoding="utf-8"), required))
     gate_doc = base / BENCHMARK_GATE_DOC
     if gate_doc.exists():
-        errors.extend(golden_set_contract_prose_errors(_display(gate_doc), gate_doc.read_text(encoding="utf-8"), required))
+        errors.extend(
+            golden_set_contract_prose_errors(_display(gate_doc), gate_doc.read_text(encoding="utf-8"), required)
+        )
 
 
 def check_k8s_static_check_counts(errors: list[str], root: Path | None = None) -> None:

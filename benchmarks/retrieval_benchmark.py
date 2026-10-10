@@ -275,9 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     # fails the v2 contract is not attributable, and a run scored against an
     # injected retriever is a fixture: none of the three may advertise itself as
     # benchmark evidence.
-    metadata["results_are_benchmark"] = (
-        bool(summary.get("any_results")) and attributable and not used_synthetic
-    )
+    metadata["results_are_benchmark"] = bool(summary.get("any_results")) and attributable and not used_synthetic
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id
