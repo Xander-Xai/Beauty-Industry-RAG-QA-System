@@ -6,7 +6,7 @@ result. Levels: **PASS_CODE**, **PASS_LOCAL_REAL**, **PASS_CI**,
 
 - Code commit under test: `61be8a9` on branch `finalize/engineering-closeout` (the closeout doc commits follow on top; the branch head is PR #92)
 - Local run (UTC): 2026-10-10, Linux 6.6 WSL2, 20 vCPU, 15 GiB RAM, Python 3.10.12, 1× RTX 5060 Ti
-- CI: the checks below run in `.github/workflows/{ci,lint,security}.yml`, which trigger only on PRs whose **base is `main`**. This closeout is PR **#92** (Draft, base `main`). At commit `0a6b77a`, all nine required checks passed: Ruff 检查 ✓, Dockerfile 构建校验 ✓, 前端构建校验 ✓, 企业就绪配置校验 ✓, 测试套件 (3.10) ✓, 测试套件 (3.11) ✓, 评估确定性守卫 ✓, pip-audit 依赖漏洞扫描 ✓, 敏感信息扫描 ✓ (RAGAS smoke correctly skipped). This document is committed *after* that run, so a later doc-only commit may re-run CI; read the live status from the #92 checks.
+- CI: the checks below run in `.github/workflows/{ci,lint,security}.yml`. At commit `0a6b77a` all nine required checks passed: Ruff 检查 ✓, Dockerfile 构建校验 ✓, 前端构建校验 ✓, 企业就绪配置校验 ✓, 测试套件 (3.10) ✓, 测试套件 (3.11) ✓, 评估确定性守卫 ✓, pip-audit 依赖漏洞扫描 ✓, 敏感信息扫描 ✓ (RAGAS smoke correctly skipped). PR #92 was then squash-merged into `main` as `f3d0305`, and the same workflows run on the push to `main`.
 
 ## 1. Engineering checks (run locally, all green)
 

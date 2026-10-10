@@ -10,6 +10,10 @@ rules govern the whole document:
    open-source work. It is not a description of any employer's production system,
    and the single-GPU host here is not a dual-A5000 production deployment.
 
+The code discussed here is on `main` as `f3d0305` (PR #92, squash-merged); the
+enumerated failure cases below are the closes in [`RESUME_CLAIMS.md`](RESUME_CLAIMS.md)
+bucket D.
+
 ## 30-second introduction
 
 > "This is a beauty-industry RAG question-answering system — regulatory,
