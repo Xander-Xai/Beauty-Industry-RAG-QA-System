@@ -76,6 +76,29 @@ PROVENANCE_FALLBACK = "deterministic_fallback"
 PROVENANCE_VALUES = (PROVENANCE_CROSS_ENCODER, PROVENANCE_FALLBACK)
 
 
+def candidate_order(pair: Pair) -> list[str]:
+    """Deterministic presentation order for one pair's candidates.
+
+    The positive document is deliberately **not** first. Presenting it first
+    makes both sides of the comparison score ``1.0`` by construction: the
+    fallback preserves input order, and a correct reranker also puts it first.
+    ``top1_rate_delta`` would then be pinned at ``0.0`` no matter what the model
+    does, so a reranker that reorders everything wrongly could not be
+    distinguished from a perfect one. Rotating by a hash of ``pair_id`` keeps the
+    run reproducible while forcing both sides to actually do the ranking.
+
+    The rotation is a function of ``pair_id`` alone, so the real and fallback
+    sides are scored on the identical presentation order.
+    """
+    candidates = [pair.positive, *pair.distractors]
+    if len(candidates) < 2:
+        return candidates
+    # Offset is drawn from 1..n-1 rather than 0..n-1, so the positive is
+    # guaranteed never to be presented first — the trivial pass is unavailable.
+    offset = 1 + int(hashlib.sha256(pair.pair_id.encode("utf-8")).hexdigest(), 16) % (len(candidates) - 1)
+    return candidates[offset:] + candidates[:offset]
+
+
 @dataclass(frozen=True)
 class Pair:
     """One (query, positive-document, distractor) judgement.
@@ -312,7 +335,9 @@ def run_smoke(pairs: tuple[Pair, ...] = SMOKE_PAIRS) -> ValidationReport:
     promotions = 0
     for pair in pairs:
         rank_started = time.perf_counter()
-        result = ranker.rank([pair.positive, *pair.distractors], pair.query)
+        # `candidate_order` puts the positive somewhere other than first, so
+        # ranking it first is a result the model has to earn.
+        result = ranker.rank(candidate_order(pair), pair.query)
         latencies.append((time.perf_counter() - rank_started) * 1000.0)
         if result.order and result.order[0] == pair.positive:
             promotions += 1
@@ -356,13 +381,43 @@ class _CrossEncoderRanker:
         self.models = [CrossEncoder(path_a), CrossEncoder(path_b)]
 
     def rank(self, documents: list[str], query: str) -> RankResult:
+        """Score every ``(query, document)`` pair **individually** and rank by it.
+
+        A single batched ``predict`` returns one score per pair, so
+        ``scores[i]`` is document *i*'s own score. Reducing the whole array with
+        ``.mean()`` instead would collapse every document onto one identical
+        number, which makes the sort a guaranteed no-op: the returned order
+        would always equal the input order, and since :data:`SMOKE_PAIRS` always
+        passes ``positive`` first, ``positive_at_rank1_rate`` would be
+        structurally ``1.0`` and the fallback-vs-real ``top1_rate_delta``
+        structurally ``0.0`` — an unfalsifiable "the reranker works" claim that
+        no model could ever contradict. This mirrors
+        ``retrieval/cross_encoder_ensemble.py:191-195``, which indexes
+        ``scores_a[i]`` per candidate for the same reason.
+        """
         started = time.perf_counter()
-        scores = [float(model.predict([(query, document) for document in documents]).mean()) for model in self.models]
+        pairs = [(query, document) for document in documents]
+        per_model: list[list[float]] = []
+        for model in self.models:
+            raw = model.predict(pairs)
+            values = [float(value) for value in list(raw)]
+            if len(values) != len(documents):
+                # A score vector that does not line up with the documents cannot
+                # be attributed to them. Failing loudly is the only honest option:
+                # padding here would silently rank documents by an invented 0.0.
+                raise RuntimeError(
+                    f"CrossEncoder returned {len(values)} scores for {len(documents)} documents; "
+                    "refusing to rank on a misaligned score vector"
+                )
+            per_model.append(values)
         latency = (time.perf_counter() - started) * 1000.0
-        # The ensemble averages the two models; this mirrors
+        # The ensemble averages the two models per document; this mirrors
         # retrieval/cross_encoder_ensemble.py:194 without its Platt calibration,
         # which needs calibrated inputs this smoke set does not have.
-        combined = [(document, (scores[0] + scores[1]) / 2.0) for document in documents]
+        combined = [
+            (document, sum(model_scores[i] for model_scores in per_model) / len(per_model))
+            for i, document in enumerate(documents)
+        ]
         combined.sort(key=lambda item: item[1], reverse=True)
         return RankResult(
             provenance=PROVENANCE_CROSS_ENCODER,
@@ -409,13 +464,14 @@ def run_comparison(pairs: tuple[Pair, ...] = SMOKE_PAIRS) -> ValidationReport:
     hardware = hardware_info()
     status = rerank_weights_status()
 
-    # Fallback side: stable input order, which is exactly what the ensemble's
-    # except-branch returns.
+    # Fallback side: it preserves whatever order it was handed, which is exactly
+    # what the ensemble's except-branch returns. Same presentation order as the
+    # real side, so the two rates are comparable.
     fallback_latencies: list[float] = []
     fallback_top1 = 0
     for pair in pairs:
         started = time.perf_counter()
-        order = [pair.positive, *pair.distractors]
+        order = candidate_order(pair)
         fallback_latencies.append((time.perf_counter() - started) * 1000.0)
         if order[0] == pair.positive:
             fallback_top1 += 1
@@ -449,6 +505,36 @@ def run_comparison(pairs: tuple[Pair, ...] = SMOKE_PAIRS) -> ValidationReport:
         )
 
     smoke = run_smoke(pairs)
+    if smoke.status != "OK":
+        # The smoke stage is the only thing that actually loads the weights and
+        # runs inference, so its verdict *is* this report's verdict. Falling
+        # through would publish a load failure as `status=OK` +
+        # `provenance=cross_encoder`, which flips
+        # :attr:`ValidationReport.is_reranking_evidence` to True and lets
+        # `--require-real` exit 0 on a run that executed nothing. The
+        # comparison is still written so the artifact shows which side ran.
+        comparison = {
+            "fallback": fallback_side,
+            "cross_encoder": None,
+            "top1_rate_delta": None,
+        }
+        return ValidationReport(
+            status=smoke.status,
+            reason=smoke.reason or "CrossEncoder smoke run did not complete",
+            provenance=PROVENANCE_FALLBACK,
+            model_revision=smoke.model_revision,
+            git_sha=git_sha,
+            git_dirty=git_dirty,
+            hardware=hardware,
+            pair_count=len(pairs),
+            smoke=smoke.smoke,
+            comparison=comparison,
+            # No improvement number: there is no real side to compare against.
+            metrics={},
+            degradations=smoke.degradations
+            or [{"stage": "cross_encoder_smoke", "detail": smoke.reason or "smoke run did not complete"}],
+        )
+
     real_side = {
         "provenance": PROVENANCE_CROSS_ENCODER,
         "positive_at_rank1": smoke.smoke.get("positive_at_rank1"),

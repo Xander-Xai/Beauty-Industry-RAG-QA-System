@@ -92,7 +92,7 @@ class RunReport:
 
     run_id: str
     timestamp_utc: str
-    outcome: str  # "answered" | "rejected_by_evidence_gate" | "rejected_by_answer_gate" | "error"
+    outcome: str  # see :func:`_classify_outcome` for the closed set
     stages: list[StageReport] = field(default_factory=list)
     degraded: bool = False
     fallback_reason: str | None = None
@@ -160,15 +160,35 @@ def hardware_info() -> dict[str, Any]:
     return info
 
 
-def rerank_evidence() -> dict[str, Any]:
-    """What the reranker actually did, derived from the real weights state."""
+def rerank_evidence(ctx: Any | None = None) -> dict[str, Any]:
+    """What the reranker actually did, preferring the runtime observation.
+
+    A filesystem precheck can say the weights exist while *this request* still
+    fell back — a load failure, an OOM, or a timeout inside
+    ``CrossEncoderEnsemble.rerank``. When the request context carries an observed
+    provenance it wins over the precheck, so the report cannot claim a real
+    rerank that never executed. ``provenance_source`` says which one was used.
+    """
     from retrieval.rerank_status import rerank_weights_status
 
     status = rerank_weights_status()
     available = bool(status["available"])
+    precheck = "cross_encoder" if available else "deterministic_fallback"
+
+    observed = getattr(ctx, "ce_stage_provenance", None) if ctx is not None else None
+    if observed in ("cross_encoder", "deterministic_fallback", "not_run"):
+        provenance = observed
+        source = "runtime"
+    else:
+        provenance = precheck
+        source = "weights_precheck"
+
     return {
         "weights_status": status["status"],
-        "provenance": "cross_encoder" if available else "deterministic_fallback",
+        "provenance": provenance,
+        "provenance_source": source,
+        "stage_reached": observed is not None,
+        "runtime_reason": getattr(ctx, "ce_stage_fallback_reason", None) if ctx is not None else None,
         "models": status["models"],
         "evidence_gate_mode": status["evidence_gate"]["mode"],
         "no_ce_ceiling": status["evidence_gate"]["no_ce_ceiling"],
@@ -184,6 +204,58 @@ def _timing(ctx: Any, stage: str) -> float | None:
     return value.get(stage)
 
 
+#: Every request leaves the pipeline through exactly one of these. Each is
+#: derived from what actually happened, so "the Evidence Gate refused" can never
+#: be reported for a request that never reached the gate.
+OUTCOME_ANSWERED = "answered"
+OUTCOME_CACHE_HIT = "answered_from_cache"
+OUTCOME_REJECTED_BY_EVIDENCE_GATE = "rejected_by_evidence_gate"
+OUTCOME_REJECTED_BY_ANSWER_GATE = "rejected_by_answer_gate"
+OUTCOME_REJECTED_BY_ADMISSION = "rejected_by_admission"
+OUTCOME_ERROR = "error"
+
+OUTCOMES = (
+    OUTCOME_ANSWERED,
+    OUTCOME_CACHE_HIT,
+    OUTCOME_REJECTED_BY_EVIDENCE_GATE,
+    OUTCOME_REJECTED_BY_ANSWER_GATE,
+    OUTCOME_REJECTED_BY_ADMISSION,
+    OUTCOME_ERROR,
+)
+
+
+def _classify_outcome(ctx: Any, evidence: Any, answer_gate: Any, generation: Any) -> str:
+    """Name the terminal state a request actually reached.
+
+    The previous chain reported ``rejected_by_evidence_gate`` from its ``else``
+    branch, which is reached by anything that produced no generation result —
+    including a **cache hit** (an answer), an **admission rejection** (refused
+    long before the gate), and a **generation failure after the gate passed**. An
+    audit trail that says the Evidence Gate refused a request it never saw is a
+    false statement about the system's most load-bearing control, so each of
+    those states is now named separately.
+
+    Order matters: the gates are checked before ``degraded`` because a generation
+    error *after* a passing Evidence Gate is an ``error``, not an Evidence-Gate
+    refusal.
+    """
+    if answer_gate is not None and not getattr(answer_gate, "passed", True):
+        return OUTCOME_REJECTED_BY_ANSWER_GATE
+    if evidence is not None and getattr(evidence, "decision", None) == "reject":
+        return OUTCOME_REJECTED_BY_EVIDENCE_GATE
+    if getattr(ctx, "degraded", False):
+        return OUTCOME_ERROR
+    if generation is not None:
+        return OUTCOME_ANSWERED
+    # No generation result and no gate refusal. Distinguish an answer served from
+    # cache from a request refused before it ever reached retrieval.
+    if getattr(ctx, "cache_hit_level", None):
+        return OUTCOME_CACHE_HIT
+    if evidence is None:
+        return OUTCOME_REJECTED_BY_ADMISSION
+    return OUTCOME_REJECTED_BY_EVIDENCE_GATE
+
+
 def _classify(ctx: Any, stage: str, evidence_attr: str | None, rerank_provenance: str | None) -> tuple[str, str | None]:
     """Derive a stage's status from what the context actually shows.
 
@@ -195,12 +267,16 @@ def _classify(ctx: Any, stage: str, evidence_attr: str | None, rerank_provenance
 
     if stage == "cache_lookup":
         level = getattr(ctx, "cache_hit_level", None)
-        if level in ("L1", "L2"):
+        if level in ("L1", "L2", "L2_SESSION"):
             return STATUS_EXECUTED, f"cache_hit={level}"
         return STATUS_EXECUTED, "cache_miss"
 
-    if stage == "cross_encoder_ensemble" and latency is not None and rerank_provenance != "cross_encoder":
-        return STATUS_DEGRADED, "ran on the deterministic fallback (no CrossEncoder weights)"
+    if stage == "cross_encoder_ensemble" and latency is not None and rerank_provenance == "deterministic_fallback":
+        reason = "ran on the deterministic fallback (no CrossEncoder weights)"
+        observed = getattr(ctx, "ce_stage_fallback_reason", None)
+        if observed:
+            reason = f"ran on the deterministic fallback at request time ({observed})"
+        return STATUS_DEGRADED, reason
 
     if stage == "complexity_eval":
         # Folded into the rewrite timing by the pipeline (pipeline.py:314), so it
@@ -232,7 +308,7 @@ def _classify(ctx: Any, stage: str, evidence_attr: str | None, rerank_provenance
 def build_run_report(ctx: Any, run_id: str | None = None) -> RunReport:
     """Build the report from an observed :class:`RequestContext`."""
     git_sha, git_dirty = git_provenance()
-    rerank = rerank_evidence()
+    rerank = rerank_evidence(ctx)
     provenance = rerank.get("provenance")
 
     stages: list[StageReport] = []
@@ -246,18 +322,8 @@ def build_run_report(ctx: Any, run_id: str | None = None) -> RunReport:
 
     evidence = getattr(ctx, "evidence_result", None)
     answer_gate = getattr(ctx, "answer_gate_result", None)
-    answer_gate_result = getattr(ctx, "generation_result", None)
-
-    if answer_gate_result is None and getattr(ctx, "evidence_result", None) is not None:
-        outcome = "rejected_by_evidence_gate"
-    elif answer_gate is not None and not getattr(answer_gate, "passed", True):
-        outcome = "rejected_by_answer_gate"
-    elif getattr(ctx, "degraded", False):
-        outcome = "error"
-    elif getattr(ctx, "generation_result", None) is not None:
-        outcome = "answered"
-    else:
-        outcome = "rejected_by_evidence_gate"
+    generation = getattr(ctx, "generation_result", None)
+    outcome = _classify_outcome(ctx, evidence, answer_gate, generation)
 
     rewrite = getattr(ctx, "rewrite_result", None)
     routing = {

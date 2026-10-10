@@ -39,14 +39,26 @@ from common.config import get_config_dict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-#: Files that a sentence-transformers CrossEncoder directory must contain before
-#: it can be loaded.  At least one must be present.
+#: Config/metadata files that identify a sentence-transformers CrossEncoder
+#: directory. Necessary but **not** sufficient: a directory holding only these
+#: carries zero model parameters and cannot score anything.
 _MODEL_MARKER_FILES = (
     "config.json",
     "modules.json",
     "sentence_bert_config.json",
+)
+
+#: Files that carry actual learned parameters. At least one of these must be
+#: present for a directory to be reported available. Without this, a half-copied
+#: or placeholder directory would satisfy the marker check, the status would read
+#: ``AVAILABLE``, and every downstream consumer
+#: (``core/run_report.py``, ``retrieval/evidence_gate.py``,
+#: ``retrieval/cross_encoder_ensemble.py``) would report a real CrossEncoder that
+#: has no weights on disk.
+_MODEL_WEIGHT_FILES = (
     "pytorch_model.bin",
     "model.safetensors",
+    "pytorch_model.bin.index.json",
 )
 
 
@@ -58,18 +70,27 @@ def _resolve_model_path(path_str: str) -> Path:
 
 
 def _model_available(path_str: str) -> tuple[bool, str]:
-    """Return ``(available, reason)`` for one configured model path."""
+    """Return ``(available, reason)`` for one configured model path.
+
+    A path counts as available only when it resolves to a directory carrying at
+    least one **weight** file on top of the config markers. A ``config.json``
+    alone is metadata, not a model: reporting it as available would let an empty
+    or partially-copied directory turn every downstream "real CrossEncoder"
+    statement into a false one.
+    """
     if not path_str:
         return False, "model_path is empty"
     path = _resolve_model_path(path_str)
     if not path.exists():
         return False, f"path does not exist: {path_str}"
     if path.is_file():
-        return True, ""
-    present = [name for name in _MODEL_MARKER_FILES if (path / name).exists()]
-    if present:
-        return True, ""
-    return False, f"directory has no model config/weight file: {path_str}"
+        # A bare file is not a directory sentence-transformers can load.
+        return False, f"model_path is a file, not a CrossEncoder directory: {path_str}"
+    if not any((path / name).exists() for name in _MODEL_MARKER_FILES):
+        return False, f"directory has no model config file: {path_str}"
+    if not any((path / name).exists() for name in _MODEL_WEIGHT_FILES):
+        return False, f"directory has config but no weight file ({', '.join(_MODEL_WEIGHT_FILES)}): {path_str}"
+    return True, ""
 
 
 def rerank_weights_status(config: dict | None = None) -> dict:

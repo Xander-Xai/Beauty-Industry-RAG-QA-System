@@ -78,6 +78,13 @@ class RequestContext:
 
     # === Rerank 阶段 ===
     rerank_results: list[RerankResult] = field(default_factory=list)
+    #: Runtime provenance of the CrossEncoder stage for THIS request, written by
+    #: ``CrossEncoderEnsemble.rerank``. ``cross_encoder`` means real inference
+    #: ran; ``deterministic_fallback`` means it degraded; ``not_run`` means no
+    #: candidates reached it. ``None`` means the stage was never reached. This is
+    #: an observation, so it outranks any filesystem precheck when reporting.
+    ce_stage_provenance: str | None = None
+    ce_stage_fallback_reason: str | None = None
 
     # === Evidence Gate ===
     evidence_result: EvidenceGateResult | None = None
@@ -92,6 +99,13 @@ class RequestContext:
 
     # === 最终输出 ===
     final_response: str = ""
+    #: Set when the pipeline must answer with a specific HTTP status instead of a
+    #: 200 + body (e.g. P2 overload → 503). It is a ``JSONResponse``-compatible
+    #: ``(status_code, content)`` pair rather than a string, because assigning a
+    #: ``JSONResponse`` to ``final_response`` would be re-validated against
+    #: ``QueryResponse.answer: str`` and surface as a 500 — turning a documented
+    #: 503 into an opaque server error.
+    http_status_override: tuple[int, dict] | None = None
 
     # === 性能指标 ===
     stage_timings: dict[str, float] = field(default_factory=dict)
@@ -176,6 +190,14 @@ class SessionState:
     """
 
     session_id: str
+    #: The principal that owns this session. A ``session_id`` is caller-supplied
+    #: and therefore guessable, so it cannot be the only key: without an owner
+    #: axis any principal holding the same id would read another principal's
+    #: ``dialog_rounds`` and ``locked_doc_ids`` — including answers synthesised
+    #: from documents that principal's role/dept mask alone could read. The
+    #: document-level RBAC filters never see session state, so this is the only
+    #: control that closes that path.
+    owner_id: str = ""
     dialog_rounds: list[dict] = field(default_factory=list)  # [{user_input, response, rewrite}]
     max_rounds: int = 6  # readme 4.4: 最近6轮
     locked_doc_ids: list[str] = field(default_factory=list)  # 证据锁定
@@ -264,6 +286,7 @@ class SessionState:
         return {
             "schema_version": self._SESSION_SCHEMA_VERSION,
             "session_id": self.session_id,
+            "owner_id": self.owner_id,
             "max_rounds": self.max_rounds,
             "created_at": self.created_at,
             "locked_doc_ids": list(self.locked_doc_ids),
@@ -284,6 +307,7 @@ class SessionState:
         """从 dict 反序列化（从 Redis 读取），重建 Pydantic 对象。"""
         session = cls(
             session_id=data["session_id"],
+            owner_id=str(data.get("owner_id", "")),
             max_rounds=data.get("max_rounds", 6),
             locked_doc_ids=list(data.get("locked_doc_ids", [])),
             created_at=data.get("created_at", time.time()),
@@ -327,50 +351,71 @@ class SessionState:
             if client is None:
                 self._publish_redis_degraded(True)
                 return
-            key = f"session:{self.session_id}"
+            key = self._redis_key()
             client.setex(key, self._SESSION_REDIS_TTL, json.dumps(self._to_dict()))
         except Exception as exc:
             logger.debug("会话 Redis 持久化失败（降级内存）: %s", exc)
             self._publish_redis_degraded(True)
 
+    def _storage_key(self) -> str:
+        """Owner-scoped composite key. Both principals sharing a ``session_id``
+        therefore get physically separate sessions, in Redis and in memory."""
+        return f"{self.owner_id}:{self.session_id}" if self.owner_id else self.session_id
+
+    def _redis_key(self) -> str:
+        return f"session:{self._storage_key()}"
+
     @classmethod
-    def get_or_create(cls, session_id: str) -> SessionState:
-        """线程安全地获取或创建会话状态（优先 Redis，兜底内存）。"""
+    def get_or_create(cls, session_id: str, owner_id: str = "") -> SessionState:
+        """获取或创建会话状态（优先 Redis，兜底内存）。
+
+        ``owner_id`` scopes the lookup to the calling principal. Presenting a
+        ``session_id`` that another principal created yields a **new, empty**
+        session for the caller instead of the foreign one — fail-closed, not an
+        error, so the API contract is unchanged and the leak is closed by
+        construction rather than by rejecting the request.
+        """
+        key = f"{owner_id}:{session_id}" if owner_id else session_id
         # 尝试从 Redis 读取
-        redis_session = cls._try_get_redis(session_id)
+        redis_session = cls._try_get_redis(key)
         if redis_session is not None:
             return redis_session
 
         # Redis 不可用或未找到，使用内存存储
         with cls._sessions_lock:
-            if session_id not in cls._sessions:
-                new_session = cls(session_id=session_id)
-                cls._sessions[session_id] = new_session
+            if key not in cls._sessions:
+                new_session = cls(session_id=session_id, owner_id=owner_id)
+                cls._sessions[key] = new_session
                 # 新创建的会话写入 Redis 预热
                 new_session._persist_to_redis()
-            return cls._sessions[session_id]
+            return cls._sessions[key]
 
     @classmethod
-    def _try_get_redis(cls, session_id: str) -> SessionState | None:
+    def _try_get_redis(cls, key: str) -> SessionState | None:
         """尝试从 Redis 获取会话。Redis 不可用或未找到时返回 None。"""
         try:
             client = _get_redis_client()
             if client is None:
                 cls._publish_redis_degraded(True)
                 return None
-            key = f"session:{session_id}"
-            raw = client.get(key)
+            redis_key = f"session:{key}"
+            raw = client.get(redis_key)
             if raw is None:
                 # A cache miss is not a degradation: Redis answered.
                 cls._publish_redis_degraded(False)
                 return None
             data = json.loads(raw)
             if data.get("schema_version") != cls._SESSION_SCHEMA_VERSION:
-                logger.debug("Redis 会话 schema 不兼容，忽略并降级: %s", key)
+                logger.debug("Redis 会话 schema 不兼容，忽略并降级: %s", redis_key)
                 return None
             session = cls._from_dict(data)
+            # A payload written before owner scoping (or by a different owner)
+            # must not be handed to the caller. Treat it as absent.
+            if session.owner_id and session.owner_id != key.split(":", 1)[0]:
+                logger.debug("Redis 会话 owner 不匹配，忽略: %s", redis_key)
+                return None
             # 刷新 TTL
-            client.expire(key, cls._SESSION_REDIS_TTL)
+            client.expire(redis_key, cls._SESSION_REDIS_TTL)
             cls._publish_redis_degraded(False)
             return session
         except Exception as exc:
