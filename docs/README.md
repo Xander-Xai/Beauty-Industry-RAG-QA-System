@@ -78,6 +78,23 @@ artifact contract, covered by tests).
 Retrieval benchmark result: `PENDING` — no reproducible artifact exists, so no
 retrieval metric is claimed anywhere in the repository.
 
+### Finalization closeout
+
+- [Final engineering audit](finalization/FINAL_ENGINEERING_AUDIT.md): the six false-claim/
+  permission defects found and fixed in the closeout, the items deliberately not changed,
+  and the residual risks.
+- [Acceptance matrix](finalization/ACCEPTANCE_MATRIX.md): every check with its evidence path,
+  command and result, and the `PASS_*` / `BLOCKED_EXTERNAL` / `NEEDS_HUMAN` verdict per item.
+- [Reproducible evaluation](finalization/REPRODUCIBLE_EVALUATION.md): data prep, annotation
+  spec, model prep, commands and artifact formats.
+- [Evidence manifest](finalization/EVIDENCE_MANIFEST.md): capability → source → test → CI →
+  artifact → evidence level.
+- [Interview guide](finalization/INTERVIEW_GUIDE.md) and
+  [resume claims](finalization/RESUME_CLAIMS.md): what may and may not be claimed, with the
+  post-employment open-source boundary stated explicitly.
+- [Human annotation work package](../tests/evaluation/golden_set_v2/ANNOTATION_WORKPACKAGE.md):
+  the 70-row category-balanced worksheet (in-repo: `tests/evaluation/golden_set_v2/`).
+
 ## Operations / Observability
 
 - [SLO and incident runbook](slo-runbook.md): five objectives (all `DESIGN_TARGET`) plus

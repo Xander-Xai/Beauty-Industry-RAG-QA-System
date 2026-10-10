@@ -67,6 +67,9 @@ CANONICAL_DOCS = [
     # above exist to catch, so it is named here rather than left in a nested
     # directory where no glob would pick it up.
     *sorted((ROOT / "docs" / "demo").glob("*.md")),
+    # The finalization closeout records make evidence-level claims, so they are
+    # held to the same guards as the guides.
+    *sorted((ROOT / "docs" / "finalization").glob("*.md")),
     ROOT / "artifacts/benchmarks/README.md",
 ]
 
