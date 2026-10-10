@@ -3,7 +3,7 @@
 What may be written on a resume from this work, what must be framed as
 post-employment open-source work, and what must never be claimed.
 
-**Code commit under test:** `61be8a9`. The closeout documents themselves are committed on top of it, so the branch head (PR #92) advances past this SHA; the verification results below are for `61be8a9` (code unchanged by the doc commits). · 2026-10-10 UTC. Subject to the same evidence rules as
+**Code commit under test:** `61be8a9`; the closeout documents are committed on top. The integration was squash-merged into `main` as `f3d03054d1f108d9ce82abb4499f65a4e0967e46`; the verification results below are for `61be8a9` (code unchanged by the doc commits). · 2026-10-10 UTC. Subject to the same evidence rules as
 [`EVIDENCE_MANIFEST.md`](EVIDENCE_MANIFEST.md).
 
 ## 0. The boundary that governs everything
@@ -18,6 +18,18 @@ of an employer's production system, and none of it may be written as a
 The single-GPU host (1× RTX 5060 Ti) used for the local runs is **not** a
 dual-RTX-A5000 production deployment. Where a resume implies production scale, it
 is wrong.
+
+## The four buckets — never mix them
+
+Every resume line must belong to exactly one bucket, and the buckets must not be
+blended into a single sentence.
+
+| bucket | what belongs here | rule |
+|---|---|---|
+| **A. Enterprise historical production facts** | Anything about a previous employer's *live* system: scale, traffic, the dual-RTX-A5000 topology, any production number. | **Not in this repository.** Classified `HISTORICAL_PRODUCTION` in the docs; usable only as background context, never as this repo's measurement. |
+| **B. Post-employment open-source rebuild & validation** | This whole repository — pipeline, evaluation-integrity layer, local real-dependency validations. | Each claim needs a path in [`EVIDENCE_MANIFEST.md`](EVIDENCE_MANIFEST.md); always framed as open-source, post-employment. |
+| **C. Retrieval-quality metrics that remain unprovable here** | Hit@K / Recall@K / NDCG@10 / MRR@10, RAGAS/faithfulness, QPS / P95 / throughput. | **Never quote a value.** No corpus, no weights ⇒ `BLOCKED`; no load test ⇒ `NOT_VERIFIED`. |
+| **D. Currently engineering-verified capabilities** | Fail-closed gates, the golden-set data contract and review lifecycle, the RBAC/session controls, the run-report outcomes, the contract tests. | `PASS_CODE` / `PASS_CI`; describes *engineering*, not a measured result. |
 
 ## 1. Allowed on a resume (true, verifiable, correctly framed)
 
