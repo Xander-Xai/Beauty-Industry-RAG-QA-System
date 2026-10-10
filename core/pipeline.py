@@ -276,7 +276,7 @@ class OnlineRAGPipeline:
 
                 # ③+④ 并行执行 Query Rewrite + 复杂度评估（两者无数据依赖）
                 t_rewrite = time.time()
-                session_state = SessionState.get_or_create(ctx.session_id or "default")
+                session_state = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
                 recent_dialogs = session_state.get_recent_queries()
 
                 # M-5: 使用共享线程池，避免每请求创建 ThreadPoolExecutor
@@ -392,7 +392,9 @@ class OnlineRAGPipeline:
                 # 结果存入 session.async_clip_results，供下一轮多轮对话预热复用
                 if clip_use:
                     try:
-                        session_state_for_clip = SessionState.get_or_create(ctx.session_id or "default")
+                        session_state_for_clip = SessionState.get_or_create(
+                            ctx.session_id or "default", owner_id=ctx.user_id
+                        )
                         clip_qdrant_filter = self._build_clip_filter(ctx)
                         # M-5: 使用共享线程池
                         clip_pool = self._clip_pool
@@ -447,6 +449,7 @@ class OnlineRAGPipeline:
                         query=ctx.rewrite_result.rewritten_query,
                         candidates=ctx.rerank_results,
                         top_k=config["retrieval"]["cross_encoder"]["final_top_k"],
+                        ctx=ctx,
                     )
                 ctx.record_timing("cross_encoder_ensemble", (time.time() - t_ce) * 1000)
 
@@ -569,7 +572,7 @@ class OnlineRAGPipeline:
                 self._write_cache(ctx)
 
                 # ⑱ 更新会话
-                session = SessionState.get_or_create(ctx.session_id or "default")
+                session = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
                 session.add_round(ctx.user_input, ctx.final_response, ctx.rewrite_result)
                 session.lock_evidence(ctx.evidence_locked_doc_ids)
 
@@ -674,16 +677,20 @@ class OnlineRAGPipeline:
         """处理准入拒绝 - 按优先级降级（PRD §5.2.5 / §9 + 审计拦截原因记录）"""
         # PRD §9: P2 极端过载返回 503
         if reason in ("critical_p2_rejected",):
-            from fastapi.responses import JSONResponse
-
-            ctx.final_response = JSONResponse(
-                status_code=503,
-                content={
+            # The status travels out of band on `http_status_override`, not inside
+            # `final_response`: the route serialises `final_response` into
+            # `QueryResponse.answer: str`, so a JSONResponse stored there fails
+            # response validation and the caller gets a 500 instead of the 503
+            # this branch documents.
+            ctx.http_status_override = (
+                503,
+                {
                     "error": "SERVICE_OVERLOADED",
                     "detail": "系统负载过高，请稍后重试。",
                     "retry_after": 30,
                 },
             )
+            ctx.final_response = "系统负载过高，请稍后重试。"
             log_audit_event(
                 event_type="request_rejected_503",
                 request_id=ctx.request_id,
@@ -992,7 +999,7 @@ class OnlineRAGPipeline:
         from core.pipeline_context import GenerationResult, SessionState
 
         try:
-            session_state = SessionState.get_or_create(ctx.session_id or "default")
+            session_state = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
 
             # PRD §4.6: 法规类强制启用 Answer Plan — 首次截断后生成大纲
             business_type = ctx.rewrite_result.business_type if ctx.rewrite_result else "general"

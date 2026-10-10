@@ -17,7 +17,7 @@ import os
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import FieldCondition, Filter, IsEmptyCondition, MatchValue, PayloadField
 
@@ -150,7 +150,15 @@ def query_handler(
     finally:
         _decrement_active()
 
-    cache_hit = ctx.cache_hit_level in ("L1", "L2")
+    cache_hit = ctx.cache_hit_level in ("L1", "L2", "L2_SESSION")
+
+    # A pipeline-level HTTP contract (e.g. P2 overload → 503) is returned here
+    # rather than through `QueryResponse`, whose `answer: str` cannot carry a
+    # status code. Without this the 503 branch fails response validation and the
+    # client receives a 500.
+    if ctx.http_status_override is not None:
+        status_code, content = ctx.http_status_override
+        return JSONResponse(status_code=status_code, content=content)
 
     return QueryResponse(
         answer=ctx.final_response,
@@ -182,7 +190,7 @@ def chat_handler(
 
     维护会话状态（最近 6 轮对话历史），支持证据锁定续写。
     """
-    session_state = SessionState.get_or_create(req.session_id)
+    session_state = SessionState.get_or_create(req.session_id, owner_id=identity.user_id)
 
     ctx = RequestContext(
         user_input=req.message,
@@ -208,7 +216,7 @@ def chat_handler(
         history.append(ChatMessage(role="user", content=round_data["user_input"]))
         history.append(ChatMessage(role="assistant", content=round_data["response"]))
 
-    cache_hit = ctx.cache_hit_level in ("L1", "L2")
+    cache_hit = ctx.cache_hit_level in ("L1", "L2", "L2_SESSION")
 
     return ChatResponse(
         answer=ctx.final_response,
@@ -238,7 +246,7 @@ def continuation_handler(
 
     完整续写逻辑需要微服务架构支持，此处返回空桩响应。
     """
-    SessionState.get_or_create(req.session_id)
+    SessionState.get_or_create(req.session_id, owner_id=identity.user_id)
     return {
         "answer": "",
         "has_more": False,
@@ -261,7 +269,7 @@ def dialog_history_handler(
     """
     对话历史查询入口（单块模式简化版）。
     """
-    session = SessionState.get_or_create(session_id)
+    session = SessionState.get_or_create(session_id, owner_id=identity.user_id)
     return {
         "session_id": session_id,
         "rounds": session.dialog_rounds,

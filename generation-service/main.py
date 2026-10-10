@@ -229,7 +229,7 @@ async def continuation(req: ContinuationRequest, _auth: None = Depends(verify_se
         if ctx.session_id:
             from core.pipeline_context import SessionState
 
-            session_state = SessionState.get_or_create(ctx.session_id)
+            session_state = SessionState.get_or_create(ctx.session_id, owner_id=ctx.user_id)
             # 恢复锁定的证据文档 ID
             if session_state.locked_doc_ids:
                 ctx.evidence_locked_doc_ids = list(session_state.locked_doc_ids)

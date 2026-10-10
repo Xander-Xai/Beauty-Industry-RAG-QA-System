@@ -159,7 +159,7 @@ class TestLLMClientGenerate:
 
         ctx = self._make_ctx()
         # 模拟会话历史
-        session = SessionState.get_or_create("test_session_hist")
+        session = SessionState.get_or_create("test_session_hist", owner_id="test_user")
         session.dialog_rounds.append({"user_input": "用户问题1", "response": "回答1"})
         session.dialog_rounds.append({"user_input": "用户问题2", "response": "回答2"})
 
@@ -167,7 +167,7 @@ class TestLLMClientGenerate:
         client.generate(ctx, target_model="qwen3-4b", max_tokens=512)
 
         # 清理
-        SessionState._sessions.pop("test_session_hist", None)
+        SessionState._sessions.pop("test_user:test_session_hist", None)
 
 
 class TestLLMClientTruncation:
@@ -816,7 +816,7 @@ class TestHistoryInstructionPrecedence:
     def _seed_history(self, session_id):
         from core.pipeline_context import SessionState
 
-        state = SessionState.get_or_create(session_id)
+        state = SessionState.get_or_create(session_id, owner_id="u")
         state.dialog_rounds.clear()
         state.add_round(STALE_HISTORY_RULE, "知道了。")
         return state
@@ -953,7 +953,7 @@ class TestHistoryMarkerEncoding:
     def _seed(self, session_id, user_text, assistant_text):
         from core.pipeline_context import SessionState
 
-        state = SessionState.get_or_create(session_id)
+        state = SessionState.get_or_create(session_id, owner_id="u")
         state.dialog_rounds.clear()
         state.add_round(user_text, assistant_text)
         return state
