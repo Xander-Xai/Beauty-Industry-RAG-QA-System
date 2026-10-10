@@ -90,6 +90,28 @@ def _decrement_active():
 # ─── POST /api/query ────────────────────────────────────────
 
 
+def _run_audit(ctx) -> dict | None:
+    """Build the per-request run audit, when the operator asked for it.
+
+    Off by default so the response shape is unchanged for existing clients. The
+    report is what makes a silent degradation visible: with the CrossEncoder
+    weights absent the run refuses at the Evidence Gate, and nothing in the
+    answer or the status code says the reranker was dead.
+
+    Never allowed to fail a request — an audit that breaks the endpoint would be
+    worse than no audit.
+    """
+    if os.environ.get("RAG_AUDIT_REPORT", "").strip().lower() not in ("1", "true", "yes"):
+        return None
+    try:
+        from core.run_report import build_run_report
+
+        return build_run_report(ctx).as_dict()
+    except Exception as exc:  # noqa: BLE001 - audit must never break the response
+        logger.warning("run audit unavailable: %s: %s", type(exc).__name__, exc)
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 @router.post(
     "/query",
     response_model=QueryResponse,
@@ -138,6 +160,7 @@ def query_handler(
         evidence_doc_ids=ctx.evidence_locked_doc_ids,
         latency_ms=round(ctx.get_total_latency_ms(), 2),
         cache_hit=cache_hit,
+        audit=_run_audit(ctx),
     )
 
 

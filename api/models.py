@@ -48,6 +48,15 @@ class QueryResponse(BaseModel):
     evidence_doc_ids: list[str] = Field(default_factory=list, description="Evidence Gate 锁定的文档 ID 列表")
     latency_ms: float = Field(..., description="端到端延迟（毫秒）")
     cache_hit: bool = Field(False, description="是否命中缓存（L1 或 L2）")
+    # Opt-in run audit. Populated only when RAG_AUDIT_REPORT=1, so the default
+    # response shape is unchanged. Records which stages ran, whether the reranker
+    # was the real CrossEncoder or its deterministic fallback, the gate mode and
+    # the reason the run ended — see `core/run_report.py`.
+    audit: dict | None = Field(
+        None,
+        description="端到端运行审计报告（需 RAG_AUDIT_REPORT=1）：各阶段执行/降级/未到达状态、"
+        "rerank provenance、gate_mode、outcome、git_sha",
+    )
 
 
 class ChatMessage(BaseModel):
