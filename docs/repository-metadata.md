@@ -35,7 +35,7 @@ Multimodal RAG QA for cosmetics regulation: hybrid retrieval, two-stage rerankin
 | **保留 `uint32 RBAC` 而不是 `bitmask RBAC`** | `uint32` 是可核对的实现事实（`common/auth.py` 的 `_MAX_UINT32 = 0xFFFFFFFF` 位掩码契约），`bitmask` 是同义但更含糊的通用词。仓库卡片没有篇幅做解释，所以只写能被搜索到、也能被代码对照的那一个 |
 | **删掉 `Qwen/vLLM` 与 GPU 型号** | 更早的一版以 `Qwen/vLLM` 结尾。当前生成拓扑是单一共享 4B 端点、复杂请求走 14B，**且该 GPU 拓扑在本仓库从未执行过**（权重缺失、`vllm` 未安装）。把模型名放进元数据会被读成"跑过这个栈"，这是本仓库最容易被误读的一处。模型名属于 README 与代码，不属于仓库卡片 |
 | **不写 `enterprise` 作为卖点前缀** | "enterprise" 单独出现容易被读成营销词。真正说明企业级的是 uint32 位掩码 RBAC 这个可验证的具体机制，所以保留机制、去掉形容词 |
-| **不写任何数字** | QPS、文档数、延迟都不进 description。唯一有意义的规模信息是 `HISTORICAL_PRODUCTION` 且无法复现，写进卡片等于把它变成仓库 benchmark |
+| **不写任何数字** | QPS、文档数、延迟都不进 description。本仓库不发布任何第三方生产规模数字，写进卡片等于凭空制造一个无法核对的 benchmark |
 | **不写 `production validated` / `production ready`** | 越界词，禁止出现。`separate implemented from production-validated` 是**划界声明**（谁和谁分开），不是"已通过生产验证"；后续任何改写都不得让这句话可被读成后者 |
 
 ### 备选（更强调证据治理）
@@ -194,13 +194,13 @@ gh repo edit Xander-Xai/Beauty-Industry-RAG-QA-System --homepage "https://<real-
 
 1. **左（约 55%）**：一行 positioning + 一行技术栈摘要。措辞与本文档第 1 节的**生效 description** 保持一致，避免卡片与 README 说法不同。
 2. **中（约 30%）**：一条 8 节点的横向链路示意（身份 → 缓存 → 2–4 路召回 → RRF → 两级重排 → Evidence Gate → 生成 → Answer Gate），箭头 + 极短标签，不带任何分数或延迟数字。
-3. **右（约 15%）**：一个三色证据图例条，只放三个词：`HISTORICAL_PRODUCTION` / `REPO_VERIFIED` / `PENDING`。
+3. **右（约 15%）**：一个三色证据图例条，只放三个词：`REPO_VERIFIED` / `LOCAL_REAL_VALIDATION` / `PENDING`。
 
 ### 内容红线
 
 社交预览是**最容易被单独转发**的一张图，所以它的红线比 README 更严：
 
-- **不得**出现 QPS、延迟、文档数、用户数、准确率、Recall、NDCG 等任何数字，除非紧邻 `HISTORICAL_PRODUCTION` 或 `PENDING` 标注；
+- **不得**出现 QPS、延迟、文档数、用户数、准确率、Recall、NDCG 等任何数字，除非紧邻 `PENDING` 标注或明确标为合成演示夹具值；
 - **不得**出现 `vLLM` / `Qwen` / GPU 型号；
 - **不得**出现任何"生产验证通过""已上线"的措辞；
 - **不得**使用第三方商标 logo（模型、向量库、云的 logo 都不要）；

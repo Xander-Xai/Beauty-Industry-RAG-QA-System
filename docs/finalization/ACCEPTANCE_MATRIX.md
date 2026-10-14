@@ -93,7 +93,7 @@ abridged):
 | Independent corpus (ES + Qdrant) + sealed epoch hash | all retrieval metrics, all annotation id mapping | BLOCKED_EXTERNAL |
 | CrossEncoder weights (`cross-encoder-law`, `cross-encoder-base`) | real rerank validation, Evidence Gate "normal" mode | BLOCKED_EXTERNAL |
 | Human annotator(s) + reviewer for the golden set | scorable gold, official metrics | NEEDS_HUMAN |
-| Dual-A5000 (or matching) host | topology gate `SATISFIED` | BLOCKED_EXTERNAL |
+| A second GPU matching the configured dual-GPU layout | topology gate `SATISFIED` | BLOCKED_EXTERNAL |
 | Authorization for weight download / external API / long GPU job | any real model execution | NEEDS_HUMAN |
 
 ## 7. Verdict

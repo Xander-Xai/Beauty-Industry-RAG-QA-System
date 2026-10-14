@@ -14,7 +14,7 @@ and, just as important, how the repository behaves when those assets are absent
 | CrossEncoder weights at `./models/cross-encoder-law` and `./models/cross-encoder-base` | **No** | Evidence Gate is fail-closed; rerank validation is `PENDING` |
 | The sealed epoch's `corpus_sha256` | **No** | No annotation id can resolve |
 | A human-reviewed golden set | **No** (`annotations_v1.jsonl` is empty) | No official metric is scorable |
-| GPU topology matching the configured production layout | **No** (1× RTX 5060 Ti, not 2× A5000) | Topology gate is `PENDING` |
+| GPU topology matching the configured production layout | **No** (single-GPU host) | Topology gate is `PENDING` |
 
 None of the missing items may be substituted. In particular: **do not index the
 golden passages themselves and then measure recall** — that scores `1.0` by

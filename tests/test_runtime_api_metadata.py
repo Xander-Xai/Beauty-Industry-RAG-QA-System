@@ -3,7 +3,7 @@
 The OpenAPI document is what an evaluator or integrator reads before ever
 opening the source. It must therefore stay inside the repository's evidence
 boundary: the 4B/14B vLLM GPU topology is `PENDING` (weights absent, `vllm`
-not installed) and the RTX A5000 x2 serving host is `HISTORICAL_PRODUCTION`,
+not installed) and this repository evidences no production serving topology,
 so neither may be advertised as a property of this running application.
 """
 
@@ -13,14 +13,13 @@ import re
 
 import pytest
 
-# Claims that would equate historical production hardware with the runtime
-# this repository can actually verify.
+# Claims that would equate an unverifiable production serving topology with the
+# runtime this repository can actually verify.
 _FORBIDDEN_TOPOLOGY_CLAIMS = (
     re.compile(r"双\s*GPU", re.IGNORECASE),
     re.compile(r"dual[\s-]*GPU", re.IGNORECASE),
     re.compile(r"双\s*卡"),
     re.compile(r"2\s*(?:张|个)\s*GPU", re.IGNORECASE),
-    re.compile(r"A5000"),
     re.compile(r"GPU\s*[×xX*]\s*2", re.IGNORECASE),
 )
 

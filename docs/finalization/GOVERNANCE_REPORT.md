@@ -85,12 +85,11 @@ retained/deleted set and the recovery SHAs.
   external business dataset;
 - promoting any external validation issue to done without a qualifying artifact.
 
-## 7. Resume-usable outcomes
+## 7. Verified engineering outcomes
 
 The verified, non-metric outcomes of this pass are the *defects found and fixed*
 and the *governance work*: the rerank-evidence false-positive class, the
 `.mean()` collapse that made a comparison structurally constant, the
 cross-principal session leak, the overload status-contract defect, the
 golden-set data contract and human-review lifecycle, and this integration /
-supersession / branch-retention reconciliation. No retrieval-quality number is
-claimed. See [`RESUME_CLAIMS.md`](RESUME_CLAIMS.md).
+supersession / branch-retention reconciliation. No retrieval-quality number is claimed.

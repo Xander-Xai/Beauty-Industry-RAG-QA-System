@@ -16,16 +16,13 @@ a `DESIGN_TARGET`. Nothing here states that the system has ever met a target.
 | `REPO_VERIFIED` | Implemented in this repository and covered by collected tests. |
 | `LOCAL_REAL_VALIDATION` | Exercised here on a single host against a real dependency. |
 | `PENDING` | Needs an asset, credential or runtime that is unavailable in this repository. |
-| `HISTORICAL_PRODUCTION` | A former employer's production environment. Not reproducible here. |
+| `HISTORICAL_PRODUCTION` | Legacy classification only; third-party production facts are not included. |
 
 Boundaries that hold everywhere in this document:
 
 - **Local validation is not production cluster validation.** See
   [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md).
-- **Historical production is not a repository benchmark.** The 10–15 short-burst
-  QPS and 1500+ daily request figures are `HISTORICAL_PRODUCTION` context and can
-  never be cited as a measurement of this repository. See
-  [Evidence map](evidence-map.md).
+- **No external production telemetry is published.** Performance and capacity statements here are design targets unless backed by this repository's own reproducible run artifacts.
 - **A design target is not a measured result.** PRD latency/QPS figures remain
   `DESIGN_TARGET` until an artifact under `artifacts/performance/` recorded for
   the *same* workload says otherwise. No such artifact is committed, so every
@@ -331,9 +328,9 @@ It never issues a generation request, so probing costs no GPU time.
 **Recovery verification** — the rewrite-fallback ratio returns to its baseline
 and a complex query routes to the 14B endpoint again.
 
-**Boundary** — single 4B/14B vLLM GPU topology validation is `PENDING`. Historical
-production serving experience (RTX A5000 ×2, a Qwen2.5 → Qwen3 gray migration) is
-`HISTORICAL_PRODUCTION` and is **not** evidence for this repository.
+**Boundary** — single 4B/14B vLLM GPU topology validation is `PENDING`. This
+repository publishes no third-party production serving figures, and none may be
+used as evidence for this repository.
 
 ---
 
@@ -628,6 +625,6 @@ plaintext: it is SHA256-hashed, or fully redacted for development-type queries.
   `REPO_VERIFIED`; the closed loop is `PENDING`.
 - No performance artifact exists. `artifacts/performance/` contains only its
   contract README.
-- Historical production figures (10–15 QPS, 1500+ daily requests, RTX A5000 ×2,
-  the Qwen2.5 → Qwen3 migration) remain `HISTORICAL_PRODUCTION` and are never a
-  substitute for a measurement of this repository.
+- No third-party production figures (traffic, hardware topology, model migration
+  history) are published in this repository, and none may ever be substituted for
+  a measurement of this repository. See [`DATA_PROVENANCE.md`](../DATA_PROVENANCE.md).

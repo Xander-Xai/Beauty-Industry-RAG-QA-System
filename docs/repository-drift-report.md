@@ -32,7 +32,7 @@
 |---|---|---|
 | `AUDIT_REPORT.md` (repo root) | P3 | It is **not tracked**; `.gitignore:94` excludes it. It is a local-only historical artifact and is not in the public repository, so it is out of the repository-truth scope. It must not be committed. |
 | `PRD.md` design/target sections | none | The PRD is explicitly labelled design-stage, and its reconciliation table separates current implementation from historical/target design; the consistency guard and the docs index both treat it as a design document, not a current-state source. |
-| `PRD.md:213` "线上验证" (weights from online validation) | P2 | It describes the former production system's tuning, consistent with the `HISTORICAL_PRODUCTION` framing used elsewhere; it is not a claim about this repository. Recorded here rather than rewritten to avoid inventing a provenance for the number. |
+| `PRD.md` fusion-weight provenance | P2 | **Fixed** — the removed wording attributed the fusion weights to an external grid search plus online validation. That is a third-party production work result, and it contradicted the same sentence's "调参环节均未实现". Replaced with the repo-verifiable statement: static `config.json` values with no reproducible tuning record. |
 | `CHANGELOG.md:644` names a removed test path | none | Inside a retained historical release entry that the truth audit already declares non-evidence. |
 
 ## Outcome

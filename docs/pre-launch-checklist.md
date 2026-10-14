@@ -128,7 +128,7 @@
 - [ ] 产出 retrieval benchmark artifact（`artifacts/benchmarks/<run-id>/`），并核对 `docs/repository-truth-audit.md` 中的 artifact 验收字段。**当前没有 artifact，benchmark 框架 = `REPO_VERIFIED`，benchmark 结果 = `PENDING`**
 - [ ] 产出负载/性能 artifact（吞吐、P95/P99、并发），或明确记录 PRD 中的延迟/QPS 数字仍为设计目标
 - [ ] 记录真实 RAGAS evaluator 运行结果，或明确记录其依赖/凭据仍阻塞
-- [ ] 完成真实 4B/14B vLLM GPU 拓扑验证（需要模型权重与 GPU）。**历史生产推理经验不构成该仓库的验证证据**
+- [ ] 完成真实 4B/14B vLLM GPU 拓扑验证（需要模型权重与 GPU）。**外部运行环境经验不能替代本仓库的验证证据**
 
 未覆盖的依赖故障场景（诚实缺口，非遗漏）：Qdrant 与 Elasticsearch 故障没有告警规则，因为本仓库未为它们输出任何 Prometheus 指标；目前靠 `GET /api/health` 巡检与 Runbook 流程覆盖。补齐它需要新增真实指标埋点，不应靠写一条指向不存在指标的规则来假装覆盖。
 

@@ -1,0 +1,29 @@
+# Gitleaks findings verified as false positives.
+#
+# Each entry is a full gitleaks fingerprint: <commit>:<path>:<rule>:<line>.
+# Nothing here is a credential. The list exists so the merge gate reports a
+# real leak instead of a permanent, unfixable red X — a gate that is always
+# red is a gate nobody reads.
+#
+# To re-verify after adding an entry:
+#   gitleaks detect --verbose --redact
+#   git show <commit>:<path> | sed -n '<line>p'
+#
+# Removing an entry requires re-checking the blob, not just deleting the line.
+
+# ── agent_module.py: `from transformers import ... MT5Tokenizer,
+# MT5ForConditionalGeneration` (line 7) and the continuation on line 8.
+# The `generic-api-key` rule matched on entropy of an import list. This file
+# belonged to the repository's pre-cosmetic codebase and was already removed
+# from the working tree in f62e040; only the historical blob remains.
+2d8d9f5ba037490c55daa5bd8ba863722e139b6e:agent_module.py:generic-api-key:7
+cb3530cc21bd779aebf19cab74a7217b91e8239a:agent_module.py:generic-api-key:8
+
+# ── tests/test_auth_identity_resolution.py: a self-describing fixture name
+# assigned to a local variable and passed to `monkeypatch.setenv("JWT_SECRET",
+# ...)` on the next line. It names itself as a fixture and grants nothing. The
+# string is still present in the working tree at lines 101 and 298.
+3cd123a23a7f75dd0eb699fd3a871371778edb4e:tests/test_auth_identity_resolution.py:generic-api-key:268
+d303a37c3a0f80ddbb033240b28e5622a9b647ca:tests/test_auth_identity_resolution.py:generic-api-key:298
+d0e30f14185d2efd85890785111cff7224292024:tests/test_auth_identity_resolution.py:generic-api-key:85
+b1479d853a48299bd1bf798c19d707d5f76b0bca:tests/test_auth_identity_resolution.py:generic-api-key:101

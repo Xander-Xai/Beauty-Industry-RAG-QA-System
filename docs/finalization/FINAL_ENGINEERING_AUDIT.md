@@ -81,7 +81,7 @@ both sides must actually rank.
 | Microservice path has no Answer Gate, fail-open Evidence Gate | `api-gateway/routers/generation.py` | Retained path, not the canonical runtime; needs a live deployment to verify | **NOT_VERIFIED** |
 | `user_id = req.user_id or identity.user_id` lets a body field override the JWT for audit / A-B assignment | `api/routes.py:132` | Masks still come from the verified identity, so no privilege is granted; changing it is a behavioural contract change needing its own review | **PASS_CODE** (fix applied), see note |
 | Session owner axis is the JWT `user_id`; two principals sharing it are one principal | `core/pipeline_context.py` | By construction; a stronger key would need a stable subject id the JWT does not currently expose | **PASS_LOCAL_REAL** (in-memory) |
-| Dual-A5000 topology cannot be confirmed from this host | `router/gpu_gate.py` | Single RTX 5060 Ti present; the gate compares GPU **count**, not GPU **model** | **BLOCKED_EXTERNAL** |
+| The dual-GPU topology cannot be confirmed on this host | `router/gpu_gate.py` | A single GPU is present; the gate compares GPU **count**, not GPU **model** | **BLOCKED_EXTERNAL** |
 
 ## 4. Acceptance summary
 

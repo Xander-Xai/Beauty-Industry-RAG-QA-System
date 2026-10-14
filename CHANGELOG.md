@@ -4,6 +4,52 @@
 
 ### Added
 
+- **Public repository boundary guard** (`scripts/check_public_repository_boundary.py`,
+  81 tests in `tests/test_check_public_repository_boundary.py`, wired into the
+  `test` and `evaluation-guard` CI jobs). It answers a question
+  `check_repo_consistency.py` does not: whether anything belonging to a person's
+  career, a prior employer's operations, or an unlicensed data asset is still
+  reachable in the working tree.
+  - Checks career-material filenames and content, prior-organization identity,
+    production hardware facts, business-scale figures, high-risk credential
+    shapes, data-declaration presence, manifest/tree drift and broken markdown
+    references in the boundary documents.
+  - **Explicitly does not** flag normal engineering vocabulary. `Query Rewrite`,
+    `Candidate Ranking`, `Checkpoint Resume`, `resume the ingestion run` and
+    `rerank candidates` are asserted-clean in tests, because a guard that has to
+    be loosened for product terms is a guard that gets deleted.
+  - Placeholder credentials in `.env.example` are allow-listed by **value**, not
+    by file, so the same placeholder shape appearing in application code is
+    still reported.
+  - Skips prose scanning in `.jsonl` fixtures and lockfiles, which cannot carry
+    a claim but can carry a string.
+- **Data provenance contract**: `DATA_PROVENANCE.md` (per-file provenance, the
+  sensitive-data audit result, the regulatory-content caveat and the
+  history-accessibility statement), machine-readable `DATA_MANIFEST.json`, and
+  sidecar notes in `tests/evaluation/`, `tests/evaluation/golden_set_v2/` and
+  `offline/`. Every tracked data asset is classified; a new one that is not
+  registered fails CI.
+- **Manual review backlog** (`docs/finalization/DATA_REVIEW_BACKLOG.md`) for
+  material whose licence provenance or technical correctness cannot be confirmed
+  automatically.
+- **Gitleaks scan** (`gitleaks-action@v3`) in `.github/workflows/security.yml`,
+  alongside the existing TruffleHog job. TruffleHog runs `--only-verified` by
+  design, so it cannot see a revoked or never-issued credential; Gitleaks
+  covers that half by pattern and entropy, with no verification required.
+  On a `pull_request` event the action scans the commit range the PR
+  introduces, not the whole history — a separate full-history scan (210
+  commits, 1583 blobs) was run for this pass and its six findings are recorded
+  in `.gitleaksignore`, each with its blob re-checked.
+- **Boundary guard: data assets are found by extension, not by directory.**
+  `tests/integration/testdata/queries.json` shipped unregistered because the
+  candidate list was a directory glob list, which made the classification
+  requirement opt-in. It is now extension-driven, so a fixture added to any
+  new directory must declare itself; configuration and lock files are excluded
+  by explicit path.
+- **Boundary guard: a `SYNTHETIC` manifest entry without a `marker` is an
+  error.** The class exists to force a disclosure, so an entry that omits the
+  marker declared "fabricated" without telling any reader.
+
 - **Real CrossEncoder rerank validation** (`retrieval/rerank_validation.py`).
   The second-stage reranker has only ever run its deterministic fallback here,
   and the fallback returns BiEncoder order with `ce_score_ensemble = 0` — so a
@@ -36,6 +82,30 @@
 - Consistency guard `check_rerank_evidence_vocabulary`, keeping the provenance
   labels and the "the GPU gate never measures throughput" statement in sync with
   the code. Verified to fail on real drift.
+
+### Changed
+
+- **Fabricated regulatory content is now labelled as fabricated.** The synthetic
+  fixtures in `offline/finetune_data.json` and `tests/evaluation/golden_set*.jsonl`
+  quote real regulation names (`《化妆品安全技术规范》`,
+  `《化妆品监督管理条例》`, `《化妆品标签管理办法》` …) next to invented
+  concentration limits, and assign "maximum permitted concentration" values to
+  common functional ingredients that are not on any restricted-substance list.
+  The fixtures are kept — they give the retrieval, rerank and gate paths an
+  input of realistic shape — and are now explicitly documented as fictional
+  placeholder content that must not be used for compliance, formulation or
+  ingredient-limit decisions. `DATA_PROVENANCE.md` §4 states the boundary and
+  the review backlog lists the specific assertions.
+  No retrieval metric is published, so nothing measurable changes.
+- Every remaining third-party production fact was removed from the working tree:
+  `docs/final-canonical-runtime-audit.md` (which enumerated eleven figures in
+  one row), `docs/slo-runbook.md`, `docs/evidence-map.md`, `docs/README.md`,
+  `docs/repository-truth-audit.md`, `docs/repository-metadata.md`,
+  `docs/demo/README.md`, `docs/finalization/` (four files), `CHANGELOG.md`,
+  `app.py` and `tests/test_runtime_api_metadata.py`. A generic dual-GPU *design
+  target* is retained; a production hardware model is not.
+  `HISTORICAL_PRODUCTION` survives only as a legacy taxonomy label carrying no
+  figures.
 
 ### Fixed
 
@@ -608,8 +678,8 @@ each claim in this entry actually is.
 - The FastAPI `description` (runtime-exposed through Swagger UI and the generated
   OpenAPI `info` block) advertised the product as "基于双 GPU". No code, config, test or
   artifact in this repository evidences that topology: the 4B/14B vLLM deployment is
-  `PENDING` (weights absent, `vllm` not installed) and the RTX A5000 ×2 serving host is
-  `HISTORICAL_PRODUCTION`. The runtime-facing description is now
+  `PENDING` (weights absent, `vllm` not installed) and no production serving
+  topology is evidenced by this repository. The runtime-facing description is now
   "多模态检索增强生成（RAG）的企业级知识问答 API", which matches what this repository
   does verify (multimodal recall, RBAC, audit, metrics). `info.title` and `info.version`
   remain sourced from `config.json`. `tests/test_runtime_api_metadata.py` now generates the

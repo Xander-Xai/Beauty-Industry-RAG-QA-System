@@ -17,7 +17,7 @@ One canonical taxonomy classifies every evidence claim in the current documentat
 [Classification vocabulary](evidence-map.md#classification-vocabulary). That
 table is the single source; this index does not extend it.
 
-- `HISTORICAL_PRODUCTION` — work actually done in a former employer's production environment.
+- `HISTORICAL_PRODUCTION` — legacy classification name retained for compatibility only. No third-party production facts are published under it in this repository; see [`DATA_PROVENANCE.md`](../DATA_PROVENANCE.md).
 - `HISTORICAL` — a superseded in-repository implementation/config/design kept for lineage.
 - `REPO_VERIFIED` — implemented here and covered by collected deterministic tests or CI.
 - `LOCAL_REAL_VALIDATION` — exercised here against a real dependency on one local host.
@@ -30,6 +30,13 @@ levels; see [Run outcomes that are not evidence levels](evidence-map.md#run-outc
 ## Canonical / Current
 
 - [Project overview and quick start](../README.md)
+- [Data provenance and non-affiliation statement](../DATA_PROVENANCE.md): the per-file
+  provenance of every data asset shipped in this repository, the synthetic-data boundary,
+  the sensitive-data audit result, and the history-accessibility caveat. Backed by the
+  machine-readable [`DATA_MANIFEST.json`](../DATA_MANIFEST.json) and enforced by
+  `scripts/check_public_repository_boundary.py`.
+- [Data review backlog](finalization/DATA_REVIEW_BACKLOG.md): material whose licence
+  provenance or technical correctness cannot be confirmed automatically — currently open.
 - [Deployment guide](deployment-guide.md)
 - [Kubernetes deployment contract](deployment-guide-k8s.md): the minimal second deployment form
   (`deploy/k8s/`, one workload — the FastAPI monolith, not the `api-gateway/` component).
@@ -89,9 +96,6 @@ retrieval metric is claimed anywhere in the repository.
   spec, model prep, commands and artifact formats.
 - [Evidence manifest](finalization/EVIDENCE_MANIFEST.md): capability → source → test → CI →
   artifact → evidence level.
-- [Interview guide](finalization/INTERVIEW_GUIDE.md) and
-  [resume claims](finalization/RESUME_CLAIMS.md): what may and may not be claimed, with the
-  post-employment open-source boundary stated explicitly.
 - [Human annotation work package](../tests/evaluation/golden_set_v2/ANNOTATION_WORKPACKAGE.md):
   the 70-row category-balanced worksheet (in-repo: `tests/evaluation/golden_set_v2/`).
 
