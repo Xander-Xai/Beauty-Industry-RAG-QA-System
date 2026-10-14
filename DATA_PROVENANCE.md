@@ -28,9 +28,12 @@
 
 ## 2. 数据资产清单
 
-仓库内**全部**随 Git 跟踪的数据文件如下。CI 中的
-`check_public_repository_boundary.py --list-datasets` 会重新枚举该清单并与本表比对，
-新增数据文件而未在此登记会直接让 CI 失败。
+仓库内**全部**随 Git 跟踪的数据文件如下（当前 12 项）。CI 中的
+`check_public_repository_boundary.py --list-datasets` 会按**数据文件扩展名**
+（`.json` / `.jsonl` / `.csv` / `.tsv`）重新枚举该清单，而不是按目录白名单，
+因此新增到任何目录下的数据文件都必须在此登记才会通过 CI。配置文件与依赖清单
+（`config.json`、`DATA_MANIFEST.json`、`frontend/package*.json`、Grafana dashboard）
+按路径显式排除，理由是它们携带配置而非信息资产。
 
 | 文件 | 行/条数 | 类别 | 来源 | 使用限制 |
 |---|---:|---|---|---|
@@ -43,6 +46,7 @@
 | `tests/evaluation/golden_set_v2/annotations_v1.jsonl` | 0 | `EMPTY_BY_DESIGN` | 空文件，标注工作尚未执行 | 不得写入合成或模型生成记录；CI 以 `audit_annotations.py --allow-empty` 守卫 |
 | `tests/evaluation/golden_set_v2/annotation_workpackage_v1.jsonl` | 70 | `SYNTHETIC` | 由 `scripts/validation/build_annotation_workpackage.py` 从黄金集派生的候选标注工作表 | 是**待人工评审的候选**，不是标注结论 |
 | `tests/evaluation/golden_set_v2/annotations.schema.json` | — | `SCHEMA` | JSON Schema 定义 | 不含业务数据 |
+| `tests/integration/testdata/queries.json` | 6 | `SYNTHETIC` | 人工构造的集成冒烟查询集 | 含与黄金集相同的**虚构**成分限量问题，见第 4 节 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json` | — | `RUNTIME_EVIDENCE` | 单台本地主机上对真实 Qdrant 1.12.0 服务的验证检查项 | 仅含 localhost 端点与版本信息；不含语料内容、日志或凭据 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` | — | `RUNTIME_EVIDENCE` | 同一次验证的来源与兼容性记录 | 同上 |
 | `docs/assets/demo-request-evidence-flow.webp` | — | `SYNTHETIC` | 由 `docs/demo/capture_demo.py` 从上述合成语料渲染 | 画面内所有数值均为合成值 |
@@ -94,8 +98,8 @@
 不是真实法规知识，也未经任何监管机构或第三方标准原文校对。**
 
 具体而言，下列内容出现在 `offline/finetune_data.json`、
-`tests/evaluation/golden_set*.jsonl`、`tests/evaluation/sample_golden_set.jsonl` 中，
-其形式模仿真实法规表述，但数值是虚构的：
+`tests/evaluation/golden_set*.jsonl`、`tests/evaluation/sample_golden_set.jsonl` 与
+`tests/integration/testdata/queries.json` 中，其形式模仿真实法规表述，但数值是虚构的：
 
 - 以真实法规名称（如《化妆品安全技术规范》《化妆品监督管理条例》《化妆品标签管理办法》）
   为引用来源，配以虚构的成分最大使用浓度；

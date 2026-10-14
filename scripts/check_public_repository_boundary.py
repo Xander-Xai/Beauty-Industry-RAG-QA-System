@@ -220,15 +220,25 @@ _SECRET_EXEMPT_FILES = frozenset({".env.example", "SECURITY.md", "DATA_PROVENANC
 DATA_PROVENANCE_DOC = "DATA_PROVENANCE.md"
 DATA_MANIFEST = "DATA_MANIFEST.json"
 
-#: Data assets the manifest is expected to classify. A tracked data file outside
-#: this set is either unregistered (a finding) or a false positive (add it here).
-_EXPECTED_DATA_GLOBS = (
-    "offline/*.json",
-    "tests/evaluation/*.jsonl",
-    "tests/evaluation/*.json",
-    "tests/evaluation/golden_set_v2/*.jsonl",
-    "docs/demo/*.json",
-    "artifacts/**/*.json",
+#: Extensions that make a tracked file a *data asset* rather than source or
+#: documentation. Matching on extension rather than on a directory list is
+#: deliberate: a fixture added under a new directory (`tests/integration/
+#: testdata/`, a future `benchmarks/fixtures/`) must be forced to declare
+#: itself, otherwise the classification requirement is opt-in and therefore
+#: optional.
+_DATA_SUFFIXES = frozenset({".json", ".jsonl", ".csv", ".tsv"})
+
+#: Tracked data-extension files that carry configuration or dependency
+#: metadata, not an information asset. Each is listed explicitly so adding one
+#: is a reviewable act rather than a silent hole in the scan.
+_NON_DATA_FILES = frozenset(
+    {
+        "config.json",
+        "DATA_MANIFEST.json",
+        "frontend/package.json",
+        "frontend/package-lock.json",
+        "monitoring/grafana/dashboards/rag-overview.json",
+    }
 )
 
 #: Every classified asset must be discoverable from the human-readable document.
@@ -486,7 +496,18 @@ def manifest_errors(
             errors.append(f"{DATA_MANIFEST}: {asset_path} is declared but missing from the working tree")
 
         marker = asset.get("marker")
-        if asset_class == "SYNTHETIC" and marker:
+        if asset_class == "SYNTHETIC":
+            # The marker is the whole point of the class. An entry that omits
+            # it declares "this is fabricated" without telling any reader, so
+            # absence is a finding rather than a neutral default.
+            if not marker:
+                errors.append(
+                    f"{DATA_MANIFEST}: {asset_path} is class SYNTHETIC but declares no 'marker'; "
+                    "a synthetic asset must name the file, sidecar or schema that discloses it"
+                )
+            else:
+                errors.extend(_marker_errors(base, asset_path, marker, asset))
+        elif marker:
             errors.extend(_marker_errors(base, asset_path, marker, asset))
 
     provenance_path = base / DATA_PROVENANCE_DOC
@@ -534,13 +555,7 @@ def _marker_errors(base: Path, asset_path: str, marker: str, asset: dict) -> lis
 
 def _expected_data_files(tracked_names: set[str]) -> set[str]:
     """Return tracked files that look like data assets and need classifying."""
-    import fnmatch
-
-    candidates: set[str] = set()
-    for name in tracked_names:
-        if any(fnmatch.fnmatch(name, pattern) for pattern in _EXPECTED_DATA_GLOBS):
-            candidates.add(name)
-    return candidates
+    return {name for name in tracked_names if Path(name).suffix in _DATA_SUFFIXES and name not in _NON_DATA_FILES}
 
 
 # --------------------------------------------------------------------------

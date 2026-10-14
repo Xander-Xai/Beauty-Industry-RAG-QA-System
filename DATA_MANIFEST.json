@@ -10,10 +10,24 @@
   },
   "assets": [
     {
+      "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "real-service Qdrant validation checks; localhost endpoints only",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "provenance and compatibility record for the Qdrant validation",
+      "carries_real_regulatory_claims": false
+    },
+    {
       "path": "docs/demo/synthetic_corpus.json",
       "class": "SYNTHETIC",
       "marker": "_disclaimer",
-      "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+      "marker_must_contain": [
+        "SYNTHETIC DEMO DATA"
+      ],
       "purpose": "README demo capture only",
       "carries_real_regulatory_claims": false
     },
@@ -22,6 +36,13 @@
       "class": "SYNTHETIC",
       "marker": "sidecar:offline/DATA_PROVENANCE.md",
       "purpose": "QLoRA training fixture for offline/finetune_qlora.py",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/answer_eval_set.jsonl",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
+      "purpose": "refusal / authorization / fabricated-citation evaluation cases",
       "carries_real_regulatory_claims": false
     },
     {
@@ -39,27 +60,6 @@
       "carries_real_regulatory_claims": false
     },
     {
-      "path": "tests/evaluation/sample_golden_set.jsonl",
-      "class": "SYNTHETIC",
-      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
-      "purpose": "minimal sample subset for smoke runs",
-      "carries_real_regulatory_claims": false
-    },
-    {
-      "path": "tests/evaluation/answer_eval_set.jsonl",
-      "class": "SYNTHETIC",
-      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
-      "purpose": "refusal / authorization / fabricated-citation evaluation cases",
-      "carries_real_regulatory_claims": false
-    },
-    {
-      "path": "tests/evaluation/golden_set_v2/annotations_v1.jsonl",
-      "class": "EMPTY_BY_DESIGN",
-      "marker": "schema:tests/evaluation/golden_set_v2/annotations.schema.json",
-      "purpose": "human annotation output; the annotation pass has not been performed",
-      "carries_real_regulatory_claims": false
-    },
-    {
       "path": "tests/evaluation/golden_set_v2/annotation_workpackage_v1.jsonl",
       "class": "SYNTHETIC",
       "marker": "sidecar:tests/evaluation/golden_set_v2/DATA_PROVENANCE.md",
@@ -73,15 +73,24 @@
       "carries_real_regulatory_claims": false
     },
     {
-      "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json",
-      "class": "RUNTIME_EVIDENCE",
-      "purpose": "real-service Qdrant validation checks; localhost endpoints only",
+      "path": "tests/evaluation/golden_set_v2/annotations_v1.jsonl",
+      "class": "EMPTY_BY_DESIGN",
+      "marker": "schema:tests/evaluation/golden_set_v2/annotations.schema.json",
+      "purpose": "human annotation output; the annotation pass has not been performed",
       "carries_real_regulatory_claims": false
     },
     {
-      "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json",
-      "class": "RUNTIME_EVIDENCE",
-      "purpose": "provenance and compatibility record for the Qdrant validation",
+      "path": "tests/evaluation/sample_golden_set.jsonl",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
+      "purpose": "minimal sample subset for smoke runs",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/integration/testdata/queries.json",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/integration/testdata/DATA_PROVENANCE.md",
+      "purpose": "integration-smoke query set (6 rows); includes the same fabricated regulatory questions as the golden set",
       "carries_real_regulatory_claims": false
     }
   ]

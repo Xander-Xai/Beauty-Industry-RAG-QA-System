@@ -32,10 +32,23 @@
 - **Manual review backlog** (`docs/finalization/DATA_REVIEW_BACKLOG.md`) for
   material whose licence provenance or technical correctness cannot be confirmed
   automatically.
-- **Gitleaks history scan** in `.github/workflows/security.yml`, alongside the
-  existing TruffleHog job. TruffleHog runs `--only-verified` by design, so it
-  cannot see a revoked or never-issued credential still present in the tree;
-  Gitleaks covers that half over the full history.
+- **Gitleaks scan** (`gitleaks-action@v3`) in `.github/workflows/security.yml`,
+  alongside the existing TruffleHog job. TruffleHog runs `--only-verified` by
+  design, so it cannot see a revoked or never-issued credential; Gitleaks
+  covers that half by pattern and entropy, with no verification required.
+  On a `pull_request` event the action scans the commit range the PR
+  introduces, not the whole history — a separate full-history scan (210
+  commits, 1583 blobs) was run for this pass and its six findings are recorded
+  in `.gitleaksignore`, each with its blob re-checked.
+- **Boundary guard: data assets are found by extension, not by directory.**
+  `tests/integration/testdata/queries.json` shipped unregistered because the
+  candidate list was a directory glob list, which made the classification
+  requirement opt-in. It is now extension-driven, so a fixture added to any
+  new directory must declare itself; configuration and lock files are excluded
+  by explicit path.
+- **Boundary guard: a `SYNTHETIC` manifest entry without a `marker` is an
+  error.** The class exists to force a disclosure, so an entry that omits the
+  marker declared "fabricated" without telling any reader.
 
 - **Real CrossEncoder rerank validation** (`retrieval/rerank_validation.py`).
   The second-stage reranker has only ever run its deterministic fallback here,

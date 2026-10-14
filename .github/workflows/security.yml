@@ -61,8 +61,18 @@ jobs:
       # the event payload it needs to diff the base is fetched through the API.
       # `GITHUB_TOKEN` is the automatically created per-run token; this job only
       # needs `contents: read`, which the workflow already grants.
-      - name: Gitleaks history scan (merge gate)
-        uses: gitleaks/gitleaks-action@v2
+      #
+      # v3, not v2: v3 moves the runtime from Node 20 to Node 24. GitHub removed
+      # Node 20 from hosted runners on 2026-09-16, and v2 then stops loading
+      # regardless of `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION`. v3 keeps the
+      # same inputs and behaviour. Both tools are pinned to a release tag.
+      #
+      # Scope, stated precisely: on a `pull_request` event the action scans the
+      # commit range introduced by the PR, not the whole history. A full-history
+      # scan was run separately (210 commits, 1583 blobs) and its six findings
+      # are recorded in `.gitleaksignore`.
+      - name: Gitleaks scan (merge gate)
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"

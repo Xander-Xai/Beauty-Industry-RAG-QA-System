@@ -356,20 +356,72 @@ def test_declared_but_missing_asset_is_an_error(tmp_path: Path) -> None:
     assert any("missing from the working tree" in error for error in errors)
 
 
-def test_unclassified_tracked_data_file_is_an_error(tmp_path: Path) -> None:
+def _single_asset_manifest(tmp_path: Path, path: str, asset: dict | None = None) -> None:
+    """Write a manifest declaring one asset plus a matching provenance line.
+
+    The default entry carries an inline marker so the fixture is otherwise
+    valid; tests that assert on a specific manifest error override it.
+    """
     boundary_fixture(tmp_path)
-    write(tmp_path, "offline/known.json", "{}")
-    write(tmp_path, DATA_PROVENANCE_DOC, f"非关联声明 synthetic 审计\n{offline_json}\n")
+    write(tmp_path, path, '{"_disclaimer": "SYNTHETIC DEMO DATA"}')
+    asset = asset or {
+        "path": path,
+        "class": "SYNTHETIC",
+        "marker": "_disclaimer",
+        "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+    }
+    write(tmp_path, DATA_PROVENANCE_DOC, f"非关联声明 synthetic 审计\n{path}\n")
     write(
         tmp_path,
         DATA_MANIFEST,
-        json.dumps({"classes": {"SYNTHETIC": ""}, "assets": [{"path": offline_json, "class": "SYNTHETIC"}]}),
+        json.dumps({"classes": {"SYNTHETIC": "", "SCHEMA": ""}, "assets": [asset]}),
     )
+
+
+def test_unclassified_tracked_data_file_is_an_error(tmp_path: Path) -> None:
+    _single_asset_manifest(tmp_path, offline_json, {"path": offline_json, "class": "SYNTHETIC"})
     new_data = write(tmp_path, "tests/evaluation/secret_new_set.jsonl", "{}\n")
 
     errors = manifest_errors([new_data], tmp_path)
 
     assert any("secret_new_set.jsonl" in error for error in errors)
+
+
+def test_data_asset_in_an_unlisted_directory_is_still_caught(tmp_path: Path) -> None:
+    """The candidate list must not be a directory allow-list.
+
+    Regression: `tests/integration/testdata/queries.json` shipped unclassified
+    because the globs enumerated directories rather than data extensions.
+    """
+    _single_asset_manifest(tmp_path, offline_json, {"path": offline_json, "class": "SYNTHETIC"})
+    new_data = write(tmp_path, "tests/integration/testdata/queries.json", "[]\n")
+
+    errors = manifest_errors([new_data], tmp_path)
+
+    assert any("queries.json" in error for error in errors)
+
+
+def test_configuration_files_are_excluded_by_path(tmp_path: Path) -> None:
+    """`config.json` and lockfiles carry configuration, not an information asset."""
+    _single_asset_manifest(tmp_path, offline_json)
+    # DATA_MANIFEST.json is written by the fixture above; re-writing it here
+    # would replace the declaration under test with an empty one.
+    configs = [
+        write(tmp_path, "config.json", "{}"),
+        write(tmp_path, "frontend/package-lock.json", "{}"),
+        write(tmp_path, "monitoring/grafana/dashboards/rag-overview.json", "{}"),
+    ]
+
+    assert manifest_errors(configs, tmp_path) == []
+
+
+def test_synthetic_entry_without_marker_is_an_error(tmp_path: Path) -> None:
+    """A `SYNTHETIC` class that names no disclosure proves nothing."""
+    _single_asset_manifest(tmp_path, "offline/unmarked.json", {"path": "offline/unmarked.json", "class": "SYNTHETIC"})
+
+    errors = manifest_errors([], tmp_path)
+
+    assert any("declares no 'marker'" in error for error in errors)
 
 
 def test_asset_missing_from_human_inventory_is_an_error(tmp_path: Path) -> None:
