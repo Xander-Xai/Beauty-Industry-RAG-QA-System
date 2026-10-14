@@ -1,19 +1,16 @@
 # Resume claims
 
 What may be written on a resume from this work, what must be framed as
-post-employment open-source work, and what must never be claimed.
+personal independent reproduction, and what must never be claimed.
 
 **Code commit under test:** `61be8a9`; the closeout documents are committed on top. The integration was squash-merged into `main` as `f3d03054d1f108d9ce82abb4499f65a4e0967e46`; the verification results below are for `61be8a9` (code unchanged by the doc commits). · 2026-10-10 UTC. Subject to the same evidence rules as
 [`EVIDENCE_MANIFEST.md`](EVIDENCE_MANIFEST.md).
 
 ## 0. The boundary that governs everything
 
-This repository is **post-employment open-source work**. It is not a description
-of an employer's production system, and none of it may be written as a
-2024–2025 enterprise production accomplishment. The honest framing is:
+This public repository is the maintainer's **post-employment independent reproduction** of the core technical approach of the company RAG project they previously participated in, with limited subsequent engineering improvements. It is **not** copied employer production source, an official employer repository, or a one-to-one production mirror. The honest framing is:
 
-> "Open-source RAG system I built/audited after leaving; not employer production
-> code."
+> "After leaving, I independently reproduced the core RAG system design from my enterprise project experience and made some additional engineering improvements. This public code and its tests are separate from the former employer's production system."
 
 The single-GPU host (1× RTX 5060 Ti) used for the local runs is **not** a
 dual-RTX-A5000 production deployment. Where a resume implies production scale, it
@@ -27,7 +24,7 @@ blended into a single sentence.
 | bucket | what belongs here | rule |
 |---|---|---|
 | **A. Enterprise historical production facts** | Anything about a previous employer's *live* system: scale, traffic, the dual-RTX-A5000 topology, any production number. | **Not in this repository.** Classified `HISTORICAL_PRODUCTION` in the docs; usable only as background context, never as this repo's measurement. |
-| **B. Post-employment open-source rebuild & validation** | This whole repository — pipeline, evaluation-integrity layer, local real-dependency validations. | Each claim needs a path in [`EVIDENCE_MANIFEST.md`](EVIDENCE_MANIFEST.md); always framed as open-source, post-employment. |
+| **B. Post-employment independent reproduction & limited extensions** | Personally reproduced core pipeline plus subsequent engineering improvements, evaluation-integrity work and local real-dependency validations. | Each claim needs a path in [`EVIDENCE_MANIFEST.md`](EVIDENCE_MANIFEST.md); always framed as post-employment personal reproduction, not employer code. |
 | **C. Retrieval-quality metrics that remain unprovable here** | Hit@K / Recall@K / NDCG@10 / MRR@10, RAGAS/faithfulness, QPS / P95 / throughput. | **Never quote a value.** No corpus, no weights ⇒ `BLOCKED`; no load test ⇒ `NOT_VERIFIED`. |
 | **D. Currently engineering-verified capabilities** | Fail-closed gates, the golden-set data contract and review lifecycle, the RBAC/session controls, the run-report outcomes, the contract tests. | `PASS_CODE` / `PASS_CI`; describes *engineering*, not a measured result. |
 
@@ -57,9 +54,9 @@ are backed by tests in [`EVIDENCE_MANIFEST.md`](EVIDENCE_MANIFEST.md):
 6. **Fixed an HTTP status-contract defect** where a documented 503 overload
    response was surfacing as a 500.
 
-## 2. Must be framed as open-source / post-employment
+## 2. Must be framed as personal independent reproduction / post-employment
 
-- The whole repository.
+- The public repository as a whole is a personal, independent reproduction of the core approach, with some later improvements; it is not an export of the enterprise system.
 - The "301-sample golden set", "v2 data contract", "annotation work package" —
   these are this repository's artifacts, not an employer's.
 - Any statement of scale or deployment (single GPU, no live traffic).
@@ -112,8 +109,4 @@ resume line because it is a *story*, not a metric:
 
 ## 5. One-line summary that is true
 
-> "Open-source beauty-industry RAG system (post-employment) where the engineering
-> focus is evaluation integrity: fail-closed quality gates, a human-review data
-> contract, and audit trails that cannot manufacture a result. Retrieval metrics
-> are intentionally unreported because the corpus and reranker weights are not
-> public."
+> "After my enterprise RAG project experience, I independently reproduced its core design in a separate public codebase and made some further engineering improvements. The current repository focuses on evaluation integrity: fail-closed quality gates, human-review data contracts and honest audit trails. It cannot establish the former company's production performance."
