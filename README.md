@@ -6,9 +6,7 @@
 >
 > **一句话（中）**：企业内部多模态 RAG 问答系统——把散落在 PDF、图片、表格里的化妆品法规 / 成分 / 产品知识变成可检索资产，在线返回**带引用、带出处、证据不足就拒答**的答案，并按角色与部门做权限隔离。
 >
-**项目来源与实现边界（请先读）**：本仓库是维护者在离职后，基于此前参与的企业「药妆助手」项目技术经验，对核心 RAG 架构与功能所做的**个人独立复现**，并在复现基础上进行了部分工程改进。公开代码不等于企业原始生产源码，也不是企业官方仓库或原生产系统的逐项镜像。企业任职期间的项目经历与离职后个人复现/改进是两个时间段；本仓库的源码、测试和 CI 仅证明当前个人工程对应的能力，不证明历史生产规模、业务指标或生产部署表现。
-
-> 对外介绍建议使用「**企业项目经验 + 离职后个人独立复现（含部分后续改进）**」，不要暗示企业原始代码被直接公开、迁移或持续维护。
+**项目边界**：这是面向化妆品知识问答场景的公开、独立维护的参考实现。示例与测试数据应为合成数据或允许公开使用的材料；本仓库不提供任何组织的私有源码、内部业务数据、凭据或生产部署记录。项目不代表任何机构的官方产品，也不证明生产可用性。详见 [数据来源与非关联声明](DATA_PROVENANCE.md)。
 
 >
 > **不是普通向量检索 Demo 的地方**：在线链路是**动态 2–4 路召回 → 两级重排 → Evidence/Answer 双 Gate 拦截幻觉 → RBAC 纵深防御 → 4B/14B 模型路由**；离线侧是**多模态解析 + 知识版本封存 / 人工激活**的分发布纪律。
@@ -63,8 +61,7 @@
 | 6 | **检索怎么做的、为什么这么做** | 动态 2–4 路 → 单入口加权 RRF → 两级重排 → 双 Gate；含「为什么不用微调 / 为什么 Hybrid / 为什么 Rerank」的设计取舍 | [Retrieval Pipeline](#retrieval-pipeline) |
 | 7 | **效果怎么评估** | 评测框架已实现（检索指标 + RAGAS + 性能产物契约）；**结果未产出**，golden set 缺稳定标识，相关性只能按规范化精确文本匹配 | [Evaluation](#evaluation) |
 | 8 | **已验证 / 未验证在哪看** | 边界一节讲清：[Evidence Boundary](#evidence-boundary)；逐项「已实现 / 未验证 + 升级判据」见 [Production Readiness](#production-readiness) | [docs/production-readiness.md](docs/production-readiness.md) |
-| 9 | **历史生产规模** | `HISTORICAL_PRODUCTION`，**不是**本仓库 benchmark | [Evidence Boundary](#evidence-boundary) |
-| 10 | **已知未收敛的实现细节** | 六个微服务目录中 5 个按现状不可启动 · 无 CrossEncoder 权重时全链路拒答 · 检索 benchmark 与性能产物均未执行 | [Production Readiness](#production-readiness) · issue [#84](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/84) |
+| 9 | **已知未收敛的实现细节** | 六个微服务目录中 5 个按现状不可启动 · 无 CrossEncoder 权重时全链路拒答 · 检索 benchmark 与性能产物均未执行 | [Production Readiness](#production-readiness) · issue [#84](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/84) |
 
 ---
 
@@ -541,8 +538,7 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
   `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`。
 - **微服务形态未联调。** 六个微服务目录中 5 个按现状不可启动；`dags/` 只有 DAG 注册，
   无真实调度记录。
-- **历史规模数字不是本仓库的结果。** `HISTORICAL_PRODUCTION` 表格来自前雇主生产环境，
-  本仓库不含对应语料、日志、权重或流量切分配置，无法复现。
+- **不提供第三方生产数据或历史业务指标。** 所有效果与性能结论必须来自本仓库可复核的运行证据；当前缺少可发布的真实评测结果。
 
 ---
 
@@ -556,28 +552,14 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 
 | 等级 | 含义 | 可以这样说 | 不能这样说 |
 |---|---|---|---|
-| `HISTORICAL_PRODUCTION` | 前雇主生产环境实际做过的工作；专有资产不在本仓库 | "我在上一套生产系统里……" | "本仓库证明了这个规模" |
+| `HISTORICAL_PRODUCTION` | 仅为旧版证据兼容保留的分类名称；本公开仓不发布关联的第三方生产数据 | "仅作分类兼容" | "作为本仓实测" |
 | `HISTORICAL` | 本仓库内被取代、只为追溯保留的实现 / 配置 / 设计 | "这是被取代的仓库路径，保留作为历史上下文" | "这是当前生产能力" |
 | `REPO_VERIFIED` | 代码/配置存在，并被本仓库收集到的确定性测试或 CI 覆盖 | "已实现且有测试覆盖" | "已通过生产验证" |
 | `LOCAL_REAL_VALIDATION` | 用真实外部依赖在单台本地主机上跑过 | "在本地对真实依赖验证过" | "生产集群 / HA / SLO 已验证" |
 | `DESIGN_TARGET` | 写进文档的目标 / 设计；无实现或无可复现 benchmark | "设计目标是……" | "运行中的系统达到……" |
 | `PENDING` | 代码可能在，但验证所需的真实资产 / 运行时 / 凭据在此不可得 | "已实现，真实验证待补" | "已经验证过了" |
 
-`HISTORICAL` 与 `HISTORICAL_PRODUCTION` 不可互换：前者说的是本仓库自己的历史代码，后者说的是历史生产系统，两者都不是当前能力。
-
-#### Historical Production Context
-
-> 等级 `HISTORICAL_PRODUCTION`。下表全部是**历史生产环境**的业务规模与流量背景。本公开仓库**不包含**对应的专有语料、生产日志、模型权重、监控数据或流量切分配置，因此这些数字**不是** `REPO_VERIFIED`，**不是**本仓库的 benchmark，**也无法由本仓库复现**。
-
-| 维度 | 历史生产环境事实 |
-|---|---|
-| 知识资产 | 3000+ 文档 · 5000+ 图片 · 1500+ 产品 · 2000+ 成分 · 8 大法规体系 |
-| 用户与流量 | 200+ 内部用户 · 高峰短时 10–15 QPS · 日均 1500+ 请求 |
-| 生产推理硬件 | RTX A5000 ×2 |
-| 后续模型迁移 | Qwen2.5 → Qwen3-14B / Qwen3-4B 灰度迁移验证 |
-| 公司认可 | 年度技术创新奖 |
-
-三条不可跨越的边界：**不得**把上表任何一项归类为 `REPO_VERIFIED`；**不得**用历史生产经验替代仓库验证——`config.json` 里 4B / 14B vLLM 拓扑**在本仓库从未执行过**（权重缺失、`vllm` 未安装），该项为 `PENDING`；**奖项不是运行时验证**，它不携带关于本仓库延迟、吞吐或正确性的任何证据。
+`HISTORICAL` 指本项目过时的实现或文档；`HISTORICAL_PRODUCTION` 仅保留兼容旧证据分类，不用于对外披露任何第三方业务事实。
 
 #### 框架已实现 ≠ 结果已产出
 
