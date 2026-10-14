@@ -328,9 +328,9 @@ It never issues a generation request, so probing costs no GPU time.
 **Recovery verification** — the rewrite-fallback ratio returns to its baseline
 and a complex query routes to the 14B endpoint again.
 
-**Boundary** — single 4B/14B vLLM GPU topology validation is `PENDING`. Historical
-production serving experience (RTX A5000 ×2, a Qwen2.5 → Qwen3 gray migration) is
-`HISTORICAL_PRODUCTION` and is **not** evidence for this repository.
+**Boundary** — single 4B/14B vLLM GPU topology validation is `PENDING`. This
+repository publishes no third-party production serving figures, and none may be
+used as evidence for this repository.
 
 ---
 
@@ -625,6 +625,6 @@ plaintext: it is SHA256-hashed, or fully redacted for development-type queries.
   `REPO_VERIFIED`; the closed loop is `PENDING`.
 - No performance artifact exists. `artifacts/performance/` contains only its
   contract README.
-- Historical production figures (10–15 QPS, 1500+ daily requests, RTX A5000 ×2,
-  the Qwen2.5 → Qwen3 migration) remain `HISTORICAL_PRODUCTION` and are never a
-  substitute for a measurement of this repository.
+- No third-party production figures (traffic, hardware topology, model migration
+  history) are published in this repository, and none may ever be substituted for
+  a measurement of this repository. See [`DATA_PROVENANCE.md`](../DATA_PROVENANCE.md).

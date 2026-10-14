@@ -289,11 +289,13 @@ a repository benchmark.
   Qdrant service was never exercised (PR #6/#7 records that run). See
   [Qdrant evidence: two states, kept apart](#qdrant-evidence-two-states-kept-apart).
 - Describing deterministic fake models as real BGE/CLIP/OCR validation.
-- Presenting `HISTORICAL_PRODUCTION` scale as `REPO_VERIFIED`.
-- Using historical production model-serving experience (RTX A5000 ×2, the
-  Qwen2.5 → Qwen3 gray migration) as evidence that this repository's 4B/14B vLLM
-  topology was validated. It was not; that remains `PENDING`.
-- Treating a company award as runtime technical validation of this codebase.
+- Presenting third-party production scale as `REPO_VERIFIED`. This repository
+  publishes no third-party traffic, corpus-size, hardware-topology or
+  model-migration figures; see [`DATA_PROVENANCE.md`](../DATA_PROVENANCE.md).
+- Using any prior production model-serving experience as evidence that this
+  repository's 4B/14B vLLM topology was validated. It was not; that remains
+  `PENDING`.
+- Treating an award or recognition as runtime technical validation of this codebase.
 - Claiming OpenTelemetry/Jaeger export is closed-loop. The exporter is implemented
   and test-covered but disabled by default, and no span has ever been queried from a
   backend.

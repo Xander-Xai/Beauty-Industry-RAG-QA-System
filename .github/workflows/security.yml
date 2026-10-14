@@ -51,3 +51,13 @@ jobs:
         uses: trufflesecurity/trufflehog@v3.97.9
         with:
           extra_args: --only-verified
+
+      # TruffleHog's `--only-verified` deliberately ignores credentials it
+      # cannot confirm are live, so a revoked or never-issued token still in the
+      # tree would pass. Gitleaks covers the other half: pattern and entropy
+      # matching over the full history, without requiring verification.
+      # Both are pinned to a release tag rather than a floating branch.
+      - name: Gitleaks history scan (merge gate)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"

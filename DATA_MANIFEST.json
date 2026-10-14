@@ -1,0 +1,88 @@
+{
+  "$schema_version": "data-manifest/1",
+  "description": "Machine-readable classification of every data asset tracked in this repository. DATA_PROVENANCE.md is the human-readable rendering of this file; scripts/check_public_repository_boundary.py fails CI when the two drift apart, when a path here is missing from disk, or when a tracked data file is absent from this manifest.",
+  "default_class": "UNCLASSIFIED",
+  "classes": {
+    "SYNTHETIC": "Hand-constructed fixture. Contains no real third-party asset. Regulatory text inside it is fictional placeholder content and is not authoritative — see DATA_PROVENANCE.md section 4.",
+    "EMPTY_BY_DESIGN": "Committed empty on purpose. Writing synthetic or model-generated records into it is a CI failure.",
+    "SCHEMA": "Structural definition only. Carries no business data.",
+    "RUNTIME_EVIDENCE": "Recorded observation of a real dependency on a single local host. Contains no corpus content, logs or credentials."
+  },
+  "assets": [
+    {
+      "path": "docs/demo/synthetic_corpus.json",
+      "class": "SYNTHETIC",
+      "marker": "_disclaimer",
+      "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+      "purpose": "README demo capture only",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "offline/finetune_data.json",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:offline/DATA_PROVENANCE.md",
+      "purpose": "QLoRA training fixture for offline/finetune_qlora.py",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/golden_set.jsonl",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
+      "purpose": "retrieval and RAGAS evaluation fixture (301 rows)",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/golden_set_expanded.jsonl",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
+      "purpose": "paraphrase-expanded variant of the golden set",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/sample_golden_set.jsonl",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
+      "purpose": "minimal sample subset for smoke runs",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/answer_eval_set.jsonl",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
+      "purpose": "refusal / authorization / fabricated-citation evaluation cases",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/golden_set_v2/annotations_v1.jsonl",
+      "class": "EMPTY_BY_DESIGN",
+      "marker": "schema:tests/evaluation/golden_set_v2/annotations.schema.json",
+      "purpose": "human annotation output; the annotation pass has not been performed",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/golden_set_v2/annotation_workpackage_v1.jsonl",
+      "class": "SYNTHETIC",
+      "marker": "sidecar:tests/evaluation/golden_set_v2/DATA_PROVENANCE.md",
+      "purpose": "70-row candidate worksheet awaiting human review; candidates, not labels",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "tests/evaluation/golden_set_v2/annotations.schema.json",
+      "class": "SCHEMA",
+      "purpose": "JSON Schema for the annotation lifecycle",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "real-service Qdrant validation checks; localhost endpoints only",
+      "carries_real_regulatory_claims": false
+    },
+    {
+      "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "provenance and compatibility record for the Qdrant validation",
+      "carries_real_regulatory_claims": false
+    }
+  ]
+}

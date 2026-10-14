@@ -277,7 +277,7 @@ is_visual_relevant = max(
 final_score = w_text * text_score + w_clip * clip_score + w_ocr * ocr_score
 ● 【已实现】权重按 business_type / is_visual_relevant 做确定性映射，数值来自 `config.json`。
 ● ★ 设计目标：权重由历史日志（rerank 点击率与人工标注相关性）分析得出，并**每周**根据 A/B 实验更新；
-  w_clip 的 2.0 / 1.0 / 0.0 来自线下网格搜索与线上验证。**学习与调参环节均未实现**，见 §12.2。
+  当前权重为 `config.json` 中的静态配置值，本仓库**没有**可复现的调参过程或实验记录，**学习与调参环节均未实现**，见 §12.2。
 ● 因此本系统**不是**「权重随检索价值自学习」的系统；它是「权重由配置驱动、随查询类型切换」的系统。
 4.6 长文本生成一致性保障
 【状态：`CURRENT`（已实现）——但实现方式与本节原始设计不同，见下】

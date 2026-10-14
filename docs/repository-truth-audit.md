@@ -37,10 +37,10 @@
   the FastAPI `description`, which ships to integrators through Swagger UI and the generated
   OpenAPI `info` block, claimed a "基于双 GPU" topology. Runtime-facing metadata is read as a
   claim about this repository, so it may only state `REPO_VERIFIED` capability; the 4B/14B vLLM
-  topology stays `PENDING` and RTX A5000 ×2 stays `HISTORICAL_PRODUCTION`. The claim was removed,
+  topology stays `PENDING`. The claim was removed,
   `info.title` / `info.version` still come from `config.json`, and
-  `tests/test_runtime_api_metadata.py` fails if the topology claim returns. No architecture,
-  model routing, config or historical production record changed.
+  `tests/test_runtime_api_metadata.py` fails if the topology claim returns. No architecture or
+  model routing configuration changed.
 - Repository landing (PR #55): merged as `424f43f`. It reworked
   the README top fold, added `docs/repository-metadata.md`,
   and reconciled the top-fold evidence strip with the canonical six-level taxonomy (the strip had

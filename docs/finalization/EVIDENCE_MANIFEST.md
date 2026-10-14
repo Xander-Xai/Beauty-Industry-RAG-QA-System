@@ -73,7 +73,7 @@ Levels (canonical vocabulary: [`docs/evidence-map.md`](../evidence-map.md)):
 | Any Hit@K / Recall@K / NDCG / MRR number | **NOT_VERIFIED** — no corpus |
 | Any RAGAS / faithfulness score | **NOT_VERIFIED** — evaluator gated, not run |
 | QPS / P95 under load | **NOT_VERIFIED** — no load test executed |
-| Dual RTX A5000 production validation | **NOT_VERIFIED** — host has 1× RTX 5060 Ti |
+| Dual-GPU production validation | **NOT_VERIFIED** — the validation host has a single GPU |
 | The microservice path enforces the Answer Gate | **NOT_VERIFIED** — it does not (`api-gateway/`) |
 | Enterprise data / golden set / regulation corpus quality | **NEEDS_HUMAN** |
 
