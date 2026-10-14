@@ -57,7 +57,13 @@ jobs:
       # tree would pass. Gitleaks covers the other half: pattern and entropy
       # matching over the full history, without requiring verification.
       # Both are pinned to a release tag rather than a floating branch.
+      # Gitleaks refuses to scan a `pull_request` event without a token, since
+      # the event payload it needs to diff the base is fetched through the API.
+      # `GITHUB_TOKEN` is the automatically created per-run token; this job only
+      # needs `contents: read`, which the workflow already grants.
       - name: Gitleaks history scan (merge gate)
         uses: gitleaks/gitleaks-action@v2
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_COMMENTS: "false"
