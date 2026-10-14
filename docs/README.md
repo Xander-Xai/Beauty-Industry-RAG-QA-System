@@ -89,9 +89,6 @@ retrieval metric is claimed anywhere in the repository.
   spec, model prep, commands and artifact formats.
 - [Evidence manifest](finalization/EVIDENCE_MANIFEST.md): capability → source → test → CI →
   artifact → evidence level.
-- [Interview guide](finalization/INTERVIEW_GUIDE.md) and
-  [resume claims](finalization/RESUME_CLAIMS.md): what may and may not be claimed, with the
-  post-employment open-source boundary stated explicitly.
 - [Human annotation work package](../tests/evaluation/golden_set_v2/ANNOTATION_WORKPACKAGE.md):
   the 70-row category-balanced worksheet (in-repo: `tests/evaluation/golden_set_v2/`).
 
