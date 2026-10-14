@@ -16,16 +16,13 @@ a `DESIGN_TARGET`. Nothing here states that the system has ever met a target.
 | `REPO_VERIFIED` | Implemented in this repository and covered by collected tests. |
 | `LOCAL_REAL_VALIDATION` | Exercised here on a single host against a real dependency. |
 | `PENDING` | Needs an asset, credential or runtime that is unavailable in this repository. |
-| `HISTORICAL_PRODUCTION` | A former employer's production environment. Not reproducible here. |
+| `HISTORICAL_PRODUCTION` | Legacy classification only; third-party production facts are not included. |
 
 Boundaries that hold everywhere in this document:
 
 - **Local validation is not production cluster validation.** See
   [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md).
-- **Historical production is not a repository benchmark.** The 10–15 short-burst
-  QPS and 1500+ daily request figures are `HISTORICAL_PRODUCTION` context and can
-  never be cited as a measurement of this repository. See
-  [Evidence map](evidence-map.md).
+- **No external production telemetry is published.** Performance and capacity statements here are design targets unless backed by this repository's own reproducible run artifacts.
 - **A design target is not a measured result.** PRD latency/QPS figures remain
   `DESIGN_TARGET` until an artifact under `artifacts/performance/` recorded for
   the *same* workload says otherwise. No such artifact is committed, so every
