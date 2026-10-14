@@ -21,7 +21,7 @@ a local status word.
 
 | Level | Meaning | Safe framing | Must not say |
 |---|---|---|---|
-| `HISTORICAL_PRODUCTION` | Work actually done in a former employer's production environment. Proprietary corpus, logs, models and dashboards are not in this repository. | "This was done in a previous production environment" | "The repository proves this scale" |
+| `HISTORICAL_PRODUCTION` | Legacy evidence classification retained for compatibility only; do not publish third-party production facts here. | "Legacy category only" | "Measured by this repository" |
 | `HISTORICAL` | A superseded implementation, configuration, design or compatibility artifact **in this repository**, retained only for historical lineage. It is not a current capability, and it is not evidence of former-employer production usage. | "This is a superseded repository path retained for historical/compatibility context" | "This is a current production capability" |
 | `REPO_VERIFIED` | Code/config exists and is covered by collected deterministic tests or CI in this repository. | "This is implemented and test-covered" | "This is production-validated" |
 | `LOCAL_REAL_VALIDATION` | Exercised in this repository against real external dependencies (Redis, nginx, authenticated Elasticsearch, authenticated Prometheus) on a single local host. | "Validated locally against the real dependency" | "Production cluster / HA / SLO verified" |
@@ -44,7 +44,7 @@ Rules:
    is itself the record, not a gap.
 5. `HISTORICAL` and `HISTORICAL_PRODUCTION` are not interchangeable.
    `HISTORICAL` is about this repository's own superseded code/config/design;
-   `HISTORICAL_PRODUCTION` is about a former employer's real production system.
+   `HISTORICAL_PRODUCTION` is a legacy classification and not a channel to publish organization-specific facts.
    Neither one may be presented as the other, and neither is a current capability.
 6. No document may define a second status vocabulary. A superseded in-repository
    artifact is `HISTORICAL`, never a local word such as "stale" or "partial"; a
@@ -248,54 +248,9 @@ Must not say, in either direction:
   committed run is a single local host, cluster / HA / throughput / TLS are
   `PENDING`, and no embedding-model quality is measured.
 
-## Business scale — historical production context
+## Data provenance and evaluation boundary
 
-The following numbers come from a former company production environment. The
-public repository does **not** contain the proprietary corpus, production logs,
-model weights or dashboards behind them. They are `HISTORICAL_PRODUCTION`, not
-`REPO_VERIFIED` and not a reproducible benchmark.
-
-| Metric | Value | Level | Boundary |
-|---|---|---|---|
-| Documents | 3000+ | `HISTORICAL_PRODUCTION` | company production context; proprietary corpus/logs/models are not included in the public repository |
-| Images | 5000+ | `HISTORICAL_PRODUCTION` | company production context; proprietary corpus/logs/models are not included in the public repository |
-| Products | 1500+ | `HISTORICAL_PRODUCTION` | company production context; proprietary corpus/logs/models are not included in the public repository |
-| Ingredients | 2000+ | `HISTORICAL_PRODUCTION` | company production context; proprietary corpus/logs/models are not included in the public repository |
-| Regulation systems | 8 | `HISTORICAL_PRODUCTION` | company production context; proprietary corpus/logs/models are not included in the public repository |
-| Internal users | 200+ | `HISTORICAL_PRODUCTION` | company production context; proprietary corpus/logs/models are not included in the public repository |
-| Short-burst QPS | 10–15 | `HISTORICAL_PRODUCTION` | production observation, not a repository benchmark |
-| Daily requests | 1500+ | `HISTORICAL_PRODUCTION` | production observation, not a repository benchmark |
-| Production serving hardware | RTX A5000 ×2 | `HISTORICAL_PRODUCTION` | the serving host is not part of this repository; no comparable GPU topology has been executed here |
-| Later-stage model migration | Qwen2.5 → Qwen3-14B / Qwen3-4B gray-migration validation | `HISTORICAL_PRODUCTION` | proprietary production models, weights, traffic-split configuration and logs are not in this repository; the migration is **not** reproducible here |
-| Company recognition | Annual technical innovation award | `HISTORICAL_PRODUCTION` | company recognition of prior work; **not** runtime technical validation of this codebase, and not evidence about this repository |
-
-Framing:
-
-> "In the previous production system the corpus was on the order of 3000+
-> documents and 5000+ images for 200+ internal users, with short bursts around
-> 10–15 QPS. That is company production context; the public repository contains
-> a small sanitized subset and no production logs, so those numbers are not a
-> reproducible benchmark from this repo."
-
-> "Production model serving ran on RTX A5000 ×2, and in a later stage a
-> Qwen2.5 to Qwen3-14B / Qwen3-4B gray migration was validated. Those weights, logs and
-> traffic-split configuration were proprietary and are not in this repository, so
-> the repository does not reproduce that migration."
-
-Boundary rules for the three rows above the volume metrics:
-
-1. **Do not classify any of this as `REPO_VERIFIED`.** There is no code, config,
-   test or artifact in this repository that evidences the serving hardware, the
-   gray migration, or the award.
-2. **Do not substitute historical production experience for repository
-   validation.** The single shared 4B / 14B vLLM GPU topology in `config.json` has
-   never been executed in this repository: the weights are absent and `vllm` is
-   not installed. That item stays `PENDING`.
-3. **An award is not a runtime validation.** It is recognition of company work and
-   carries no evidence about this codebase's latency, throughput or correctness.
-
-Do not present these as repository results. Do not invent a benchmark to match
-them.
+This codebase does not publish any organization-specific production inventory, traffic, deployment hardware or proprietary corpus. Illustrative datasets are for engineering tests only. Repository benchmark claims require reproducible, provenance-bound artifacts. See [DATA_PROVENANCE.md](../DATA_PROVENANCE.md).
 
 ## Benchmark artifact acceptance criteria
 
