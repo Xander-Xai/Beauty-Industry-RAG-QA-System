@@ -8,18 +8,27 @@
     "SCHEMA": "Structural definition only. Carries no business data.",
     "RUNTIME_EVIDENCE": "Recorded observation of a real dependency on a single local host. Contains no corpus content, logs or credentials."
   },
+  "disclosure_vocabulary": {
+    "record_marker": "How a single record identifies itself when separated from this manifest. 'inline:<field>' means the field travels inside every record. 'file' means one declaration at the top of the file covers the whole file. 'none' means a record carries no self-description, and record_marker_absent_reason explains why.",
+    "regulatory_shaped_fields": "Keys whose values quote a real regulation instrument or a limit-shaped concentration. A consumer building a redacted view, an external excerpt or a training export should treat exactly these keys as synthetic, because they are the ones that read as authoritative out of context.",
+    "record_marker_absent_reason": "Required whenever record_marker is 'none'. Silence is the defect this closes: an unstated gap reads as an oversight and cannot be tracked."
+  },
   "assets": [
     {
       "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json",
       "class": "RUNTIME_EVIDENCE",
       "purpose": "real-service Qdrant validation checks; localhost endpoints only",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": []
     },
     {
       "path": "artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json",
       "class": "RUNTIME_EVIDENCE",
       "purpose": "provenance and compatibility record for the Qdrant validation",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": []
     },
     {
       "path": "docs/demo/synthetic_corpus.json",
@@ -29,69 +38,104 @@
         "SYNTHETIC DEMO DATA"
       ],
       "purpose": "README demo capture only",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": []
     },
     {
       "path": "offline/finetune_data.json",
       "class": "SYNTHETIC",
       "marker": "sidecar:offline/DATA_PROVENANCE.md",
       "purpose": "QLoRA training fixture for offline/finetune_qlora.py",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "offline/finetune_qlora.py reads only instruction/input/output and drops unknown keys, so a per-record field would never reach the training template. Adding one would be a dataset change with no effect on the output that actually needs the label: the trained adapter. Tracked as open work; see DATA_REVIEW_BACKLOG.md section 1.3.",
+      "regulatory_shaped_fields": ["output"],
+      "regulatory_shaped_fields_evidence": "12 of 40 rows carry a limit-shaped value; 11 quote a named regulation; 3 carry both."
     },
     {
       "path": "tests/evaluation/answer_eval_set.jsonl",
       "class": "SYNTHETIC",
       "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
       "purpose": "refusal / authorization / fabricated-citation evaluation cases",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "AnswerEvalSample.from_dict selects named fields into a frozen dataclass and silently drops unknown keys, so a per-record field would be discarded on load. The records also quote no limit value, only 2 of 12 name an instrument, and nothing is exported that carries the text. Tracked as open work; see DATA_REVIEW_BACKLOG.md section 1.3.",
+      "regulatory_shaped_fields": ["question", "expected_behavior", "notes"],
+      "regulatory_shaped_fields_evidence": "2 of 12 rows name a regulation instrument; 0 carry a limit-shaped value."
     },
     {
       "path": "tests/evaluation/golden_set.jsonl",
       "class": "SYNTHETIC",
       "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
       "purpose": "retrieval and RAGAS evaluation fixture (301 rows)",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "Highest-value file and highest blast radius. Its sha256 is pinned in tests/validation/test_golden_set_evidence_docs.py and recorded in docs/validation/rag-eval-readiness.md as a measured 0/301 contract result; sample_id is derived from the line index; _sample_hash hashes the sorted contexts. A per-record field is therefore a dataset version change, not a metadata addition. Deliberately deferred and tracked; see DATA_REVIEW_BACKLOG.md section 1.3.",
+      "regulatory_shaped_fields": ["question", "contexts[]", "answer", "ground_truth"],
+      "regulatory_shaped_fields_evidence": "110 of 301 rows name a regulation instrument (contexts 91, answer 14, ground_truth 21, question 10); 116 carry a limit-shaped value (contexts 182, ground_truth 115, answer 78, question 5); 51 carry both. contexts is retrieval ground truth and question is the retrieval query, so neither may receive an inline marker without changing what is measured."
     },
     {
       "path": "tests/evaluation/golden_set_expanded.jsonl",
       "class": "SYNTHETIC",
       "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
       "purpose": "paraphrase-expanded variant of the golden set",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "Same shape and same reason as golden_set.jsonl. No consumer reads this file at all, which lowers the forwarding risk but does not remove it: it is still published raw JSONL. Tracked as open work; see DATA_REVIEW_BACKLOG.md section 1.3.",
+      "regulatory_shaped_fields": ["question", "contexts[]", "answer", "ground_truth"],
+      "regulatory_shaped_fields_evidence": "104 of 301 rows name a regulation instrument; 111 carry a limit-shaped value."
     },
     {
       "path": "tests/evaluation/golden_set_v2/annotation_workpackage_v1.jsonl",
       "class": "SYNTHETIC",
       "marker": "sidecar:tests/evaluation/golden_set_v2/DATA_PROVENANCE.md",
       "purpose": "70-row candidate worksheet awaiting human review; candidates, not labels",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "Generated by scripts/validation/build_annotation_workpackage.py and byte-compared to the committed file by tests/test_annotation_workpackage.py, so the marker would have to be added in the generator and the file regenerated — a dataset change, deferred on purpose. Derived from golden_set.jsonl, which is where the underlying risk is recorded. Tracked as open work; see DATA_REVIEW_BACKLOG.md section 1.3.",
+      "regulatory_shaped_fields": ["question", "candidate_contexts[]", "source_ground_truth"],
+      "regulatory_shaped_fields_evidence": "12 of 70 rows name a regulation instrument; 35 carry a limit-shaped value."
     },
     {
       "path": "tests/evaluation/golden_set_v2/annotations.schema.json",
       "class": "SCHEMA",
       "purpose": "JSON Schema for the annotation lifecycle",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": []
     },
     {
       "path": "tests/evaluation/golden_set_v2/annotations_v1.jsonl",
       "class": "EMPTY_BY_DESIGN",
       "marker": "schema:tests/evaluation/golden_set_v2/annotations.schema.json",
       "purpose": "human annotation output; the annotation pass has not been performed",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "Committed empty by design and guarded as empty in CI, so there is no record to mark. Declared so the field is never silently absent on a non-empty annotation file.",
+      "regulatory_shaped_fields": []
     },
     {
       "path": "tests/evaluation/sample_golden_set.jsonl",
       "class": "SYNTHETIC",
       "marker": "sidecar:tests/evaluation/DATA_PROVENANCE.md",
       "purpose": "minimal sample subset for smoke runs",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "5-row subset of golden_set.jsonl, read only by tests/evaluation/test_ragas_eval.py against a mocked evaluator. Deferred with its parent so the smoke subset never diverges from the dataset it samples. Tracked as open work; see DATA_REVIEW_BACKLOG.md section 1.3.",
+      "regulatory_shaped_fields": ["question", "contexts[]", "answer", "ground_truth"],
+      "regulatory_shaped_fields_evidence": "1 of 5 rows names a regulation instrument and carries a limit-shaped value."
     },
     {
       "path": "tests/integration/testdata/queries.json",
       "class": "SYNTHETIC",
       "marker": "sidecar:tests/integration/testdata/DATA_PROVENANCE.md",
       "purpose": "integration-smoke query set (6 rows); includes the same fabricated regulatory questions as the golden set",
-      "carries_real_regulatory_claims": false
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "Declared for consistency with the rest of the evaluation fixtures, but the file quotes no regulation instrument and carries no limit-shaped value, so there is nothing to mark. The sidecar still documents the intent.",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "0 of 6 rows name a regulation instrument; 0 carry a limit-shaped value. The questions are phrased as regulatory questions but carry no asserted conclusion."
     }
   ]
 }

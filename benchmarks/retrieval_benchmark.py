@@ -47,6 +47,7 @@ from benchmarks.provenance import (
     now_utc,
     render_environment,
     sha256_json,
+    synthetic_data_provenance,
     write_gitignore_entry,
 )
 from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
@@ -233,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
     metadata = {
         "run_id": run_id,
         "timestamp_utc": now_utc(),
+        # The artifact quotes fixture `question` and `contexts` text. It has to
+        # declare itself before anyone reads a number out of it.
+        **synthetic_data_provenance(),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "dataset_path": str(dataset_path),

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from benchmarks.provenance import synthetic_data_provenance
+
 # Latency keys that are always reported, even when a stage did not run.
 LATENCY_STAGES = (
     "total_retrieval_ms",
@@ -164,6 +166,10 @@ class QueryBenchmarkResult:
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
+            # The row quotes the fixture's `question` verbatim, and the fixture
+            # names real regulation instruments next to invented limits. A
+            # forwarded line must carry that with it; the sidecar does not travel.
+            **synthetic_data_provenance(),
             "sample_id": self.sample_id,
             "question": self.question,
             "business_type": self.business_type,

@@ -24,6 +24,34 @@ from urllib.parse import urlsplit, urlunsplit
 
 UNAVAILABLE = "unavailable"
 
+#: Machine-readable class carried by every artifact that quotes evaluation
+#: fixture text. The fixtures name real regulation instruments next to invented
+#: limits (see ``DATA_PROVENANCE.md`` §4), so an artifact that leaves the
+#: repository carrying that text has to say what it is *inside* the artifact —
+#: a sidecar does not travel with a forwarded file.
+SYNTHETIC_DATA_CLASS = "SYNTHETIC"
+
+#: Short enough to survive a copy-paste, specific enough not to read as a
+#: disclaimer attached to something else. Deliberately bilingual in substance:
+#: the repository's readers and its data are both Chinese.
+SYNTHETIC_DATA_NOTICE = (
+    "SYNTHETIC EVALUATION DATA / 合成评测数据：其中的法规名称、标准号与限量均为虚构占位值，"
+    "不构成法规结论，不得用于配方开发、合规判定或成分限用判断。"
+    "Regulation names, standard numbers and limits here are fabricated fixtures; "
+    "they are not regulatory conclusions and must not be used for formulation, "
+    "compliance or ingredient-limit decisions."
+)
+
+
+def synthetic_data_provenance() -> dict[str, Any]:
+    """The disclosure block every artifact quoting fixture text must carry."""
+    return {
+        "data_class": SYNTHETIC_DATA_CLASS,
+        "carries_real_regulatory_claims": False,
+        "notice": SYNTHETIC_DATA_NOTICE,
+    }
+
+
 # Names only — the harness never reads secret values, and never writes them.
 CREDENTIAL_ENV_NAMES = (
     "OPENAI_API_KEY",

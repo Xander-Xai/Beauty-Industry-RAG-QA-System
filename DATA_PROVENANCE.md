@@ -165,6 +165,37 @@ harness 有一条真实形状的输入可跑。** 它们不是安全评估依据
 3. **只有在有可靠来源、合法使用依据和对应回归测试时**，才允许引入真实法规数据。
    三者缺一，就维持虚构标识。
 
+### 机器可读的披露状态（`DATA_MANIFEST.json`）
+
+声明不能只存在于散文里。每个资产在清单中都必须写明三件事：
+
+| 字段 | 含义 |
+|---|---|
+| `carries_real_regulatory_claims` | 该资产是否声称携带真实法规结论。当前全部为 `false`；翻成 `true` 需要来源 + 许可 + 回归测试，是一次可评审的变更而不是安静的一次编辑 |
+| `record_marker` | **一条记录脱离本文件后如何自证身份**。`inline:<field>` 表示该字段随每条记录传播；`file` 表示文件顶部一次声明覆盖全文件；`none` 表示记录不带自描述 |
+| `regulatory_shaped_fields` | 哪些键的值引用了真实法规标识或限量数值。构造脱敏视图、外部摘录或训练导出时，恰好应当把这几个键当作合成内容处理 |
+| `record_marker_absent_reason` | `record_marker: "none"` 时必填。**"没有修"必须是一句可追踪的理由，而不是一处省略** |
+
+`scripts/check_public_repository_boundary.py` 在 CI 中强制以上四项。
+
+### 产物侧的标识（比夹具本身更关键）
+
+sidecar 不随转发走，因此**携带夹具文本的产物**必须自带标识。
+`benchmarks/provenance.py::synthetic_data_provenance()` 是唯一来源，返回
+`data_class` / `carries_real_regulatory_claims` / `notice` 三项，当前写入：
+
+- `artifacts/benchmarks/<run-id>/metadata.json`
+- `artifacts/benchmarks/<run-id>/per_query_results.jsonl`（**每行**）
+- `data/eval/reports/ragas_report_*.json`（顶层；Markdown 报告在表头之前先输出该声明）
+
+这三个产物此前会把夹具的 `question`、`contexts`、参考答案原样写出且不带任何标识，
+是实际最可能被复制传播的路径。
+
+**仍然存在的缺口**：`HUMAN_ANNOTATION_BACKLOG.md`（由
+`scripts/validation/audit_annotations.py` 生成，最多带出 60 条 `question` 文本）尚未
+加标识；原始 JSONL 行本身也没有行内标识。前者见 backlog 第 1.4 节，后者是刻意
+推迟的数据集版本变更，理由与代价逐条列在那里。
+
 CI 中强制第 1、2 条的是 `check_public_repository_boundary.py` 的第 6 项检查
 （`fabricated_regulatory_authority_violations`）与
 `tests/test_mock_generator.py`；回归用例在

@@ -475,6 +475,59 @@ def _load_manifest(root: Path) -> dict:
     return json.loads((root / DATA_MANIFEST).read_text(encoding="utf-8"))
 
 
+#: Per-record disclosure values accepted in ``DATA_MANIFEST.json``. ``none`` is
+#: legal only together with a reason, which is what keeps "we did not fix this"
+#: a tracked, reviewable statement rather than an omission.
+RECORD_MARKER_VALUES = frozenset({"inline", "file", "none"})
+
+#: Every classified asset must say what it is, per record and in the manifest.
+_REQUIRED_ASSET_DECLARATIONS = ("carries_real_regulatory_claims", "record_marker", "regulatory_shaped_fields")
+
+
+def _asset_declaration_errors(asset_path: str, asset: dict, errors: list[str]) -> None:
+    """Return missing or contradictory disclosure declarations for one asset."""
+    for key in _REQUIRED_ASSET_DECLARATIONS:
+        if key not in asset:
+            errors.append(
+                f"{DATA_MANIFEST}: {asset_path} does not declare {key!r}; "
+                "a classified asset must state its regulatory claim status, how a record "
+                "identifies itself, and which keys read as authoritative out of context"
+            )
+
+    marker = asset.get("record_marker")
+    if marker is None:
+        return
+    if isinstance(marker, str):
+        head = marker.split(":", 1)[0]
+    else:
+        head = None
+    if head not in RECORD_MARKER_VALUES:
+        errors.append(
+            f"{DATA_MANIFEST}: {asset_path} has unrecognised record_marker {marker!r}; "
+            f"expected one of {sorted(RECORD_MARKER_VALUES)} (optionally 'inline:<field>')"
+        )
+        return
+    if head == "none" and not str(asset.get("record_marker_absent_reason") or "").strip():
+        errors.append(
+            f"{DATA_MANIFEST}: {asset_path} declares record_marker 'none' without "
+            "record_marker_absent_reason; a record that carries no self-description must "
+            "say why, or the gap cannot be tracked"
+        )
+    if head != "none" and asset.get("record_marker_absent_reason"):
+        errors.append(
+            f"{DATA_MANIFEST}: {asset_path} carries record_marker {head!r} and also a "
+            "record_marker_absent_reason; the two describe different states"
+        )
+
+    claims = asset.get("carries_real_regulatory_claims")
+    if claims is not None and not isinstance(claims, bool):
+        errors.append(f"{DATA_MANIFEST}: {asset_path} has non-boolean carries_real_regulatory_claims {claims!r}")
+
+    shaped = asset.get("regulatory_shaped_fields")
+    if shaped is not None and not isinstance(shaped, list):
+        errors.append(f"{DATA_MANIFEST}: {asset_path} has non-list regulatory_shaped_fields {shaped!r}")
+
+
 def manifest_errors(
     paths: Sequence[Path],
     root: Path | None = None,
@@ -482,9 +535,10 @@ def manifest_errors(
 ) -> list[str]:
     """Return drift between the manifest, the working tree and the statement.
 
-    Three directions are checked, because each one fails silently on its own:
+    Four directions are checked, because each one fails silently on its own:
     a classified path that no longer exists, a new data file nobody classified,
-    and a synthetic asset whose marker was dropped.
+    a synthetic asset whose marker was dropped, and an asset that never declared
+    how a separated record identifies itself.
     """
     base = root or ROOT
     errors: list[str] = []
@@ -511,6 +565,7 @@ def manifest_errors(
             errors.append(f"{DATA_MANIFEST}: {asset_path} uses undeclared class {asset_class!r}")
         if not (base / asset_path).is_file():
             errors.append(f"{DATA_MANIFEST}: {asset_path} is declared but missing from the working tree")
+        _asset_declaration_errors(asset_path, asset, errors)
 
         marker = asset.get("marker")
         if asset_class == "SYNTHETIC":

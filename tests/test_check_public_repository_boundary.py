@@ -360,8 +360,9 @@ def test_declared_but_missing_asset_is_an_error(tmp_path: Path) -> None:
 def _single_asset_manifest(tmp_path: Path, path: str, asset: dict | None = None) -> None:
     """Write a manifest declaring one asset plus a matching provenance line.
 
-    The default entry carries an inline marker so the fixture is otherwise
-    valid; tests that assert on a specific manifest error override it.
+    The default entry carries an inline marker and the full disclosure
+    declaration, so the fixture is otherwise valid; tests that assert on a
+    specific manifest error override it.
     """
     boundary_fixture(tmp_path)
     write(tmp_path, path, '{"_disclaimer": "SYNTHETIC DEMO DATA"}')
@@ -370,6 +371,9 @@ def _single_asset_manifest(tmp_path: Path, path: str, asset: dict | None = None)
         "class": "SYNTHETIC",
         "marker": "_disclaimer",
         "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+        "carries_real_regulatory_claims": False,
+        "record_marker": "file",
+        "regulatory_shaped_fields": [],
     }
     write(tmp_path, DATA_PROVENANCE_DOC, f"非关联声明 synthetic 审计\n{path}\n")
     write(
@@ -512,6 +516,157 @@ def test_unreadable_manifest_is_reported_not_raised(tmp_path: Path) -> None:
     errors = manifest_errors([], tmp_path)
 
     assert errors and "unreadable" in errors[0]
+
+
+# --- per-record disclosure declarations ------------------------------------
+#
+# The gap this closes is silence: an evaluation fixture whose records carry no
+# self-description looks identical to a fixture whose records were fixed. The
+# manifest must therefore state, per asset, how a separated record identifies
+# itself — and a `none` without a reason is the case the guard exists to catch.
+
+
+@pytest.mark.parametrize("key", ["carries_real_regulatory_claims", "record_marker", "regulatory_shaped_fields"])
+def test_missing_disclosure_declaration_is_an_error(tmp_path: Path, key: str) -> None:
+    asset = {
+        "path": offline_json,
+        "class": "SYNTHETIC",
+        "marker": "_disclaimer",
+        "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+        "carries_real_regulatory_claims": False,
+        "record_marker": "file",
+        "regulatory_shaped_fields": [],
+    }
+    del asset[key]
+    _single_asset_manifest(tmp_path, offline_json, asset)
+
+    errors = manifest_errors([], tmp_path)
+
+    assert any(f"does not declare {key!r}" in error for error in errors)
+
+
+def test_record_marker_none_without_a_reason_is_an_error(tmp_path: Path) -> None:
+    _single_asset_manifest(
+        tmp_path,
+        offline_json,
+        {
+            "path": offline_json,
+            "class": "SYNTHETIC",
+            "marker": "_disclaimer",
+            "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+            "carries_real_regulatory_claims": False,
+            "record_marker": "none",
+            "regulatory_shaped_fields": ["answer"],
+        },
+    )
+
+    errors = manifest_errors([], tmp_path)
+
+    assert any("record_marker_absent_reason" in error for error in errors)
+
+
+def test_record_marker_none_with_a_reason_is_accepted(tmp_path: Path) -> None:
+    """An explicit, reasoned gap is a tracked state, not a failure."""
+    _single_asset_manifest(
+        tmp_path,
+        offline_json,
+        {
+            "path": offline_json,
+            "class": "SYNTHETIC",
+            "marker": "_disclaimer",
+            "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+            "carries_real_regulatory_claims": False,
+            "record_marker": "none",
+            "record_marker_absent_reason": "loader drops unknown keys; change deferred",
+            "regulatory_shaped_fields": ["answer"],
+        },
+    )
+
+    assert manifest_errors([], tmp_path) == []
+
+
+def test_reason_without_record_marker_none_is_contradictory(tmp_path: Path) -> None:
+    _single_asset_manifest(
+        tmp_path,
+        offline_json,
+        {
+            "path": offline_json,
+            "class": "SYNTHETIC",
+            "marker": "_disclaimer",
+            "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+            "carries_real_regulatory_claims": False,
+            "record_marker": "inline:_data_class",
+            "record_marker_absent_reason": "left over from a previous declaration",
+            "regulatory_shaped_fields": [],
+        },
+    )
+
+    errors = manifest_errors([], tmp_path)
+
+    assert any("different states" in error for error in errors)
+
+
+def test_unknown_record_marker_value_is_an_error(tmp_path: Path) -> None:
+    _single_asset_manifest(
+        tmp_path,
+        offline_json,
+        {
+            "path": offline_json,
+            "class": "SYNTHETIC",
+            "marker": "_disclaimer",
+            "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+            "carries_real_regulatory_claims": False,
+            "record_marker": "sidecar-ish",
+            "regulatory_shaped_fields": [],
+        },
+    )
+
+    errors = manifest_errors([], tmp_path)
+
+    assert any("unrecognised record_marker" in error for error in errors)
+
+
+def test_inline_record_marker_with_field_is_accepted(tmp_path: Path) -> None:
+    _single_asset_manifest(
+        tmp_path,
+        offline_json,
+        {
+            "path": offline_json,
+            "class": "SYNTHETIC",
+            "marker": "_disclaimer",
+            "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+            "carries_real_regulatory_claims": False,
+            "record_marker": "inline:_data_class",
+            "regulatory_shaped_fields": ["answer"],
+        },
+    )
+
+    assert manifest_errors([], tmp_path) == []
+
+
+def test_committed_manifest_declares_a_disclosure_state_for_every_asset() -> None:
+    """Every asset in the committed manifest states how a record identifies itself."""
+    manifest = json.loads((ROOT_SCRIPT().parents[1] / DATA_MANIFEST).read_text(encoding="utf-8"))
+
+    for asset in manifest["assets"]:
+        assert "record_marker" in asset, asset["path"]
+        assert "carries_real_regulatory_claims" in asset, asset["path"]
+        assert "regulatory_shaped_fields" in asset, asset["path"]
+        if asset["record_marker"] == "none":
+            assert asset.get("record_marker_absent_reason"), asset["path"]
+
+
+def test_committed_manifest_does_not_overclaim_fixture_content() -> None:
+    """No committed fixture may assert that it carries real regulatory claims.
+
+    That flag is the machine-readable half of the provenance statement. If it
+    ever flips to true the asset needs a source, a licence and a regression test,
+    which is a reviewable event rather than a quiet edit.
+    """
+    manifest = json.loads((ROOT_SCRIPT().parents[1] / DATA_MANIFEST).read_text(encoding="utf-8"))
+
+    offenders = [a["path"] for a in manifest["assets"] if a.get("carries_real_regulatory_claims")]
+    assert offenders == []
 
 
 # --------------------------------------------------------------------------
