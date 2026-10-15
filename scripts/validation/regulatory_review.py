@@ -53,6 +53,7 @@ import re
 import sys
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +175,23 @@ def _is_filled(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _is_iso_date(value: Any) -> bool:
+    """True only for a real calendar date in ``YYYY-MM-DD`` form.
+
+    A regex alone accepts ``2026-99-99``, which would let an "auditable"
+    verification carry a date that never existed. The audit trail is the one
+    thing a reviewer cannot reconstruct after the fact, so it is worth parsing
+    rather than pattern-matching.
+    """
+    if not isinstance(value, str) or not _DATE_RE.match(value):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def load_checklist(path: str | Path = DEFAULT_CHECKLIST) -> dict[str, Any]:
     """Read the checklist file, raising :class:`ReviewError` when unreadable."""
     try:
@@ -224,8 +242,8 @@ def validate_entry(entry: Mapping[str, Any]) -> list[str]:
         errors.append(f"{entry_id}: is_explicit_synthetic_placeholder must be true, false or null")
 
     reviewed_at = entry.get("reviewed_at")
-    if reviewed_at is not None and not (_is_filled(reviewed_at) and _DATE_RE.match(str(reviewed_at))):
-        errors.append(f"{entry_id}: reviewed_at must be null or an ISO YYYY-MM-DD date")
+    if reviewed_at is not None and not _is_iso_date(reviewed_at):
+        errors.append(f"{entry_id}: reviewed_at must be null or a real ISO YYYY-MM-DD date")
 
     if status == REVIEW_STATUS_VERIFIED:
         for field in REQUIRED_FOR_VERIFICATION:
@@ -236,8 +254,18 @@ def validate_entry(entry: Mapping[str, Any]) -> list[str]:
                 f"{entry_id}: a declared synthetic placeholder cannot be {REVIEW_STATUS_VERIFIED}; "
                 "verifying fabricated text would restate it as real regulatory content"
             )
+        # The checklist is a hand-editable JSON file, so validation has to
+        # enforce the same licence rule as promote_to_verified(). Otherwise the
+        # CI gate advertises a restriction that a manual edit walks straight
+        # past, and a verified claim with an unestablished redistribution licence
+        # passes the very check meant to prevent it.
         if license_state == LICENSE_NO_REDISTRIBUTION:
             errors.append(f"{entry_id}: status {REVIEW_STATUS_VERIFIED} conflicts with license NO_REDISTRIBUTION")
+        if license_state == LICENSE_UNKNOWN:
+            errors.append(
+                f"{entry_id}: status {REVIEW_STATUS_VERIFIED} requires an established license; "
+                f"{LICENSE_UNKNOWN} means the redistribution terms were never resolved"
+            )
 
     if status in UNREVIEWED_STATUSES and _is_filled(entry.get("reviewer")):
         errors.append(
@@ -338,8 +366,8 @@ def promote_to_verified(
         raise ReviewError(f"{entry_id}: license {license!r} is not one of {list(LICENSE_STATES)}")
     if not _is_filled(reviewer):
         raise ReviewError("a verification requires a named reviewer")
-    if not _DATE_RE.match(str(reviewed_at or "")):
-        raise ReviewError("a verification requires an ISO reviewed_at date")
+    if not _DATE_RE.match(str(reviewed_at or "")) or not _is_iso_date(reviewed_at):
+        raise ReviewError("a verification requires a real ISO reviewed_at date")
     if not _is_filled(conclusion):
         raise ReviewError("a verification requires the reviewer's own conclusion")
     if not _is_filled(authoritative_source):

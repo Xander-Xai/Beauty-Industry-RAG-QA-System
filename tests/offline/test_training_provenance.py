@@ -20,6 +20,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from benchmarks.provenance import SYNTHETIC_DATA_CLASS, UNCLASSIFIED_DATA_CLASS
 from offline.training_provenance import (
     TRAINING_PROVENANCE_FILENAME,
@@ -70,6 +72,36 @@ def test_unregistered_training_data_is_never_called_compliance_capable(tmp_path:
 
     assert any("未经登记" in restriction for restriction in restrictions)
     assert not any("合规判定" in restriction for restriction in restrictions)
+
+
+def test_a_registered_non_synthetic_class_is_not_called_unregistered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A future licensed corpus must not produce a self-contradicting card.
+
+    Registered-but-not-SYNTHETIC is the case that was previously collapsed into
+    the synthetic branch: it received the synthetic compliance ban, and its
+    empty manifest notice was backfilled with "this path is not registered",
+    which is plainly false about a path that *is* in the manifest.
+    """
+    monkeypatch.setattr(
+        "offline.training_provenance.dataset_data_provenance",
+        lambda path: {
+            "data_class": "LICENSED_CORPUS",
+            "carries_real_regulatory_claims": None,
+            "notice": "",  # exactly what the manifest lookup returns for this class
+        },
+    )
+
+    block = _provenance()
+
+    assert block["training_input"]["data_class"] == "LICENSED_CORPUS"
+    assert block["training_input"]["notice"] == ""
+    assert block["training_input"]["resolution"] == "resolved from DATA_MANIFEST.json"
+    # Neither the synthetic ban nor the unconfirmed warning, because neither applies.
+    joined = " ".join(block["usage_restrictions"])
+    assert "配方合规判断" not in joined
+    assert "未经登记" not in joined
+    # The capability disclaimer is unconditional.
+    assert block["capability_evidence"]["regulatory_correctness_evaluated"] is False
 
 
 def test_missing_training_file_reports_no_digest_instead_of_a_fake_one() -> None:

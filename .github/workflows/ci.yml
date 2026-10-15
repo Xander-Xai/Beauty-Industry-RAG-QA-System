@@ -285,10 +285,13 @@ jobs:
             --backlog tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md
           git diff --exit-code -- tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md
 
-      # Every regulatory assertion in the fixtures carries an explicit review
-      # state, and no assertion may claim to be verified against an authoritative
-      # source without a named reviewer, a date and a versioned citation. A
-      # synthetic placeholder can never be promoted at all.
+      # Schema and transition rules for every regulatory assertion in the
+      # fixtures: no entry may claim to be verified against an authoritative
+      # source without a named reviewer, a real calendar date, a conclusion, a
+      # versioned citation and an established licence, and a synthetic
+      # placeholder can never be promoted at all. Coverage — that no claim
+      # family has silently lost its row — is pinned separately in
+      # tests/validation/test_regulatory_review_checklist.py.
       - name: Regulatory assertion review checklist
         run: python scripts/validation/regulatory_review.py --check
 

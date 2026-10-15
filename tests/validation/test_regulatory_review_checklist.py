@@ -49,6 +49,35 @@ from scripts.validation.regulatory_review import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST_PATH = REPO_ROOT / "docs" / "finalization" / "REGULATORY_REVIEW_CHECKLIST.json"
 
+#: The claim families this repository's fixtures assert, pinned here rather than
+#: in the checklist file.
+#:
+#: `--check` validates schema and transitions; it cannot tell that a *whole row*
+#: was deleted, because a checklist with fifteen entries and a checklist with
+#: fourteen both look internally consistent. Deleting a row is precisely how a
+#: claim would silently lose its review state, so coverage is asserted against
+#: an inventory held in reviewed code — a file anyone can edit cannot guard its
+#: own completeness.
+EXPECTED_CLAIM_FAMILIES = frozenset(
+    {
+        "heavy-metal-limits",
+        "niacinamide-max-concentration",
+        "retinol-leave-on-rinse-off",
+        "salicylic-acid-leave-on",
+        "mit-preservative-restriction",
+        "arbutin-kojic-azelaic",
+        "aha-concentration-range",
+        "filing-and-registration-regime",
+        "efficacy-claim-evidence-types",
+        "label-and-inci-thresholds",
+        "multiplier-efficacy-claims",
+        "packaging-food-contact-standard",
+        "training-adapter-regulatory-capability",
+        "answer-eval-citation-refusal",
+        "annotation-workpackage-candidate-contexts",
+    }
+)
+
 AUTHORITATIVE_SOURCE = "《化妆品安全技术规范》(示例来源，仅用于测试)"
 SOURCE_VERSION = "2015 版"
 
@@ -126,6 +155,19 @@ def test_committed_checklist_covers_both_evaluation_and_training_fixtures() -> N
 
     assert "offline/finetune_data.json" in files
     assert "tests/evaluation/golden_set.jsonl" in files
+
+
+def test_no_claim_family_lost_its_review_state() -> None:
+    """Coverage is asserted against reviewed code, not against the editable file.
+
+    A row deleted from the JSON would still leave `--check` passing, which is
+    exactly how a regulatory claim loses its review state without anyone
+    deciding anything.
+    """
+    payload = load_checklist(CHECKLIST_PATH)
+    committed = {entry["id"] for entry in payload["entries"]}
+
+    assert committed == EXPECTED_CLAIM_FAMILIES
 
 
 # --- promotion requires a human, a date and a versioned source --------------
@@ -296,6 +338,60 @@ def test_a_rejected_entry_cannot_be_re_entered() -> None:
             source_version=SOURCE_VERSION,
             license=LICENSE_PUBLIC,
         )
+
+
+# --- a hand-edited file must meet the same bar as the promotion function -----
+
+
+def test_a_hand_written_verified_entry_with_an_unknown_licence_is_rejected() -> None:
+    """The JSON is directly editable, so validation must repeat the licence rule.
+
+    Otherwise the CI gate advertises a restriction that a manual edit walks
+    straight past, and a "verified" claim whose redistribution terms were never
+    resolved passes the check meant to prevent exactly that.
+    """
+    entry = _entry(
+        status=REVIEW_STATUS_VERIFIED,
+        reviewer="r",
+        reviewed_at="2026-10-15",
+        conclusion="c",
+        authoritative_source=AUTHORITATIVE_SOURCE,
+        source_version=SOURCE_VERSION,
+        license=LICENSE_UNKNOWN,
+    )
+
+    errors = validate_entry(entry)
+
+    assert any("established license" in error for error in errors)
+
+
+def test_a_hand_written_verified_entry_needs_a_real_calendar_date() -> None:
+    """A regex would accept 2026-99-99; the audit trail must not be fictional."""
+    entry = _entry(
+        status=REVIEW_STATUS_VERIFIED,
+        reviewer="r",
+        reviewed_at="2026-99-99",
+        conclusion="c",
+        authoritative_source=AUTHORITATIVE_SOURCE,
+        source_version=SOURCE_VERSION,
+        license=LICENSE_PUBLIC,
+    )
+
+    errors = validate_entry(entry)
+
+    assert any("reviewed_at" in error for error in errors)
+
+
+def test_promotion_refuses_an_impossible_date() -> None:
+    with pytest.raises(ReviewError, match="reviewed_at"):
+        _promote(reviewed_at="2026-02-30")
+
+
+def test_promotion_accepts_a_real_leap_day() -> None:
+    """The date check must not be so strict it rejects a genuine date."""
+    promoted = _promote(reviewed_at="2024-02-29")
+
+    assert promoted["reviewed_at"] == "2024-02-29"
 
 
 # --- rendering --------------------------------------------------------------

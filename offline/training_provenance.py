@@ -49,6 +49,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from benchmarks.provenance import (  # noqa: E402
+    SYNTHETIC_DATA_CLASS,
     UNCLASSIFIED_DATA_CLASS,
     UNCLASSIFIED_DATA_NOTICE,
     dataset_data_provenance,
@@ -126,12 +127,38 @@ def build_training_provenance(
     file, so an unrecognised path resolves to ``UNCLASSIFIED`` and is described
     as unconfirmed: this module never defaults unknown input to synthetic, and
     never defaults anything to compliance-capable.
+
+    Three cases are kept apart rather than collapsed into "synthetic or not",
+    because the registered-but-not-synthetic case is the one that would otherwise
+    produce a self-contradicting card:
+
+    * ``SYNTHETIC`` — carries the synthetic notice and the compliance ban.
+    * ``UNCLASSIFIED`` — carries the "unconfirmed" notice. Applied *only* here:
+      a path that IS registered must never be described as unregistered.
+    * any other registered class (a licensed corpus, ``RUNTIME_EVIDENCE``, …) —
+      no invented notice at all. Its class and claim status are reported as
+      declared, and the compliance ban is withheld because this module has no
+      basis to assert that its content is fabricated. The capability-claim
+      disclaimer still applies.
     """
     resolved = Path(data_path)
     provenance = dataset_data_provenance(data_path)
     data_class = str(provenance["data_class"])
     unclassified = data_class == UNCLASSIFIED_DATA_CLASS
-    notice = provenance["notice"] or UNCLASSIFIED_DATA_NOTICE
+    synthetic = data_class == SYNTHETIC_DATA_CLASS and provenance["carries_real_regulatory_claims"] is False
+
+    if unclassified:
+        notice: str = UNCLASSIFIED_DATA_NOTICE
+        restrictions: list[str] = [UNCLASSIFIED_TRAINING_USAGE_RESTRICTIONS]
+    elif synthetic:
+        notice = str(provenance["notice"])
+        restrictions = [SYNTHETIC_TRAINING_USAGE_RESTRICTIONS]
+    else:
+        # A registered class with no manifest notice. Say what is declared and
+        # stop: inventing either a synthetic warning or a licence reassurance
+        # here would be a claim about a corpus this module did not inspect.
+        notice = ""
+        restrictions = []
 
     return {
         "schema_version": TRAINING_PROVENANCE_SCHEMA_VERSION,
@@ -171,7 +198,7 @@ def build_training_provenance(
             "statement": _NEVER_CLAIMED,
         },
         "usage_restrictions": [
-            UNCLASSIFIED_TRAINING_USAGE_RESTRICTIONS if unclassified else SYNTHETIC_TRAINING_USAGE_RESTRICTIONS,
+            *restrictions,
             ("训练执行成功不代表法规能力已获证明 / A successful training run is not proof of regulatory capability."),
         ],
     }
