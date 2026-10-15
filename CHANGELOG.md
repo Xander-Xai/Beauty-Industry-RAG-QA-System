@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Every artifact that quotes dataset text now identifies itself, by resolving
+  the dataset rather than assuming it.** The fixtures name real regulation
+  instruments next to invented limits, so a sidecar does not travel with a file
+  that gets forwarded. The benchmark and RAGAS writers — the paths a reader is
+  actually most likely to copy out of — carried the dataset `question`,
+  `contexts` and reference answer with no marker at all.
+  - `benchmarks/provenance.py::dataset_data_provenance(path)` is the single
+    source, and it looks the path up in `DATA_MANIFEST.json`. `--dataset` accepts
+    any JSONL, so a hardcoded `SYNTHETIC` claim would be a false statement the
+    moment someone points the benchmark at a licensed corpus — and labelling real
+    data as fabricated is worse than saying nothing.
+  - A declared synthetic fixture gets the full notice; any other declared class
+    gets its own; **a path that is not in the manifest gets
+    `data_class: UNCLASSIFIED` and `carries_real_regulatory_claims: null`**, with
+    no notice. An unverifiable path receives no claim in either direction.
+  - Written into `artifacts/benchmarks/<run>/metadata.json`, into **every row** of
+    `per_query_results.jsonl`, into `report.md` (first line below the title), and
+    into `ragas_report_*.json` plus its Markdown rendering above the header block.
+  - `to_json_dict` and `write_per_query_jsonl` take the provenance as a required
+    argument rather than defaulting it, so a caller cannot emit a row without
+    stating the dataset it was scored against.
+  - `EvaluationReport` defaults to `UNCLASSIFIED` / `None`, not `SYNTHETIC` /
+    `False`: a report written before these fields existed has no provenance, and
+    defaulting it would turn an absence into an affirmative claim about a dataset
+    this process never inspected.
+  - Purely additive: no scoring field, metric key or report column changes, so an
+    artifact written before this change still compares against one written after.
+- **Per-asset disclosure declarations in `DATA_MANIFEST.json`**, enforced by
+  `check_public_repository_boundary.py`: `carries_real_regulatory_claims`,
+  `record_marker` (`inline:<field>` / `file` / `none`),
+  `regulatory_shaped_fields`, and `record_marker_absent_reason` — required
+  whenever `record_marker` is `none`. The point is that "we did not fix this"
+  becomes a tracked, reviewable statement instead of an omission; an asset with
+  no self-describing record now fails CI unless it says why.
+  - `regulatory_shaped_fields` records, per asset, which keys quote a regulation
+    instrument or a limit-shaped concentration, with the measured counts in
+    `regulatory_shaped_fields_evidence`. A tool building a redacted view or an
+    external excerpt can act on it without parsing content.
+  - An `inline:<field>` marker is **verified against the records**: the guard
+    reads the asset and fails if the named field is absent from any record, or if
+    the file's shape is not a record list. A declared marker that is not in the
+    records would let CI report a self-describing asset while every forwarded
+    record still reads as authoritative.
+- `tests/benchmark/test_synthetic_disclosure.py` — reads the real writers rather
+  than re-describing them, because the failure being guarded is a writer that
+  quietly stopped emitting the field.
+
 ### Changed
 
 - **Synthetic fixture generator no longer emits real regulatory identifiers.**
@@ -27,7 +76,7 @@
     contract, including a scan of the generated output for real instruments and
     registry numbers.
 
-### Added
+### Guarded
 
 - **Boundary guard check 6 — fabricated regulatory authority**
   (`fabricated_regulatory_authority_violations` in
@@ -65,6 +114,23 @@
   every commit / PR / issue reference are unchanged. No Git object, ref, tag or
   branch was touched; the metadata audit is recorded in
   `docs/finalization/DATA_REVIEW_BACKLOG.md` §3.
+- **Measured inventory of the mixed-form fixtures**, per file and per field, with
+  the counts of rows quoting a regulation instrument and rows carrying a
+  limit-shaped value. Recorded in `docs/finalization/DATA_REVIEW_BACKLOG.md` §1.2
+  and mirrored as `regulatory_shaped_fields` in `DATA_MANIFEST.json`, so the
+  claims are checkable rather than descriptive.
+- **The dataset change that would close the remaining gap is analysed but not
+  performed.** Adding a per-record `_data_class` to the JSONL fixtures is a
+  dataset version change, not a metadata edit: `golden_set.jsonl` has a pinned
+  sha256 recorded in a test and in `docs/validation/rag-eval-readiness.md` as a
+  measured 0/301 contract result, `annotation_workpackage_v1.jsonl` is
+  byte-compared to its generator output, and `sample_id` is derived from the line
+  index. The audit of every parser, indexer and evaluator found none of them
+  rejects an unknown top-level key, so a purely additive field is safe — and
+  `question` / `contexts` must not be touched, because those are the retrieval
+  query and the retrieval ground truth. Full blast radius and the recommended
+  minimal change are in `docs/finalization/DATA_REVIEW_BACKLOG.md` §1.4, awaiting
+  a decision. No regulatory value was replaced with an unverified number.
 
 ### Added
 

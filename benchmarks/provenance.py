@@ -11,6 +11,7 @@ Two rules govern this module:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import re
@@ -23,6 +24,88 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 UNAVAILABLE = "unavailable"
+
+#: Class value used when a dataset's provenance is not known. Never a default
+#: for an *assertion*: an artifact whose dataset could not be classified says so
+#: rather than claiming either way. ``DATA_MANIFEST.json`` uses the same word
+#: as its ``default_class``.
+UNCLASSIFIED_DATA_CLASS = "UNCLASSIFIED"
+
+#: Machine-readable class carried by every artifact that quotes evaluation
+#: fixture text. The fixtures name real regulation instruments next to invented
+#: limits (see ``DATA_PROVENANCE.md`` §4), so an artifact that leaves the
+#: repository carrying that text has to say what it is *inside* the artifact —
+#: a sidecar does not travel with a forwarded file.
+SYNTHETIC_DATA_CLASS = "SYNTHETIC"
+
+#: Short enough to survive a copy-paste, specific enough not to read as a
+#: disclaimer attached to something else. Deliberately bilingual in substance:
+#: the repository's readers and its data are both Chinese.
+SYNTHETIC_DATA_NOTICE = (
+    "SYNTHETIC EVALUATION DATA / 合成评测数据：其中的法规名称、标准号与限量均为虚构占位值，"
+    "不构成法规结论，不得用于配方开发、合规判定或成分限用判断。"
+    "Regulation names, standard numbers and limits here are fabricated fixtures; "
+    "they are not regulatory conclusions and must not be used for formulation, "
+    "compliance or ingredient-limit decisions."
+)
+
+_DATA_MANIFEST = "DATA_MANIFEST.json"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _repo_relative(path: Path) -> str:
+    """Path relative to the repository root, or ``""`` when it is outside it."""
+    try:
+        return str(path.resolve().relative_to(_REPO_ROOT)).replace("\\", "/")
+    except ValueError:
+        return ""
+
+
+def declared_data_class(path: str | Path) -> tuple[str, bool | None]:
+    """Look a dataset up in ``DATA_MANIFEST.json``.
+
+    Returns ``(class, carries_real_regulatory_claims)``. A path that is not a
+    declared asset — an operator's own corpus, a licensed dataset, a file
+    outside the repository — resolves to ``(UNCLASSIFIED, None)``. That is the
+    whole point: the benchmark's ``--dataset`` flag accepts any JSONL, so a
+    fixed ``SYNTHETIC`` claim would be a false statement the moment someone
+    points it at real data.
+    """
+    manifest_path = _REPO_ROOT / _DATA_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return UNCLASSIFIED_DATA_CLASS, None
+    relative = _repo_relative(Path(path))
+    candidates = {relative, str(path)}
+    for asset in manifest.get("assets") or []:
+        if asset.get("path") in candidates:
+            claims = asset.get("carries_real_regulatory_claims")
+            return str(asset.get("class") or UNCLASSIFIED_DATA_CLASS), claims if isinstance(claims, bool) else None
+    return UNCLASSIFIED_DATA_CLASS, None
+
+
+def dataset_data_provenance(path: str | Path) -> dict[str, Any]:
+    """The disclosure block for an artifact built from *this* dataset.
+
+    Synthetic fixtures get the full notice. Anything else — a licensed corpus,
+    an operator's own file, a path outside the repository — is reported as
+    unclassified with an unknown claim status, because a benchmark harness that
+    labels real data as fabricated is worse than one that says nothing.
+    """
+    data_class, claims = declared_data_class(path)
+    if data_class == SYNTHETIC_DATA_CLASS and claims is False:
+        return {
+            "data_class": SYNTHETIC_DATA_CLASS,
+            "carries_real_regulatory_claims": False,
+            "notice": SYNTHETIC_DATA_NOTICE,
+        }
+    return {
+        "data_class": data_class,
+        "carries_real_regulatory_claims": claims,
+        "notice": "",
+    }
+
 
 # Names only — the harness never reads secret values, and never writes them.
 CREDENTIAL_ENV_NAMES = (

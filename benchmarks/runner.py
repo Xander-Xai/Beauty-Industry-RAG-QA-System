@@ -258,8 +258,14 @@ def summarize_run(
     }
 
 
-def write_per_query_jsonl(path: Path, runs: Sequence[ConfigRun]) -> int:
-    """Write per-query results for executed configurations only."""
+def write_per_query_jsonl(path: Path, runs: Sequence[ConfigRun], data_provenance: dict) -> int:
+    """Write per-query results for executed configurations only.
+
+    ``data_provenance`` is the caller's resolved statement of what dataset these
+    rows were scored against. It is required because each row quotes that
+    dataset's ``question`` verbatim and a sidecar does not travel with a
+    forwarded row; see ``benchmarks.provenance.dataset_data_provenance``.
+    """
     import json
 
     written = 0
@@ -269,7 +275,7 @@ def write_per_query_jsonl(path: Path, runs: Sequence[ConfigRun]) -> int:
             if not run.executed:
                 continue
             for result in run.results:
-                handle.write(json.dumps(result.to_json_dict(), ensure_ascii=False) + "\n")
+                handle.write(json.dumps(result.to_json_dict(data_provenance), ensure_ascii=False) + "\n")
                 written += 1
     return written
 

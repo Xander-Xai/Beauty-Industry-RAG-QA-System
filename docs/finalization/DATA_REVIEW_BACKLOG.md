@@ -55,26 +55,142 @@
 （字段 `inci_name` 因改名为 `act_code` 而同步更新，结构键 `ingredient_id` /
 `safety_info` / `role_mask` 未变）。
 
-### 1.2 本轮未处置：声明齐备但仍保留混合形态的四个来源
+### 1.2 逐文件实测清单（混合形态到底在哪里）
+
+下表由脚本对每个跟踪数据文件逐行统计得出，统计口径与
+`DATA_MANIFEST.json` 的 `regulatory_shaped_fields` 一致：*"引用真实法规标识"*
+指出现 `《…》` 或 `化妆品安全技术规范` / `化妆品监督管理条例` 等法规名；
+*"含限量数值"*指出现 `≤X%` / `不超过 X%` / `X mg/kg` / `X ppm` 形态。
+
+| 文件 | 记录数 | 引用真实法规 | 含限量 | 两者兼有 | 带法规形态的字段 |
+|---|---:|---:|---:|---:|---|
+| `tests/evaluation/golden_set.jsonl` | 301 | 110 | 116 | 51 | `question` `contexts[]` `answer` `ground_truth` |
+| `tests/evaluation/golden_set_expanded.jsonl` | 301 | 104 | 111 | — | 同上 |
+| `tests/evaluation/sample_golden_set.jsonl` | 5 | 1 | 1 | 1 | 同上 |
+| `tests/evaluation/golden_set_v2/annotation_workpackage_v1.jsonl` | 70 | 12 | 35 | — | `question` `candidate_contexts[]` `source_ground_truth` |
+| `offline/finetune_data.json` | 40 | 12 | 12 | 3 | `output` |
+| `tests/evaluation/answer_eval_set.jsonl` | 12 | 2 | 0 | 0 | `question` `expected_behavior` `notes` |
+| `tests/integration/testdata/queries.json` | 6 | 0 | 0 | 0 | 无 |
+| `docs/demo/synthetic_corpus.json` | 2 文档 | 0 | 0 | 0 | 无（已改用 `DEMO-*` 虚构系列） |
+| `tests/evaluation/golden_set_v2/annotations_v1.jsonl` | 0 | 0 | 0 | 0 | 无（空文件） |
+
+黄金集内部分布（按字段出现次数，非互斥）：`contexts[]` 91 条法规名 / 182 条限量、
+`ground_truth` 21 / 115、`answer` 14 / 78、`question` 10 / 5。
+
+**关键约束**：`question` 是检索查询，`contexts` 是检索 ground truth。给这两个字段
+加行内标识会直接进入检索文本，改变评测难度——这正是任务要求第 6 条禁止的。
+因此行内标识只能是**新增的顶层字段**，不能改写任何现有文本字段。
+
+### 1.3 是否存在真实使用者误读的实际路径
+
+**存在一条，且不是夹具本身。** 逐条核查了所有读取方（`api/`、`app.py`、`core/`、
+`retrieval/`、`offline/`、`frontend/src/` 对这些文件名的引用数为 **0**）：
+
+| 路径 | 是否会把夹具文本送出仓库 | 判定 |
+|---|---|---|
+| FastAPI / 前端 / 知识库加载 | 否。`offline/source_discovery.py` 只从运维方指定的 source root 发现语料，从不扫描 `tests/` 或 `offline/` | 安全 |
+| Demo（`docs/demo/mock_api.py` → 截图） | 是，但 `synthetic_corpus.json` 已是全虚构标识 + 行内 `_disclaimer`，且 `require_disclosures()` 在缺失标记时**直接中止渲染** | 已处置 |
+| 检索基准产物 `artifacts/benchmarks/<run>/per_query_results.jsonl` | **是**。逐行写出夹具 `question` 原文 | **本轮已加标识**（每行；标识由 `--dataset` 在清单中的类别推导） |
+| 检索基准产物 `metadata.json` | **是**。`corpus.correspondence.missing_examples` 最多带 3 × 120 字黄金段原文 | **本轮已加标识** |
+| RAGAS 报告 `data/eval/reports/ragas_report_*.json` | **是**。`per_sample_scores` 带 `question` / `reference_answer` / `retrieved_contexts` | **本轮已加标识**（顶层；数据集不在清单中时为 `UNCLASSIFIED` 且不写声明） |
+| `HUMAN_ANNOTATION_BACKLOG.md`（`audit_annotations.py` 生成） | 是，最多 60 条 `question` 截断文本 | 未处置，见 1.4 |
+| QLoRA 训练导出 | 是，训练文本直接由 `instruction/input/output` 模板化 | 未处置，见 1.4 |
+
+也就是说：**sidecar 不随文件走，而 benchmark / RAGAS 的产物才是真正会被转发的那份
+文件**。本轮把这三个产物的写出路径补上了机器可读标识（`data_class` /
+`carries_real_regulatory_claims` / `notice`），风险因此从"整批产物无标识"降到
+"原始夹具行无标识"。
+
+标识**由数据集推导**（`benchmarks/provenance.py::dataset_data_provenance()`，查
+`DATA_MANIFEST.json`），而不是写死。原因：`--dataset` 与 RAGAS 的 `dataset_path`
+接受任意 JSONL。写死 `SYNTHETIC` 会在指向运维方自有语料或经授权真实语料时变成一句
+假话——而"把真实数据标成合成"比不标更危险。清单里查不到的路径得到
+`data_class: UNCLASSIFIED` 与 `carries_real_regulatory_claims: null`，且**不写声明**：
+它拿不到任何断言，包括那句听起来让人放心的"这不是真实法规数据"。
+
+同理，`EvaluationReport` 的默认值是 `UNCLASSIFIED` / `None` 而不是 `SYNTHETIC` /
+`False`。否则读入一个在本变更之前写出的旧报告时，默认值会把"没有来源信息"追认成
+"合成且无真实法规主张"——一句关于本进程从未检查过的数据集的肯定陈述。
+
+### 1.4 本轮刻意未处置：给原始夹具行加标识（数据集变更）
+
+给 JSONL 每行加 `"_data_class": "SYNTHETIC"` 是最直接的解法，但它是**数据集版本
+变更**，不是元数据补充。本轮先做影响分析，是否执行留给下一步决定。已确认的约束：
+
+**解析器/索引器/评测器审计结果——没有任何一个会因为新增顶层字段而失败。**
+
+| 读取方 | 行为 |
+|---|---|
+| `benchmarks/dataset.py::load_queries` | 只取具名字段，`raw` 原样保留；无多余键拒绝 |
+| `benchmarks/golden_set_contract.py` | 只对**缺失/非法必填字段** fail-closed，从不拒绝未知键 |
+| `tests/evaluation/ragas_eval.py::format_for_ragas` | 直接下标取 4 个字段，未知键不进 RAGAS 输入 |
+| `tests/evaluation/answer_eval.py::AnswerEvalSample.from_dict` | 具名字段进 frozen dataclass，未知键丢弃 |
+| `offline/finetune_qlora.py::load_training_data` | 只取 `instruction/input/output` |
+| `scripts/validation/build_annotation_workpackage.py` | 只复制具名键 |
+
+**真正会被改动的东西（必须一起做，否则就是回归）**：
+
+1. `golden_set.jsonl` 的 sha256 `36cdaf44…c7df` 被
+   `tests/validation/test_golden_set_evidence_docs.py:72` **硬钉**，且同值记录在
+   `docs/validation/rag-eval-readiness.md:31,45`（一次已测量的 0/301 契约结果）。
+   改字节必须同时更新测试与该文档，否则 CI 失败。
+2. `annotation_workpackage_v1.jsonl` 与生成器输出**逐字节相等**
+   （`tests/test_annotation_workpackage.py:98`）。标识必须加在生成器里并重新生成，
+   否则两者立即漂移。
+3. `sample_id` 由**行序号**派生（`benchmarks/dataset.py:183,193`）。新增字段不改变
+   行数与顺序，因此 `sample_id` 与 `sample_ids_hash` 不变——这是选择"新增顶层字段"
+   而非"插入行"或"重排"的关键理由。多个测试按固定 id 取样
+   （`test_review_regressions.py:1158` 的 `["0000","0002"]` 等），重排会直接破坏它们。
+4. `benchmarks/corpus.py::_sample_hash` 对**排序后的 `contexts` 文本**取哈希。
+   只要不改 `contexts` 内容，`sample_hash` 不变。
+5. `tests/evaluation/ragas_eval.py::sample_id_for` 对 `question` 取哈希。改
+   `question` 会改 `sample_id`；不改则不变。
+6. 行数 301 在 `tests/integration/test_retrieval_benchmark_blocking.py:100` 与
+   `tests/validation/test_golden_set_evidence_docs.py:71,77` 被断言。
+
+**因此推荐的最小数据集变更（若决定执行）**：
+
+- 只给 6 个 SYNTHETIC 评测资产加**一个**顶层字段，例如
+  `"_data_class": "SYNTHETIC"`，值取自 `DATA_MANIFEST.json` 的 `class`；
+- 同时把 `record_marker` 从 `none` 改为 `inline:_data_class`，删除
+  `record_marker_absent_reason`；
+- `golden_set.jsonl` 按第 1–6 条同步更新 sha、重新测量并重写
+  `docs/validation/rag-eval-readiness.md` 的 0/301 段落，并在该文档写明
+  "数据集版本已升，旧指标与新指标不可直接比较"；
+- `annotation_workpackage_v1.jsonl` 由生成器重新产出并提交；
+- 不引入任何未经权威来源核对的法规数值，不改写任何现有文本字段。
+
+**同时要承认这条方案的上限**：行内标识只随**整条 JSON 记录**传播。用 `jq .contexts`
+抽字段、或把 `contexts` 数组粘进聊天框的人，带走的仍然是未标注文本。字段级标识
+无法解决这个问题；要解决只能改写文本本身，而那会改变被测信号。本轮不制造这种
+不可信数据。
+
+### 1.5 本轮未处置的原始理由（保留）
 
 `offline/finetune_data.json`、`tests/evaluation/golden_set*.jsonl`、
 `tests/evaluation/sample_golden_set.jsonl`、`tests/integration/testdata/queries.json`
-**保持原样**。理由与代价：
+本轮**保持原样**。理由与代价：
 
 - 这四类文件的法规措辞本身就是**被测信号**：检索评测要测的就是"问题里的法规实体
   与语料里的法规条款能否对上"。把实体名换成 `DEMO-*` 会改变检索难度分布，而当前
   评测尚未产出可发布结果；
 - 修正数值需要权威来源，反而会把一份"明确标注为虚构"的夹具变成"部分可信"的混合体，
   风险更高；
-- 这四处已有 sidecar `DATA_PROVENANCE.md` 逐文件声明，且已登记在
-  `DATA_MANIFEST.json`，读者在打开文件的同目录就能看到。
+- 每一条资产现在都在 `DATA_MANIFEST.json` 里显式声明 `record_marker: "none"` 与
+  `record_marker_absent_reason`，由 CI 强制。这个缺口从此是**可追踪的已知状态**，
+  而不是沉默——这正是它之前的问题所在。
 
 **残余风险（必须承认，不等于已解决）**：sidecar 声明需要读者打开旁边的说明文件。
 一份被单独转发、粘贴或检索命中的 `golden_set.jsonl` 行，脱离 sidecar 后仍然读起来
-像真实法规结论。本轮**没有**解决这一点，也没有把它记为已解决。
+像真实法规结论。1.3 的产物侧标识把最常见的转发路径堵住了，但**原始夹具行的这个
+缺口本轮没有关闭**，也没有把它记为已解决。
 
 **待人工完成的核验**：
 
+- [ ] 决定是否执行 1.4 的数据集版本变更（这是工程决定，不需要法规资质）。
+- [ ] 处置 `scripts/validation/audit_annotations.py` 生成的
+      `HUMAN_ANNOTATION_BACKLOG.md`：该文件会带出最多 60 条 `question` 文本，
+      目前无标识（与 1.4 同类问题，但面向的是标注工作流而非评测）。
 - [ ] 在引入真实语料前，由具备化妆品法规资质的人逐条审阅下表中的断言，给出"可公开引用
       的公开来源"或"必须删除"的结论。
 - [ ] 确认引用源名称的准确写法（例如标准全称、现行版本号、发布机构）。

@@ -96,6 +96,16 @@ def build_report(
     """Render the human-readable run report."""
     lines: list[str] = ["# Benchmark Run", ""]
 
+    # Above the provenance block: this report quotes the dataset's questions and
+    # the ground-truth passages it matched. The notice is empty when the dataset
+    # is not a declared synthetic fixture, which is the honest answer for an
+    # operator's own corpus or a licensed one.
+    notice = metadata.get("notice") or ""
+    if notice:
+        lines += [f"> ⚠️ {notice}", ""]
+    lines.append(f"- `data_class`: {_fmt(metadata.get('data_class'))}")
+    lines.append("")
+
     lines += ["## Provenance", ""]
     for key in (
         "run_id",

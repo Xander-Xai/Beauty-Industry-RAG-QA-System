@@ -162,8 +162,16 @@ class QueryBenchmarkResult:
     ndcg_at_10: float | None
     latency_ms: dict[str, float | None]
 
-    def to_json_dict(self) -> dict[str, Any]:
+    def to_json_dict(self, data_provenance: dict[str, Any]) -> dict[str, Any]:
+        """Render one scored row.
+
+        ``data_provenance`` is required rather than defaulted: the row quotes the
+        dataset's ``question`` verbatim, so whoever writes it must state that
+        dataset's class. Defaulting it here would be exactly the false claim
+        this disclosure exists to prevent — ``--dataset`` accepts any JSONL.
+        """
         return {
+            **data_provenance,
             "sample_id": self.sample_id,
             "question": self.question,
             "business_type": self.business_type,
