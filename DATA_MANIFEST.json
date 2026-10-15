@@ -6,7 +6,8 @@
     "SYNTHETIC": "Hand-constructed fixture. Contains no real third-party asset. Regulatory text inside it is fictional placeholder content and is not authoritative — see DATA_PROVENANCE.md section 4.",
     "EMPTY_BY_DESIGN": "Committed empty on purpose. Writing synthetic or model-generated records into it is a CI failure.",
     "SCHEMA": "Structural definition only. Carries no business data.",
-    "RUNTIME_EVIDENCE": "Recorded observation of a real dependency on a single local host. Contains no corpus content, logs or credentials."
+    "RUNTIME_EVIDENCE": "Recorded observation of a real dependency on a single local host. Contains no corpus content, logs or credentials.",
+    "GOVERNANCE": "Review-tracker metadata. Records the state of outstanding human verification work. Asserts no regulatory conclusion of its own; every entry names what still has to be decided."
   },
   "disclosure_vocabulary": {
     "record_marker": "How a single record identifies itself when separated from this manifest. 'inline:<field>' means the named field travels inside every record, and CI verifies the field is present in every one. 'file' means one declaration at the top of the file covers the whole file. 'none' means a record carries no self-description, and record_marker_absent_reason explains why.",
@@ -29,6 +30,15 @@
       "carries_real_regulatory_claims": false,
       "record_marker": "file",
       "regulatory_shaped_fields": []
+    },
+    {
+      "path": "docs/finalization/REGULATORY_REVIEW_CHECKLIST.json",
+      "class": "GOVERNANCE",
+      "marker": "schema:scripts/validation/regulatory_review.py",
+      "purpose": "per-assertion review state for the regulatory-shaped fixture text; 15 entries, none verified",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": ["review_question", "locator"]
     },
     {
       "path": "docs/demo/synthetic_corpus.json",

@@ -93,8 +93,8 @@
 | 检索基准产物 `artifacts/benchmarks/<run>/per_query_results.jsonl` | **是**。逐行写出夹具 `question` 原文 | **本轮已加标识**（每行；标识由 `--dataset` 在清单中的类别推导） |
 | 检索基准产物 `metadata.json` | **是**。`corpus.correspondence.missing_examples` 最多带 3 × 120 字黄金段原文 | **本轮已加标识** |
 | RAGAS 报告 `data/eval/reports/ragas_report_*.json` | **是**。`per_sample_scores` 带 `question` / `reference_answer` / `retrieved_contexts` | **本轮已加标识**（顶层；数据集不在清单中时为 `UNCLASSIFIED` 且不写声明） |
-| `HUMAN_ANNOTATION_BACKLOG.md`（`audit_annotations.py` 生成） | 是，最多 60 条 `question` 截断文本 | 未处置，见 1.4 |
-| QLoRA 训练导出 | 是，训练文本直接由 `instruction/input/output` 模板化 | 未处置，见 1.4 |
+| `HUMAN_ANNOTATION_BACKLOG.md`（`audit_annotations.py` 生成） | 是，最多 60 条 `question` 截断文本 | **已处置**：文件自带类别与合成声明，见 1.6 |
+| QLoRA 训练导出 | 是，训练文本直接由 `instruction/input/output` 模板化 | **已处置**：输出目录写出 `DATA_PROVENANCE.json`，见 1.7 |
 
 也就是说：**sidecar 不随文件走，而 benchmark / RAGAS 的产物才是真正会被转发的那份
 文件**。本轮把这三个产物的写出路径补上了机器可读标识（`data_class` /
@@ -188,11 +188,10 @@
 **待人工完成的核验**：
 
 - [ ] 决定是否执行 1.4 的数据集版本变更（这是工程决定，不需要法规资质）。
-- [ ] 处置 `scripts/validation/audit_annotations.py` 生成的
-      `HUMAN_ANNOTATION_BACKLOG.md`：该文件会带出最多 60 条 `question` 文本，
-      目前无标识（与 1.4 同类问题，但面向的是标注工作流而非评测）。
+- [x] ~~处置 `HUMAN_ANNOTATION_BACKLOG.md`~~ —— 已完成，见 1.6。
 - [ ] 在引入真实语料前，由具备化妆品法规资质的人逐条审阅下表中的断言，给出"可公开引用
-      的公开来源"或"必须删除"的结论。
+      的公开来源"或"必须删除"的结论。逐条状态见
+      [`REGULATORY_REVIEW_CHECKLIST.json`](REGULATORY_REVIEW_CHECKLIST.json)（见 1.8）。
 - [ ] 确认引用源名称的准确写法（例如标准全称、现行版本号、发布机构）。
 - [ ] 确认哪些类别（防腐剂、防晒剂、禁限用组分）在目标司法辖区内确实存在限量表，
       避免夹具暗示不存在的机制。
@@ -221,6 +220,107 @@
 
 > `data/mock_generator.py` 此前是上表中"铅 / 汞 / 砷 限量"一行的另一处来源，
 > 已按 1.1 改为 `DEMO-TRACE-*` 虚构示踪物，不再使用真实重金属符号。
+
+### 1.6 已处置：人工标注任务单的披露边界
+
+**问题**：`audit_annotations.py` 生成的 `HUMAN_ANNOTATION_BACKLOG.md` 会把黄金集的
+`question` 原文截断为前 60 字、最多输出 60 条到 Markdown 表格，而该文件此前**不含
+任何数据来源声明**。标注工作单恰恰是最可能被单独转发的那份文件——它要发给标注人、
+贴进工单、发给审阅方——而转发它的人不会同时转发旁边的 sidecar。
+
+**已执行的处置**（只加披露，不改夹具）：
+
+- `build_backlog()` 通过 `benchmarks/provenance.py::dataset_data_provenance()` 按
+  `--source-dataset` 的**实际路径**解析类别，与 benchmark / RAGAS 产物共用同一套
+  查表机制，不新增第二套分类；
+- 披露块写在**标题之后、问题表格之前**：数据类别、`carries_real_regulatory_claims`、
+  源数据集路径与其 SHA-256、样本数，以及合成声明全文（中英双语）；
+- 源数据集**不在清单中**时得到 `UNCLASSIFIED` 与 `UNCLASSIFIED_DATA_NOTICE`：
+  既不断言其为合成，也不断言其为真实法规资料，只声明"来源未经登记"；
+- `sample_id`、`question` 摘要、排序、待标注数量与人工审阅状态的计算逻辑**一字未改**，
+  也不自动补全任何标注结果，不把待审数据标记为 `REVIEWED`。
+
+**边界**：这让 Markdown 单独传播时读者能看到数据性质，但**不改变**原始 JSONL 行没有
+行内标识这一事实——那一项仍是 1.4 描述的数据集版本变更，未在本次执行。
+
+回归用例见 `tests/validation/test_annotation_backlog_disclosure.py`，覆盖已登记合成
+数据、未登记数据、仓库外路径、空标注集，以及"只保留文件前半部分"的独立传播场景。
+
+### 1.7 已处置：QLoRA 训练输出的披露
+
+**问题**：训练输入 `offline/finetune_data.json` 的合成性质写在
+`offline/DATA_PROVENANCE.md`（sidecar），但**输出侧没有**。训练完成后输出目录里只有
+adapter 权重和一份 `README.md` 模型卡，模型卡记录了训练数据路径、LoRA 超参与
+base model，却完全没有说明该路径的内容是虚构占位值。adapter 是真正会离开本机的
+东西：它被复制进 `models/`、由 vLLM 加载、挂到服务栈上，而训练夹具不会跟着走。
+
+**已执行的处置**（新增 `offline/training_provenance.py`，**不改动训练语料**）：
+
+- 训练完成后在输出目录写出机器可读的 `DATA_PROVENANCE.json`，并把同一份内容渲染进
+  模型卡 `README.md`；
+- 类别与 SHA-256 同样由 `dataset_data_provenance()` 推导，不写死 `SYNTHETIC`；
+  `--data_path` 指向未登记语料时得到 `UNCLASSIFIED`，**既不默认合成，也不宣称合规**；
+- 三件事分开记录，不混为一谈：
+  | 字段 | 含义 |
+  |---|---|
+  | `training_input` | 训练语料是什么：类别、SHA-256、记录数、解析方式 |
+  | `training_run` | 本次脚本做了什么：base model、量化、LoRA 与训练超参。自述，未经独立复现 |
+  | `capability_evidence` | 有人**证明过**什么。恒为 `regulatory_correctness_evaluated: false`，`benchmark` 与 `reviewed_by` 恒为 `null` |
+- 合成训练数据额外标注：训练产物**不得**用于真实化妆品配方合规判断、成分限用判定或
+  对外法规答复（中英双语）。
+
+**边界**：本项**没有**产出真实 adapter 权重，也**没有**重新训练任何模型——仓库中
+不存在可验证的训练产物。因此验证仅限于代码级：`build_training_provenance()` 与模型卡
+渲染的单元测试，以及用 mock 参数驱动 `_write_model_card()` 的端到端路径。
+`capability_evidence` 的语义边界（"训练收敛 ≠ 法规正确"）目前是**声明**而非
+**测量**：要把它变成测量结果，需要一次真实的、与法规正确性相关的评测，本轮未执行。
+
+回归用例见 `tests/offline/test_training_provenance.py`。
+
+### 1.8 已建立：法规断言专业复核工作流
+
+**问题**：上方的"待核验断言清单"是一张按主题分组的散文表。它没有逐条状态、没有
+审核人、没有审核日期、没有对应的来源与版本，因此"部分已核验"与"完全未核验"看起来
+一样，也无法被二次审核者追溯。更关键的是：**没有任何机制阻止状态被改写**。字段
+全都可编辑的追踪器没有"哪种编辑是正当的"这条规则，于是 `VERIFIED` 可以被任何
+工具敲进去——包括一个从未读过法规的工具。
+
+**已执行的处置**：`scripts/validation/regulatory_review.py` +
+[`REGULATORY_REVIEW_CHECKLIST.json`](REGULATORY_REVIEW_CHECKLIST.json)。
+
+每条记录包含：数据文件与记录定位、法规形态字段、断言类型、是否为明确的合成占位值、
+独立传播与误读风险、待核验的权威来源与版本、审核人 / 审核日期 / 审核结论、再分发
+许可、最终状态。
+
+五种状态按**允许的动作**而非按听起来的好坏排序：
+
+| 状态 | 含义 | 能否由 AI / 脚本写入 |
+|---|---|---|
+| `PENDING_REVIEW` | 尚无具备资质者判断。新条目的唯一初始状态 | 是（创建时即为待审） |
+| `VERIFIED_WITH_SOURCE` | 已对照**可引用、带版本**的权威来源核实 | **否**，见下 |
+| `SYNTHETIC_ONLY` | 已确认为刻意的虚构占位值。终态 | 是（对夹具而言即正确终态） |
+| `REJECTED` | 已确认错误并撤出使用 | 否 |
+| `BLOCKED_BY_LICENSE` | 因许可未确认而不得使用或再分发 | 否 |
+
+`VERIFIED_WITH_SOURCE` 只能经 `promote_to_verified()` 到达，该函数拒绝所有捷径：
+缺少具名审核人 / 日期 / 结论 / 来源 / **版本** 任一项即报错；许可为
+`NO_REDISTRIBUTION` 时拒绝；**已声明为合成占位值的条目一律拒绝**——核实一段刻意
+编造的文本等于把它改写成真实法规内容，与本任务第 6 条边界直接冲突。
+
+当前 15 条全部处于 `SYNTHETIC_ONLY`，**无一条 `VERIFIED_WITH_SOURCE`**。
+这不是进度，而是准确状态：这些断言本就是虚构夹具，正确终态就是"仅作合成"，
+而不是等待核实。
+
+> 一处与旧表的**事实更正**：`GB 4806` 包装材料断言只出现在
+> `offline/finetune_data.json`（第 36 条记录的 `output`），检索类夹具中出现次数为 0。
+> 旧表把它与黄金集并列，此处按实测更正。
+
+**边界**：引入真实法规资料前必须先确认来源与再分发许可，**不默认复制受许可限制的
+标准全文**。`license` 默认为 `UNKNOWN`，且按阻塞项处理——公开发布不等于允许再分发。
+这部分工作见第 2 节，仍未开始。
+
+校验命令：`python3 scripts/validation/regulatory_review.py --check`
+（已接入 CI）。回归用例见 `tests/validation/test_regulatory_review_checklist.py`。
 
 ---
 

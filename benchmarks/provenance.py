@@ -49,6 +49,23 @@ SYNTHETIC_DATA_NOTICE = (
     "compliance or ingredient-limit decisions."
 )
 
+#: The statement an artifact may make about a dataset whose provenance nobody
+#: established. It deliberately asserts *nothing* about the content — not that it
+#: is fabricated, and not that it is real. Both of those would be claims about a
+#: file this process never inspected, and the reassuring one is the more
+#: dangerous of the two: "this is not real regulation" read next to genuine
+#: licensed text is itself a false statement. Renderers must therefore place it
+#: where an unknown is expected, never as a substitute for
+#: :data:`SYNTHETIC_DATA_NOTICE`.
+UNCLASSIFIED_DATA_NOTICE = (
+    "UNCLASSIFIED DATA PROVENANCE / 数据来源未登记：该路径未在 DATA_MANIFEST.json 中登记，"
+    "数据性质未经确认。不得将其断言为合成数据，也不得将其断言为已核验的真实法规资料；"
+    "在完成来源登记与专业核验之前，只能作为来源未知的样本处理。"
+    "This path is not registered in DATA_MANIFEST.json, so its provenance is unconfirmed. "
+    "It may not be called synthetic, and it may not be called verified regulatory material; "
+    "until the source is registered and reviewed, treat it as unknown."
+)
+
 _DATA_MANIFEST = "DATA_MANIFEST.json"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
