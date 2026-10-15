@@ -26,6 +26,7 @@ from scripts.check_public_repository_boundary import (
     career_content_violations,
     career_path_violations,
     data_declaration_errors,
+    fabricated_regulatory_authority_violations,
     list_datasets,
     main,
     manifest_errors,
@@ -514,7 +515,74 @@ def test_unreadable_manifest_is_reported_not_raised(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 7. Markdown references
+# 7. Fabricated regulatory authority
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '{"code": "GB/T", "limit": "≤10mg/kg"}',
+        'LIMIT = "≤2%"  # per 化妆品安全技术规范',
+        'name = "NMPA", limit = "不超过1%"',
+        'cas = "98-92-0", limit = "≤5%"',
+        'standard = "QB/T 1684", limit = "≤0.01%"',
+        'standard = "化妆品监督管理条例", limit = "不超过 20%"',
+        'value = "GB 4806.7 适用于包装，≤10 mg/kg"',
+    ],
+)
+def test_fabricated_regulatory_authority_is_rejected(tmp_path: Path, line: str) -> None:
+    write(tmp_path, "data/mock_generator.py", f"{line}\n")
+
+    errors = fabricated_regulatory_authority_violations([tmp_path / "data/mock_generator.py"], tmp_path)
+
+    assert errors, line
+    assert "fabricated regulatory authority" in errors[0]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # The fictional series the generator uses today.
+        '{"code": "DEMO-STD", "limit": "≤10 mg/kg（虚构示例值）"}',
+        '{"cas_number": "000-00-0", "limit": "≤0.90%（w/w）"}',
+        'CAS_PLACEHOLDER = "000-00-0"',
+        # Naming an instrument while disclosing that the value is synthetic is
+        # what a deprecation notice and a compliance checklist have to do.
+        'LEGACY = "GB/T 1234 旧标准限量 ≤5%（已停用，仅为合成示例）"',
+        "# placeholder until the licence question is settled — 化妆品安全技术规范 ≤2%",
+    ],
+)
+def test_technical_and_disclosed_lines_are_not_flagged(tmp_path: Path, line: str) -> None:
+    write(tmp_path, "data/mock_generator.py", f"{line}\n")
+
+    assert fabricated_regulatory_authority_violations([tmp_path / "data/mock_generator.py"], tmp_path) == []
+
+
+def test_authority_check_is_scoped_to_synthetic_sources(tmp_path: Path) -> None:
+    """Prose and application code may name real instruments; generators may not.
+
+    A repository-wide version of this rule would fire on the provenance
+    documents themselves, which have to name the families of content they
+    declare fabricated.
+    """
+    prose = write(tmp_path, "docs/provenance.md", "《化妆品安全技术规范》限量 ≤10 mg/kg 为虚构占位值\n")
+    app = write(tmp_path, "core/pipeline.py", 'LIMIT = "≤10mg/kg"  # per 化妆品安全技术规范\n')
+
+    paths = [prose, app]
+
+    assert fabricated_regulatory_authority_violations(paths, tmp_path) == []
+
+
+def test_committed_mock_generator_is_clean() -> None:
+    """The generator in the tree must not reintroduce the hybrid it was fixed for."""
+    found = fabricated_regulatory_authority_violations([ROOT_SCRIPT().parents[1] / "data/mock_generator.py"])
+
+    assert found == []
+
+
+# --------------------------------------------------------------------------
+# 8. Markdown references
 # --------------------------------------------------------------------------
 
 
@@ -539,7 +607,7 @@ def test_external_links_are_not_resolved(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 8. Orchestration and CLI
+# 9. Orchestration and CLI
 # --------------------------------------------------------------------------
 
 
