@@ -625,24 +625,95 @@ _LIMIT_VALUE_PATTERN = re.compile(
 )
 
 #: A line that discloses itself as synthetic is allowed to name an instrument —
-#: that is what a deprecation notice or a compliance checklist has to do.
+#: that is what a deprecation notice, a migration note or a compliance checklist
+#: has to do. The marker must be prose; see :func:`_discloses_synthetic`.
 _SYNTHETIC_DISCLOSURE_PATTERN = re.compile(
-    r"(?i)虚构|合成|placeholder|synthetic|not\s+authoritative|非真实|示例值|杜撰"
+    r"(?i)虚构|合成|placeholder|synthetic|fictional|fabricated|not\s+authoritative|非真实|示例值|杜撰"
 )
+
+#: A ``"key": "value"`` pair. Used only to decide what counts as *disclosure*:
+#: a marker carried as a data field is metadata the generator emits, so it
+#: travels with the record into every output file and cannot be the thing that
+#: vouches for it. Masking these before the disclosure search is what keeps
+#: ``{"code": "NMPA", "limit": "≤1%", "data_class": "SYNTHETIC"}`` an error
+#: while leaving a prose sentence that explains why the line is safe alone.
+_QUOTED_PAIR = re.compile(r"""["'][^"'\n]*["']\s*:\s*["'][^"'\n]*["']""")
+
+#: Upper bound on how many lines one record may span. Brace counting is a
+#: heuristic and a brace inside a multi-line string can skew it, so the window
+#: is capped: a mis-segmentation can then miss a finding, but it cannot merge
+#: two unrelated tables into one oversized record.
+_MAX_RECORD_LINES = 40
 
 
 def _is_synthetic_source(name: str) -> bool:
     return any(pattern.search(name) for pattern in _SYNTHETIC_SOURCE_PATTERNS)
 
 
-def fabricated_regulatory_authority_violations(paths: Iterable[Path], root: Path | None = None) -> list[str]:
-    """Return synthetic sources that attach an authority to a fabricated value.
+def _records(text: str) -> list[tuple[int, str]]:
+    """Split a source file into records and return ``(first_lineno, text)``.
 
-    The shape being caught is the hybrid the provenance statement rules out: a
-    real instrument, registry or standard number sitting next to a made-up
-    limit. Correcting such a line to a real value would require a source and a
-    licence, so the fix is to invent an identifier that resolves to nothing —
-    which is what ``data/mock_generator.py`` now does.
+    A record is a brace-delimited block (a dict literal, a JSON object) or, when
+    the file has no braces to speak of, a single line. Pairing an authority with
+    a limit has to survive the ordinary Python formatting where the two live on
+    separate lines of the same dict, or the check is bypassed by running a
+    formatter.
+    """
+    records: list[tuple[int, str]] = []
+    buffer: list[str] = []
+    start = 1
+    depth = 0
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if not buffer:
+            start = lineno
+        buffer.append(line)
+        depth += line.count("{") - line.count("}")
+        if depth <= 0 or len(buffer) >= _MAX_RECORD_LINES:
+            records.append((start, "\n".join(buffer)))
+            buffer = []
+            depth = 0
+    if buffer:
+        records.append((start, "\n".join(buffer)))
+    return records
+
+
+def _has_authority(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _REGULATORY_AUTHORITY_PATTERNS)
+
+
+def _discloses_synthetic(record: str) -> bool:
+    """True when prose *outside* the record's data values says it is synthetic."""
+    prose = _QUOTED_PAIR.sub('""', record)
+    return bool(_SYNTHETIC_DISCLOSURE_PATTERN.search(prose))
+
+
+def fabricated_regulatory_authority_violations(paths: Iterable[Path], root: Path | None = None) -> list[str]:
+    """Return synthetic sources that name a real authority, or pair one with a limit.
+
+    Two independent findings, both about the same hybrid the provenance
+    statement rules out — a real instrument, registry or standard number
+    attached to something invented:
+
+    1. **Real identifier.** A record in a generator names ``GB/T``, ``NMPA`` or
+       a real CAS number. On its own this is not yet a false conclusion, but a
+       generator is the one place where such a string exists *only* to be
+       emitted, and there is no version of it that is worth keeping.
+    2. **Fabricated authority.** The same record also carries a limit-shaped
+       value, which is the hybrid itself: a reader who resolves the identifier
+       has no way to tell the limit did not come with it.
+
+    Both findings are suppressed by prose disclosure, and only by prose: see
+    :func:`_discloses_synthetic`. Three escapes are closed deliberately, because
+    each one would make the rule cosmetic:
+
+    - The pair is matched across a whole record, not one physical line, so
+      splitting ``"code"`` and ``"limit"`` onto separate lines does not pass.
+    - A disclosure marker carried as a data field (``"data_class": "SYNTHETIC"``)
+      is metadata the generator emits into the output next to the offending
+      value, so it cannot vouch for it. A comment saying why a row is safe can,
+      because a comment does not travel into the generated file.
+    - Prose disclosure still works, because a deprecation notice and a migration
+      checklist have to be able to name the instrument they are retiring.
     """
     violations: list[str] = []
     for path in paths:
@@ -654,17 +725,20 @@ def fabricated_regulatory_authority_violations(paths: Iterable[Path], root: Path
         text = read_text(path)
         if text is None:
             continue
-        for lineno, line in enumerate(text.splitlines(), start=1):
-            if len(line) > 2000:
+        for lineno, record in _records(text):
+            if not _has_authority(record):
                 continue
-            if _SYNTHETIC_DISCLOSURE_PATTERN.search(line):
+            if _discloses_synthetic(record):
                 continue
-            if not any(pattern.search(line) for pattern in _REGULATORY_AUTHORITY_PATTERNS):
-                continue
-            if _LIMIT_VALUE_PATTERN.search(line):
+            if _LIMIT_VALUE_PATTERN.search(record):
                 violations.append(
                     f"{name}:{lineno}: fabricated regulatory authority "
                     "(real instrument or registry number paired with a limit-shaped value)"
+                )
+            else:
+                violations.append(
+                    f"{name}:{lineno}: real regulatory identifier in a synthetic source "
+                    "(a generator emits every string it holds; use an invented identifier)"
                 )
     return violations
 

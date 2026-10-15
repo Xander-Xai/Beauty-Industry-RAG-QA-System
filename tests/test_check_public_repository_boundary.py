@@ -529,6 +529,10 @@ def test_unreadable_manifest_is_reported_not_raised(tmp_path: Path) -> None:
         'standard = "QB/T 1684", limit = "≤0.01%"',
         'standard = "化妆品监督管理条例", limit = "不超过 20%"',
         'value = "GB 4806.7 适用于包装，≤10 mg/kg"',
+        # No limit anywhere near it: a real standard prefix in a generator is
+        # still a real standard prefix, because a generator exists to emit it.
+        '{"code": "GB/T", "name": "国家标准", "count": 50}',
+        'LAW_ID = "NMPA-2023-014"',
     ],
 )
 def test_fabricated_regulatory_authority_is_rejected(tmp_path: Path, line: str) -> None:
@@ -537,24 +541,71 @@ def test_fabricated_regulatory_authority_is_rejected(tmp_path: Path, line: str) 
     errors = fabricated_regulatory_authority_violations([tmp_path / "data/mock_generator.py"], tmp_path)
 
     assert errors, line
-    assert "fabricated regulatory authority" in errors[0]
+    assert "fabricated regulatory authority" in errors[0] or "real regulatory identifier" in errors[0]
+
+
+def test_prose_disclosure_still_suppresses_the_identifier_finding(tmp_path: Path) -> None:
+    """A deprecation notice has to be able to name what it retires."""
+    write(
+        tmp_path,
+        "data/mock_generator.py",
+        '# 旧的 GB/T 前缀已停用；此处为虚构示例，仅说明迁移路径。\nRETIRED_PREFIX = "DEMO-STD"\n',
+    )
+
+    assert fabricated_regulatory_authority_violations([tmp_path / "data/mock_generator.py"], tmp_path) == []
+
+
+def test_split_across_lines_of_one_record_is_rejected(tmp_path: Path) -> None:
+    """Running a formatter must not be a way through the check.
+
+    A dict literal that puts the identifier and the limit on separate lines is
+    the ordinary way to write one, so the pair is correlated across the record
+    rather than across a physical line.
+    """
+    write(
+        tmp_path,
+        "data/mock_generator.py",
+        'TABLE = [\n    {\n        "code": "NMPA",\n        "limit": "≤1%",\n    },\n]\n',
+    )
+
+    errors = fabricated_regulatory_authority_violations([tmp_path / "data/mock_generator.py"], tmp_path)
+
+    assert errors
+
+
+def test_data_field_metadata_cannot_disclose_the_record(tmp_path: Path) -> None:
+    """``"data_class": "SYNTHETIC"`` is emitted, not an explanation.
+
+    A marker carried as a data field travels into the generated output next to
+    the offending value, so it cannot be what vouches for that value. Only
+    prose outside the record's data values counts as disclosure.
+    """
+    write(
+        tmp_path,
+        "data/mock_generator.py",
+        'record = {"code": "NMPA", "limit": "≤1%", "data_class": "SYNTHETIC",\n          "disclaimer": "虚构数据"}\n',
+    )
+
+    errors = fabricated_regulatory_authority_violations([tmp_path / "data/mock_generator.py"], tmp_path)
+
+    assert any("fabricated regulatory authority" in error for error in errors)
 
 
 @pytest.mark.parametrize(
-    "line",
+    "source",
     [
         # The fictional series the generator uses today.
         '{"code": "DEMO-STD", "limit": "≤10 mg/kg（虚构示例值）"}',
         '{"cas_number": "000-00-0", "limit": "≤0.90%（w/w）"}',
         'CAS_PLACEHOLDER = "000-00-0"',
-        # Naming an instrument while disclosing that the value is synthetic is
-        # what a deprecation notice and a compliance checklist have to do.
-        'LEGACY = "GB/T 1234 旧标准限量 ≤5%（已停用，仅为合成示例）"',
-        "# placeholder until the licence question is settled — 化妆品安全技术规范 ≤2%",
+        # Prose explaining why a retired instrument is named is allowed to name
+        # it. The explanation is a comment, not a field the generator emits.
+        '# 旧标准（GB/T 1234）曾规定 ≤5%；已停用，此处仅为虚构示例的历史记录。\nLEGACY_LIMIT = "0"\n',
+        "# placeholder until the licence question is settled — 化妆品安全技术规范 ≤2%\nLICENSE_PENDING = True\n",
     ],
 )
-def test_technical_and_disclosed_lines_are_not_flagged(tmp_path: Path, line: str) -> None:
-    write(tmp_path, "data/mock_generator.py", f"{line}\n")
+def test_technical_and_disclosed_lines_are_not_flagged(tmp_path: Path, source: str) -> None:
+    write(tmp_path, "data/mock_generator.py", f"{source}\n")
 
     assert fabricated_regulatory_authority_violations([tmp_path / "data/mock_generator.py"], tmp_path) == []
 

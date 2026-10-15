@@ -8,22 +8,22 @@ regulation, a real CAS entry or a real product.
 
 Why the identifiers are fictional rather than plausible
 ------------------------------------------------------
-An earlier revision of this generator emitted ``GB/T <n>-<year>``, ``QB/T``,
-``NMPA`` and ``HFJB`` headings, real INCI names with real CAS numbers, and
-fictional heavy-metal limits written in the layout of a real technical
-standard. Each generated ``.txt`` was therefore individually mistakable for a
-genuine regulatory conclusion, which is precisely the hybrid the data-provenance
-statement has to rule out. Replacing the values with authoritative ones would
-have required a source and a licence; inventing more of them would have widened
-the problem. The identifiers are now drawn from one invented series
-(``DEMO-STD-*`` / ``DEMO-ACT-*`` / ``000-00-0``) that is also used by
-``docs/demo/synthetic_corpus.json``, and every generated file opens with
-:data:`SYNTHETIC_DATA_NOTICE`.
+An earlier revision emitted fictional ``GB/T <n>-<year>`` and ``QB/T`` headings,
+none of them a real instrument, together with real INCI names carrying real CAS
+numbers and fictional heavy-metal limits written in the layout of a real
+technical standard. Each generated ``.txt`` was therefore individually mistakable
+for a genuine regulatory conclusion, which is precisely the hybrid the
+data-provenance statement has to rule out. Replacing the values with
+authoritative ones would have required a source and a licence; inventing more
+of them would have widened the problem. The identifiers are now drawn from one
+invented series (``DEMO-STD-*`` / ``DEMO-ACT-*`` / ``000-00-0``) that is also
+used by ``docs/demo/synthetic_corpus.json``, and every generated file opens
+with :data:`SYNTHETIC_DATA_NOTICE`.
 
 Boundary and CI
 ---------------
 ``scripts/check_public_repository_boundary.py`` fails CI if a real regulatory
-identifier is ever paired with a limit-shaped number in this module, and
+identifier appears in this module at all, and
 ``tests/test_mock_generator.py`` fixes the disclosure contract on the output.
 See ``DATA_PROVENANCE.md`` §4.
 """

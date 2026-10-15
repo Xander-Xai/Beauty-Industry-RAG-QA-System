@@ -43,10 +43,13 @@
   `formulas.jsonl` 每条记录带 `data_class: "SYNTHETIC"` 与
   `carries_real_regulatory_claims: false`；输出目录旁写出 `DATA_PROVENANCE.md`；
 - `scripts/check_public_repository_boundary.py` 新增第 6 项检查
-  `fabricated_regulatory_authority_violations`，在 CI 中拒绝"真实法规标识 +
-  限量数值"的组合（作用域限定为生成器类源码，见脚本内注释）；
+  `fabricated_regulatory_authority_violations`，在 CI 中拒绝合成生成器源码中出现
+  真实法规标识（单条即报错），以及"真实法规标识 + 限量数值"的组合（作用域限定为
+  生成器类源码，见脚本内注释）；
+- 披露只在**散文**（注释）里成立。以数据字段形式携带的标记（`"data_class":
+  "SYNTHETIC"`）是被生成器写进产物的元数据，不能为同一条记录背书；
 - `tests/test_mock_generator.py` 固定披露契约，`tests/test_check_public_repository_boundary.py`
-  固定该检查的正例与反例。
+  固定该检查的正例与反例，包含"跨行拆分"与"元数据伪装披露"两种绕过。
 
 工程有效性未受影响：`tests/test_mock_generator.py` 原有 4 项结构断言全部保留并通过
 （字段 `inci_name` 因改名为 `act_code` 而同步更新，结构键 `ingredient_id` /

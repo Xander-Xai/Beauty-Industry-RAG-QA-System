@@ -31,12 +31,20 @@
 
 - **Boundary guard check 6 — fabricated regulatory authority**
   (`fabricated_regulatory_authority_violations` in
-  `scripts/check_public_repository_boundary.py`). It rejects a synthetic source
-  that pairs a real regulatory instrument or registry number with a limit-shaped
-  value, on a line that does not disclose itself as synthetic. Scoped to
-  generator sources on purpose: the provenance documents name real instruments
-  *because* they have to declare which families of content are fabricated, and a
-  repository-wide version of the rule would fire on the disclosure itself.
+  `scripts/check_public_repository_boundary.py`). Two findings, both about a
+  synthetic source naming a real instrument, registry or standard number: the
+  identifier alone, and the identifier paired with a limit-shaped value. Scoped
+  to generator sources on purpose — the provenance documents name real
+  instruments *because* they have to declare which families of content are
+  fabricated, and a repository-wide rule would fire on the disclosure.
+  - The pair is correlated across a whole record rather than one physical line,
+    so putting `"code"` and `"limit"` on separate lines of the same dict does
+    not pass. A generator that emits a real standard prefix with no limit on
+    the same record is reported too.
+  - A disclosure marker carried as a **data field** (`"data_class": "SYNTHETIC"`)
+    is not disclosure: it is metadata the generator emits into the output next
+    to the offending value. A **comment** is, because a comment does not travel
+    with the row into the generated file.
 - **`docs/finalization/DATA_REVIEW_BACKLOG.md` is exempt from the two career
   checks only.** It is a boundary-policy document whose job is to report removed
   career material. The credential, third-party-identity, fabricated-authority,
