@@ -2,6 +2,70 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Synthetic fixture generator no longer emits real regulatory identifiers.**
+  `data/mock_generator.py` produced documents titled `GB/T <n>-<year>` / `QB/T` /
+  `NMPA` / `HFJB` / `EU` / `FDA` / `ASEAN`, laid out with standard clause
+  numbering, carrying real INCI names and real CAS numbers next to invented
+  limits (烟酰胺 ≤5%, 视黄醇 ≤0.3%, 铅 ≤10 mg/kg, 汞 ≤1 mg/kg). A single
+  generated `.txt` was indistinguishable from a real technical standard. It was
+  also outside the data-manifest's reach: the manifest enumerates by data-file
+  extension, and a `.py` generator is neither.
+  - Identifiers are now drawn from one invented series — `DEMO-STD-*` /
+    `DEMO-GRP-*` / `DEMO-REQ-*` / `DEMO-ACT-*` / `DEMO-TRACE-*`, placeholder CAS
+    `000-00-0` — the same series `docs/demo/synthetic_corpus.json` already used.
+    Limit values stay fictional. Replacing an invented number with a real one
+    would require a source and a licence; inventing more of them would widen the
+    problem.
+  - Every generated file opens with a synthetic notice; `metadata.jsonl`,
+    `ingredients.jsonl` and `formulas.jsonl` carry `data_class: "SYNTHETIC"` and
+    `carries_real_regulatory_claims: false` per record; a `DATA_PROVENANCE.md`
+    sidecar is written next to the output.
+  - `tests/test_mock_generator.py` keeps its four structural assertions (the
+    `inci_name` field is now `act_code`) and adds five that pin the disclosure
+    contract, including a scan of the generated output for real instruments and
+    registry numbers.
+
+### Added
+
+- **Boundary guard check 6 — fabricated regulatory authority**
+  (`fabricated_regulatory_authority_violations` in
+  `scripts/check_public_repository_boundary.py`). Two findings, both about a
+  synthetic source naming a real instrument, registry or standard number: the
+  identifier alone, and the identifier paired with a limit-shaped value. Scoped
+  to generator sources on purpose — the provenance documents name real
+  instruments *because* they have to declare which families of content are
+  fabricated, and a repository-wide rule would fire on the disclosure.
+  - The pair is correlated across a whole record rather than one physical line,
+    so putting `"code"` and `"limit"` on separate lines of the same dict does
+    not pass. A generator that emits a real standard prefix with no limit on
+    the same record is reported too.
+  - A disclosure marker carried as a **data field** (`"data_class": "SYNTHETIC"`)
+    is not disclosure: it is metadata the generator emits into the output next
+    to the offending value. A **comment** is, because a comment does not travel
+    with the row into the generated file.
+- **`docs/finalization/DATA_REVIEW_BACKLOG.md` is exempt from the two career
+  checks only.** It is a boundary-policy document whose job is to report removed
+  career material. The credential, third-party-identity, fabricated-authority,
+  manifest and link checks still read it, so a leaked key in it still fails.
+
+### Declared
+
+- `DATA_PROVENANCE.md` §4 gains the ordering rule for the "real name + invented
+  limit" hybrid: change the identifier first, then strengthen labelling, and
+  admit real regulation text only with a source, a licence and a regression test.
+  §2 now records that a fixture *generator* is subject to the same boundary even
+  though it is not a data file and does not appear in the manifest.
+- **Public metadata normalization.** Issue and pull-request titles and bodies
+  that framed the repository as a job artefact were rewritten in neutral
+  technical language, and prior-organization production figures were replaced by
+  a reference to their `HISTORICAL_PRODUCTION` classification instead of being
+  restated. Technical background, the reason for each change, the outcome and
+  every commit / PR / issue reference are unchanged. No Git object, ref, tag or
+  branch was touched; the metadata audit is recorded in
+  `docs/finalization/DATA_REVIEW_BACKLOG.md` §3.
+
 ### Added
 
 - **Public repository boundary guard** (`scripts/check_public_repository_boundary.py`,

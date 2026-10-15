@@ -62,6 +62,23 @@
 - 生产日志、监控数据、流量样本、访问凭据：仓库内**不存在**，`.gitignore` 与
   `.dockerignore` 同时排除。
 
+### 生成器不是数据文件，但同样受约束
+
+`data/mock_generator.py` 是**随仓库发布的源码**，不是数据资产，因此不在上表（它是
+`.py`，清单按数据扩展名枚举）。但它会生成具有法规文档形状的语料，所以它受第 4 节的
+约束与 CI 守卫：
+
+- 它生成的每一个 `.txt` 以合成声明开头，并使用一套**完全虚构**的标识
+  （`DEMO-STD-*` / `DEMO-GRP-*` / `DEMO-REQ-*` / `DEMO-ACT-*`、占位 CAS `000-00-0`）。
+  它不产生任何真实标准号、真实原料编号或真实限量。
+- 输出的 `metadata.jsonl` / `ingredients.jsonl` / `formulas.jsonl` 每条记录都带
+  `data_class: "SYNTHETIC"` 与 `carries_real_regulatory_claims: false`。
+- 生成目录旁会写出 `DATA_PROVENANCE.md` 说明文件。
+
+`scripts/check_public_repository_boundary.py` 的第 6 项检查在 CI 中强制这一点：
+**生成器源码中不得出现真实法规标识**，"真实法规标识 + 限量数值"的组合单独计为
+更严重的一类（见第 4 节末段）。
+
 ---
 
 ## 3. 敏感数据审计结果
@@ -108,6 +125,16 @@
 - 以倍数表述的虚构功效数据（如"保湿 ×1000 倍"）；
 - 版本号、标准号、备案号格式等占位串。
 
+这四个来源是**已知的、声明齐备但仍保留混合形态**的资产：它们由检索评测与训练夹具的
+形状要求决定，改成虚构标识会降低夹具的检索难度分布，且当前评测尚未产出可发布结果。
+处置理由与代价见
+[`docs/finalization/DATA_REVIEW_BACKLOG.md`](docs/finalization/DATA_REVIEW_BACKLOG.md) 第 1 节。
+
+相比之下，**不在上述清单中的合成来源已经改掉了这个形态**：`data/mock_generator.py`
+过去生成 `GB/T` / `QB/T` / `NMPA` / `HFJB` 标题、真实 INCI 与真实 CAS 编号，并附带
+虚构的重金属限量，写成真实技术标准的样子。现在它使用与
+`docs/demo/synthetic_corpus.json` 同一套虚构标识，并在每个输出文件里独立声明。
+
 **这些内容存在的唯一目的，是让检索、重排、Evidence Gate、Answer Gate 与评测
 harness 有一条真实形状的输入可跑。** 它们不是安全评估依据，不得用于配方开发、
 合规判定、成分限用判断或任何面向消费者的答复。
@@ -124,6 +151,27 @@ harness 有一条真实形状的输入可跑。** 它们不是安全评估依据
    背书。语料替换后，该用例必须重新评审。
 3. 未替换语料前，本仓库的定位是**检索工程与答案门控的实现验证**，不是化妆品法规知识库。
 
+### 混合形态的处置原则
+
+"真实法规名称 + 虚构限量值"是本仓库里唯一一种**单独声明不足以化解**的风险：
+读者看到《化妆品安全技术规范》这个名称时，会把它当作可信度来源，而不会去查
+旁边那行"本数据为虚构"。因此处置顺序是固定的：
+
+1. **优先改标识，而不是改数值。** 把引用源换成仓库自造的虚构标准系列
+   （`DEMO-STD-*`、`DEMO-ACT-*`、占位 CAS `000-00-0`），数值保持虚构。
+   `data/mock_generator.py` 与 `docs/demo/synthetic_corpus.json` 已经是这个形态。
+2. **其次加强标注与边界隔离。** 每个生成文件独立携带声明，输出目录旁写出
+   `DATA_PROVENANCE.md`，每条记录带 `carries_real_regulatory_claims: false`。
+3. **只有在有可靠来源、合法使用依据和对应回归测试时**，才允许引入真实法规数据。
+   三者缺一，就维持虚构标识。
+
+CI 中强制第 1、2 条的是 `check_public_repository_boundary.py` 的第 6 项检查
+（`fabricated_regulatory_authority_violations`）与
+`tests/test_mock_generator.py`；回归用例在
+`tests/test_check_public_repository_boundary.py`。第 3 条无法自动化，只能由
+具备资质的人判断，清单见
+[`docs/finalization/DATA_REVIEW_BACKLOG.md`](docs/finalization/DATA_REVIEW_BACKLOG.md)。
+
 需要替换为真实语料时，按 [`docs/benchmark-data-quality.md`](docs/benchmark-data-quality.md)
 的数据准入流程执行，来源许可无法确认的材料先进入隔离区
 （`offline/source_trust.py` 的 `UNTRUSTED` 信任级别），经人工批准后才可激活。
@@ -138,6 +186,9 @@ harness 有一条真实形状的输入可跑。** 它们不是安全评估依据
    并把受许可限制的原始内容留在仓库之外，只提交脱敏后的标识与契约。
 3. **修改第 3 节结论** → 同步更新 `scripts/check_public_repository_boundary.py`
    中的断言与 `tests/test_check_public_repository_boundary.py`，两者必须一起改。
+4. **新增一个会生成法规形状语料的源码** → 它是 `.py`，不进第 2 节清单，但要满足
+   第 2 节末"生成器不是数据文件"一节的披露要求，并会被第 6 项检查
+   （`fabricated_regulatory_authority_violations`）覆盖。
 
 ---
 

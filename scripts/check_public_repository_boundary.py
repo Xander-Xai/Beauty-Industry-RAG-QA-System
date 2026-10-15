@@ -20,10 +20,12 @@ What it checks
    explicit allow-listing for the placeholders this repository legitimately ships.
 4. **Data declaration presence** — ``DATA_PROVENANCE.md``, ``DATA_MANIFEST.json``
    and the links that make them discoverable from the README and the docs index.
-5. **Data provenance consistency** — every tracked data file is classified in the
-   manifest, every classified path exists, and every synthetic asset carries the
-   marker that tells a reader the contents are fabricated.
-6. **Broken markdown references** in the boundary documents themselves.
+5. **Data provenance consistency** — every tracked data file is classified in
+   the manifest, every classified path exists, and every synthetic asset carries
+   the    marker that tells a reader the contents are fabricated.
+6. **Fabricated regulatory authority** — a synthetic source that pairs a real
+   regulatory instrument or registry number with a limit-shaped value.
+7. **Broken markdown references** in the boundary documents themselves.
 
 What it deliberately does not do
 --------------------------------
@@ -35,6 +37,12 @@ built so those survive. It also never asserts that the repository is free of
 anything: it can only report what is present in the files it can read. The
 history caveat is documented in ``DATA_PROVENANCE.md`` §6 rather than papered over
 here, because no working-tree scan can see a deleted blob.
+
+Check 6 is scoped to *generator* sources on purpose. The boundary documents
+themselves name real instruments on purpose, because the disclosure has to say
+which families of content are fabricated; a repository-wide version of that
+check would either fire on the disclosure or need an allow-list wide enough to
+defeat itself.
 
 The checks are deterministic and read the working tree through ``git ls-files``,
 so they never depend on wall-clock state or on a GitHub API.
@@ -71,6 +79,13 @@ _BOUNDARY_POLICY_FILES = frozenset(
         "tests/test_check_public_repository_boundary.py",
     }
 )
+
+#: Documents whose job is to *report* career material rather than contain any:
+#: the audit backlog names what was removed and why it needs review, exactly as
+#: the provenance statement does. They are exempt from the two career checks
+#: only — the credential, third-party identity, fabricated-authority, manifest
+#: and link checks still read them, so a leaked key in either would still fail.
+_CAREER_POLICY_FILES = _BOUNDARY_POLICY_FILES | frozenset({"docs/finalization/DATA_REVIEW_BACKLOG.md"})
 
 #: Files that legitimately carry long lists of literal identifiers: lockfiles pin
 #: package names, and the repo's own guard tests assert on pattern text.
@@ -312,7 +327,7 @@ def career_path_violations(paths: Iterable[Path], root: Path | None = None) -> l
     violations: list[str] = []
     for path in paths:
         name = relative(path, root)
-        if name in _BOUNDARY_POLICY_FILES:
+        if name in _CAREER_POLICY_FILES:
             continue
         stem = path.stem
         for pattern in _CAREER_FILENAME_PATTERNS:
@@ -333,10 +348,12 @@ def career_content_violations(paths: Iterable[Path], root: Path | None = None) -
     for path in paths:
         if not is_scannable(path, root):
             continue
+        name = relative(path, root)
+        if name in _CAREER_POLICY_FILES:
+            continue
         text = read_text(path)
         if text is None:
             continue
-        name = relative(path, root)
         for lineno, line in enumerate(text.splitlines(), start=1):
             if len(line) > 2000:
                 continue
@@ -559,7 +576,175 @@ def _expected_data_files(tracked_names: set[str]) -> set[str]:
 
 
 # --------------------------------------------------------------------------
-# Check 6 — markdown references in the boundary documents
+# Check 6 — fabricated regulatory authority
+# --------------------------------------------------------------------------
+
+#: Synthetic sources: files whose job is to *manufacture* regulatory-shaped
+#: fixtures. This is deliberately a narrow scope. The repository also documents
+#: real regulatory vocabulary in prose (``DATA_PROVENANCE.md``, the backlog, the
+#: boundary docs), and a repository-wide version of this check would either fire
+#: on those or need an allow-list wide enough to defeat itself. What must never
+#: happen is a *generator* emitting a value that reads as an authority.
+_SYNTHETIC_SOURCE_PATTERNS = (
+    re.compile(r"(?i)(?:^|/)mock_generator\.py$"),
+    re.compile(r"(?i)(?:^|/)(?:mock|synthetic|fixture)[a-z_]*\.py$"),
+    re.compile(r"(?i)(?:^|/)seed_[a-z_]*\.py$"),
+)
+
+#: Real instruments, issuing bodies and registries. Present in the prose of the
+#: boundary documents on purpose; the check only looks where a generated value
+#: would inherit the authority.
+_REGULATORY_AUTHORITY_PATTERNS = (
+    re.compile(r"\bGB\s*/?\s*T\b"),
+    re.compile(r"\bQB\s*/?\s*T\b"),
+    re.compile(r"\bNMPA\b"),
+    re.compile(r"\bHFJB\b"),
+    re.compile(r"\bGB\s*4806\b"),
+    re.compile(r"\bGB\s*\d{4,5}(?:\.\d+)?\b"),
+    re.compile(r"\bISO\s*\d{3,5}\b"),
+    re.compile(r"\bFDA\b"),
+    re.compile(r"\bEU\s*1223/2009\b"),
+    re.compile(r"化妆品安全技术规范"),
+    re.compile(r"化妆品监督管理条例"),
+    re.compile(r"化妆品标签管理办法"),
+    re.compile(r"化妆品功效宣称评价规范"),
+    re.compile(r"化妆品生产质量管理规范"),
+    # A registry number is an authority too: it is the lookup key that turns a
+    # fictional limit into something a reader can resolve. ``000-00-0`` is the
+    # reserved placeholder this repository uses instead, so it is excluded.
+    re.compile(r"\b(?!000-00-0)\d{2,7}-\d{2}-\d\b"),
+)
+
+#: A limit-shaped value. The bare CAS shape is included because attaching a
+#: registry number to a fictional limit is the same failure at a different
+#: layer: the reader gets a lookup key that resolves to something real.
+_LIMIT_VALUE_PATTERN = re.compile(
+    r"(?:不超过|不得大于|≤|<=)\s*[\d.]+\s*(?:%|mg\s*/\s*kg|ppm|CFU)"
+    r"|\b\d+(?:\.\d+)?\s*(?:%|mg\s*/\s*kg|ppm)\b"
+    r"|\b(?!000-00-0)\d{2,7}-\d{2}-\d\b"
+)
+
+#: A line that discloses itself as synthetic is allowed to name an instrument —
+#: that is what a deprecation notice, a migration note or a compliance checklist
+#: has to do. The marker must be prose; see :func:`_discloses_synthetic`.
+_SYNTHETIC_DISCLOSURE_PATTERN = re.compile(
+    r"(?i)虚构|合成|placeholder|synthetic|fictional|fabricated|not\s+authoritative|非真实|示例值|杜撰"
+)
+
+#: A ``"key": "value"`` pair. Used only to decide what counts as *disclosure*:
+#: a marker carried as a data field is metadata the generator emits, so it
+#: travels with the record into every output file and cannot be the thing that
+#: vouches for it. Masking these before the disclosure search is what keeps
+#: ``{"code": "NMPA", "limit": "≤1%", "data_class": "SYNTHETIC"}`` an error
+#: while leaving a prose sentence that explains why the line is safe alone.
+_QUOTED_PAIR = re.compile(r"""["'][^"'\n]*["']\s*:\s*["'][^"'\n]*["']""")
+
+#: Upper bound on how many lines one record may span. Brace counting is a
+#: heuristic and a brace inside a multi-line string can skew it, so the window
+#: is capped: a mis-segmentation can then miss a finding, but it cannot merge
+#: two unrelated tables into one oversized record.
+_MAX_RECORD_LINES = 40
+
+
+def _is_synthetic_source(name: str) -> bool:
+    return any(pattern.search(name) for pattern in _SYNTHETIC_SOURCE_PATTERNS)
+
+
+def _records(text: str) -> list[tuple[int, str]]:
+    """Split a source file into records and return ``(first_lineno, text)``.
+
+    A record is a brace-delimited block (a dict literal, a JSON object) or, when
+    the file has no braces to speak of, a single line. Pairing an authority with
+    a limit has to survive the ordinary Python formatting where the two live on
+    separate lines of the same dict, or the check is bypassed by running a
+    formatter.
+    """
+    records: list[tuple[int, str]] = []
+    buffer: list[str] = []
+    start = 1
+    depth = 0
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if not buffer:
+            start = lineno
+        buffer.append(line)
+        depth += line.count("{") - line.count("}")
+        if depth <= 0 or len(buffer) >= _MAX_RECORD_LINES:
+            records.append((start, "\n".join(buffer)))
+            buffer = []
+            depth = 0
+    if buffer:
+        records.append((start, "\n".join(buffer)))
+    return records
+
+
+def _has_authority(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _REGULATORY_AUTHORITY_PATTERNS)
+
+
+def _discloses_synthetic(record: str) -> bool:
+    """True when prose *outside* the record's data values says it is synthetic."""
+    prose = _QUOTED_PAIR.sub('""', record)
+    return bool(_SYNTHETIC_DISCLOSURE_PATTERN.search(prose))
+
+
+def fabricated_regulatory_authority_violations(paths: Iterable[Path], root: Path | None = None) -> list[str]:
+    """Return synthetic sources that name a real authority, or pair one with a limit.
+
+    Two independent findings, both about the same hybrid the provenance
+    statement rules out — a real instrument, registry or standard number
+    attached to something invented:
+
+    1. **Real identifier.** A record in a generator names ``GB/T``, ``NMPA`` or
+       a real CAS number. On its own this is not yet a false conclusion, but a
+       generator is the one place where such a string exists *only* to be
+       emitted, and there is no version of it that is worth keeping.
+    2. **Fabricated authority.** The same record also carries a limit-shaped
+       value, which is the hybrid itself: a reader who resolves the identifier
+       has no way to tell the limit did not come with it.
+
+    Both findings are suppressed by prose disclosure, and only by prose: see
+    :func:`_discloses_synthetic`. Three escapes are closed deliberately, because
+    each one would make the rule cosmetic:
+
+    - The pair is matched across a whole record, not one physical line, so
+      splitting ``"code"`` and ``"limit"`` onto separate lines does not pass.
+    - A disclosure marker carried as a data field (``"data_class": "SYNTHETIC"``)
+      is metadata the generator emits into the output next to the offending
+      value, so it cannot vouch for it. A comment saying why a row is safe can,
+      because a comment does not travel into the generated file.
+    - Prose disclosure still works, because a deprecation notice and a migration
+      checklist have to be able to name the instrument they are retiring.
+    """
+    violations: list[str] = []
+    for path in paths:
+        if not is_scannable(path, root):
+            continue
+        name = relative(path, root)
+        if not _is_synthetic_source(name):
+            continue
+        text = read_text(path)
+        if text is None:
+            continue
+        for lineno, record in _records(text):
+            if not _has_authority(record):
+                continue
+            if _discloses_synthetic(record):
+                continue
+            if _LIMIT_VALUE_PATTERN.search(record):
+                violations.append(
+                    f"{name}:{lineno}: fabricated regulatory authority "
+                    "(real instrument or registry number paired with a limit-shaped value)"
+                )
+            else:
+                violations.append(
+                    f"{name}:{lineno}: real regulatory identifier in a synthetic source "
+                    "(a generator emits every string it holds; use an invented identifier)"
+                )
+    return violations
+
+
+# --------------------------------------------------------------------------
+# Check 7 — markdown references in the boundary documents
 # --------------------------------------------------------------------------
 
 _MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
@@ -615,6 +800,7 @@ def run_checks(root: Path | None = None) -> list[str]:
         *career_content_violations(paths, base),
         *third_party_identity_violations(paths, base),
         *secret_violations(paths, base),
+        *fabricated_regulatory_authority_violations(paths, base),
         *data_declaration_errors(base),
         *manifest_errors(paths, base, manifest),
         *broken_markdown_references(paths, base),
