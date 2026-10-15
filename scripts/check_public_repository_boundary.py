@@ -484,8 +484,43 @@ RECORD_MARKER_VALUES = frozenset({"inline", "file", "none"})
 _REQUIRED_ASSET_DECLARATIONS = ("carries_real_regulatory_claims", "record_marker", "regulatory_shaped_fields")
 
 
-def _asset_declaration_errors(asset_path: str, asset: dict, errors: list[str]) -> None:
-    """Return missing or contradictory disclosure declarations for one asset."""
+def _asset_records(path: Path) -> list[dict] | None:
+    """Return an asset's records, or None when the shape is not a record list.
+
+    JSONL is one object per line; a JSON file is a top-level array of objects.
+    Anything else (a single JSON object, unparsable text) is not a record list,
+    and the caller then cannot verify an inline marker — which is reported
+    rather than waved through.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if path.suffix == ".jsonl":
+        records = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                decoded = json.loads(stripped)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(decoded, dict):
+                return None
+            records.append(decoded)
+        return records
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(decoded, list) and all(isinstance(item, dict) for item in decoded):
+        return decoded
+    return None
+
+
+def _asset_declaration_errors(asset_path: str, asset: dict, base: Path, errors: list[str]) -> None:
+    """Return missing, contradictory or unverifiable disclosure declarations."""
     for key in _REQUIRED_ASSET_DECLARATIONS:
         if key not in asset:
             errors.append(
@@ -498,9 +533,9 @@ def _asset_declaration_errors(asset_path: str, asset: dict, errors: list[str]) -
     if marker is None:
         return
     if isinstance(marker, str):
-        head = marker.split(":", 1)[0]
+        head, _, inline_field = marker.partition(":")
     else:
-        head = None
+        head, inline_field = None, ""
     if head not in RECORD_MARKER_VALUES:
         errors.append(
             f"{DATA_MANIFEST}: {asset_path} has unrecognised record_marker {marker!r}; "
@@ -518,6 +553,29 @@ def _asset_declaration_errors(asset_path: str, asset: dict, errors: list[str]) -
             f"{DATA_MANIFEST}: {asset_path} carries record_marker {head!r} and also a "
             "record_marker_absent_reason; the two describe different states"
         )
+    if head == "inline":
+        # A declared marker that is not in the records is worse than an absent
+        # one: CI would report a self-describing asset while every forwarded
+        # record still reads as authoritative.
+        if not inline_field.strip():
+            errors.append(
+                f"{DATA_MANIFEST}: {asset_path} declares record_marker 'inline' without "
+                "naming the field, e.g. 'inline:_data_class'"
+            )
+        else:
+            records = _asset_records(base / asset_path)
+            if records is None:
+                errors.append(
+                    f"{DATA_MANIFEST}: {asset_path} declares record_marker "
+                    f"{marker!r} but its shape is not a record list, so the field cannot be verified"
+                )
+            else:
+                missing = sum(1 for record in records if inline_field not in record)
+                if missing:
+                    errors.append(
+                        f"{DATA_MANIFEST}: {asset_path} declares record_marker {marker!r} but "
+                        f"{missing} of {len(records)} record(s) do not carry {inline_field!r}"
+                    )
 
     claims = asset.get("carries_real_regulatory_claims")
     if claims is not None and not isinstance(claims, bool):
@@ -565,7 +623,7 @@ def manifest_errors(
             errors.append(f"{DATA_MANIFEST}: {asset_path} uses undeclared class {asset_class!r}")
         if not (base / asset_path).is_file():
             errors.append(f"{DATA_MANIFEST}: {asset_path} is declared but missing from the working tree")
-        _asset_declaration_errors(asset_path, asset, errors)
+        _asset_declaration_errors(asset_path, asset, base, errors)
 
         marker = asset.get("marker")
         if asset_class == "SYNTHETIC":

@@ -90,9 +90,9 @@
 |---|---|---|
 | FastAPI / 前端 / 知识库加载 | 否。`offline/source_discovery.py` 只从运维方指定的 source root 发现语料，从不扫描 `tests/` 或 `offline/` | 安全 |
 | Demo（`docs/demo/mock_api.py` → 截图） | 是，但 `synthetic_corpus.json` 已是全虚构标识 + 行内 `_disclaimer`，且 `require_disclosures()` 在缺失标记时**直接中止渲染** | 已处置 |
-| 检索基准产物 `artifacts/benchmarks/<run>/per_query_results.jsonl` | **是**。逐行写出夹具 `question` 原文 | **本轮已加标识** |
+| 检索基准产物 `artifacts/benchmarks/<run>/per_query_results.jsonl` | **是**。逐行写出夹具 `question` 原文 | **本轮已加标识**（每行；标识由 `--dataset` 在清单中的类别推导） |
 | 检索基准产物 `metadata.json` | **是**。`corpus.correspondence.missing_examples` 最多带 3 × 120 字黄金段原文 | **本轮已加标识** |
-| RAGAS 报告 `data/eval/reports/ragas_report_*.json` | **是**。`per_sample_scores` 带 `question` / `reference_answer` / `retrieved_contexts` | **本轮已加标识** |
+| RAGAS 报告 `data/eval/reports/ragas_report_*.json` | **是**。`per_sample_scores` 带 `question` / `reference_answer` / `retrieved_contexts` | **本轮已加标识**（顶层；数据集不在清单中时为 `UNCLASSIFIED` 且不写声明） |
 | `HUMAN_ANNOTATION_BACKLOG.md`（`audit_annotations.py` 生成） | 是，最多 60 条 `question` 截断文本 | 未处置，见 1.4 |
 | QLoRA 训练导出 | 是，训练文本直接由 `instruction/input/output` 模板化 | 未处置，见 1.4 |
 
@@ -100,6 +100,17 @@
 文件**。本轮把这三个产物的写出路径补上了机器可读标识（`data_class` /
 `carries_real_regulatory_claims` / `notice`），风险因此从"整批产物无标识"降到
 "原始夹具行无标识"。
+
+标识**由数据集推导**（`benchmarks/provenance.py::dataset_data_provenance()`，查
+`DATA_MANIFEST.json`），而不是写死。原因：`--dataset` 与 RAGAS 的 `dataset_path`
+接受任意 JSONL。写死 `SYNTHETIC` 会在指向运维方自有语料或经授权真实语料时变成一句
+假话——而"把真实数据标成合成"比不标更危险。清单里查不到的路径得到
+`data_class: UNCLASSIFIED` 与 `carries_real_regulatory_claims: null`，且**不写声明**：
+它拿不到任何断言，包括那句听起来让人放心的"这不是真实法规数据"。
+
+同理，`EvaluationReport` 的默认值是 `UNCLASSIFIED` / `None` 而不是 `SYNTHETIC` /
+`False`。否则读入一个在本变更之前写出的旧报告时，默认值会把"没有来源信息"追认成
+"合成且无真实法规主张"——一句关于本进程从未检查过的数据集的肯定陈述。
 
 ### 1.4 本轮刻意未处置：给原始夹具行加标识（数据集变更）
 

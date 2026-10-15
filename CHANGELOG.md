@@ -4,20 +4,33 @@
 
 ### Added
 
-- **Every artifact that quotes evaluation-fixture text now identifies itself.**
-  The fixtures name real regulation instruments next to invented limits, so a
-  sidecar does not travel with a file that gets forwarded. The benchmark and
-  RAGAS writers — the paths a reader is actually most likely to copy out of —
-  carried the fixture `question`, `contexts` and reference answer with no
-  marker at all.
-  - `benchmarks/provenance.py::synthetic_data_provenance()` is the single source
-    for `data_class` / `carries_real_regulatory_claims` / `notice`.
+- **Every artifact that quotes dataset text now identifies itself, by resolving
+  the dataset rather than assuming it.** The fixtures name real regulation
+  instruments next to invented limits, so a sidecar does not travel with a file
+  that gets forwarded. The benchmark and RAGAS writers — the paths a reader is
+  actually most likely to copy out of — carried the dataset `question`,
+  `contexts` and reference answer with no marker at all.
+  - `benchmarks/provenance.py::dataset_data_provenance(path)` is the single
+    source, and it looks the path up in `DATA_MANIFEST.json`. `--dataset` accepts
+    any JSONL, so a hardcoded `SYNTHETIC` claim would be a false statement the
+    moment someone points the benchmark at a licensed corpus — and labelling real
+    data as fabricated is worse than saying nothing.
+  - A declared synthetic fixture gets the full notice; any other declared class
+    gets its own; **a path that is not in the manifest gets
+    `data_class: UNCLASSIFIED` and `carries_real_regulatory_claims: null`**, with
+    no notice. An unverifiable path receives no claim in either direction.
   - Written into `artifacts/benchmarks/<run>/metadata.json`, into **every row** of
-    `per_query_results.jsonl`, and into `ragas_report_*.json` (top level, and
-    above the header block in the Markdown rendering).
+    `per_query_results.jsonl`, into `report.md` (first line below the title), and
+    into `ragas_report_*.json` plus its Markdown rendering above the header block.
+  - `to_json_dict` and `write_per_query_jsonl` take the provenance as a required
+    argument rather than defaulting it, so a caller cannot emit a row without
+    stating the dataset it was scored against.
+  - `EvaluationReport` defaults to `UNCLASSIFIED` / `None`, not `SYNTHETIC` /
+    `False`: a report written before these fields existed has no provenance, and
+    defaulting it would turn an absence into an affirmative claim about a dataset
+    this process never inspected.
   - Purely additive: no scoring field, metric key or report column changes, so an
     artifact written before this change still compares against one written after.
-    `EvaluationReport` keeps defaults, so pre-existing report files still load.
 - **Per-asset disclosure declarations in `DATA_MANIFEST.json`**, enforced by
   `check_public_repository_boundary.py`: `carries_real_regulatory_claims`,
   `record_marker` (`inline:<field>` / `file` / `none`),
@@ -26,9 +39,14 @@
   becomes a tracked, reviewable statement instead of an omission; an asset with
   no self-describing record now fails CI unless it says why.
   - `regulatory_shaped_fields` records, per asset, which keys quote a regulation
-  instrument or a limit-shaped concentration, with the measured counts in
+    instrument or a limit-shaped concentration, with the measured counts in
     `regulatory_shaped_fields_evidence`. A tool building a redacted view or an
     external excerpt can act on it without parsing content.
+  - An `inline:<field>` marker is **verified against the records**: the guard
+    reads the asset and fails if the named field is absent from any record, or if
+    the file's shape is not a record list. A declared marker that is not in the
+    records would let CI report a self-describing asset while every forwarded
+    record still reads as authoritative.
 - `tests/benchmark/test_synthetic_disclosure.py` — reads the real writers rather
   than re-describing them, because the failure being guarded is a writer that
   quietly stopped emitting the field.

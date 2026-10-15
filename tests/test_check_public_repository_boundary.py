@@ -626,7 +626,73 @@ def test_unknown_record_marker_value_is_an_error(tmp_path: Path) -> None:
     assert any("unrecognised record_marker" in error for error in errors)
 
 
-def test_inline_record_marker_with_field_is_accepted(tmp_path: Path) -> None:
+def test_inline_record_marker_is_verified_against_the_records(tmp_path: Path) -> None:
+    """A declared marker that is not in the records is worse than an absent one.
+
+    It would let CI report a self-describing asset while every forwarded record
+    still reads as an authoritative regulatory statement.
+    """
+    _single_asset_manifest(
+        tmp_path,
+        "offline/claims.jsonl",
+        {
+            "path": "offline/claims.jsonl",
+            "class": "SYNTHETIC",
+            "marker": "sidecar:offline/DATA_PROVENANCE.md",
+            "carries_real_regulatory_claims": False,
+            "record_marker": "inline:_data_class",
+            "regulatory_shaped_fields": ["answer"],
+        },
+    )
+    write(tmp_path, "offline/DATA_PROVENANCE.md", "虚构 synthetic 审计\n")
+    write(tmp_path, "offline/claims.jsonl", '{"answer": "a"}\n{"answer": "b"}\n')
+
+    errors = manifest_errors([], tmp_path)
+
+    assert any("2 of 2 record(s) do not carry '_data_class'" in error for error in errors)
+
+
+def test_inline_record_marker_present_in_every_record_is_accepted(tmp_path: Path) -> None:
+    _single_asset_manifest(
+        tmp_path,
+        "offline/claims.jsonl",
+        {
+            "path": "offline/claims.jsonl",
+            "class": "SYNTHETIC",
+            "marker": "sidecar:offline/DATA_PROVENANCE.md",
+            "carries_real_regulatory_claims": False,
+            "record_marker": "inline:_data_class",
+            "regulatory_shaped_fields": ["answer"],
+        },
+    )
+    write(tmp_path, "offline/DATA_PROVENANCE.md", "虚构 synthetic 审计\n")
+    write(tmp_path, "offline/claims.jsonl", '{"answer": "a", "_data_class": "SYNTHETIC"}\n')
+
+    assert manifest_errors([], tmp_path) == []
+
+
+def test_inline_marker_without_a_field_name_is_an_error(tmp_path: Path) -> None:
+    _single_asset_manifest(
+        tmp_path,
+        offline_json,
+        {
+            "path": offline_json,
+            "class": "SYNTHETIC",
+            "marker": "_disclaimer",
+            "marker_must_contain": ["SYNTHETIC DEMO DATA"],
+            "carries_real_regulatory_claims": False,
+            "record_marker": "inline",
+            "regulatory_shaped_fields": [],
+        },
+    )
+
+    errors = manifest_errors([], tmp_path)
+
+    assert any("without naming the field" in error for error in errors)
+
+
+def test_inline_marker_on_an_unverifiable_shape_is_an_error(tmp_path: Path) -> None:
+    """A declaration the guard cannot check is a declaration it cannot trust."""
     _single_asset_manifest(
         tmp_path,
         offline_json,
@@ -637,11 +703,14 @@ def test_inline_record_marker_with_field_is_accepted(tmp_path: Path) -> None:
             "marker_must_contain": ["SYNTHETIC DEMO DATA"],
             "carries_real_regulatory_claims": False,
             "record_marker": "inline:_data_class",
-            "regulatory_shaped_fields": ["answer"],
+            "regulatory_shaped_fields": [],
         },
     )
+    write(tmp_path, offline_json, '{"_disclaimer": "SYNTHETIC DEMO DATA"}')
 
-    assert manifest_errors([], tmp_path) == []
+    errors = manifest_errors([], tmp_path)
+
+    assert any("shape is not a record list" in error for error in errors)
 
 
 def test_committed_manifest_declares_a_disclosure_state_for_every_asset() -> None:

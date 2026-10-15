@@ -180,16 +180,34 @@ harness 有一条真实形状的输入可跑。** 它们不是安全评估依据
 
 ### 产物侧的标识（比夹具本身更关键）
 
-sidecar 不随转发走，因此**携带夹具文本的产物**必须自带标识。
-`benchmarks/provenance.py::synthetic_data_provenance()` 是唯一来源，返回
+sidecar 不随转发走，因此**携带数据集文本的产物**必须自带标识。
+`benchmarks/provenance.py::dataset_data_provenance(path)` 是唯一来源，返回
 `data_class` / `carries_real_regulatory_claims` / `notice` 三项，当前写入：
 
 - `artifacts/benchmarks/<run-id>/metadata.json`
 - `artifacts/benchmarks/<run-id>/per_query_results.jsonl`（**每行**）
-- `data/eval/reports/ragas_report_*.json`（顶层；Markdown 报告在表头之前先输出该声明）
+- `artifacts/benchmarks/<run-id>/report.md`（正文第一段，低于标题）
+- `data/eval/reports/ragas_report_*.json`（顶层）与对应的 Markdown（表头之前）
 
 这三个产物此前会把夹具的 `question`、`contexts`、参考答案原样写出且不带任何标识，
 是实际最可能被复制传播的路径。
+
+**标识必须由数据集本身推导，不能写死。** `--dataset` 与 RAGAS 的 `dataset_path` 接受
+任意 JSONL，包括运维方自有语料或经授权的真实语料。写死 `SYNTHETIC` 会在那一刻变成
+一句假话，而"把真实数据标成合成"比什么都不标更危险。因此
+`dataset_data_provenance()` 从 [`DATA_MANIFEST.json`](DATA_MANIFEST.json) 查出该路径
+声明的类别：
+
+| 查询结果 | 产物写入 |
+|---|---|
+| 清单声明为 `SYNTHETIC` 且 `carries_real_regulatory_claims: false` | `data_class: SYNTHETIC` + 完整声明 |
+| 清单声明为其他类别（如 `RUNTIME_EVIDENCE`） | 该类别 + 清单里的声明状态 |
+| **不在清单中**（运维方语料、经授权语料、仓库外路径） | `data_class: UNCLASSIFIED`，`carries_real_regulatory_claims: null`，**不写声明** |
+
+最后一行是关键：无从核实的路径拿不到任何断言，包括那句听起来让人放心的
+"这不是真实法规数据"。RAGAS 报告的 `data_class` 默认值同样是 `UNCLASSIFIED`
+而非 `SYNTHETIC`，因此一个在本变更之前写出的旧报告被读入时，不会被默认值
+追认为"合成且无真实法规主张"。
 
 **仍然存在的缺口**：`HUMAN_ANNOTATION_BACKLOG.md`（由
 `scripts/validation/audit_annotations.py` 生成，最多带出 60 条 `question` 文本）尚未

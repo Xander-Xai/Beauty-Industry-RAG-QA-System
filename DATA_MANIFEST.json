@@ -9,7 +9,7 @@
     "RUNTIME_EVIDENCE": "Recorded observation of a real dependency on a single local host. Contains no corpus content, logs or credentials."
   },
   "disclosure_vocabulary": {
-    "record_marker": "How a single record identifies itself when separated from this manifest. 'inline:<field>' means the field travels inside every record. 'file' means one declaration at the top of the file covers the whole file. 'none' means a record carries no self-description, and record_marker_absent_reason explains why.",
+    "record_marker": "How a single record identifies itself when separated from this manifest. 'inline:<field>' means the named field travels inside every record, and CI verifies the field is present in every one. 'file' means one declaration at the top of the file covers the whole file. 'none' means a record carries no self-description, and record_marker_absent_reason explains why.",
     "regulatory_shaped_fields": "Keys whose values quote a real regulation instrument or a limit-shaped concentration. A consumer building a redacted view, an external excerpt or a training export should treat exactly these keys as synthetic, because they are the ones that read as authoritative out of context.",
     "record_marker_absent_reason": "Required whenever record_marker is 'none'. Silence is the defect this closes: an unstated gap reads as an oversight and cannot be tracked."
   },

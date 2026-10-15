@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from benchmarks.provenance import synthetic_data_provenance
-
 # Latency keys that are always reported, even when a stage did not run.
 LATENCY_STAGES = (
     "total_retrieval_ms",
@@ -164,12 +162,16 @@ class QueryBenchmarkResult:
     ndcg_at_10: float | None
     latency_ms: dict[str, float | None]
 
-    def to_json_dict(self) -> dict[str, Any]:
+    def to_json_dict(self, data_provenance: dict[str, Any]) -> dict[str, Any]:
+        """Render one scored row.
+
+        ``data_provenance`` is required rather than defaulted: the row quotes the
+        dataset's ``question`` verbatim, so whoever writes it must state that
+        dataset's class. Defaulting it here would be exactly the false claim
+        this disclosure exists to prevent — ``--dataset`` accepts any JSONL.
+        """
         return {
-            # The row quotes the fixture's `question` verbatim, and the fixture
-            # names real regulation instruments next to invented limits. A
-            # forwarded line must carry that with it; the sidecar does not travel.
-            **synthetic_data_provenance(),
+            **data_provenance,
             "sample_id": self.sample_id,
             "question": self.question,
             "business_type": self.business_type,

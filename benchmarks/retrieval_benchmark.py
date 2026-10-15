@@ -41,13 +41,13 @@ from benchmarks.golden_set_contract import (
 from benchmarks.models import STATUS_EXECUTED
 from benchmarks.provenance import (
     collect_environment,
+    dataset_data_provenance,
     effective_retrieval_config,
     git_provenance,
     new_run_id,
     now_utc,
     render_environment,
     sha256_json,
-    synthetic_data_provenance,
     write_gitignore_entry,
 )
 from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
@@ -231,12 +231,15 @@ def main(argv: list[str] | None = None) -> int:
         # different indexes/collections/model revisions cannot share a hash.
         "effective_config": effective_config,
     }
+    data_provenance = dataset_data_provenance(dataset_path)
     metadata = {
         "run_id": run_id,
         "timestamp_utc": now_utc(),
-        # The artifact quotes fixture `question` and `contexts` text. It has to
-        # declare itself before anyone reads a number out of it.
-        **synthetic_data_provenance(),
+        # The artifact quotes the dataset's `question` and `contexts` text, so
+        # it has to declare that dataset before anyone reads a number out of it.
+        # Resolved from the manifest: `--dataset` accepts any JSONL, including a
+        # licensed or operator-supplied corpus that is not synthetic at all.
+        **data_provenance,
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "dataset_path": str(dataset_path),
@@ -284,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    rows_written = write_per_query_jsonl(run_dir / "per_query_results.jsonl", runs)
+    rows_written = write_per_query_jsonl(run_dir / "per_query_results.jsonl", runs, data_provenance)
 
     report.write_artifacts(
         output_root=output_root,

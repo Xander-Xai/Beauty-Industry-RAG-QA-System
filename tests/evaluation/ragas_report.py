@@ -16,7 +16,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
-from benchmarks.provenance import synthetic_data_provenance
+from benchmarks.provenance import UNCLASSIFIED_DATA_CLASS, dataset_data_provenance
 from tests.evaluation.ragas_eval import RAGASEvaluator
 
 logger = logging.getLogger(__name__)
@@ -60,13 +60,14 @@ class EvaluationReport:
     metrics: list[str] = field(default_factory=list)
     failures: list[dict] = field(default_factory=list)
     environment: dict = field(default_factory=dict)
-    # Self-description. `per_sample_scores` quotes the fixture's question,
-    # contexts and reference answer, and the fixture names real regulation
-    # instruments next to invented limits. Defaults keep older report files
-    # loadable; a report written before this field existed is still readable,
-    # but every report *written* now carries the disclosure.
-    data_class: str = "SYNTHETIC"
-    carries_real_regulatory_claims: bool = False
+    # Self-description. `per_sample_scores` quotes the dataset's question,
+    # contexts and reference answer. The defaults are *unknown*, not synthetic:
+    # a report written before these fields existed has no provenance, and
+    # defaulting it to "synthetic, no real claims" would turn an absence into an
+    # affirmative statement about data this process never inspected. A report
+    # built now gets the resolved class of the dataset it actually scored.
+    data_class: str = UNCLASSIFIED_DATA_CLASS
+    carries_real_regulatory_claims: bool | None = None
     notice: str = ""
 
 
@@ -164,7 +165,7 @@ class RAGASReporter:
             category_breakdown=category_breakdown,
             dataset_size=counts.get("successful", len(per_sample)),
             metadata=metadata,
-            **synthetic_data_provenance(),
+            **dataset_data_provenance(self._dataset_path()),
             run_id=f"{tag}-{datetime.now().strftime('%Y%m%dT%H%M%S')}",
             git_commit=self._git_commit(),
             dataset=self._dataset_path(),
@@ -434,7 +435,8 @@ class RAGASReporter:
             # regulation instruments next to invented limits.
             lines.append(f"> ⚠️ {report.notice}")
             lines.append("")
-        lines.append(f"- **数据类别**: {report.data_class}")
+        if report.data_class and report.data_class != UNCLASSIFIED_DATA_CLASS:
+            lines.append(f"- **数据类别**: {report.data_class}")
         lines.append(f"- **时间戳**: {report.timestamp}")
         lines.append(f"- **模式**: {report.mode}（pipeline=真实管线输出；reference=参考答案 smoke）")
         lines.append(f"- **git commit**: {report.git_commit or '—'}")
