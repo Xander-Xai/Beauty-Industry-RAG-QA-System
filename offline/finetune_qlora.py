@@ -19,6 +19,12 @@ Qwen3-14B QLoRA 微调脚本
     - lora_target_modules: q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
     - quantization_bits: 4 (NF4)
     - quant_type: nf4
+
+训练输出披露：
+    训练完成后，输出目录除 adapter 权重与 README.md 模型卡外，还会写出机器可读的
+    ``DATA_PROVENANCE.json``（见 ``offline/training_provenance.py``）。它记录训练输入
+    数据的类别与 SHA-256、训练执行参数，以及"尚未做任何法规正确性评测"这一事实。
+    训练语料本身不被修改。
 """
 
 import json
@@ -262,18 +268,58 @@ def main():
     logger.info("Saving LoRA adapter to %s...", data_args.output_dir)
     trainer.save_model(data_args.output_dir)
 
-    # 8. 生成 Model Card
+    # 8. 生成 Model Card 与 provenance sidecar
     _write_model_card(data_args, lora_args, model_args, len(dataset))
     logger.info("Fine-tuning complete!")
+
+
+def _collect_provenance(data_args, lora_args, model_args, dataset_size: int) -> dict:
+    """Resolve what the training output may be claimed to be.
+
+    The classification comes from ``DATA_MANIFEST.json`` via
+    ``benchmarks.provenance.dataset_data_provenance`` — the same lookup the
+    benchmark, RAGAS and annotation-backlog writers use — so an adapter trained
+    on an unregistered corpus is reported as ``UNCLASSIFIED`` rather than
+    assumed synthetic, and a corpus that *is* registered synthetic carries that
+    warning into the model card. The training text itself is untouched.
+    """
+    from offline.training_provenance import build_training_provenance
+
+    return build_training_provenance(
+        data_path=data_args.data_path,
+        output_dir=data_args.output_dir,
+        base_model=model_args.model_path,
+        quantization=f"{model_args.quantization_bits}-bit {model_args.quant_type}",
+        lora={
+            "rank": lora_args.lora_rank,
+            "alpha": lora_args.lora_alpha,
+            "dropout": lora_args.lora_dropout,
+            "target_modules": lora_args.lora_target_modules,
+        },
+        hyperparameters={
+            "num_epochs": data_args.num_epochs,
+            "batch_size": data_args.batch_size,
+            "gradient_accumulation_steps": data_args.gradient_accumulation_steps,
+            "learning_rate": data_args.learning_rate,
+            "max_seq_length": data_args.max_seq_length,
+            "validation_split": data_args.validation_split,
+        },
+        dataset_size=dataset_size,
+    )
 
 
 def _write_model_card(data_args, lora_args, model_args, dataset_size: int):
     """生成 Model Card README.md 到输出目录。"""
     import os
 
+    provenance = _collect_provenance(data_args, lora_args, model_args, dataset_size)
+
     card_path = os.path.join(data_args.output_dir, "README.md")
+    from offline.training_provenance import render_markdown_section
+
     card = f"""# QLoRA Adapter — Model Card
 
+{render_markdown_section(provenance)}
 ## Base Model
 - **Model**: {model_args.model_path}
 - **Quantization**: {model_args.quantization_bits}-bit {model_args.quant_type}
@@ -287,6 +333,7 @@ def _write_model_card(data_args, lora_args, model_args, dataset_size: int):
 ## Training Data
 - **Size**: {dataset_size} examples
 - **Source**: {data_args.data_path}
+- **Class**: {provenance["training_input"]["data_class"]} — see the disclosure above
 
 ## Training Hyperparameters
 - **Epochs**: {data_args.num_epochs}
@@ -301,11 +348,19 @@ def _write_model_card(data_args, lora_args, model_args, dataset_size: int):
 ## Deployment
 Place this adapter at the path referenced by `config.json` under `gen_14b.lora_adapter_path`.
 vLLM will load it automatically via `--enable-lora --lora-modules QLoRA-adapter=<path>`.
+
+Deploying this adapter makes its answers *reachable*. It does not make them
+regulatorily correct — see "What this adapter has and has not demonstrated".
 """
     os.makedirs(os.path.dirname(card_path), exist_ok=True)
     with open(card_path, "w") as f:
         f.write(card)
     logger.info("Model card written: %s", card_path)
+
+    from offline.training_provenance import write_training_provenance
+
+    sidecar = write_training_provenance(data_args.output_dir, provenance)
+    logger.info("Training provenance written: %s", sidecar)
 
 
 if __name__ == "__main__":

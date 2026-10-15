@@ -47,6 +47,7 @@
 | `tests/evaluation/golden_set_v2/annotation_workpackage_v1.jsonl` | 70 | `SYNTHETIC` | 由 `scripts/validation/build_annotation_workpackage.py` 从黄金集派生的候选标注工作表 | 是**待人工评审的候选**，不是标注结论 |
 | `tests/evaluation/golden_set_v2/annotations.schema.json` | — | `SCHEMA` | JSON Schema 定义 | 不含业务数据 |
 | `tests/integration/testdata/queries.json` | 6 | `SYNTHETIC` | 人工构造的集成冒烟查询集 | 含与黄金集相同的**虚构**成分限量问题，见第 4 节 |
+| `docs/finalization/REGULATORY_REVIEW_CHECKLIST.json` | 15 条目 | `GOVERNANCE` | 逐条法规断言的人工复核状态追踪器，机器可读 | **不主张任何法规结论**；15 条全部处于 `SYNTHETIC_ONLY`，无一条 `VERIFIED_WITH_SOURCE` |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json` | — | `RUNTIME_EVIDENCE` | 单台本地主机上对真实 Qdrant 1.12.0 服务的验证检查项 | 仅含 localhost 端点与版本信息；不含语料内容、日志或凭据 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` | — | `RUNTIME_EVIDENCE` | 同一次验证的来源与兼容性记录 | 同上 |
 | `docs/assets/demo-request-evidence-flow.webp` | — | `SYNTHETIC` | 由 `docs/demo/capture_demo.py` 从上述合成语料渲染 | 画面内所有数值均为合成值 |
@@ -188,8 +189,12 @@ sidecar 不随转发走，因此**携带数据集文本的产物**必须自带�
 - `artifacts/benchmarks/<run-id>/per_query_results.jsonl`（**每行**）
 - `artifacts/benchmarks/<run-id>/report.md`（正文第一段，低于标题）
 - `data/eval/reports/ragas_report_*.json`（顶层）与对应的 Markdown（表头之前）
+- `tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md`（由
+  `scripts/validation/audit_annotations.py` 生成，标题之后、问题表格之前）
+- QLoRA 训练输出目录的 `DATA_PROVENANCE.json` 与模型卡 `README.md`（由
+  `offline/training_provenance.py` 生成，见 `offline/finetune_qlora.py`）
 
-这三个产物此前会把夹具的 `question`、`contexts`、参考答案原样写出且不带任何标识，
+这些产物此前会把夹具的 `question`、`contexts`、参考答案原样写出且不带任何标识，
 是实际最可能被复制传播的路径。
 
 **标识必须由数据集本身推导，不能写死。** `--dataset` 与 RAGAS 的 `dataset_path` 接受
@@ -209,10 +214,21 @@ sidecar 不随转发走，因此**携带数据集文本的产物**必须自带�
 而非 `SYNTHETIC`，因此一个在本变更之前写出的旧报告被读入时，不会被默认值
 追认为"合成且无真实法规主张"。
 
-**仍然存在的缺口**：`HUMAN_ANNOTATION_BACKLOG.md`（由
-`scripts/validation/audit_annotations.py` 生成，最多带出 60 条 `question` 文本）尚未
-加标识；原始 JSONL 行本身也没有行内标识。前者见 backlog 第 1.4 节，后者是刻意
-推迟的数据集版本变更，理由与代价逐条列在那里。
+标注任务单是这一族里唯一的例外：它对 `UNCLASSIFIED` 会写出
+`UNCLASSIFIED_DATA_NOTICE`，因为该文件的主要读者是人，而**沉默**才是那里真正
+的危险形态——一份没有任何来源声明的工作单会被当成已核验材料使用。该声明只陈述
+"来源未登记、性质未确认"，既不断言其为合成，也不断言其为真实法规资料，因此不与
+上表冲突。回归用例见 `tests/validation/test_annotation_backlog_disclosure.py`。
+
+**已经关闭的缺口**：`HUMAN_ANNOTATION_BACKLOG.md` 此前最多带出 60 条 `question`
+文本却没有任何标识。它由 `audit_annotations.py` 生成时会按 `--source-dataset`
+解析类别，并把 `data class` / `carries real regulatory claims` / 源文件路径与
+SHA-256 / 合成声明写在标题之后、问题表格之前——单独复制这份 Markdown 的读者
+不需要打开 sidecar 就能知道它是什么。清单里查不到的源数据集得到
+`UNCLASSIFIED` 与"来源未经确认"的说明，同样不会得到任何肯定性断言。
+
+**仍然存在的缺口**：原始 JSONL 行本身仍没有行内标识。这是刻意推迟的数据集版本
+变更，理由与代价见 backlog 第 1.4 节。
 
 CI 中强制第 1、2 条的是 `check_public_repository_boundary.py` 的第 6 项检查
 （`fabricated_regulatory_authority_violations`）与

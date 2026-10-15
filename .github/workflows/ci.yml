@@ -273,6 +273,25 @@ jobs:
             --dataset tests/evaluation/golden_set_v2/annotations_v1.jsonl \
             --allow-empty
 
+      # The work order that quotes fixture questions carries its own data
+      # provenance, so a forwarded copy cannot read as regulation. Regenerated
+      # here rather than trusted: the committed file must be exactly what the
+      # tool produces.
+      - name: Annotation backlog disclosure boundary
+        run: |
+          python scripts/validation/audit_annotations.py \
+            --dataset tests/evaluation/golden_set_v2/annotations_v1.jsonl \
+            --allow-empty \
+            --backlog tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md
+          git diff --exit-code -- tests/evaluation/golden_set_v2/HUMAN_ANNOTATION_BACKLOG.md
+
+      # Every regulatory assertion in the fixtures carries an explicit review
+      # state, and no assertion may claim to be verified against an authoritative
+      # source without a named reviewer, a date and a versioned citation. A
+      # synthetic placeholder can never be promoted at all.
+      - name: Regulatory assertion review checklist
+        run: python scripts/validation/regulatory_review.py --check
+
       # Keeps the documented contract field list in sync with the validator.
       - name: Repository consistency guard
         run: python scripts/check_repo_consistency.py
