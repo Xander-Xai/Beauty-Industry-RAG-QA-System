@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **The query-side CLIP text encoder could never run.** `clip_visual` is one of
+  the four dynamic recall paths, but it could not contribute a single hit on any
+  request: `EmbeddingService.encode_text_clip` and `encode_texts_clip_batch` read
+  `self.clip_processor` and `self.clip_model`, and neither accessor existed on the
+  class. `__init__` still initialised the private attributes behind them, so the
+  call raised `AttributeError` *before* any model load — meaning this was not a
+  missing-weights condition that a smoke test would surface, it failed for every
+  input regardless of what was on disk.
+  - `retrieval/parallel_recall.py::_recall_clip` catches per-path exceptions and
+    returns `[]`. That is the right behaviour for one recall channel failing and
+    the wrong place for an unconditional defect to hide, because the visual path
+    then contributed nothing while the request still answered from the other
+    paths. `core/pipeline.py::_should_use_clip_sync` could still select the path
+    and still observe `clip_sync_timeout`, and RRF still applied the `clip_visual`
+    weight of `2.0` to a path that returned nothing.
+  - Root cause: every other CLIP test substitutes the encoder — the suite defines
+    its own `encode_text_clip`, patches `models.embedding_service.EmbeddingService`
+    or uses `MagicMock` — so no test executed the real method body. 3094 passing
+    tests could not see it.
+  - Added `clip_processor` / `clip_model` lazy properties mirroring the existing
+    `bge_tokenizer` / `bge_model` accessors, reading
+    `embedding.image_clip.model_path`. The configured CLIP path was already in
+    `config.json`; nothing had ever read it. `EmbeddingService.__init__` gained an
+    optional `clip_model_path`, and it is deliberately independent of the existing
+    `model_path` argument so a BGE override cannot repoint the visual encoder at a
+    text-only model.
+  - **The gap that let it ship is now closed.** `tests/test_embedding_service_clip_encoder.py`
+    drives the real encoder bodies and the real `_recall_clip`, stubbing only the
+    `transformers` surface (no CLIP weights needed) and the Qdrant boundary.
+    Reverting the two properties turns 8 of its 9 tests red.
+  - This makes the existing `docs/evidence-map.md` entry for CLIP visual recall
+    accurate rather than aspirational — it already claimed
+    `REPO_VERIFIED (adapter) / PENDING (real weights)`, which described the
+    ingestion side in `offline/embeddings.py::CLIPImageEmbedder` and did not
+    account for the broken query-side counterpart. Real CLIP recall quality still
+    needs real weights and stays `VAL-MODEL-002` / issue #8. No retrieval
+    metric, latency figure or benchmark result changes, because none was ever
+    produced on this path.
+
 ### Added
 
 - **Every artifact that quotes dataset text now identifies itself, by resolving

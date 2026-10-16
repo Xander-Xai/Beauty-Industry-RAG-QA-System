@@ -32,12 +32,13 @@ class EmbeddingService:
     - 统一接口封装，支持模型热切换
     """
 
-    def __init__(self, model_path: str | None = None):
+    def __init__(self, model_path: str | None = None, clip_model_path: str | None = None):
         self._bge_model = None
         self._bge_tokenizer = None
         self._bge_model_path = model_path or config["embedding"]["text"]["model_path"]
         self._clip_model = None
         self._clip_processor = None
+        self._clip_model_path = clip_model_path or config["embedding"]["image_clip"]["model_path"]
         self._qdrant_client = None
         logger.info("EmbeddingService 初始化完成（模型懒加载）")
 
@@ -57,6 +58,23 @@ class EmbeddingService:
             self._bge_model = AutoModel.from_pretrained(self._bge_model_path)
             self._bge_model.eval()
         return self._bge_model
+
+    @property
+    def clip_processor(self):
+        if self._clip_processor is None:
+            from transformers import CLIPProcessor
+
+            self._clip_processor = CLIPProcessor.from_pretrained(self._clip_model_path)
+        return self._clip_processor
+
+    @property
+    def clip_model(self):
+        if self._clip_model is None:
+            from transformers import CLIPModel
+
+            self._clip_model = CLIPModel.from_pretrained(self._clip_model_path)
+            self._clip_model.eval()
+        return self._clip_model
 
     @property
     def qdrant_client(self):
