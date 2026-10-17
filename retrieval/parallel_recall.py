@@ -31,6 +31,8 @@ RBAC 位掩码过滤在召回后通过 is_allowed() 二次校验，并在融合�
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -38,11 +40,29 @@ import numpy as np
 from common.audit import log_audit_event
 from common.config import get_config_dict
 from core.pipeline_context import SessionState
+from monitoring.otel_tracer import MetricsCollector
+from retrieval.clip_path_status import ClipPathOutcome, ClipPathStatus
 from retrieval_service.rerank.rrf_fusion import rrf_fusion
 
 config = get_config_dict()
 
 logger = logging.getLogger(__name__)
+
+
+def _record_metrics(record, **kwargs) -> None:
+    """Record into the shared collector, never letting telemetry affect recall.
+
+    Uses the process-wide ``common.tracing.get_metrics()`` singleton rather than a local
+    instance: a per-instance collector would split one counter across several series and
+    make the totals meaningless to an operator.
+    """
+    try:
+        from common.tracing import get_metrics
+
+        record(get_metrics(), **kwargs)
+    except Exception:
+        logger.debug("CLIP 路径指标记录失败", exc_info=True)
+
 
 #: Unique documents below this count after fusion trigger the ES fallback.
 #: The only trigger for that supplementary recall; a failing Qdrant path is
@@ -65,7 +85,63 @@ class ParallelRecallManager:
         self._clip_retriever = None
         self._rewrite_variants_retriever = None
         self.max_workers = 4
+        # CLIP 的同步召回共用一个长驻单线程池，而不是每请求新建。
+        # 单槽闸门保证同一时刻至多一个 CLIP 任务在执行：CLIP 前向无法安全取消，
+        # 因此超时的任务被「遗弃」而不是等待，队列也不会在慢模型下无限增长。
+        self._clip_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clip-recall")
+        self._clip_slot = threading.Lock()
+        self._clip_status = ClipPathStatus()
+        self._clip_status_lock = threading.Lock()
         logger.info("ParallelRecallManager 初始化完成")
+
+    @property
+    def clip_embedding_service(self):
+        """Manager-scoped CLIP encoder, created once.
+
+        Previously ``_recall_clip`` constructed a fresh ``EmbeddingService`` per request.
+        Because the CLIP weights load lazily, that turned every multimodal request into a
+        full weight reload and put the load permanently outside the sync budget. Caching
+        the service keeps the injection point (``models.embedding_service.EmbeddingService``
+        is still imported at first use) while loading the weights once per process.
+        """
+        if getattr(self, "_clip_embedding_service", None) is None:
+            from models.embedding_service import EmbeddingService
+
+            self._clip_embedding_service = EmbeddingService()
+        return self._clip_embedding_service
+
+    def _ensure_clip_runtime(self) -> None:
+        """Lazily create the CLIP execution runtime.
+
+        ``__init__`` sets these, but the test suite (and any caller substituting the
+        retrievers) legitimately builds the manager without it. Initialising on first
+        use keeps the single-slot guarantee without requiring every construction path to
+        remember it.
+        """
+        if not hasattr(self, "_clip_pool"):
+            self._clip_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clip-recall")
+        if not hasattr(self, "_clip_slot"):
+            self._clip_slot = threading.Lock()
+        if not hasattr(self, "_clip_status_lock"):
+            self._clip_status_lock = threading.Lock()
+        if not hasattr(self, "_clip_status"):
+            self._clip_status = ClipPathStatus()
+
+    def clip_path_status(self) -> ClipPathStatus:
+        """Terminal status of the most recent CLIP path attempt.
+
+        Read by :meth:`execute` for degradation reporting and metrics. A ``UNSET``
+        status means the path was substituted rather than executed, which is treated as
+        "not instrumented" rather than as a failure.
+        """
+        self._ensure_clip_runtime()
+        with self._clip_status_lock:
+            return self._clip_status
+
+    def _set_clip_path_status(self, status: ClipPathStatus) -> None:
+        self._ensure_clip_runtime()
+        with self._clip_status_lock:
+            self._clip_status = status
 
     @property
     def dense_retriever(self):
@@ -159,6 +235,7 @@ class ParallelRecallManager:
         all_results = []
         path_results: dict[str, list] = {}  # 各路径独立结果（用于计算 agreement）
         futures = {}
+        clip_pre_filter_hits: dict[str, int] = {}
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # ① Dense 语义路 (BGE → Qdrant)
@@ -206,6 +283,9 @@ class ParallelRecallManager:
                 path_name = futures[future]
                 try:
                     results = future.result()
+                    if path_name == "clip_visual":
+                        # 授权过滤前的命中数，用于区分「无命中」与「全部被权限过滤」。
+                        clip_pre_filter_hits["clip_visual"] = len(results)
                     results = self._apply_rbac_filter(results, user_role_mask, user_dept_mask)
                     path_results[path_name] = results
                     all_results.extend(results)
@@ -241,11 +321,31 @@ class ParallelRecallManager:
         # it; a failing Qdrant path is reported separately and never triggers it.
         all_doc_ids = {r.doc_id for r in all_results}
         qdrant_paths = {"dense_bge", "clip_visual", "rewrite_variants"}
+        # 结构性失败：路径未出现在 path_results 中（future 本身抛错）。
         failed_qdrant_paths = {
             path_name
             for path_name in qdrant_paths
             if any(futures[f] == path_name for f in futures) and path_name not in path_results
         }
+        # CLIP 路径自带结构化状态，因此它的失败不依赖「整体召回是否偏少」这一旁证：
+        # 即使其余通道返回了大量文档，一次视觉召回失败也必须被报告。
+        clip_status = self.clip_path_status()
+        if "clip_visual" in path_results and clip_status.is_failure:
+            failed_qdrant_paths.add("clip_visual")
+            logger.warning(
+                "CLIP 视觉召回降级: outcome=%s detail=%s elapsed=%.0fms",
+                clip_status.outcome.value,
+                clip_status.detail or "-",
+                clip_status.elapsed_ms,
+            )
+        elif (
+            "clip_visual" in path_results
+            and clip_status.outcome is ClipPathOutcome.EMPTY
+            and clip_pre_filter_hits.get("clip_visual", 0) > 0
+            and not path_results["clip_visual"]
+        ):
+            # 有命中但授权过滤后为空：这是权限结果，不是召回失败，单独计数。
+            self._record_clip_authorization_filtered(clip_pre_filter_hits["clip_visual"])
         if len(all_doc_ids) < 10:
             failed_qdrant_paths |= {
                 path_name for path_name in qdrant_paths if path_name in path_results and not path_results[path_name]
@@ -307,27 +407,27 @@ class ParallelRecallManager:
         ]
 
     def _recall_clip(self, query, qdrant_filter, top_k) -> list:
+        """CLIP 视觉语义召回（含 PRD §4.5 预算保护）。
+
+        返回值契约不变：``list[RecallResult]``，异常时返回 ``[]``，因此 RRF、RBAC 与
+        Evidence Gate 的下游语义完全不受影响。
+
+        结构化状态通过 :meth:`clip_path_status` 旁路暴露，而不是改变返回类型——
+        正常零命中与执行失败都表现为 ``[]``，但两者不再不可区分。
+
+        延迟契约：``clip_sync.timeout_ms`` 现在真正约束调用方等待时间。
+        任务提交到长驻单线程池，超时后不等待（CLIP 前向无法安全取消），
+        闸门保证至多一个任务在执行，后续请求快速失败而不是排在一个慢加载后面。
         """
-        CLIP 视觉语义召回（含 PRD §4.5 120ms 超时保护）
-        """
-        from concurrent.futures import ThreadPoolExecutor
         from concurrent.futures import TimeoutError as FuturesTimeout
 
         from core.pipeline_context import RecallResult
 
         clip_timeout_s = config.get("clip_sync", {}).get("timeout_ms", 120) / 1000.0
+        started = time.perf_counter()
+        self._ensure_clip_runtime()
 
-        def _do_clip():
-            from models.embedding_service import EmbeddingService
-
-            embedding_svc = EmbeddingService()
-            clip_embedding = embedding_svc.encode_text_clip(query)
-            return self.clip_retriever.search(clip_embedding, qdrant_filter, top_k)
-
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_do_clip)
-                hits = future.result(timeout=clip_timeout_s)
+        def _to_results(hits):
             return [
                 RecallResult(
                     doc_id=h["doc_id"],
@@ -341,12 +441,115 @@ class ParallelRecallManager:
                 )
                 for h in hits
             ]
-        except (FuturesTimeout, TimeoutError) as e:
-            logger.warning(f"CLIP 检索超时 ({clip_timeout_s * 1000:.0f}ms)，丢弃 CLIP 分支: {e}")
+
+        def _finish(status: ClipPathStatus):
+            status = ClipPathStatus(
+                outcome=status.outcome,
+                hit_count=status.hit_count,
+                elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+                detail=status.detail,
+            )
+            self._set_clip_path_status(status)
+            self._record_clip_path_status(status)
+            return status
+
+        # 单槽闸门：上一次 CLIP 任务仍在执行时直接快速失败，而不是排队。
+        if not self._clip_slot.acquire(blocking=False):
+            logger.warning("CLIP 检索忙（上一任务仍在执行），跳过本次视觉召回")
+            _finish(ClipPathStatus(ClipPathOutcome.BUSY))
             return []
-        except Exception as e:
-            logger.error(f"CLIP 视觉语义召回失败: {e}")
+
+        # 复用 manager 级缓存的 EmbeddingService。此前每请求新建一个服务，懒加载因此变成
+        # 每请求重新读取 CLIP 权重，永远无法落在同步预算内。
+        embedding_svc = self.clip_embedding_service
+
+        def _do_clip():
+            clip_embedding = embedding_svc.encode_text_clip(query)
+            return self.clip_retriever.search(clip_embedding, qdrant_filter, top_k)
+
+        future = self._clip_pool.submit(_do_clip)
+
+        def _release(_fut=None):
+            self._clip_slot.release()
+
+        try:
+            hits = future.result(timeout=clip_timeout_s)
+        except (FuturesTimeout, TimeoutError) as exc:
+            logger.warning("CLIP 检索超时 (%.0fms)，丢弃 CLIP 分支: %s", clip_timeout_s * 1000, type(exc).__name__)
+            # 不 join：不阻塞调用方等待已超时的推理。闸门由回调在任务真正结束后释放。
+            future.add_done_callback(_release)
+            _finish(ClipPathStatus(ClipPathOutcome.TIMEOUT))
             return []
+        except Exception as exc:
+            _release()
+            outcome, detail = self._classify_clip_failure(exc)
+            logger.error("CLIP 视觉语义召回失败 [%s/%s]: %s", outcome.value, detail, type(exc).__name__)
+            _finish(ClipPathStatus(outcome, detail=detail))
+            return []
+
+        _release()
+        results = _to_results(hits)
+        outcome = ClipPathOutcome.OK if results else ClipPathOutcome.EMPTY
+        _finish(ClipPathStatus(outcome, hit_count=len(results)))
+        return results
+
+    @staticmethod
+    def _record_clip_authorization_filtered(pre_filter_count: int) -> None:
+        """Record that the visual path matched documents this caller may not see.
+
+        This is an authorization outcome, not a recall failure: the path worked and the
+        results were correctly removed. It is counted separately so an operator reading
+        ``clip.path.degraded`` does not mistake a permission boundary for an outage.
+        Only the count is recorded — never the document ids.
+        """
+        _record_metrics(MetricsCollector.record_clip_authorization_filtered, hidden_count=pre_filter_count)
+
+    @staticmethod
+    def _classify_clip_failure(exc: BaseException) -> tuple[ClipPathOutcome, str]:
+        """把异常映射到封闭的失败分类集合。
+
+        只使用异常类型与固定 token，绝不把查询文本、文档 ID 或异常消息放进分类，
+        因为这些值会进入日志与指标名。无法识别的异常归入 ``UNKNOWN``，而不是伪装成
+        一次健康的零命中。
+        """
+        import numpy as _np
+
+        try:
+            from qdrant_client.http.exceptions import UnexpectedResponse as _UnexpectedResponse
+        except Exception:  # pragma: no cover - older/newer clients
+            _UnexpectedResponse = ()
+
+        if isinstance(exc, (ImportError, ModuleNotFoundError)):
+            return ClipPathOutcome.MODEL_UNAVAILABLE, "not_installed"
+        if isinstance(exc, FileNotFoundError):
+            return ClipPathOutcome.MODEL_UNAVAILABLE, "missing_weights"
+        if isinstance(exc, OSError):
+            return ClipPathOutcome.MODEL_UNAVAILABLE, "missing_weights"
+        if isinstance(exc, ValueError) and ("vector" in str(exc).lower() or "shape" in str(exc).lower()):
+            return ClipPathOutcome.DIMENSION_MISMATCH, "query_vs_collection"
+        if _UnexpectedResponse and isinstance(exc, _UnexpectedResponse):
+            return ClipPathOutcome.QDRANT_FAILED, "qdrant_error"
+        if isinstance(exc, _np.linalg.LinAlgError):
+            return ClipPathOutcome.ENCODE_FAILED, "encoder_error"
+        if isinstance(exc, RuntimeError) and "clip" in str(exc).lower():
+            return ClipPathOutcome.MODEL_UNAVAILABLE, "loader_error"
+        if isinstance(exc, ValueError):
+            return ClipPathOutcome.DIMENSION_MISMATCH, "query_vs_collection"
+        return ClipPathOutcome.UNKNOWN, "unclassified"
+
+    @staticmethod
+    def _record_clip_path_status(status: ClipPathStatus) -> None:
+        """Emit the CLIP path outcome into the existing tracer.
+
+        Reuses ``MetricsCollector.record_clip_path_attempt`` from
+        ``monitoring/otel_tracer``; no parallel monitoring stack is introduced.
+        """
+        _record_metrics(
+            MetricsCollector.record_clip_path_attempt,
+            outcome=status.outcome.value,
+            detail=status.detail,
+            elapsed_ms=status.elapsed_ms,
+        )
 
     def _recall_rewrite_variants(self, query, query_embedding, qdrant_filter, top_k) -> list:
         """改写泛化路召回"""

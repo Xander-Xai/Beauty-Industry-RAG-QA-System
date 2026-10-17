@@ -21,6 +21,30 @@ config = get_config_dict()
 logger = logging.getLogger(__name__)
 
 
+def clip_cosine_similarity(left, right) -> float:
+    """Cosine similarity between two CLIP-space vectors, with an explicit check.
+
+    Both arguments must already live in the same CLIP joint space. This helper refuses
+    to produce a number when the two are not comparable, rather than padding, truncating
+    or coercing one to match the other — a similarity between mismatched spaces is not a
+    small number, it is not a number.
+
+    Raises:
+        ValueError: differing lengths, a non-finite norm, or a zero norm.
+    """
+    left_arr = np.asarray(left, dtype=np.float32).flatten()
+    right_arr = np.asarray(right, dtype=np.float32).flatten()
+    if left_arr.shape != right_arr.shape:
+        raise ValueError(f"vector length mismatch: {left_arr.shape[0]} != {right_arr.shape[0]}")
+    left_norm = float(np.linalg.norm(left_arr))
+    right_norm = float(np.linalg.norm(right_arr))
+    if not np.isfinite(left_norm) or not np.isfinite(right_norm):
+        raise ValueError("non-finite vector norm")
+    if left_norm == 0.0 or right_norm == 0.0:
+        raise ValueError("zero-norm vector has no defined cosine similarity")
+    return float(np.dot(left_arr, right_arr) / (left_norm * right_norm))
+
+
 class EmbeddingService:
     """
     Embedding 编码服务
@@ -32,12 +56,13 @@ class EmbeddingService:
     - 统一接口封装，支持模型热切换
     """
 
-    def __init__(self, model_path: str | None = None):
+    def __init__(self, model_path: str | None = None, clip_model_path: str | None = None):
         self._bge_model = None
         self._bge_tokenizer = None
         self._bge_model_path = model_path or config["embedding"]["text"]["model_path"]
         self._clip_model = None
         self._clip_processor = None
+        self._clip_model_path = clip_model_path or config["embedding"]["image_clip"]["model_path"]
         self._qdrant_client = None
         logger.info("EmbeddingService 初始化完成（模型懒加载）")
 
@@ -57,6 +82,23 @@ class EmbeddingService:
             self._bge_model = AutoModel.from_pretrained(self._bge_model_path)
             self._bge_model.eval()
         return self._bge_model
+
+    @property
+    def clip_processor(self):
+        if self._clip_processor is None:
+            from transformers import CLIPProcessor
+
+            self._clip_processor = CLIPProcessor.from_pretrained(self._clip_model_path)
+        return self._clip_processor
+
+    @property
+    def clip_model(self):
+        if self._clip_model is None:
+            from transformers import CLIPModel
+
+            self._clip_model = CLIPModel.from_pretrained(self._clip_model_path)
+            self._clip_model.eval()
+        return self._clip_model
 
     @property
     def qdrant_client(self):
@@ -153,36 +195,71 @@ class EmbeddingService:
         return text_features.cpu().numpy()
 
     def get_image_centroid(self) -> np.ndarray | None:
-        """
-        PRD §4.5: 获取图像库质心向量
+        """PRD §4.5: 获取图像库质心向量
 
         用于 CLIP 判别器的第三个分量: query_emb vs image_centroid_sim。
         从 Qdrant rag_image_512 采样向量计算质心。
-        """
-        try:
-            collection_name = config["embedding"]["image_clip"]["collection"]
 
-            # 从 Qdrant scroll 采样向量
+        保留此方法作为兼容包装；需要区分「质心不存在」与「质心查询失败」的调用方
+        应使用 :meth:`image_centroid_with_status`。
+        """
+        centroid, _status = self.image_centroid_with_status()
+        return centroid
+
+    def image_centroid_with_status(self) -> tuple[np.ndarray | None, str]:
+        """图像库质心 + 结构化状态。
+
+        Returns:
+            ``(centroid, status)``。``status`` 为 ``"ok"``、``"no_image_vectors"``
+            （collection 为空，属正常情况）或失败分类。质心始终按
+            ``embedding.image_clip.dimension`` 校验维度，返回的向量与 CLIP 图像
+            向量同处一个 512 维联合空间。
+        """
+        expected_dim = int(config["embedding"]["image_clip"].get("dimension", 512))
+        collection_name = config["embedding"]["image_clip"]["collection"]
+        try:
             records, _ = self.qdrant_client.scroll(
                 collection_name=collection_name,
                 limit=100,
                 with_payload=False,
                 with_vectors=True,
             )
+        except Exception as exc:
+            logger.warning("图像质心查询失败 (%s): %s", type(exc).__name__, collection_name)
+            return None, "qdrant_error"
 
-            if not records:
-                return None
+        if not records:
+            return None, "no_image_vectors"
 
+        try:
             embeddings = np.array([r.vector for r in records], dtype=np.float32)
-            centroid = np.mean(embeddings, axis=0)
-            # 归一化
-            norm = np.linalg.norm(centroid)
-            if norm > 0:
-                centroid = centroid / norm
-            return centroid
-        except Exception as e:
-            logger.debug(f"图像质心计算失败: {e}")
-            return None
+        except (TypeError, ValueError):
+            # A record whose vector is absent or ragged. Reported, never coerced.
+            return None, "ragged_vectors"
+
+        if embeddings.ndim != 2:
+            return None, "ragged_vectors"
+        if embeddings.shape[1] != expected_dim:
+            # Never truncate or pad to make the shapes agree.
+            logger.warning(
+                "图像质心维度不符: collection=%s 实际=%d 期望=%d",
+                collection_name,
+                embeddings.shape[1],
+                expected_dim,
+            )
+            return None, "dimension_mismatch"
+
+        centroid = np.mean(embeddings, axis=0)
+        norm = float(np.linalg.norm(centroid))
+        if not np.isfinite(norm) or norm == 0.0:
+            # A zero or non-finite centroid would make every similarity undefined.
+            return None, "zero_norm"
+        return centroid / norm, "ok"
+
+    @property
+    def image_clip_dimension(self) -> int:
+        """The dimension the image collection and the CLIP encoders must agree on."""
+        return int(config["embedding"]["image_clip"].get("dimension", 512))
 
     def search_qdrant_text(
         self,

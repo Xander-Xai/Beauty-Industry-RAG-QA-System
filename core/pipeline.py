@@ -786,6 +786,24 @@ class OnlineRAGPipeline:
             fallback=True,
         )
 
+    def _record_clip_centroid_component(self, status: str, score: float) -> None:
+        """Record the third discriminator component's status.
+
+        An unavailable centroid is *not* a routing failure: keyword and intent routing
+        still decide, which is exactly the fail-open behaviour the PRD describes. What
+        must not happen is the component being silently indistinguishable from a
+        genuine zero similarity, so the status is emitted as its own series.
+        """
+        try:
+            from common.tracing import get_metrics
+
+            metrics = get_metrics()
+            metrics.increment(f"clip.centroid_component.{status}")
+            metrics.observe_histogram("clip.centroid_component.score", float(score))
+        except Exception:
+            # Telemetry must never change the routing decision.
+            logger.debug("CLIP 质心分量指标记录失败", exc_info=True)
+
     def _should_use_clip_sync(self, rewrite_result) -> tuple[bool, int]:
         """
         CLIP 判别式三档同步路由（PRD §4.5）
@@ -835,21 +853,42 @@ class OnlineRAGPipeline:
         intent_score = 0.3 if intent in ("formulation", "ingredient") else 0.0
 
         # PRD §4.5 第三分量: query_emb vs image_centroid_sim
+        #
+        # 两侧必须同处 CLIP 联合空间。图像质心来自 rag_image_512（512d），因此查询侧
+        # 必须用 CLIP 文本编码器（512d），而不是 BGE 文本编码器（768d）：后者与质心
+        # 维度不同，np.dot 会抛 ValueError 并被吞成 0.0，使该分量永久失效。
         centroid_score = 0.0
+        centroid_status = "ok"
+        centroid = None
         try:
-            # 获取图像库质心（懒计算，从 embedding_service 获取）
-            image_centroid = self.embedding_service.get_image_centroid()
-            if image_centroid is not None:
-                query_emb = self.embedding_service.encode_text(query_text)
-                import numpy as np
+            centroid, centroid_status = self.embedding_service.image_centroid_with_status()
+        except Exception as exc:
+            centroid_status = "centroid_unavailable"
+            logger.warning("图像质心获取失败: %s", type(exc).__name__)
 
-                centroid_score = float(
-                    np.dot(query_emb, image_centroid)
-                    / (np.linalg.norm(query_emb) * np.linalg.norm(image_centroid) + 1e-8)
-                )
+        if centroid is not None:
+            try:
+                # CLIP 文本向量与 CLIP 图像向量共享一个投影空间，这是 CLIP 的定义。
+                from models.embedding_service import clip_cosine_similarity
+
+                query_emb = self.embedding_service.encode_text_clip(query_text)
+                centroid_score = clip_cosine_similarity(query_emb, centroid)
                 centroid_score = max(centroid_score, 0.0)
-        except Exception as e:
-            logger.debug(f"图像质心相似度计算失败: {e}")
+                centroid_status = "ok"
+            except ValueError as exc:
+                # 维度不一致或零范数：不截断、不补零、不伪造一个 0.0 评分冒充正常结果。
+                centroid_status = "incompatible_vectors"
+                centroid_score = 0.0
+                logger.warning("CLIP 质心分量不可计算: %s", exc)
+            except Exception as exc:
+                # 模型不可用 / 权重缺失等。与「无命中」区分记录。
+                centroid_status = "clip_encode_unavailable"
+                centroid_score = 0.0
+                logger.warning("CLIP 查询编码失败: %s", type(exc).__name__)
+        elif centroid_status != "no_image_vectors":
+            logger.warning("图像质心不可用: %s", centroid_status)
+
+        self._record_clip_centroid_component(centroid_status, centroid_score)
 
         score = max(keyword_score, intent_score, centroid_score)
         logger.debug(

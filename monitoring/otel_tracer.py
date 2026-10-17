@@ -401,6 +401,43 @@ class MetricsCollector:
         if failure_class:
             self.increment(f"vllm.generation.attempt.failure_class.{failure_class}")
 
+    def record_clip_path_attempt(self, *, outcome: str, detail: str = "", elapsed_ms: float = 0.0) -> None:
+        """Record the terminal outcome of exactly one CLIP visual-recall attempt.
+
+        ``outcome`` is a :class:`retrieval.clip_path_status.ClipPathOutcome` value, so
+        ``rag_clip_path_outcome_*`` always sums to ``rag_clip_path_attempts``. The
+        distinction the series exists to preserve: ``empty`` is a *successful* zero-hit
+        recall and is never counted under ``rag_clip_path_degraded`` — only
+        ``model_unavailable``, ``encode_failed``, ``qdrant_failed``,
+        ``dimension_mismatch``, ``timeout``, ``busy`` and ``unknown`` are.
+
+        ``detail`` is a bounded operator-facing token appended to the name, for the same
+        reason ``record_vllm_generation_attempt`` uses a name suffix: this exporter has no
+        label plumbing. It is passed through unchanged, so callers must pass a token from
+        the closed vocabulary and never a query, a document id or an exception message.
+        """
+        self.increment("clip.path.attempts")
+        base = f"clip.path.outcome.{outcome}"
+        if detail:
+            self.increment(f"{base}.{detail}")
+        else:
+            self.increment(base)
+        if elapsed_ms >= 0:
+            self.observe_histogram("clip.path.duration", elapsed_ms)
+        if outcome not in ("ok", "empty", "unset"):
+            self.increment("clip.path.degraded")
+
+    def record_clip_authorization_filtered(self, hidden_count: int) -> None:
+        """Record that the visual path matched documents this caller may not see.
+
+        A permission boundary, not an outage: counted separately from
+        ``rag_clip_path_degraded`` so an operator cannot read it as a recall failure. Only
+        the count is recorded, never the document ids.
+        """
+        self.increment("clip.path.authorization_filtered")
+        if hidden_count >= 0:
+            self.observe_histogram("clip.path.authorization_filtered_docs", float(hidden_count))
+
     def record_vllm_generation_request(self, *, outcome: str, retries: int, elapsed_ms: float) -> None:
         """Record the terminal outcome of exactly one ``route_chat`` call.
 
