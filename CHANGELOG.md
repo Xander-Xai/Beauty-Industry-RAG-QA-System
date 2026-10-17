@@ -33,7 +33,11 @@
   - **The gap that let it ship is now closed.** `tests/test_embedding_service_clip_encoder.py`
     drives the real encoder bodies and the real `_recall_clip`, stubbing only the
     `transformers` surface (no CLIP weights needed) and the Qdrant boundary.
-    Reverting the two properties turns 8 of its 9 tests red.
+    Reverting the two properties turns 6 of its 9 tests red, including the one that
+    closes the original gap (`test_recall_clip_reaches_the_real_encoder`, which
+    reproduces the `AttributeError` through the real `_recall_clip`). The 3 that stay
+    green cover the separate `clip_model_path` constructor change and do not depend on
+    the accessors.
   - This makes the existing `docs/evidence-map.md` entry for CLIP visual recall
     accurate rather than aspirational — it already claimed
     `REPO_VERIFIED (adapter) / PENDING (real weights)`, which described the
@@ -42,6 +46,51 @@
     needs real weights and stays `VAL-MODEL-002` / issue #8. No retrieval
     metric, latency figure or benchmark result changes, because none was ever
     produced on this path.
+
+### Known limitations
+
+Found while reviewing the CLIP encoder fix above. All three are pre-existing and none
+is introduced by that change, so they are recorded rather than fixed here — the encoder
+fix only makes the query side reachable for the first time, which is what exposed them.
+None of them corrupts a returned result: each degrades the CLIP path or its observability
+while the remaining recall channels continue to answer.
+
+- **The CLIP discriminator's centroid component is permanently dead.** `core/pipeline.py::_should_use_clip_sync`
+  compares `EmbeddingService.encode_text(query_text)` — BGE, 768-d — against
+  `get_image_centroid()`, which reads `rag_image_512` and returns a 512-d vector.
+  `np.dot` on those raises `ValueError: shapes (768,) and (512,) not aligned` on every
+  call, which the surrounding `except Exception` logs at `debug` and leaves
+  `centroid_score = 0.0`. Visual routing therefore runs on the keyword and intent
+  components alone; the third component described in PRD §4.5 contributes nothing.
+  `REPO_VERIFIED` as a defect — no test executes this branch, which is the same
+  substitution gap that hid the encoder bug.
+- **A swallowed CLIP failure is not reported on a healthy request.** `_recall_clip`
+  returns `[]` rather than raising, so `path_results["clip_visual"]` is set to an empty
+  list and the `failed_qdrant_paths` aggregate only reports it when the request returned
+  fewer than 10 distinct documents. When the other channels answer normally the failure
+  leaves only the `logger.error` from inside `_recall_clip`; there is no per-path failure
+  metric. Timeouts are distinguishable (a separate `logger.warning` at
+  `parallel_recall.py:345`), but model-unavailable, a wrong vector dimension and any
+  other encoder exception collapse into one generic `except Exception` carrying only the
+  exception string — no structured, security-safe reason class.
+- **The 120 ms CLIP budget does not bound latency, and the weights are never reused.**
+  `_recall_clip` builds a fresh `EmbeddingService()` per request (`parallel_recall.py:323`
+  and `:510`), so lazy loading re-reads the CLIP weights on every multimodal request
+  rather than caching them. The `with ThreadPoolExecutor(...)` block then calls
+  `shutdown(wait=True)` on exit, so a `future.result(timeout=0.12)` that times out still
+  blocks until the in-flight load finishes: a load standing in for the real one ran 1502 ms
+  wall time against a 120 ms budget. The timeout converts the outcome to `[]` but does not
+  cap the wait. Until the service is shared across requests and pre-warmed, the visual
+  path is expected to remain non-contributing at runtime. `REPO_VERIFIED` by measurement
+  of the executor semantics; the magnitude with real weights is `PENDING` under
+  `VAL-MODEL-002`, and no latency number is claimed.
+
+Also noted, no action taken: `encode_text_clip` returns an unnormalised vector while
+`encode_texts_clip_batch` L2-normalises. This is harmless — the image collection is
+created with `Distance.COSINE` and validated as such in `offline/qdrant_writer.py`, Qdrant
+normalises internally, and the one other CLIP consumer normalises both operands before
+the dot product — but the two encoders do not share one documented return contract. The
+query side also has no `device` argument, unlike `offline/embeddings.py::CLIPImageEmbedder`.
 
 ### Added
 
