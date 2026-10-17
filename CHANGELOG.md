@@ -47,50 +47,76 @@
     metric, latency figure or benchmark result changes, because none was ever
     produced on this path.
 
+### Fixed
+
+- **The CLIP visual recall path failed three more ways after the encoder fix, each
+  invisible from the outside.** The encoder fix made the query side reachable for the
+  first time, which exposed what was behind it.
+
+  - **The centroid discriminator component could never contribute.** `core/pipeline.py::_should_use_clip_sync`
+    compared `EmbeddingService.encode_text(query_text)` — BGE, 768-d — against the image
+    centroid, which is CLIP, 512-d. `np.dot` raised `ValueError: shapes (768,) and (512,)
+    not aligned` on every call, the surrounding `except Exception` logged it at `debug`,
+    and `centroid_score` was left at `0.0`. PRD §4.5's third component was dead code and
+    visual routing ran on the keyword and intent components alone. The query side now
+    uses the CLIP text encoder, which shares the joint projection space with the image
+    vectors, and `models.embedding_service.clip_cosine_similarity` refuses to return a
+    number for mismatched lengths, non-finite norms or zero norms rather than padding,
+    truncating or coercing one side to match the other. `get_image_centroid` keeps its
+    signature; `image_centroid_with_status` additionally distinguishes an empty collection
+    from a Qdrant failure, ragged vectors, a dimension mismatch and a zero norm. Keyword
+    and intent routing are unchanged, and a degraded centroid stays fail-open: it stops
+    contributing to the score instead of blocking the request.
+
+  - **A healthy zero-hit recall was indistinguishable from a failure.** `_recall_clip`
+    returned `[]` for both, so the aggregate degraded-path warning — which only fired when
+    the whole request returned fewer than 10 documents — stayed silent on an otherwise
+    healthy request, and no per-path metric existed. `_recall_clip` still returns
+    `list[RecallResult]`, so the RRF, RBAC and Evidence Gate contracts are untouched, but it
+    now also publishes a `ClipPathStatus` over a closed vocabulary: `ok`, `empty`,
+    `model_unavailable`, `encode_failed`, `qdrant_failed`, `dimension_mismatch`, `timeout`,
+    `busy`, `unknown`. Only `ok`, `empty` and `unset` are non-failures, so a real zero-hit
+    recall is never counted as an outage and an outage is never reported as a healthy zero.
+    Failure reasons are classified from exception types into a bounded token set; a query,
+    a document id or an exception message never reaches a log line or a metric name.
+    Timeouts, missing weights and a wrong vector dimension are now separable. Metrics reuse
+    the existing collector through `MetricsCollector.record_clip_path_attempt` — no parallel
+    monitoring stack. Documents matched but hidden by authorization are counted separately
+    from degradation, so a permission boundary cannot be misread as an outage.
+
+  - **The 120 ms budget bounded nothing, and the weights never persisted.** The per-call
+    `ThreadPoolExecutor` ran `shutdown(wait=True)` on context exit, so a timed-out attempt
+    still blocked until the load finished — measured at 1502 ms against the 120 ms budget —
+    while a fresh `EmbeddingService` per request turned lazy loading into a full weight
+    reload on every multimodal request. The attempt now runs on a long-lived single-slot
+    pool shared by the manager, and a timeout abandons the attempt instead of joining it.
+    A request never waits for a weight load it did not start: while an attempt is in flight,
+    the next one fails fast as `busy` instead of queueing, so the queue cannot grow without
+    bound under a slow model. The service is created once per manager, so the weights load
+    once per process. Inference cannot be cancelled safely, so isolation and reclamation are
+    explicit: an abandoned attempt keeps running on the single worker, its result is
+    discarded, and the slot is released when it actually finishes.
+
+  `tests/test_clip_path_contract.py` covers all three. Reverting the latency work turns 11
+  of its tests red and reverting the encoder choice turns 2 red, including the one asserting
+  that a visually-relevant query with no visual keyword still routes on the centroid alone.
+
 ### Known limitations
 
-Found while reviewing the CLIP encoder fix above. All three are pre-existing and none
-is introduced by that change, so they are recorded rather than fixed here — the encoder
-fix only makes the query side reachable for the first time, which is what exposed them.
-None of them corrupts a returned result: each degrades the CLIP path or its observability
-while the remaining recall channels continue to answer.
+Still open after the fixes above, recorded rather than silently left:
 
-- **The CLIP discriminator's centroid component is permanently dead.** `core/pipeline.py::_should_use_clip_sync`
-  compares `EmbeddingService.encode_text(query_text)` — BGE, 768-d — against
-  `get_image_centroid()`, which reads `rag_image_512` and returns a 512-d vector.
-  `np.dot` on those raises `ValueError: shapes (768,) and (512,) not aligned` on every
-  call, which the surrounding `except Exception` logs at `debug` and leaves
-  `centroid_score = 0.0`. Visual routing therefore runs on the keyword and intent
-  components alone; the third component described in PRD §4.5 contributes nothing.
-  `REPO_VERIFIED` as a defect — no test executes this branch, which is the same
-  substitution gap that hid the encoder bug.
-- **A swallowed CLIP failure is not reported on a healthy request.** `_recall_clip`
-  returns `[]` rather than raising, so `path_results["clip_visual"]` is set to an empty
-  list and the `failed_qdrant_paths` aggregate only reports it when the request returned
-  fewer than 10 distinct documents. When the other channels answer normally the failure
-  leaves only the `logger.error` from inside `_recall_clip`; there is no per-path failure
-  metric. Timeouts are distinguishable (a separate `logger.warning` at
-  `parallel_recall.py:345`), but model-unavailable, a wrong vector dimension and any
-  other encoder exception collapse into one generic `except Exception` carrying only the
-  exception string — no structured, security-safe reason class.
-- **The 120 ms CLIP budget does not bound latency, and the weights are never reused.**
-  `_recall_clip` builds a fresh `EmbeddingService()` per request (`parallel_recall.py:323`
-  and `:510`), so lazy loading re-reads the CLIP weights on every multimodal request
-  rather than caching them. The `with ThreadPoolExecutor(...)` block then calls
-  `shutdown(wait=True)` on exit, so a `future.result(timeout=0.12)` that times out still
-  blocks until the in-flight load finishes: a load standing in for the real one ran 1502 ms
-  wall time against a 120 ms budget. The timeout converts the outcome to `[]` but does not
-  cap the wait. Until the service is shared across requests and pre-warmed, the visual
-  path is expected to remain non-contributing at runtime. `REPO_VERIFIED` by measurement
-  of the executor semantics; the magnitude with real weights is `PENDING` under
-  `VAL-MODEL-002`, and no latency number is claimed.
-
-Also noted, no action taken: `encode_text_clip` returns an unnormalised vector while
-`encode_texts_clip_batch` L2-normalises. This is harmless — the image collection is
-created with `Distance.COSINE` and validated as such in `offline/qdrant_writer.py`, Qdrant
-normalises internally, and the one other CLIP consumer normalises both operands before
-the dot product — but the two encoders do not share one documented return contract. The
-query side also has no `device` argument, unlike `offline/embeddings.py::CLIPImageEmbedder`.
+- `encode_text_clip` returns an unnormalised vector while `encode_texts_clip_batch`
+  L2-normalises. Harmless — the image collection is created with `Distance.COSINE` and
+  validated as such in `offline/qdrant_writer.py`, Qdrant normalises internally, and the
+  centroid component now normalises both operands through `clip_cosine_similarity` — but the
+  two encoders do not share one documented return contract. The query side also has no
+  `device` argument, unlike `offline/embeddings.py::CLIPImageEmbedder`.
+- A shared CLIP encoder means the first request after process start still pays the weight
+  load. It now abandons that attempt at the budget instead of blocking on it, and the load
+  completes on the background worker so later requests reuse the weights — but there is no
+  explicit start-up warm-up, and the cost with real weights is unmeasured. Real CLIP timing
+  remains `PENDING` under `VAL-MODEL-002`; no latency or throughput figure is claimed here,
+  and the 120 ms budget is a configuration value, not a measured end-to-end SLA.
 
 ### Added
 
