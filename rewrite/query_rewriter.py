@@ -209,7 +209,21 @@ class QueryRewriter:
             return []
 
     def _call_llm(self, prompt: str, temperature: float = None) -> str:
-        """调用共享 4B vLLM 端点 (gen_4b)"""
+        """调用共享 4B vLLM 端点 (gen_4b)
+
+        ``query_rewrite.max_output_tokens`` and ``query_rewrite.temperature`` from
+        ``config.json`` are applied here. Previously a ``payload`` dict was built from
+        both settings and then ignored: the call hardcoded ``max_tokens=192`` while only
+        ``temperature`` was read off the payload. The two happened to agree because the
+        configured value *was* 192, so the configuration was inert rather than visibly
+        wrong — changing it in ``config.json`` would have silently done nothing.
+
+        Failures propagate. The caller (``core/pipeline.OnlineRAGPipeline.query_rewriter``
+        path) catches them and degrades to the rule-based rewrite, and
+        ``generate_variants`` degrades to an empty variant list. Router-level retry and
+        failure classification are deliberately out of scope here and remain outside the
+        resilience contract, as documented on ``StatelessRouter.route_completion``.
+        """
         from router.stateless_router import StatelessRouter
 
         payload = {
@@ -218,12 +232,17 @@ class QueryRewriter:
             "temperature": temperature if temperature is not None else self.temperature,
         }
 
+        router = StatelessRouter()
         try:
-            router = StatelessRouter()
-            response = router.route_completion("gen_4b", prompt, max_tokens=192, temperature=payload["temperature"])
-            return response
+            return router.route_completion(
+                "gen_4b",
+                payload["prompt"],
+                max_tokens=payload["max_tokens"],
+                temperature=payload["temperature"],
+            )
         except Exception as e:
-            logger.error(f"共享 4B vLLM 端点调用失败: {e}")
+            # Logged, then re-raised unchanged: the caller decides whether to degrade.
+            logger.error("共享 4B vLLM 端点调用失败: %s", type(e).__name__)
             raise
 
     def _parse_response(self, text: str, original_query: str) -> QueryRewriteResult | None:

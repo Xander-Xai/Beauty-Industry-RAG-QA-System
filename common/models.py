@@ -40,7 +40,15 @@ class RecallResult(BaseModel):
 
 
 class RerankResult(BaseModel):
-    """Single document after cross-encoder / bi-encoder re-ranking."""
+    """Single document after cross-encoder / bi-encoder re-ranking.
+
+    Provenance is carried explicitly rather than dropped at the rerank boundary.
+    ``RecallResult.metadata`` already carries ``source_path``, ``content_hash`` and
+    ``chunk_id`` from the Qdrant payload, and a reranked result is what the evidence
+    gate and the final citations are built from: dropping those fields there removed
+    the ability to state where an answer came from. ``metadata`` is kept as the escape
+    hatch for anything the named fields do not cover.
+    """
 
     doc_id: str
     content: str
@@ -51,6 +59,14 @@ class RerankResult(BaseModel):
     bi_score: float = 0.0
     nli_score: float = 0.0
     final_score: float = 0.0
+    #: Repository-relative origin of the source document, when the recall path knew it.
+    source_path: str = ""
+    #: Stable content digest of the source document, for citation verification.
+    content_hash: str = ""
+    #: Chunk identity within the source document, so a citation can name the passage.
+    chunk_id: str = ""
+    #: Anything else the recall path carried (version epoch, permission masks, ...).
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvidenceGateResult(BaseModel):

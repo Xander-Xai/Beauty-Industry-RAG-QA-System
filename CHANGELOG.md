@@ -118,6 +118,68 @@ Still open after the fixes above, recorded rather than silently left:
   remains `PENDING` under `VAL-MODEL-002`; no latency or throughput figure is claimed here,
   and the 120 ms budget is a configuration value, not a measured end-to-end SLA.
 
+### Fixed
+
+- **The Evidence Gate raised its own confidence when a check failed.**
+  `_compute_doc_consistency` returned a fixed `0.8` whenever the NLI call raised. That is a
+  *raised* default rather than a neutral one: a successful check that found contradictions
+  scores below `0.8`, so an NLI outage made the gate more permissive than a working check and
+  `w4 · 0.8` was added to the evidence score. It now fails closed — the component contributes
+  nothing — which is the direction already documented for missing rerank weights
+  (`VAL-DEGRADE-001`). The degraded state is reported through
+  `gate_mode="fail_closed_doc_consistency_unavailable"` and reset per evaluation, so a previous
+  request's failure cannot mark the next one. `tests/test_evidence_gate.py` had asserted the
+  `0.8` default as intended behaviour; that assertion is replaced by the corrected contract.
+
+- **The deployed retrieval service gated requests with a weaker Evidence Gate.**
+  `retrieval-service/rerank/` carried its own copies of `evidence_gate`, `answer_gate` and the
+  bi/cross encoders. `retrieval-service` is a deployed microservice
+  (`docker-compose.microservices.yml`, port 8200, reached by the API gateway), and its Evidence
+  Gate copy had no fail-closed marker, ignored `weights_override`, `thresholds_override` and
+  `conservative_mode` entirely — so PRD §4.4's conservative threshold raise never applied on that
+  path — and carried the same `0.8` default. `evidence_gate` and `answer_gate` now re-export the
+  canonical hardened implementations from `retrieval/`, so both deployments share one gate. The
+  reranker duplicates are left in place deliberately: the service bi-encoder has a
+  `dedicated_model_available` path the canonical one lacks, so collapsing them is a behaviour
+  change rather than a mechanical swap, and is tracked as follow-up.
+
+- **Provenance was discarded at the rerank boundary.** `RerankResult` had no `source_path`,
+  `content_hash`, `chunk_id` or `metadata` fields, and both bi-encoders built it from the recall
+  result without carrying them — even though `RecallResult.metadata` already carried them from the
+  Qdrant payload. Since the evidence gate and the final citations are built from reranked
+  results, a citation could not state where a passage came from. `RerankResult` now carries the
+  three named fields plus `metadata`, both bi-encoders populate them, and the CE ensemble already
+  mutates candidates in place so it preserves them.
+
+- **A refusal response listed the documents it had retrieved.** `evidence_locked_doc_ids` is
+  populated before generation and the API returns it unconditionally. The Evidence Gate rejection
+  returns before that point and was already correct, but the Answer Gate rejection returned after
+  it, so a refused answer still named the retrieved documents. The Answer Gate path now clears
+  the list, keeping the two refusals consistent. The ids remain gated by RBAC either way; this
+  removes an enumeration of documents that supported no answer.
+
+- **`auth/user_identity.py` was a second, unwired authentication implementation.** It was
+  superseded by `common/auth.py` (documented as migrated from it), had no importer, no test, no
+  CI or script reference, and no dynamic-import path to reach it. Its docstring still advertised a
+  `anonymous / super_admin` fallback that the code no longer had. Two authentication
+  implementations in one repository is a standing hazard — a fix to the live one need not reach
+  the dead one — so it is deleted rather than left as an unwired near-copy.
+
+- **`POST /api/continuation` answered 200 with an empty stub.** It returned
+  `{"answer": "", "has_more": false}`, which a client cannot distinguish from a real, empty
+  answer, and it was documented as "简化版" (simplified). The feature was never implemented, so
+  it now returns **501 Not Implemented** with an explicit error body rather than inventing
+  continuation behaviour; the session is still resolved so the authorization path is unchanged and
+  an unauthenticated caller is still rejected first.
+
+- **`QueryRewriter._call_llm` ignored its own configuration.** It built a `payload` from
+  `query_rewrite.max_output_tokens` and `temperature`, then called the endpoint with a hardcoded
+  `max_tokens=192` and read only `temperature` off the payload. The configured value happened to
+  be 192, so the setting was inert rather than visibly wrong: changing it in `config.json` would
+  have silently done nothing. Both settings now reach the call. The call still logs and re-raises,
+  leaving the degradation decision with its callers, and remains outside the router's resilience
+  contract as documented on `StatelessRouter.route_completion`.
+
 ### Added
 
 - **Every artifact that quotes dataset text now identifies itself, by resolving

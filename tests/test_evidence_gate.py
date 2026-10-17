@@ -209,8 +209,14 @@ class TestDocConsistency:
         score = g._compute_doc_consistency("query", [])
         assert score == 1.0
 
-    def test_consistency_returns_default_on_exception(self):
-        """NLI 推理异常时返回默认值 0.8"""
+    def test_consistency_fails_closed_on_exception(self):
+        """NLI 推理异常时该分量不计分，而不是返回一个偏高的默认值。
+
+        This previously asserted ``score == 0.8``. A fixed 0.8 is a *raised* default: a
+        genuine consistency check that found contradictions would score lower, so an
+        NLI outage made the evidence score higher and the gate more permissive than a
+        successful check. The check that could not run must not buy confidence.
+        """
         g = EvidenceEnsembleGate()
         mock_gate = MagicMock()
         # 批量 NLI 和逐条 NLI 都抛出异常
@@ -223,7 +229,45 @@ class TestDocConsistency:
             make_rerank_result("d2", 0.7),
         ]
         score = g._compute_doc_consistency("query", results)
-        assert score == 0.8
+        assert score == 0.0
+
+    def test_failed_consistency_marks_the_gate_degraded(self):
+        g = EvidenceEnsembleGate()
+        mock_gate = MagicMock()
+        mock_gate._batch_nli_inference.side_effect = RuntimeError("NLI batch error")
+        mock_gate._nli_inference.side_effect = RuntimeError("NLI model error")
+        g._answer_gate = mock_gate
+
+        results = [make_rerank_result("d1", 0.9), make_rerank_result("d2", 0.9)]
+        result = g.evaluate("query", results, retrieval_agreement_score=0.9)
+
+        assert result.doc_consistency_score == 0.0
+
+        # `_gate_mode` reports the no-weights marker first when weights are absent, which
+        # is the more fundamental condition; the consistency marker is what surfaces once
+        # weights are available, so it is asserted against that state directly.
+        g.rerank_status = {"status": "READY"}
+        assert g._gate_mode() == "fail_closed_doc_consistency_unavailable"
+        g._doc_consistency_degraded = False
+        assert g._gate_mode() == "normal"
+
+    def test_degraded_marker_does_not_leak_into_the_next_evaluation(self):
+        """The marker describes one evaluation, not the lifetime of the gate object."""
+        g = EvidenceEnsembleGate()
+        mock_gate = MagicMock()
+        mock_gate._batch_nli_inference.side_effect = RuntimeError("NLI batch error")
+        mock_gate._nli_inference.side_effect = RuntimeError("NLI model error")
+        g._answer_gate = mock_gate
+        g.rerank_status = {"status": "READY"}
+
+        docs = [make_rerank_result("d1", 0.9), make_rerank_result("d2", 0.9)]
+        assert g.evaluate("query", docs, retrieval_agreement_score=0.9).gate_mode != "normal"
+
+        healthy = MagicMock()
+        healthy._batch_nli_inference.return_value = [(0.1, 0.8)]
+        g._answer_gate = healthy
+
+        assert g.evaluate("query", docs, retrieval_agreement_score=0.9).gate_mode == "normal"
 
     def test_consistency_all_consistent(self):
         """所有文档对一致 (contradiction < 0.5)：一致性为 1.0"""

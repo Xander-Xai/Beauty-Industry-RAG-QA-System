@@ -562,6 +562,13 @@ class OnlineRAGPipeline:
                         query=ctx.user_input,
                         business_type=ctx.rewrite_result.business_type if ctx.rewrite_result else "",
                     )
+                    # No answer was produced, so there is no evidence supporting one.
+                    # `evidence_locked_doc_ids` was already populated above, and the API
+                    # returns it unconditionally — without this the refusal response
+                    # would still name the documents that were retrieved. The Evidence
+                    # Gate rejection path returns earlier and never had that problem;
+                    # this keeps the two refusals consistent.
+                    ctx.evidence_locked_doc_ids = []
                     ctx.final_response = "无法确认相关信息，请补充更多细节或换个方式提问。"
                     return ctx.final_response
 

@@ -10,6 +10,7 @@ BiEncoder 宽保留重排模块（readme 7.3 Stage 1）
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -17,7 +18,32 @@ from common.config import get_config_dict
 
 config = get_config_dict()
 
+if TYPE_CHECKING:  # pragma: no cover - annotation only
+    from core.pipeline_context import RerankResult
+
 logger = logging.getLogger(__name__)
+
+
+def _to_rerank_result(candidate, **scores) -> RerankResult:
+    """Build a RerankResult, carrying the candidate's provenance through the rerank.
+
+    Without this the ``source_path`` / ``content_hash`` / ``chunk_id`` the recall path
+    resolved from the Qdrant payload were discarded here, so the evidence gate and the
+    citations built downstream could not name where a passage came from.
+    """
+    from core.pipeline_context import RerankResult
+
+    metadata = dict(getattr(candidate, "metadata", None) or {})
+    return RerankResult(
+        doc_id=candidate.doc_id,
+        content=candidate.content,
+        source=getattr(candidate, "source", ""),
+        source_path=str(metadata.get("source_path") or ""),
+        content_hash=str(metadata.get("content_hash") or ""),
+        chunk_id=str(metadata.get("chunk_id") or ""),
+        metadata=metadata,
+        **scores,
+    )
 
 
 class BiEncoderReranker:
@@ -59,8 +85,6 @@ class BiEncoderReranker:
         Returns:
             list[RerankResult] 按 bi_score 降序排列
         """
-        from core.pipeline_context import RerankResult
-
         if not candidates:
             return []
 
@@ -81,22 +105,12 @@ class BiEncoderReranker:
             results = []
             for idx in top_indices:
                 candidate = candidates[idx]
-                results.append(
-                    RerankResult(
-                        doc_id=candidate.doc_id,
-                        content=candidate.content,
-                        source=getattr(candidate, "source", ""),
-                        bi_score=float(similarities[idx]),
-                    )
-                )
+                results.append(_to_rerank_result(candidate, bi_score=float(similarities[idx])))
 
             logger.info(f"BiEncoder 重排完成: {len(candidates)} → {len(results)}")
             return results
 
         except Exception as e:
             logger.error(f"BiEncoder 重排失败: {e}")
-            # 降级：返回原始候选的前 top_k 条
-            return [
-                RerankResult(doc_id=c.doc_id, content=c.content, source=getattr(c, "source", ""), bi_score=0.0)
-                for c in candidates[:top_k]
-            ]
+            # 降级：返回原始候选的前 top_k 条（同样保留溯源字段）
+            return [_to_rerank_result(c, bi_score=0.0) for c in candidates[:top_k]]
