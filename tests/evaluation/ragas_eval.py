@@ -284,9 +284,37 @@ class RAGASEvaluator:
         self._evaluate_calls += 1
         raw = ragas_evaluate(dataset=dataset, metrics=selected_metrics)
         self._last_raw_result = raw
-        self._last_available = True
-        self._last_warning = None
-        return {metric: getattr(raw, metric, 0.0) for metric in selected_metric_names}
+
+        # A metric RAGAS did not return is a metric that was not measured, not a
+        # metric that scored zero. `getattr(raw, metric, 0.0)` reported an absent
+        # or non-numeric value as 0.0 while `evaluator_status` still said
+        # `available`, so an unmeasured metric was indistinguishable from a
+        # measured failure. Missing metrics are omitted from the mapping instead;
+        # the report renders an absent metric as `—`, and a run that measured
+        # nothing at all is reported unavailable rather than as a zero-scored one.
+        scores: dict[str, float] = {}
+        missing: list[str] = []
+        for metric in selected_metric_names:
+            value = getattr(raw, metric, None)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                missing.append(metric)
+                continue
+            numeric = float(value)
+            if numeric != numeric:  # NaN: present but unmeasurable
+                missing.append(metric)
+                continue
+            scores[metric] = numeric
+
+        if missing:
+            msg = "RAGAS 未返回可用的指标: " + ", ".join(missing)
+            logger.warning(msg)
+        else:
+            msg = None
+        self._last_warning = msg
+        # Availability answers "did the evaluator run?", not "did every metric
+        # come back?". A partial run is a real run; an empty one is not.
+        self._last_available = bool(scores)
+        return scores
 
     # ------------------------------------------------------------------
     # Public evaluation entrypoints

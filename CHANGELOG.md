@@ -4,6 +4,196 @@
 
 ### Fixed
 
+- **A RAGAS comparison against a baseline that never ran reported an improvement.**
+  `RAGASReporter.compare_reports` differenced with
+  `baseline.overall_scores.get(metric, 0.0)`. A report whose evaluator was
+  unavailable carries `overall_scores == {}` by construction
+  (`ragas_report.py::build_report`), so every metric resolved to `0.0` and the
+  verdict logic printed `✅ 总体提升` for a run whose baseline never executed —
+  the fabricated-improvement path the evidence taxonomy exists to prevent. The
+  same default applied per category, and to any metric only one side measured.
+  - A side with no measured scores, or an explicitly `unavailable` evaluator,
+    now yields `verdict="not_comparable"` with the reason in `notes` and **no**
+    deltas. A metric present on only one side is skipped and named in `notes`
+    rather than differenced against `0.0`. Two runs sharing no metric are
+    `not_comparable`, not `mixed` — a mixed verdict claimed a result from zero
+    measurements.
+  - A report loaded from a file written before `evaluator_status` existed
+    defaults to `unknown`. It still carries scores, so it is comparable, but the
+    unverified provenance is stated in `notes` instead of being silently
+    trusted.
+  - `format_comparison_markdown` renders an absent delta as `—`. It previously
+    printed `+0.0000 →` for a metric nobody compared, which reads as "measured,
+    no change".
+  - Adds 8 regression tests (`tests/evaluation/test_ragas_report.py`,
+    `TestUnavailableRunIsNotAZero`, `TestCategoryBreakdownNeverReportsZero`).
+  - This changes **no** existing score. RAGAS stays `PENDING` (`VAL-RAGAS-001`,
+    issue #12); the harness has still never produced a real evaluator result
+    here.
+
+- **A metric RAGAS did not return was published as a score of 0.0.**
+  `RAGASEvaluator._run_ragas` ended with
+  `return {metric: getattr(raw, metric, 0.0) for metric in selected_metric_names}`
+  while setting `evaluator_status: available` unconditionally. A renamed metric,
+  a per-metric failure or a `NaN` therefore appeared in the report as a measured
+  zero, indistinguishable from a genuinely poor score. Missing and non-numeric
+  metrics are now omitted from the mapping and named in `_last_warning`; the
+  report renders an absent metric as `—`, which is the convention the overall
+  block already used and the one `benchmarks/performance.py` and
+  `tests/evaluation/answer_eval.py` follow. A run that measured **no** metric is
+  reported unavailable instead of as a zero-scored one; a partial run stays
+  available, because "did the evaluator run" and "did every metric come back"
+  are different questions.
+
+- **A category table cell with no observation printed `0.0000`.**
+  `_compute_category_breakdown` ended each metric with
+  `sum(vals) / len(vals) if vals else 0.0`, so a category in which a metric was
+  never measured was published as "measured, and it scored zero". Such cells are
+  now `None` and render as `—`.
+
+- **The load-test runner could republish a stale report as a fresh result.**
+  `tests/load/run_benchmark.py::run_benchmark` picked the most recent
+  `reports/benchmark/benchmark_*.json` after locust exited. If locust exited 0
+  without writing anything, a file left by an **earlier** session was adopted,
+  the caller wrote it out under a new timestamp and printed
+  `✅ 基准测试完成` — a green load-test result for a run that measured nothing.
+  The runner now records its start time and accepts only reports this
+  invocation could have produced; it fails explicitly instead of substituting
+  history. `reports/benchmark/README.md` documented only the empty-directory
+  case, not this one.
+
+- **The load-test HTML report rendered unmeasured values as zero.** Absent
+  latency percentiles, request counts, cache counters and the error rate were
+  all defaulted to `0` and formatted into a publishable report, including a
+  Conclusions section — contradicting `artifacts/performance/README.md`
+  ("Not executed is not zero") and `benchmarks/performance.py`. Unmeasured values
+  now render as `未测量`, an unmeasured error rate is grey rather than green, and
+  `compare_runs` prints `不可比` instead of a percentage computed against a
+  zero baseline. This matches the existing convention of `null`, never `0`.
+
+- **A skipped Qdrant check was recorded as a passing check inside the published
+  evidence artifact.** `scripts/validation/validate_qdrant_store.py` called
+  `_log(True, "redis_check_skipped", …)` when Redis was unreachable, so
+  `checks.json` carried a check that never executed with `ok: true` — sitting
+  beside four real cache-isolation checks with nothing to distinguish it. Skipped
+  checks are now recorded via `_log_skipped` with `skipped: true` and counted in
+  `checks_run` but in neither `checks_passed` nor `checks_failed`;
+  `check_counts` gained a `checks_skipped` field.
+  - The committed `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/` record gains
+    `"checks_skipped": 0` in both `checks.json` and `metadata.json`. This is the
+    derivation the file's own note already documents — none of its 20 recorded
+    checks carries a `skipped` marker — and it is **not** a new measurement: the
+    20 checks, the 20 passes and the run itself are untouched.
+  - No new evidence is claimed. `VAL-STORE-001` remains `LOCAL_REAL_VALIDATION`
+    on deterministic vectors, and Qdrant cluster / HA / throughput / TLS remain
+    `PENDING`.
+
+- **The real-BGE smoke gate reported an interrupted download as an available
+  asset.** `scripts/smoke_bge_ingestion.py::_model_asset_present` accepted a bare
+  `config.json`, so an empty or half-downloaded model directory skipped the
+  harness's `EXTERNAL_MODEL_ASSET_REQUIRED` branch (exit 3) and died inside
+  `from_pretrained` with exit 1 and a traceback — reporting a missing-asset
+  state as a smoke *failure*, and contradicting
+  `benchmarks/backends.py::_looks_like_model_dir`, which already requires config
+  **and** weights **and** tokenizer assets. The check now matches that contract,
+  with 9 tests in `tests/validation/test_model_asset_detection.py`.
+  - No weights are added and no model run is claimed. `VAL-MODEL-001` (real BGE
+    smoke) remains `PENDING` / `NOT EXECUTED` (issue #8).
+
+### Documentation
+
+- **The README denied evidence that the repository holds.** Four statements
+  about `VAL-DEGRADE-001` and `VAL-STORE-001` were false against the canonical
+  index in `docs/deferred-runtime-validation.md`:
+  - "目前没有测试断言这个端到端后果，也没有 artifact 证明它" — the consequence
+    *is* asserted, by `tests/test_evidence_gate_degradation.py`, and
+    `VAL-DEGRADE-001` is `EXECUTED` / `REPO_VERIFIED`.
+    `docs/production-readiness.md` already said so.
+  - "11 项门禁全部 `NOT EXECUTED`" (twice) and "当前状态：全部 `NOT EXECUTED`" —
+    the index has **17** entries: 15 `NOT EXECUTED`, `VAL-STORE-001`
+    (`EXECUTED`) and `VAL-DEGRADE-001` (`EXECUTED`). The README's own table
+    already graded Qdrant as `LOCAL_REAL_VALIDATION`, contradicting the summary.
+  - The Production Validation Checklist and the Roadmap marked both executed
+    entries as `⬜`, and listed issues #84 / #85 — both **closed** — as open.
+- **`LOCAL_REAL_VALIDATION` was "只有这五项，不要扩大" while the repository
+  already had six.** `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/` (20/20 checks)
+  is graded `LOCAL_REAL_VALIDATION` in `docs/evidence-map.md` and
+  `docs/deferred-runtime-validation.md`, and the README's own evidence table
+  says so. The count is corrected in `README.md`,
+  `docs/architecture-baseline.md`, `docs/production-readiness.md` and the
+  `LOCAL_REAL_VALIDATION` definition in `docs/evidence-map.md`. **No new
+  validation was performed and no level was upgraded by this change** — the sixth
+  item was already executed and already graded; only the count was wrong. The
+  "do not expand this list" instruction is retained.
+- **The runbook procedure count was 8 across six documents; the runbook has
+  11.** Corrected in `README.md`, `docs/architecture-baseline.md`,
+  `docs/pre-launch-checklist.md`, `docs/operations-guide.md`,
+  `docs/repository-truth-audit.md` and `docs/evidence-map.md`. The 5 SLO
+  objectives are correct and unchanged.
+- **`README.md` contradicted itself on the microservices.** Two places said
+  "六个微服务目录中 5 个按现状不可启动" while a third (line 197) said all six
+  `main.py` import and are asserted in subprocesses by
+  `tests/test_microservice_imports.py` — which is what issue #84 recorded and
+  fixed. Both stale statements now describe the accurate boundary: importable
+  but not container-verified and not integrated.
+- **`DATA_PROVENANCE.md` claimed "当前 12 项" over a 14-row table** while
+  `check_public_repository_boundary.py --list-datasets` enumerates 13
+  data-extension files. Rather than swap one fragile integer for another, the
+  sentence now names the command that computes it — the same choice the README
+  makes for its deliberately unpinned counts.
+
+### Governance
+
+- **The public-metadata record understated what is still published.**
+  `docs/finalization/DATA_REVIEW_BACKLOG.md` stated that the published archive
+  tags point at trees containing "只有技术文档，**没有**职业文件". That is true
+  for career *files* — no `RESUME_CLAIMS.md` or `INTERVIEW_GUIDE.md` is in those
+  trees — but it is materially incomplete: three published tags
+  (`archive/chore-final-interview-readiness-audit-336e325`,
+  `archive/chore-governance-lineage-22-24-bf788b5`,
+  `archive/chore-repository-truth-reconciliation-20261002-9b4d4da`) point at a
+  `docs/interview-evidence-map.md` that carries a third party's
+  production-scale table (corpus size, image count, internal user count,
+  short-burst QPS, production serving hardware, model migration, company award)
+  together with a first-person `Interview framing:` section. Any visitor can
+  open these at `/tree/<tag>/docs`.
+  - The neutralization list was also incomplete. PR #94, #96, #93, #92 and
+    Issue #47 / PR #57 bodies still carry their original wording, including a
+    third party's product name and a direct SHA pointer to the résumé document.
+    These are now listed as **pending human decision** rather than described as
+    handled.
+  - **No history was rewritten, no tag was deleted, no PR or Issue body was
+    edited, and no commit is amended.** Rewriting history and deleting shared
+    tags are irreversible and require separate authorization under the existing
+    policy; editing published PR/Issue bodies is an outward-facing change that
+    needs a per-item judgement, not a bulk scan. This change only makes the
+    record accurate.
+  - The section now also states the limit that matters most: both boundary
+    guards (`check_public_repository_boundary.py` and
+    `check_repo_consistency.py`) are **working-tree** guards built on
+    `git ls-files`. Everything recorded in that section is invisible to them, so
+    a green CI run must never be read as "the public repository has no residual
+    career or third-party content".
+  - Reachable-by-SHA objects and the separate question of a different, earlier
+    codebase in history under a second author identity remain **unresolved** and
+    are still governed by the same "revoke → assess → authorize" ordering.
+
+### Not verified here
+
+- No real model was loaded, no vLLM server was started, no retrieval benchmark
+  was executed and no performance run was performed. Every evidence level,
+  every `PENDING` / `NOT EXECUTED` entry and every missing metric in this entry
+  is unchanged by this release.
+- `scripts/smoke_bge_ingestion.py` was exercised only through its asset-detection
+  branch; no BGE, CLIP, PaddleOCR, CrossEncoder, NLI or Qwen weight exists in
+  this environment.
+- The stale-report fix for `tests/load/run_benchmark.py` was verified by reading
+  the call path, not by running locust against a live API.
+- No claim is made or upgraded about CLIP vector-space consistency,
+  `VAL-MODEL-002`, or the retrieval quality of any recall path.
+
+### Fixed
+
 - **The query-side CLIP text encoder could never run.** `clip_visual` is one of
   the four dynamic recall paths, but it could not contribute a single hit on any
   request: `EmbeddingService.encode_text_clip` and `encode_texts_clip_batch` read

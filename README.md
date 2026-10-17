@@ -42,7 +42,7 @@
 | 权限模型 | uint32 位掩码 RBAC（`role_mask` / `dept_mask`） | `common/auth.py` · `config.json` → `rbac` |
 | 一致性守卫 | `scripts/check_repo_consistency.py` 在 CI 中运行 | [Quick Start](#quick-start) → 开发与检查 |
 | 检索 benchmark 结果 | **结果 `PENDING`**（框架 `REPO_VERIFIED`） | [Evaluation](#evaluation) |
-| 生产上线验收 | **未完成**：11 项门禁全部 `NOT EXECUTED` | [Limitations](#limitations) |
+| 生产上线验收 | **未完成**：17 项门禁中 15 项 `NOT EXECUTED`、2 项已 `EXECUTED` | [Limitations](#limitations) |
 
 > 精确计数（测试用例数、代码行数、面板数）刻意不写死在此表，避免随迭代漂移成假声明；
 > 按 [Evidence Boundary → 复核方式](#复核方式) 给出的命令在当前 commit 现场计算。
@@ -61,7 +61,7 @@
 | 6 | **检索怎么做的、为什么这么做** | 动态 2–4 路 → 单入口加权 RRF → 两级重排 → 双 Gate；含「为什么不用微调 / 为什么 Hybrid / 为什么 Rerank」的设计取舍 | [Retrieval Pipeline](#retrieval-pipeline) |
 | 7 | **效果怎么评估** | 评测框架已实现（检索指标 + RAGAS + 性能产物契约）；**结果未产出**，golden set 缺稳定标识，相关性只能按规范化精确文本匹配 | [Evaluation](#evaluation) |
 | 8 | **已验证 / 未验证在哪看** | 边界一节讲清：[Evidence Boundary](#evidence-boundary)；逐项「已实现 / 未验证 + 升级判据」见 [Production Readiness](#production-readiness) | [docs/production-readiness.md](docs/production-readiness.md) |
-| 9 | **已知未收敛的实现细节** | 六个微服务目录中 5 个按现状不可启动 · 无 CrossEncoder 权重时全链路拒答 · 检索 benchmark 与性能产物均未执行 | [Production Readiness](#production-readiness) · issue [#84](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/84) |
+| 9 | **已知未收敛的实现细节** | 六个微服务目录可导入但未联调、未部署 · 无 CrossEncoder 权重时全链路拒答 · 检索 benchmark 与性能产物均未执行 | [Production Readiness](#production-readiness) |
 
 ---
 
@@ -531,13 +531,15 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 - **没有真实评测结果。** 检索 Recall / HitRate@1/3/5/10 / MRR@10 / NDCG@10、QPS、P95/P99
   延迟、RAGAS 质量分，全部 `PENDING`。三套评测**框架**已实现且有测试覆盖，但框架 ≠ 结果；
   golden set 缺稳定标识，当前任何检索指标都不可归因到文档身份。见 [Evaluation](#evaluation)。
-- **没有生产验证。** [Production Readiness](#production-readiness) 的 11 项门禁全部
-  `NOT EXECUTED`；没有生产部署、没有 HA/SLO 主张、没有生产延迟或吞吐证据。
+- **没有生产验证。** [Production Readiness](#production-readiness) 的 17 项门禁中仍有 15 项
+  `NOT EXECUTED`；没有生产部署、没有 HA/SLO 主张、没有生产延迟或吞吐证据。已执行的 2 项是
+  `VAL-STORE-001`（单机真实 Qdrant）与 `VAL-DEGRADE-001`（无权重降级断言），都不是生产验证。
 - **按当前仓库状态直接部署，所有查询都会被拒答。** 缺 CrossEncoder 权重时重排走确定性降级，
   `ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分
   `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`。
-- **微服务形态未联调。** 六个微服务目录中 5 个按现状不可启动；`dags/` 只有 DAG 注册，
-  无真实调度记录。
+- **微服务形态未联调。** 六个微服务目录的 `main.py` 现在都能被导入（`tests/test_microservice_imports.py`
+  在子进程中逐一断言，issue #84 记录的 5 个 `ModuleNotFoundError` 已修复），但"模块可导入"不等于
+  "容器能启动"或"端到端联调通过"，后两者仍为 `PENDING`；`dags/` 只有 DAG 注册，无真实调度记录。
 - **不提供第三方生产数据或历史业务指标。** 所有效果与性能结论必须来自本仓库可复核的运行证据；当前缺少可发布的真实评测结果。
 
 ---
@@ -585,15 +587,19 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 | 前端 + 真实后端端到端运行 | `REPO_VERIFIED`（客户端与 API metadata 契约） | `PENDING` | 一次真实浏览器运行：`frontend/` 对真实单体 + 真实 ES/Qdrant + 真实模型。首屏那张图由 Playwright 驱动**真实 UI**、后端为合成 mock，属演示产出而非后端集成证据 |
 | 前端生产部署 | —（部署态在本仓库之外） | `PENDING` | 一次真实部署并记录环境。这是 deployment-specific 状态，本仓库不断言 |
 
-#### 本地真实验证（`LOCAL_REAL_VALIDATION`，只有这 5 项）
+#### 本地真实验证（`LOCAL_REAL_VALIDATION`，6 项）
 
-在本地单主机 + 真实依赖上实际跑过，证据见 [docs/validation/v2.5-runtime-security-validation.md](docs/validation/v2.5-runtime-security-validation.md)：
+在本地单主机 + 真实依赖上实际跑过，证据见 [docs/validation/v2.5-runtime-security-validation.md](docs/validation/v2.5-runtime-security-validation.md)（前 5 项）与 [Qdrant validation record](docs/validation/qdrant-local-real-validation.md)（第 6 项）：
 
 1. Redis 7.4.9 多进程会话持久化（进程 A 写入 → 进程 B 类型化恢复 → 进程 C 观察到更新 → TTL 刷新）
 2. Redis 跨进程登录限流（跨两进程交替第 6 次 429、窗口过期、Redis 挂掉时降级单进程内存）
 3. 真实 nginx 单跳与多跳 `TRUSTED_PROXIES` 客户端 IP 解析
 4. 认证 Elasticsearch 8.11（匿名/错误凭据 401、writer mapping + `search_after`、在线 BM25 检索）
 5. 带 Bearer token 的 Prometheus 抓取（无 token 401、Bearer 200、target `up == 1`）
+6. 真实 Qdrant 1.12.0 单主机服务（20/20 检查：epoch 级 point id、payload 过滤、RBAC 融合前重过滤、缓存键隔离；**确定性向量，不是 BGE/CLIP**）
+
+第 6 项由已提交的 artifact 提升，不是新增一次运行；提升它之后本地真实验证就是 6 项，
+其余等级不因此放宽。
 
 **这不等于生产集群验证**：Redis Cluster/Sentinel、云负载均衡拓扑、多节点 ES/TLS、长期 Prometheus/Grafana 运维、生产 HA/SLO，以及 4B/14B vLLM GPU 部署，均未在本仓库验证。
 
@@ -622,10 +628,10 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 | FastAPI 单体在线链路（`/api/query`、`/api/chat`、`/api/health`） | ✅ | `PENDING`（整条链路没有一次完整运行记录；五个 `LOCAL_REAL_VALIDATION` 项各自验证的是单个机制） |
 | RS256 认证 + uint32 权限掩码契约 + 畸形声明 fail closed | ✅ | 单项 `LOCAL_REAL_VALIDATION`（nginx 代理链解析、Redis 跨进程登录限流）；整条请求路径 `PENDING` |
 | Elasticsearch 8 BM25 稀疏检索 + Painless 位掩码过滤 | ✅ | `LOCAL_REAL_VALIDATION`（认证 ES 8.11：writer mapping、`search_after`、在线 BM25） |
-| 权限纵深：存储侧下推 + 融合前文档级过滤 + L2 缓存物理分区 | ✅ | `PENDING`（无真实 Qdrant/ES 多角色语料 artifact） |
+| 权限纵深：存储侧下推 + 融合前文档级过滤 + L2 缓存物理分区 | ✅ | `LOCAL_REAL_VALIDATION`（真实单主机 Qdrant + 真实 Redis：多身份 RBAC 可见性与缓存键隔离，`VAL-STORE-001`）；`PENDING`（生产策略审计、集群拓扑） |
 | 动态 2–4 路召回选择 | ✅ | `PENDING`（选择逻辑确定且有测试，但**收益无法度量**——golden set 缺 `complexity` / `visual_required` 标签，见 #86） |
 | 两级重排调用链（BiEncoder → 150 → CrossEncoder ensemble → 10） | ✅（调用链 + 确定性降级） | `PENDING`（权重不在仓库，实际只跑过降级路径） |
-| Evidence Gate / Answer Gate 判定（含法规类矛盾拒答） | ✅ | `PENDING`（降级后果见下） |
+| Evidence Gate / Answer Gate 判定（含法规类矛盾拒答） | ✅ | `PENDING`（真实 NLI / CrossEncoder 权重下的判定质量）；**无权重时的降级后果已被断言**（`VAL-DEGRADE-001`，见下） |
 | Prompt 信任边界（证据限数据区块、当前请求限指令区块、标记转义） | ✅ | `PENDING`（结构约束，**不是** prompt injection 免疫证明） |
 | 离线 ingestion（多格式解析、扫描页 OCR 路由、确定性切块、内容哈希增量、快照校验、epoch 封存） | ✅ | `PENDING`（无真实语料 ingestion artifact） |
 | 9 字段结构化审计双 sink（Redis Stream + 每日 JSONL） | ✅ | `PENDING` |
@@ -634,19 +640,22 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 
 **未验证（`PENDING` / `DESIGN_TARGET`：代码或设计存在，真实资产 / 环境 / 凭据不可得）**
 
-真实 Qdrant 服务运行（回归覆盖目前是进程内 `:memory:`）· 检索指标 Recall / HitRate@K / MRR@10 / NDCG@10 · QPS 与 P95/P99 延迟 · RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` 会 fail-fast 而不是给零分）· BGE / CLIP / PaddleOCR / CrossEncoder 真实权重 · 4B/14B vLLM GPU 拓扑 · Airflow 真实调度 · Kubernetes 真实集群部署 · 浏览器 → 真实后端端到端 · 告警在真实流量下的触发 · OTLP span 回读 · Redis Cluster/Sentinel、多节点 ES、TLS、外部负载均衡。
+真实 Qdrant 的**集群 / HA / 吞吐 / TLS** 与真实 BGE/CLIP 向量下的召回（单机真实服务已 `EXECUTED`，见上）· 检索指标 Recall / HitRate@K / MRR@10 / NDCG@10 · QPS 与 P95/P99 延迟 · RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` 会 fail-fast 而不是给零分）· BGE / CLIP / PaddleOCR / CrossEncoder 真实权重 · 4B/14B vLLM GPU 拓扑 · Airflow 真实调度 · Kubernetes 真实集群部署 · 浏览器 → 真实后端端到端 · 告警在真实流量下的触发 · OTLP span 回读 · Redis Cluster/Sentinel、多节点 ES、TLS、外部负载均衡。
 
-**必须知道的一条降级事实**：仓库内没有 CrossEncoder 权重时，重排走确定性降级，`ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分 `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`（`config.json` → `retrieval.evidence_gate`）——**因此按当前仓库状态直接部署，所有查询都会被拒答**。这是 gate 降级时选择关闸的正确方向，但也说明缺失资产不是装饰性问题。目前没有测试断言这个端到端后果，也没有 artifact 证明它，见 `VAL-DEGRADE-001`。
+**必须知道的一条降级事实**：仓库内没有 CrossEncoder 权重时，重排走确定性降级，`ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分 `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`（`config.json` → `retrieval.evidence_gate`）——**因此按当前仓库状态直接部署，所有查询都会被拒答**。这是 gate 降级时选择关闸的正确方向，但也说明缺失资产不是装饰性问题。这个端到端后果现在**已被断言**
+而不是只被叙述：`tests/test_evidence_gate_degradation.py` 把确定性降级输出喂进 gate，对照配置的阈值
+断言 `0.40 < 0.55` 上限，并断言每个 fixture 都被拒答（`VAL-DEGRADE-001`，等级 `REPO_VERIFIED`）。
+真实 CrossEncoder 权重下的重排收益仍是 `VAL-RERANK-001`，`NOT EXECUTED`。
 
 #### Production Validation Checklist
 
-从「架构 Demo」走到「可上生产」还需要完成的验证，逐条在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md) 里有可执行的步骤与验收标准。**当前状态：全部 `NOT EXECUTED`。**
+从「架构 Demo」走到「可上生产」还需要完成的验证，逐条在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md) 里有可执行的步骤与验收标准。**当前状态：17 项中 15 项 `NOT EXECUTED`；`VAL-STORE-001` 与 `VAL-DEGRADE-001` 已 `EXECUTED`，且都不是生产验证。**
 
 | 门禁项 | 需要什么 | 状态 |
 |---|---|---|
 | 检索 benchmark 可归因 | golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required`（#86）；接真实检索执行器；跑五个配置 | ⬜ `VAL-RETRIEVAL-001` |
-| 真实 Qdrant 服务 | 单机容器 + 封存 epoch 语料；验证 epoch 过滤、epoch 级 point id、payload 过滤 | ⬜ `VAL-STORE-001` |
-| 降级行为可断言 | 无需环境：断言无权重时 Evidence Gate 必然拒答 | ⬜ `VAL-DEGRADE-001`（**最先做，零环境成本**） |
+| 真实 Qdrant 服务 | 单机容器 + 封存 epoch 语料；验证 epoch 过滤、epoch 级 point id、payload 过滤 | ✅ `VAL-STORE-001`（已 `EXECUTED`，`LOCAL_REAL_VALIDATION`；**集群 / HA / 吞吐 / TLS 仍 `PENDING`**） |
+| 降级行为可断言 | 无需环境：断言无权重时 Evidence Gate 必然拒答 | ✅ `VAL-DEGRADE-001`（已 `EXECUTED`，`REPO_VERIFIED`；真实权重下的重排收益另见下行） |
 | 两级重排收益 | 真实 CrossEncoder 权重；对比 `hybrid_rrf_biencoder` 与 `+_crossencoder` | ⬜ `VAL-RERANK-001` |
 | 真实模型权重 | BGE / CLIP / PaddleOCR smoke | ⬜ `VAL-MODEL-001/002/003` |
 | 质量分 | 获批 RAGAS evaluator 凭据 + 一次真实运行 | ⬜ `VAL-RAGAS-001` |
@@ -671,10 +680,9 @@ artifact 加证据等级提升规则。
 
 | 优先级 | 事项 | 状态 |
 |---|---|---|
-| P0 | 断言「无 CrossEncoder 权重时 Evidence Gate 必然拒答」，把该端到端后果钉死 | ⬜ `VAL-DEGRADE-001`（**零环境成本，最先做**） |
 | P0 | 检索指标可归因：golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required` | ⬜ issue #86 · `VAL-RETRIEVAL-001` |
 | P0 | 跑一次真实 BM25 / Dense / Hybrid 检索 benchmark 并提交可复现 artifact | ⬜ issue #18 |
-| P0 | 真实 Qdrant 服务运行（当前回归覆盖是进程内 `:memory:`） | ⬜ `VAL-STORE-001` |
+| P0 | 把已断言的降级后果接上真实权重：`VAL-DEGRADE-001` 零环境部分已完成，真实 CrossEncoder 收益待测 | ⬜ `VAL-RERANK-001` |
 | P1 | 真实模型权重 smoke：BGE / CLIP / PaddleOCR | ⬜ issue #8 · `VAL-MODEL-001/002/003` |
 | P1 | 两级重排收益度量：`hybrid_rrf_biencoder` vs `+_crossencoder` | ⬜ `VAL-RERANK-001` |
 | P1 | RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` fail fast） | ⬜ issue #12 之一部分 · `VAL-RAGAS-001` |
@@ -684,8 +692,8 @@ artifact 加证据等级提升规则。
 | P2 | 真实浏览器 → 真实后端端到端 smoke（当前 `PENDING`） | ⬜ issue #60 · `VAL-E2E-001` |
 | P2 | Airflow 真实调度 · Kubernetes 集群部署与 readiness | ⬜ issue #54 · `VAL-SCHED-001` · `VAL-K8S-001` |
 | P2 | 生产基础设施拓扑：Redis Cluster/Sentinel · 多节点 ES + TLS · 外部负载均衡 | ⬜ `VAL-TOPO-001` |
-| P2 | 文档与代码同步（5 处已确认漂移） | ⬜ issue #84 |
-| P2 | 外部验证索引与生产验证清单补齐 | ⬜ issue #85 |
+
+> 文档与代码同步（issue #84）与外部验证索引补齐（issue #85）已关闭，不再是待办项。
 
 ---
 
@@ -703,7 +711,7 @@ artifact 加证据等级提升规则。
 | [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md) | golden set 实测字段覆盖与它对指标可归因性的限制 |
 | [docs/repository-metadata.md](docs/repository-metadata.md) | 期望的 GitHub 仓库 About 配置（description / topics / homepage） |
 | [docs/security-regression-coverage.md](docs/security-regression-coverage.md) | 固定威胁清单、每项控制与测试、以及仍然开放的有界缺口 |
-| [docs/slo-runbook.md](docs/slo-runbook.md) | 5 个 SLO 目标（均为 `DESIGN_TARGET`）+ 8 个按真实降级路径写的处置流程 |
+| [docs/slo-runbook.md](docs/slo-runbook.md) | 5 个 SLO 目标（均为 `DESIGN_TARGET`）+ 11 个按真实降级路径写的处置流程 |
 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/user-guide.md](docs/user-guide.md) | 运维与使用手册 |
 | [docs/deployment-guide.md](docs/deployment-guide.md) · [docs/data-admin-guide.md](docs/data-admin-guide.md) | 部署与知识数据管理 |
 | [docs/ragas-evaluation-guide.md](docs/ragas-evaluation-guide.md) · [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md) | 评测框架与数据质量边界 |

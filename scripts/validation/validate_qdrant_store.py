@@ -67,26 +67,47 @@ _FAILURES = 0
 
 
 def check_counts(checks: list[dict[str, Any]]) -> dict[str, int]:
-    """Derive ``checks_run`` / ``checks_passed`` / ``checks_failed`` from the records.
+    """Derive ``checks_run`` / ``checks_passed`` / ``checks_failed`` / ``checks_skipped``
+    from the records.
 
     ``checks_run`` is the length of the executed record set. A check that never
     ran therefore cannot be counted, which is what makes a hand-written total
     (the historical 21) impossible to keep in sync by accident.
+
+    A skipped check is counted in ``checks_run`` but in neither
+    ``checks_passed`` nor ``checks_failed``, and is reported separately. The
+    Redis cache-isolation block used to call ``_log(True, "redis_check_skipped",
+    …)``, which recorded a check that never executed as a *passing* check inside
+    the published evidence artifact — indistinguishable from the executed
+    isolation checks it sat next to.
     """
     return {
         "checks_run": len(checks),
-        "checks_passed": sum(1 for check in checks if check["ok"]),
-        "checks_failed": sum(1 for check in checks if not check["ok"]),
+        "checks_passed": sum(1 for check in checks if check["ok"] and not check.get("skipped")),
+        "checks_failed": sum(1 for check in checks if not check["ok"] and not check.get("skipped")),
+        "checks_skipped": sum(1 for check in checks if check.get("skipped")),
     }
 
 
 def _log(ok: bool, check_id: str, message: str) -> None:
-    """Record one check, print its verdict, and count the failure."""
+    """Record one executed check, print its verdict, and count the failure."""
     global _FAILURES
     _CHECKS.append({"id": check_id, "ok": bool(ok), "message": message})
     print(f"[{'PASS' if ok else 'FAIL'}] {message}")
     if not ok:
         _FAILURES += 1
+
+
+def _log_skipped(check_id: str, message: str) -> None:
+    """Record a check that did not run.
+
+    It is neither a pass nor a failure. Recording it as ``ok=True`` published a
+    passing check inside ``checks.json`` for work that was never performed, and
+    ``test_a_passing_run_records_no_failures`` could not see the difference
+    because the artifact carried no marker.
+    """
+    _CHECKS.append({"id": check_id, "ok": False, "skipped": True, "message": message})
+    print(f"[SKIP] {message}")
 
 
 def qdrant_version_compatibility(client_version: str, server_version: str) -> dict[str, Any]:
@@ -197,7 +218,8 @@ def _emit_checks(destination: str | None, compatibility: dict[str, Any]) -> None
         "compatibility": compatibility,
         "note": (
             "counts are derived from the checks list above; `compatibility` is a non-gating finding "
-            "and is deliberately excluded from checks_run"
+            "and is deliberately excluded from checks_run. A check with `skipped: true` did not run: "
+            "it is counted in checks_run but in neither checks_passed nor checks_failed"
         ),
     }
     path = Path(destination)
@@ -458,7 +480,10 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - linear validatio
         )
         rclient.flushdb()
     except Exception as exc:  # noqa: BLE001 - Redis is optional for this script
-        _log(True, "redis_check_skipped", f"Redis cache-isolation check skipped (Redis not reachable: {exc})")
+        _log_skipped(
+            "redis_check_skipped",
+            f"Redis cache-isolation check skipped (Redis not reachable: {exc})",
+        )
 
     client.delete_collection(TEXT_COLLECTION)
     client.delete_collection(IMAGE_COLLECTION)

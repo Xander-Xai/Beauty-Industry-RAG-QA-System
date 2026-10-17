@@ -36,9 +36,10 @@ class EvaluationReport:
 
     tag: str  # 报告标签，如 "baseline", "v2.1-prompt-tweak"
     timestamp: str  # ISO 格式时间戳
-    overall_scores: dict[str, float]  # 指标名称 → 整体分数
+    overall_scores: dict[str, float]  # 指标名称 → 整体分数（未返回的指标不出现，不写 0）
     per_sample_scores: list[dict]  # 每条数据的评分 [{question, faithfulness, ..., business_type, difficulty}]
-    category_breakdown: dict[str, dict[str, float]]  # {类别: {指标: 均值}}
+    # {类别: {指标: 均值}}；值为 None 表示该类别没有该指标的观测，不是 0 分
+    category_breakdown: dict[str, dict[str, float | None]]
     dataset_size: int
     metadata: dict  # 配置快照、LLM 后端信息等
     # Provenance / accounting (defaults keep older report files loadable).
@@ -79,8 +80,11 @@ class ComparisonResult:
     comparison_tag: str
     overall_deltas: dict[str, float]  # 指标 → 差值（comparison - baseline）
     category_deltas: dict[str, dict[str, float]]  # {类别: {指标: 差值}}
-    verdict: str  # "improved" | "regressed" | "mixed"
+    verdict: str  # "improved" | "regressed" | "mixed" | "not_comparable"
     significant_changes: list[str]  # 显著变化的描述
+    #: Why a comparison is unavailable or partial. Empty when it is comparable.
+    #: A comparison that cannot be made must say so here rather than ship zeros.
+    notes: list[str] = field(default_factory=list)
 
 
 class RAGASReporter:
@@ -295,14 +299,24 @@ class RAGASReporter:
     def _compute_category_breakdown(
         self,
         per_sample: list[dict],
-    ) -> dict[str, dict[str, float]]:
+    ) -> dict[str, dict[str, float | None]]:
         """按分类字段（business_type, difficulty）计算各指标均值。"""
-        breakdown: dict[str, dict[str, float]] = {}
+        breakdown: dict[str, dict[str, float | None]] = {}
         if not per_sample:
             return breakdown
 
         # 获取所有评分指标键（排除分类字段）
         metric_keys = [k for k in per_sample[0] if k not in ("question", "business_type", "difficulty")]
+
+        def _means(rows: list[dict]) -> dict[str, float | None]:
+            out: dict[str, float | None] = {}
+            for mk in metric_keys:
+                vals = [r[mk] for r in rows if isinstance(r.get(mk), (int, float))]
+                # No observation in this category means the category has no score
+                # for that metric. Writing 0.0 there reported "measured, and it
+                # scored zero" for a cell that was never measured.
+                out[mk] = sum(vals) / len(vals) if vals else None
+            return out
 
         # 按 business_type 拆分
         bt_groups: dict[str, list[dict]] = {}
@@ -311,11 +325,7 @@ class RAGASReporter:
             bt_groups.setdefault(bt, []).append(row)
 
         for bt, rows in bt_groups.items():
-            key = f"business_type:{bt}"
-            breakdown[key] = {}
-            for mk in metric_keys:
-                vals = [r[mk] for r in rows if isinstance(r.get(mk), (int, float))]
-                breakdown[key][mk] = sum(vals) / len(vals) if vals else 0.0
+            breakdown[f"business_type:{bt}"] = _means(rows)
 
         # 按 difficulty 拆分
         diff_groups: dict[str, list[dict]] = {}
@@ -324,11 +334,7 @@ class RAGASReporter:
             diff_groups.setdefault(diff, []).append(row)
 
         for diff, rows in diff_groups.items():
-            key = f"difficulty:{diff}"
-            breakdown[key] = {}
-            for mk in metric_keys:
-                vals = [r[mk] for r in rows if isinstance(r.get(mk), (int, float))]
-                breakdown[key][mk] = sum(vals) / len(vals) if vals else 0.0
+            breakdown[f"difficulty:{diff}"] = _means(rows)
 
         return breakdown
 
@@ -368,33 +374,86 @@ class RAGASReporter:
         baseline: EvaluationReport,
         comparison: EvaluationReport,
     ) -> ComparisonResult:
-        """对比两个报告，计算增量并生成判断。"""
+        """对比两个报告，计算增量并生成判断。
+
+        Two reports may only be differenced when **both** actually ran. A report
+        whose evaluator was unavailable carries no scores, and substituting
+        ``0.0`` for a missing score turns "this side never executed" into a
+        measured improvement on every metric — the old behaviour reported
+        ``✅ 总体提升`` for a run whose baseline never ran. A missing side is
+        reported as ``not_comparable`` with the reason attached, and no delta is
+        emitted for a metric only one side measured.
+        """
+        notes: list[str] = []
+        unusable: list[str] = []
+        unknown: list[str] = []
+        for report in (baseline, comparison):
+            if report.evaluator_status == "unavailable" or not report.overall_scores:
+                unusable.append(
+                    f"{report.tag}（{report.evaluator_status}"
+                    f"{'：' + report.unavailable_reason if report.unavailable_reason else '：无实测分数'}）"
+                )
+            elif report.evaluator_status != "available":
+                # A report written before `evaluator_status` existed defaults to
+                # `unknown`. It carries scores, so it may be compared, but its
+                # provenance is unverified and the comparison says so rather
+                # than presenting the delta as fully attested.
+                unknown.append(f"{report.tag}（evaluator_status: unknown，来源记录无此字段）")
+        if unusable:
+            return ComparisonResult(
+                baseline_tag=baseline.tag,
+                comparison_tag=comparison.tag,
+                overall_deltas={},
+                category_deltas={},
+                verdict="not_comparable",
+                significant_changes=[],
+                notes=[
+                    "对比不可用：以下报告没有实测分数，相减会把「未执行」当成 0 分从而伪造出提升。"
+                    f"{'; '.join(unusable)}"
+                ],
+            )
+        notes.extend(f"来源记录的评测器状态未标注，对比结果未经 provenance 复核：{tag}" for tag in unknown)
+
         overall_deltas: dict[str, float] = {}
         all_metrics = set(baseline.overall_scores) | set(comparison.overall_scores)
 
-        for metric in all_metrics:
-            b = baseline.overall_scores.get(metric, 0.0)
-            c = comparison.overall_scores.get(metric, 0.0)
-            overall_deltas[metric] = round(c - b, 4)
+        for metric in sorted(all_metrics):
+            if metric not in baseline.overall_scores or metric not in comparison.overall_scores:
+                missing_in = [
+                    tag
+                    for tag, report in (("基线", baseline), ("对比", comparison))
+                    if metric not in report.overall_scores
+                ]
+                notes.append(
+                    f"{METRIC_LABELS.get(metric, metric)}：{'/'.join(missing_in)} 未给出该指标，"
+                    "已跳过而不是按 0 计入差值"
+                )
+                continue
+            overall_deltas[metric] = round(comparison.overall_scores[metric] - baseline.overall_scores[metric], 4)
 
         # 类别维度增量
         category_deltas: dict[str, dict[str, float]] = {}
         all_categories = set(baseline.category_breakdown) | set(comparison.category_breakdown)
-        for cat in all_categories:
+        for cat in sorted(all_categories):
             cat_deltas: dict[str, float] = {}
-            b_cat = baseline.category_breakdown.get(cat, {})
-            c_cat = comparison.category_breakdown.get(cat, {})
-            for metric in set(b_cat) | set(c_cat):
-                bv = b_cat.get(metric, 0.0)
-                cv = c_cat.get(metric, 0.0)
-                cat_deltas[metric] = round(cv - bv, 4)
+            b_cat = baseline.category_breakdown.get(cat) or {}
+            c_cat = comparison.category_breakdown.get(cat) or {}
+            for metric in sorted(set(b_cat) | set(c_cat)):
+                if b_cat.get(metric) is None or c_cat.get(metric) is None:
+                    continue
+                cat_deltas[metric] = round(c_cat[metric] - b_cat[metric], 4)
             if cat_deltas:
                 category_deltas[cat] = cat_deltas
 
         # 判断 verdict
         improvements = sum(1 for v in overall_deltas.values() if v > 0.01)
         regressions = sum(1 for v in overall_deltas.values() if v < -0.01)
-        if regressions == 0 and improvements > 0:
+        if not overall_deltas:
+            # Both sides ran but share no comparable metric, so no delta exists.
+            # "mixed" would claim a mixed result from zero measurements.
+            verdict = "not_comparable"
+            notes.append("两侧报告没有共同的可比指标，没有产生任何差值")
+        elif regressions == 0 and improvements > 0:
             verdict = "improved"
         elif improvements == 0 and regressions > 0:
             verdict = "regressed"
@@ -418,6 +477,7 @@ class RAGASReporter:
             category_deltas=category_deltas,
             verdict=verdict,
             significant_changes=significant_changes,
+            notes=notes,
         )
 
     # ------------------------------------------------------------------
@@ -459,11 +519,14 @@ class RAGASReporter:
         lines.append("|------|------|")
         for metric in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]:
             label = METRIC_LABELS.get(metric, metric)
-            score = report.overall_scores.get(metric, "—")
-            if isinstance(score, float):
-                lines.append(f"| {label} | {score:.4f} |")
+            # `None` = this category produced no observation for this metric.
+            # `—` is the same token the overall block already uses, so a
+            # category table can no longer show a fabricated 0.0000.
+            score = report.overall_scores.get(metric)
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                lines.append(f"| {label} | {float(score):.4f} |")
             else:
-                lines.append(f"| {label} | {score} |")
+                lines.append(f"| {label} | — |")
 
         # 类别拆分
         if report.category_breakdown:
@@ -478,7 +541,10 @@ class RAGASReporter:
                 lines.append("|------|------|")
                 for metric, score in metrics_dict.items():
                     label = METRIC_LABELS.get(metric, metric)
-                    lines.append(f"| {label} | {score:.4f} |")
+                    if isinstance(score, (int, float)) and not isinstance(score, bool):
+                        lines.append(f"| {label} | {float(score):.4f} |")
+                    else:
+                        lines.append(f"| {label} | — |")
 
         if report.failures:
             lines.append("")
@@ -501,6 +567,7 @@ class RAGASReporter:
             "improved": "✅ 总体提升",
             "regressed": "❌ 总体下降",
             "mixed": "⚠️ 混合变化",
+            "not_comparable": "⛔ 不可对比（未产生实测差值）",
         }.get(comparison.verdict, comparison.verdict)
 
         lines.append(f"# RAGAS 评估对比: {comparison.baseline_tag} → {comparison.comparison_tag}")
@@ -508,16 +575,28 @@ class RAGASReporter:
         lines.append(f"**判定**: {verdict_label}")
         lines.append("")
 
+        if comparison.notes:
+            lines.append("> ⚠️ 本次对比不完整，以下说明不可用的部分：")
+            for note in comparison.notes:
+                lines.append(f"> - {note}")
+            lines.append("")
+
         # 整体增量
         lines.append("## 整体指标变化")
         lines.append("")
-        lines.append("| 指标 | 基线 | 对比 | 增量 |")
-        lines.append("|------|------|------|------|")
+        lines.append("| 指标 | 增量 |")
+        lines.append("|------|------|")
         for metric in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]:
             label = METRIC_LABELS.get(metric, metric)
-            delta = comparison.overall_deltas.get(metric, 0.0)
-            arrow = "↑" if delta > 0.01 else ("↓" if delta < -0.01 else "→")
-            lines.append(f"| {label} | — | — | {delta:+.4f} {arrow} |")
+            # An absent delta is an unmeasured delta. The old `get(metric, 0.0)`
+            # plus a `→` arrow printed `+0.0000 →` for a metric nobody compared,
+            # which reads as "measured, no change".
+            delta = comparison.overall_deltas.get(metric)
+            if isinstance(delta, (int, float)) and not isinstance(delta, bool):
+                arrow = "↑" if delta > 0.01 else ("↓" if delta < -0.01 else "→")
+                lines.append(f"| {label} | {float(delta):+.4f} {arrow} |")
+            else:
+                lines.append(f"| {label} | — |")
 
         # 显著变化
         if comparison.significant_changes:
