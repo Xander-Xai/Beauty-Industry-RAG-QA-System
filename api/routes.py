@@ -235,24 +235,32 @@ def chat_handler(
 
 @router.post(
     "/continuation",
-    summary="长文续写（单块模式简化版）",
+    summary="长文续写（未实现）",
+    responses={501: {"model": ErrorResponse}},
 )
 def continuation_handler(
     req: ContinuationRequest,
     identity: UserIdentity = Depends(require_identity),
 ):
-    """
-    长文续写入口（单块模式简化版）。
+    """长文续写入口 — 明确未实现。
 
-    完整续写逻辑需要微服务架构支持，此处返回空桩响应。
+    This endpoint was never implemented; it returned a stub that looked like a
+    successful, empty continuation (``answer: ""`` with ``has_more: false``). A client
+    could not distinguish "the model produced nothing" from "this feature does not
+    exist", and an empty answer invites the caller to treat a non-answer as an answer.
+
+    It now returns **501 Not Implemented** with an explicit error body. The limitation is
+    tracked as an open issue rather than described as working behaviour, and no
+    continuation capability is invented here.
+
+    The session is still resolved so the authorization path stays identical to every
+    other endpoint — an unauthenticated caller is rejected before reaching the 501.
     """
     SessionState.get_or_create(req.session_id, owner_id=identity.user_id)
-    return {
-        "answer": "",
-        "has_more": False,
-        "session_id": req.session_id,
-        "outline": req.outline or [],
-    }
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=("长文续写尚未实现：该端点从未提供续写能力，此前返回的空桩响应会让调用方把空答案误认为模型输出。"),
+    )
 
 
 # ─── GET /api/dialog_history ─────────────────────────────────

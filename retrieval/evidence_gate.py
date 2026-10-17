@@ -45,6 +45,10 @@ class EvidenceEnsembleGate:
         self.weights = config["retrieval"]["evidence_gate"]["weights"]
         self.thresholds = config["retrieval"]["evidence_gate"]["thresholds"]
         self._answer_gate = None
+        # Set per-evaluate() when the inter-document consistency check could not run.
+        # Tracked so the degraded state is observable in ``gate_mode`` rather than
+        # silently folded into a plausible-looking score.
+        self._doc_consistency_degraded = False
         # Config precheck: report (do not silently mask) the missing-weights
         # state. The decision path is unchanged and stays fail-closed.
         self.rerank_status = rerank_weights_status()
@@ -66,7 +70,11 @@ class EvidenceEnsembleGate:
         return self.rerank_status
 
     def _gate_mode(self) -> str:
-        return "fail_closed_no_rerank_weights" if self.rerank_status.get("status") == "BLOCKED" else "normal"
+        if self.rerank_status.get("status") == "BLOCKED":
+            return "fail_closed_no_rerank_weights"
+        if self._doc_consistency_degraded:
+            return "fail_closed_doc_consistency_unavailable"
+        return "normal"
 
     @property
     def answer_gate(self):
@@ -101,6 +109,10 @@ class EvidenceEnsembleGate:
             EvidenceGateResult 含决策结果
         """
         from core.pipeline_context import EvidenceGateResult
+
+        # Per-call reset: the degraded marker describes *this* evaluation, so a
+        # previous request's NLI failure must not mark the next one as degraded.
+        self._doc_consistency_degraded = False
 
         if not rerank_results:
             return EvidenceGateResult(
@@ -228,5 +240,11 @@ class EvidenceEnsembleGate:
             return consistency
 
         except Exception as e:
-            logger.warning(f"NLI 文档一致性检测失败，使用默认值: {e}")
-            return 0.8
+            # Fail closed. The check could not run, so it contributes nothing rather
+            # than a fixed 0.8: a raised default would *increase* the evidence score
+            # and make an NLI outage more likely to pass the gate than a real check
+            # with genuine contradictions would. This matches the direction already
+            # documented for missing rerank weights (VAL-DEGRADE-001).
+            self._doc_consistency_degraded = True
+            logger.warning("NLI 文档一致性检测失败，按 fail-closed 处理（该分量不计分）: %s", type(e).__name__)
+            return 0.0
