@@ -19,7 +19,7 @@ corpus and CrossEncoder weights are absent, and none is.
 
 ## 1. What this closeout changed
 
-Six defects were reproduced by execution **before** being fixed. Each is a case
+Seven defects (F1–F7) were reproduced by execution **before** being fixed. Each is a case
 where the system could publish a claim that was not true — a fabricated rerank
 result, a mislabeled audit outcome, or a permission leak. The full register is in
 [`tests/test_engineering_closeout_regressions.py`](../../tests/test_engineering_closeout_regressions.py),

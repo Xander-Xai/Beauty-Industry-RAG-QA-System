@@ -25,10 +25,31 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 
 def _model_asset_present(model_path: str) -> bool:
+    """True only when the directory holds a *loadable* checkpoint.
+
+    A bare `config.json` used to count, so an interrupted download or an empty
+    directory was reported as an available asset: the harness skipped its
+    `EXTERNAL_MODEL_ASSET_REQUIRED` branch (exit 3) and died inside
+    `from_pretrained` instead, exiting 1 with a traceback and misrepresenting a
+    missing-asset state as a smoke failure. `AutoModel.from_pretrained` needs
+    config **and** weights, and `AutoTokenizer.from_pretrained` needs tokenizer
+    assets — so all three groups must be present. This mirrors
+    `benchmarks/backends.py::_looks_like_model_dir`, which already encodes the
+    same rule for the benchmark harness.
+    """
     path = Path(model_path)
     if not path.is_dir():
         return False
-    return any(path.glob("*.safetensors")) or any(path.glob("pytorch_model*.bin")) or (path / "config.json").is_file()
+    if not (path / "config.json").is_file():
+        return False
+    has_weights = any(path.glob("*.safetensors")) or any(path.glob("pytorch_model*.bin"))
+    if not has_weights:
+        return False
+    # Tokenizer assets: either a single vocab file or a pre-tokenizer directory.
+    has_tokenizer = (
+        any(path.glob("tokenizer.json")) or any(path.glob("vocab*")) or (path / "tokenizer_config.json").is_file()
+    )
+    return has_tokenizer
 
 
 def run_smoke(model_path: str, dimension: int, batch_size: int, model_revision: str | None) -> int:

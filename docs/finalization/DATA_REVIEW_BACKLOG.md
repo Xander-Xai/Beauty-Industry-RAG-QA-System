@@ -357,15 +357,30 @@ base model，却完全没有说明该路径的内容是虚构占位值。adapter
   `HISTORICAL_PRODUCTION` 分类而非复述数值。
 - Release `v2.4.0` 的说明与仓库 About 元数据经检查**无需修改**。
 
+**上表不是完整清单——2026-10-18 复核发现的遗漏**：
+
+以下公开元数据**仍原样保留**首次措辞，本轮及上一轮都未改写。改写它们会改变已发布的
+共享对象，且涉及对外表述的判断，因此**不在本次增量审计中自动执行**，留待人工决定：
+
+| 对象 | 仍公开的内容 | 为什么被遗漏 |
+|---|---|---|
+| PR #94 正文 | 前企业产品名与"离职后个人独立复现"的来源说明 | 上一轮按"技术文档同步"归类，未纳入中性化范围 |
+| PR #96 正文 | 按 SHA 直接指向已移除的 docs/finalization/RESUME_CLAIMS.md，并自述其为最敏感对象 | 披露本身是治理行为，但其公开措辞复述了求职材料的性质 |
+| PR #92 / #93 正文 | 直接点名 `INTERVIEW_GUIDE`、`RESUME_CLAIMS` 文件名 | 未纳入中性化范围 |
+| Issue #47 / PR #57 正文 | 复述了工作树已删除的旧指标数值 | 仅核查了工作树，未核查 PR/Issue 正文 |
+
 **待人工完成的核验**：
 
 - [ ] 确认被移除的内容中是否包含必须吊销的资产（真实凭据、商业秘密）。
       **本轮扫描未发现真实凭据**；工作树移除内容为企业规模数字与职业材料描述。
       这些描述的措辞属于治理用词，**不能**据此断定已发生商业秘密泄露。
+- [ ] 决定上表所列 PR / Issue 正文是否需要中性化改写。改写是可见的对外变更，
+      应当逐条判断，而不是由一次自动扫描批量执行。
 - [ ] 若确需历史重写，单独申请授权，并按"先吊销 → 再评估 → 最后授权执行"的顺序进行。
       已确认可从 `main` 历史按 SHA 访问的对象见本节末表。
 - [ ] 确认公开标签的处理方案。本轮**未**删除、未迁移任何标签，因为那属于
-      不可逆的共享对象破坏操作。
+      不可逆的共享对象破坏操作。**但下节记录的复核结果把标签问题从"只是命名问题"
+      升级为"标签指向的树里有内容"**，需要按内容而不是按命名决定。
 
 ### 当前仍可从 Git 历史访问的对象
 
@@ -379,11 +394,38 @@ base model，却完全没有说明该路径的内容是虚构占位值。adapter
 | docs/finalization/INTERVIEW_GUIDE.md | `f3d0305` 引入，`91f70a8` 删除 | 面向技术评审的问题清单 |
 | docs/interview-readiness-final-report.md | 历史提交引入，`ecd5af7`（#74）删除 | 项目状态冻结与对外表述记录 |
 | docs/interview-architecture-baseline.md、docs/interview-evidence-map.md、docs/interview-walkthrough.md | 历史提交引入；`main` 上前两份已改名为 `docs/architecture-baseline.md` 与 `docs/evidence-map.md`，第三份（走查脚本）已整体移除 | 技术文档，仅旧文件名带面试措辞，内容无个人职业信息 |
-| 归档标签 archive/chore-final-interview-readiness-audit-336e325 等 7 个 | 2026-10-04 创建 | 标签**名称**含面试措辞；标签指向的树里只有技术文档，**没有**职业文件 |
 
-标签处置建议（需授权后执行）：删除标签不会从对象库移除提交，但会移除公开可见的
-命名。若要彻底移除 `RESUME_CLAIMS.md`，需要 `git filter-repo` 重写并强推，
-并同步要求所有协作者重新克隆——**本轮未执行，也不预先授权**。
+### 公开标签指向的树里有内容——上一轮把它记成了"只有命名问题"
+
+上一版本节写的是："标签**名称**含面试措辞；标签指向的树里只有技术文档，**没有**职业文件"。
+**2026-10-18 复核推翻了后半句。** 就职业**文件**而言确实没有——RESUME_CLAIMS.md 与
+INTERVIEW_GUIDE.md 都不在这些树里。但树里有两样当时没有被计入的东西：
+
+- **前企业生产规模数值表。** 三个已发布标签
+  （`archive/chore-final-interview-readiness-audit-336e325`、
+  `archive/chore-governance-lineage-22-24-bf788b5`、
+  `archive/chore-repository-truth-reconciliation-20261002-9b4d4da`）
+  指向的 docs/interview-evidence-map.md 里带
+  `The following numbers come from a former company production environment.` 的表，
+  含文档数 / 图片数 / 内部用户数 / 短时 QPS / 生产 serving 硬件型号 / 模型迁移 / 公司奖项。
+- **一段第一人称的求职话术。** 同一文件在这些树里带 `Interview framing:` 小节，
+  含直接引用的自述句式。这既是求职表述，也是第三方生产事实。
+
+因此标签不再是"只是命名不好听"的问题，而是**三个公开、可浏览的入口直接分发这两类内容**
+（`https://github.com/<owner>/<repo>/tree/<tag>/docs` 即可打开）。处置方式应按内容决定：
+
+- 删除这三个标签会移除公开入口，但**不会**从对象库移除提交；
+- 彻底移除内容仍需 `git filter-repo` 重写 + 强推 + 全员重新克隆。
+
+**本次增量审计未删除任何标签、未改写任何历史、未改写任何 PR/Issue 正文。**
+删除共享标签是不可逆的公开对象破坏操作，按既有原则需单独授权；此处只把事实记录准确。
+
+### 一个必须说清楚的边界
+
+`scripts/check_public_repository_boundary.py` 与 `scripts/check_repo_consistency.py`
+**都是工作树守卫**（它们基于 `git ls-files`）。上面整节记录的对象对这两个 CI 守卫
+**天然不可见**——它们不读历史，也不读 GitHub 元数据。看到 CI 绿灯**不能**推出
+"公开仓没有残留职业或企业内容"。守卫能保证的是：新提交不再引入新的越界内容。
 
 ---
 

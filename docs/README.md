@@ -87,7 +87,7 @@ retrieval metric is claimed anywhere in the repository.
 
 ### Finalization closeout
 
-- [Final engineering audit](finalization/FINAL_ENGINEERING_AUDIT.md): the six false-claim/
+- [Final engineering audit](finalization/FINAL_ENGINEERING_AUDIT.md): the seven false-claim/
   permission defects found and fixed in the closeout, the items deliberately not changed,
   and the residual risks.
 - [Acceptance matrix](finalization/ACCEPTANCE_MATRIX.md): every check with its evidence path,

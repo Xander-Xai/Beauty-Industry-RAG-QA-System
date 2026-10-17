@@ -171,18 +171,21 @@ RRF 融合与去重之后，先由 BiEncoder 宽保留 Top 150，再由两个 Cr
 | 性能产物框架 | `benchmarks/performance.py`、`artifacts/performance/` | 七文件契约；未测量即 `null`，绝不写 `0`；状态由实际观测推导 |
 | Prometheus 告警规则 | `monitoring/prometheus/alerts.yml` | 6 条规则，只引用真实 emit 的 series |
 | Grafana 仪表盘 JSON | `monitoring/grafana/dashboards/rag-overview.json` | 10 个面板，只用真实指标 |
-| SLO 与故障 Runbook | `docs/slo-runbook.md` | 5 个目标 + 8 个处置流程，按代码中真实存在的降级路径编写 |
+| SLO 与故障 Runbook | `docs/slo-runbook.md` | 5 个目标 + 11 个处置流程，按代码中真实存在的降级路径编写 |
 | OTLP exporter 实现 | `monitoring/otel_exporter.py` | 可选启用、失败不影响业务、span 属性白名单 |
 
 ### LOCAL_REAL_VALIDATION（本地单主机、真实依赖上跑过）
 
-只有这五项，不要扩大：
+只有这六项，不要扩大：
 
 - Redis 多进程会话持久化
 - Redis 跨进程登录限流
 - nginx / `TRUSTED_PROXIES` 反向代理客户端 IP 解析
 - 认证 Elasticsearch（在线 BM25 + 离线 writer）
 - 带 Bearer token 的 Prometheus 抓取（无 token 401 / Bearer 200 / target `up == 1`）
+- 真实 Qdrant 单主机服务（epoch point id / payload 过滤 / RBAC 重过滤 / 缓存键隔离；
+  `VAL-STORE-001`，由已提交的 `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/` 提升，
+  **确定性向量，不构成 BGE/CLIP 模型质量证据**）
 
 ### DESIGN_TARGET（写进文档的目标值，没有任何实测支撑）
 

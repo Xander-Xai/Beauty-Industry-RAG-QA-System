@@ -57,7 +57,7 @@ def test_record_counts_are_derivable_from_the_check_list(record):
 
 def test_counts_partition_the_check_list(record):
     counts = record["counts"]
-    assert counts["checks_passed"] + counts["checks_failed"] == counts["checks_run"]
+    assert counts["checks_passed"] + counts["checks_failed"] + counts["checks_skipped"] == counts["checks_run"]
     assert counts["checks_run"] == len(record["checks"])
 
 
@@ -107,7 +107,39 @@ def test_check_counts_detects_an_inflated_metadata_total(record):
 
 def test_check_counts_counts_a_failure_as_failed():
     checks = [{"id": "a", "ok": True}, {"id": "b", "ok": False}]
-    assert check_counts(checks) == {"checks_run": 2, "checks_passed": 1, "checks_failed": 1}
+    assert check_counts(checks) == {
+        "checks_run": 2,
+        "checks_passed": 1,
+        "checks_failed": 1,
+        "checks_skipped": 0,
+    }
+
+
+def test_check_counts_does_not_report_a_skipped_check_as_passed():
+    """A check that never ran must not inflate the passing count.
+
+    The Redis cache-isolation block recorded `_log(True, "redis_check_skipped",
+    …)`, so an unreachable Redis published a *passing* check inside
+    `checks.json`. The artifact carried nothing that distinguished it from the
+    four executed cache-isolation checks beside it.
+    """
+    executed = [{"id": "a", "ok": True}, {"id": "b", "ok": False}]
+    with_skip = executed + [{"id": "redis_check_skipped", "ok": False, "skipped": True}]
+    counts = check_counts(with_skip)
+    assert counts == {
+        "checks_run": 3,
+        "checks_passed": 1,
+        "checks_failed": 1,
+        "checks_skipped": 1,
+    }
+    # The legacy shape could not express "skipped": it would have counted 2 passed.
+    assert counts["checks_passed"] == check_counts(executed)["checks_passed"]
+
+
+def test_a_skipped_check_is_not_a_passing_check(record):
+    """No recorded check may carry `ok` and `skipped` together."""
+    for check in record["checks"]:
+        assert not (check["ok"] and check.get("skipped")), f"{check['id']} is recorded as both passing and skipped"
 
 
 def test_metadata_mismatch_is_detected_by_the_shared_derivation(record):

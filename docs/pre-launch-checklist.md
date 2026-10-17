@@ -115,7 +115,7 @@
 
 - [x] performance artifact 契约（七文件、`EXECUTED`/`PARTIAL`/`BLOCKED`、未测量即 `null`）
 - [x] 结构化企业动作审计（统一 schema、强制脱敏、request_id 关联、Redis Stream + JSONL 持久化）
-- [x] SLO 与故障 Runbook（5 个目标 + 8 个处置流程；目标为 `DESIGN_TARGET`）
+- [x] SLO 与故障 Runbook（5 个目标 + 11 个处置流程；目标为 `DESIGN_TARGET`）
 - [x] Prometheus 告警规则（6 条，全部基于真实 emit 的指标；阈值为 `DESIGN_TARGET`）
 - [x] Grafana 最小仪表盘（10 个面板，仅真实指标）
 - [x] OTLP exporter 实现（默认关闭、失败不影响业务、span 属性白名单）
