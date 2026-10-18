@@ -3,8 +3,25 @@
 
 校验 JSONL 黄金数据集的格式完整性和内容质量。
 
+这里有一个必须区分开的事实，否则会产生误导性结论：
+
+* **格式校验（本脚本的默认职责）** 只回答「字段是否齐全、类型是否正确」。
+  它**不是**「相关性标签已验证」，也**不是**「检索指标可归因」。
+* **可归因性（attributability）** 由 `benchmarks.golden_set_contract` 的 v2 契约判定：
+  只有每一条 ground-truth 段落都能解析到真实索引中的 `(doc_id, chunk_id)`、
+  并带有 `corpus_version` 与人工评审状态时，才允许把检索指标当作证据。
+
+当前提交的 `golden_set.jsonl` 版本**格式合规但不可归因（0/301）**：它没有
+`doc_id` / `chunk_id` / `source_id`，relevance 只能退化为规范化精确文本匹配。
+本脚本因此在格式通过后**显式披露**可归因计数，避免「全部合规」被读成
+「相关性标签已验证」。阻塞与数据需求见 `docs/benchmark-data-quality.md`、issue #86。
+
 Usage:
     python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden_set.jsonl
+
+    # 需要把「不可归因」也当作失败（例如真实 benchmark 前置门禁）时：
+    python -m tests.evaluation.validate_golden_set \
+        --dataset tests/evaluation/golden_set.jsonl --require-attributable
 """
 
 from __future__ import annotations
@@ -25,6 +42,11 @@ VALID_BUSINESS_TYPES = {"ingredient", "regulation", "formula", "image", "general
 VALID_DIFFICULTIES = {"easy", "medium", "hard"}
 # 最小条目数
 MIN_ENTRIES = 300
+
+#: 退出码：格式失败
+EXIT_FORMAT_INVALID = 1
+#: 退出码：格式通过但不可归因（仅当 --require-attributable 时使用）
+EXIT_NOT_ATTRIBUTABLE = 2
 
 
 def validate_golden_set(path: str) -> list[str]:
@@ -111,8 +133,53 @@ def validate_golden_set(path: str) -> list[str]:
     return errors
 
 
-def main() -> None:
-    """CLI 入口。"""
+def attributability_report(path: str) -> dict:
+    """按 v2 契约测量数据集的可归因性。
+
+    只报告「有多少行可以作为检索证据」以及缺失字段的机器可读原因，绝不补齐或推断
+    任何缺失字段。返回键：``total`` / ``valid`` / ``invalid`` / ``invalid_reasons``
+    / ``attributable``。
+    """
+    from benchmarks.golden_set_contract import load_contract_rows, validate_dataset
+
+    rows = load_contract_rows(path)
+    report = validate_dataset(rows)
+    return {
+        "total": report.total,
+        "valid": report.valid_count,
+        "invalid": report.invalid_count,
+        "invalid_reasons": report.invalid_reasons(),
+        "attributable": report.valid_count > 0,
+    }
+
+
+def _render_attributability(report: dict) -> list[str]:
+    """把格式合规与「相关性标签已验证」明确区分开。"""
+    lines = [
+        "",
+        "── 可归因性（relevance attributability, golden-set-contract/v2）──",
+        f"可归因行数: {report['valid']} / {report['total']}",
+    ]
+    if report["attributable"]:
+        lines.append("该数据集可作为可归因的检索评测输入。")
+    else:
+        reasons = ", ".join(f"{name}×{count}" for name, count in sorted(report["invalid_reasons"].items()))
+        lines += [
+            "该数据集**不可归因**：检索指标若在此运行，只能退化为规范化精确文本匹配，",
+            "无法区分「检索失败」与「文本对齐失败」。",
+            f"缺失字段（机器可读）: {reasons or '-'}",
+            "",
+            "注意：**格式校验通过 ≠ golden set 的相关性标签已验证**。",
+            "身份字段（doc_id/chunk_id/source_id）、visual_required、complexity_label 与",
+            "人工评审状态仍然缺失；真实语料、封存 epoch 与人工标注是外部依赖。",
+            "阻塞与数据需求见 docs/benchmark-data-quality.md 与 issue #86；",
+            "真实运行见 issue #18。",
+        ]
+    return lines
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI 入口。返回进程退出码。"""
     parser = argparse.ArgumentParser(description="黄金数据集验证工具")
     parser.add_argument(
         "--dataset",
@@ -120,29 +187,46 @@ def main() -> None:
         required=True,
         help="JSONL 黄金数据集路径",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--require-attributable",
+        action="store_true",
+        help="格式通过但数据集不可归因时，以非零退出码失败（默认为仅披露）",
+    )
+    args = parser.parse_args(argv)
 
     errors = validate_golden_set(args.dataset)
 
     if errors:
-        print(f"❌ 验证失败 — 发现 {len(errors)} 个问题:\n")
+        print(f"❌ 格式校验失败 — 发现 {len(errors)} 个问题:\n")
         for err in errors:
             print(f"  • {err}")
-        sys.exit(1)
-    else:
-        dataset = load_golden_set(args.dataset)
-        print(f"✅ 验证通过 — {len(dataset)} 条数据全部合规")
-        # 打印统计
-        bt_counts: dict[str, int] = {}
-        diff_counts: dict[str, int] = {}
-        for entry in dataset:
-            bt = entry.get("business_type", "unspecified")
-            diff = entry.get("difficulty", "unspecified")
-            bt_counts[bt] = bt_counts.get(bt, 0) + 1
-            diff_counts[diff] = diff_counts.get(diff, 0) + 1
-        print(f"\n  按业务类型: {dict(sorted(bt_counts.items()))}")
-        print(f"  按难度: {dict(sorted(diff_counts.items()))}")
+        return EXIT_FORMAT_INVALID
+
+    dataset = load_golden_set(args.dataset)
+    print(f"✅ 格式校验通过 — {len(dataset)} 条数据字段齐全")
+
+    # 打印统计
+    bt_counts: dict[str, int] = {}
+    diff_counts: dict[str, int] = {}
+    for entry in dataset:
+        bt = entry.get("business_type", "unspecified")
+        diff = entry.get("difficulty", "unspecified")
+        bt_counts[bt] = bt_counts.get(bt, 0) + 1
+        diff_counts[diff] = diff_counts.get(diff, 0) + 1
+    print(f"\n  按业务类型: {dict(sorted(bt_counts.items()))}")
+    print(f"  按难度: {dict(sorted(diff_counts.items()))}")
+
+    report = attributability_report(args.dataset)
+    print("\n".join(_render_attributability(report)))
+
+    if args.require_attributable and not report["attributable"]:
+        print(
+            f"\n❌ --require-attributable: 可归因行数为 0/{report['total']}，拒绝把该数据集当作检索证据。",
+            file=sys.stderr,
+        )
+        return EXIT_NOT_ATTRIBUTABLE
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

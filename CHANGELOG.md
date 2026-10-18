@@ -138,6 +138,18 @@
 
 ### Documentation
 
+- **The golden-set format validator reported "all compliant" without disclosing that
+  0/301 rows are attributable.** `tests/evaluation/validate_golden_set.py` checks field
+  presence and shape only; it printed `301 条数据全部合规` and exited 0, so its pass could
+  be read as "the relevance labels are validated". Those are different claims. The CLI now
+  also runs the `golden-set-contract/v2` measurement and prints `可归因行数: 0 / 301` with
+  the named missing fields, states explicitly that a format pass is **not** relevance-label
+  validation, and gains `--require-attributable` to turn the 0/301 state into a non-zero
+  exit for a real gate. `docs/benchmark-data-quality.md` records the origin trace
+  (synthetic fixtures, no corpus, resolvers need a live ES/Qdrant) and the four external
+  prerequisites that block issue #86. No identifier, relevance label or benchmark result is
+  created; #86 stays OPEN.
+
 - **The README denied evidence that the repository holds.** Four statements
   about `VAL-DEGRADE-001` and `VAL-STORE-001` were false against the canonical
   index in `docs/deferred-runtime-validation.md`:
