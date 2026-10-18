@@ -28,6 +28,7 @@ from benchmarks.dataset import (
     DEFAULT_DATASET_PATH,
     DatasetError,
     bucket_coverage,
+    filter_attributable_queries,
     load_queries,
     load_rows,
     sample_ids_hash,
@@ -35,6 +36,7 @@ from benchmarks.dataset import (
 )
 from benchmarks.golden_set_contract import (
     DatasetContractError,
+    dataset_integrity_errors,
     require_attributable,
     validate_dataset,
 )
@@ -109,6 +111,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="minimum contract-valid fraction required by --require-contract (default 1.0)",
+    )
+    parser.add_argument(
+        "--drop-unattributable",
+        action="store_true",
+        help=(
+            "exclude samples that fail golden-set-contract/v2 instead of scoring them by "
+            "normalized-text matching. The excluded count and reasons are recorded in the "
+            "artifact. If no sample remains, the run refuses (exit 2) rather than scoring an "
+            "empty set (issue #86)."
+        ),
+    )
+    parser.add_argument(
+        "--require-integrity",
+        action="store_true",
+        help=(
+            "fail (exit 2) when the dataset has cross-row integrity errors such as a duplicate "
+            "sample_id or a passage annotated twice in one row"
+        ),
     )
     parser.add_argument(
         "--executor",
@@ -208,6 +228,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dataset error: {exc}", file=sys.stderr)
         return 2
 
+    # Issue #86: exclude unattributable samples rather than silently scoring them
+    # by normalized-text matching. Exclusion is recorded, and a run left with
+    # nothing to score refuses (exit 2) instead of producing an empty "success".
+    original_query_count = len(queries)
+    unattributable_dropped = 0
+    excluded_samples: list[dict[str, Any]] = []
+    if args.drop_unattributable:
+        kept, excluded_samples = filter_attributable_queries(queries)
+        unattributable_dropped = len(queries) - len(kept)
+        if not kept:
+            reason_counts: dict[str, int] = {}
+            for entry in excluded_samples:
+                for reason in entry["reasons"]:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            print(
+                f"--drop-unattributable removed all {original_query_count} samples "
+                f"(reasons: {reason_counts}); refusing to score. No sample was down-graded to "
+                "normalized-text matching.",
+                file=sys.stderr,
+            )
+            return 2
+        queries = kept
+
+    integrity_errors = dataset_integrity_errors([query.raw for query in queries])
+    if integrity_errors and args.require_integrity:
+        print(f"dataset integrity error: {integrity_errors}", file=sys.stderr)
+        return 2
+
     # The v2 contract is always measured so every artifact states whether its
     # dataset is attributable. It is only a hard gate when --require-contract is
     # set, so an exploratory blocked run still produces a diagnostic artifact.
@@ -227,11 +275,8 @@ def main(argv: list[str] | None = None) -> int:
 
     run_id = new_run_id()
     effective_config = effective_retrieval_config()
-    # The real executor is only wired for a configuration whose backends answered
-    # a live probe. When a backend is unavailable the factory stays None, so the
-    # run takes the existing BLOCKED path with the reason "unavailable backends"
-    # rather than emitting an all-empty ranking that would look like a measured
-    # all-zero result (see benchmarks/executors.py).
+    # Wire a real executor only for configurations that pass live backend probes.
+    # An unavailable stack remains BLOCKED, never an all-zero successful result.
     executor_factories: dict[str, Any] = {}
     if args.executor == "real":
         from benchmarks.executors import real_retriever_factory
@@ -277,8 +322,6 @@ def main(argv: list[str] | None = None) -> int:
         "effective_config": effective_config,
         "requested_configs": configs,
         "executor": args.executor,
-        # Configurations for which a real production executor was actually wired.
-        # Empty when --executor none, or when every backend probe failed.
         "real_executor_configs": sorted(executor_factories),
         "top_k": args.top_k,
         "allow_dirty": bool(args.allow_dirty),
@@ -291,6 +334,17 @@ def main(argv: list[str] | None = None) -> int:
         # a benchmark result below.
         "dataset_contract": contract_report.as_dict(),
         "attributable": attributable,
+        # What --drop-unattributable excluded, and what the cross-row integrity
+        # check found. Both are recorded even when their gate flags are off, so a
+        # reader can see the exclusion rule and any duplicate identity without
+        # re-running.
+        "unattributable_filter": {
+            "applied": bool(args.drop_unattributable),
+            "original_sample_count": original_query_count,
+            "dropped": unattributable_dropped,
+            "excluded": excluded_samples,
+        },
+        "dataset_integrity_errors": integrity_errors,
         # Which corpus this run read, and whether it actually contains the golden
         # passages. Without it two runs against different indexes are
         # indistinguishable in their provenance.

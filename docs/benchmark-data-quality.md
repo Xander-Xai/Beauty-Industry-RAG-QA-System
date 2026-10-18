@@ -206,3 +206,34 @@ execution) stay **OPEN/BLOCKED**. Field/format compliance is **not** relevance-l
 validation: the format validator now prints this distinction itself
 (`python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden_set.jsonl`),
 and `--require-attributable` turns the 0/301 state into a non-zero exit for a real gate.
+
+## Unattributable samples are excluded, not down-graded (issue #86)
+
+The v2 contract is a per-row verdict; a dataset is a mixture of valid and invalid
+rows until an annotation pass completes. Two problems follow from that mixture,
+and both are now handled explicitly rather than by the level-2 fallback:
+
+* **Exclusion instead of silent down-grading.** `--drop-unattributable` on
+  `python -m benchmarks.retrieval_benchmark` removes every sample that fails the
+  contract and records the count, the excluded sample ids and their
+  machine-readable reasons in the artifact (metadata field
+  `unattributable_filter`). A sample is therefore never scored by normalized-text
+  matching merely because its identifier is missing. If the filter leaves no
+  sample, the run refuses with exit code 2 and writes no artifact — an empty
+  dataset is not a successful run. The derived `sample_id` (the line index) is
+  preserved on kept rows, so a filtered run is directly comparable to an
+  unfiltered one.
+* **Cross-row integrity.** `dataset_integrity_errors()` (in
+  `benchmarks/golden_set_contract.py`) checks the invariants a per-row validator
+  cannot see: a `sample_id` used by two rows, and one row that annotates the same
+  passage twice. Either silently corrupts a metric — a duplicate id makes two
+  queries share a result slot, and a duplicated annotation changes the Recall@K
+  denominator. `--require-integrity` turns a non-empty result into exit code 2.
+  A dataset without `sample_id` (the committed one) has nothing to compare and is
+  unaffected.
+
+Neither flag changes the default behaviour: without them the CLI behaves exactly
+as before, and `metadata.dataset_integrity_errors` is still recorded so a reader
+can see what was found even when the gate flag is off. The committed golden set
+is still 0/301 attributable, so `--drop-unattributable` refuses it (exit 2) rather
+than scoring it.
