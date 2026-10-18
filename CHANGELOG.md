@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The duplicated Rerank implementations are consolidated into one per stage.** The
+  repository carried two parallel Rerank stacks: the canonical `retrieval/{bi_encoder,
+  cross_encoder_ensemble,rerank_batch_aggregator}.py` and a served copy under
+  `retrieval-service/rerank/`. They were not equivalent. The served `cross_encoder` and
+  `batch_aggregator` had drifted **behind** the canonical ones — no Platt scaling, no
+  tokenizer truncation, no async cross-request aggregation, CPU fallback or SLA-adaptive
+  window — so the deployed `retrieval-service` ran a weaker, less observable reranker than
+  the online path. The one feature the served copy was **ahead** on, the
+  `dedicated_model_available()` / `_rerank_with_dedicated_model()` path in its bi-encoder,
+  has been ported into `retrieval/bi_encoder.py`, so no real business path is lost. The
+  three served modules now re-export the canonical classes (`retrieval-service/main.py`
+  import paths are preserved), and `tests/test_rerank_single_implementation.py` pins both
+  the single-implementation identity and a determinism check that `core/pipeline.py` and
+  `retrieval-service/main.py` rank a fixed candidate set identically. Rerank quality with
+  real CrossEncoder weights remains `PENDING` (`VAL-MODEL-002`, issue #8); this is the
+  engineering change, not the quality measurement.
+
 ### Fixed
 
 - **A RAGAS comparison against a baseline that never ran reported an improvement.**
