@@ -285,6 +285,98 @@ def _coverage(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def select_attributable_rows(
+    rows: Sequence[Mapping[str, Any]],
+    resolver: IdentifierResolver | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split rows into contract-valid and unattributable ones.
+
+    Issue #86 asks that a row whose identity cannot be produced be **excluded**
+    rather than silently downgraded to normalized-text matching. This is the
+    helper for that: it returns ``(kept, excluded)`` where ``kept`` are the rows
+    that satisfy ``golden-set-contract/v2`` and ``excluded`` records every dropped
+    row with its machine-readable reasons.
+
+    Exclusion is loud, never silent: the caller receives the reason list and is
+    expected to record it. Filtering to zero valid rows is a refusal, not an
+    empty successful run — :func:`require_attributable` still applies to the kept
+    set.
+    """
+    kept: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for row in rows:
+        verdict = validate_row(row, resolver=resolver)
+        if verdict.status == STATUS_VALID:
+            kept.append(dict(row))
+        else:
+            excluded.append(verdict.as_dict())
+    return kept, excluded
+
+
+def dataset_integrity_errors(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Cross-row integrity checks the per-row contract cannot express.
+
+    ``validate_row`` checks one row at a time, so it cannot see two rows that
+    claim the same ``sample_id`` or one row that lists the same passage twice.
+    Both silently corrupt a measurement: a duplicate id makes two queries share
+    a result slot, and a duplicated annotation makes a one-passage ground truth
+    look like a two-passage set, changing the Recall@K denominator.
+
+    Returns a list of ``{sample_id, reason}`` objects; an empty list means the
+    dataset is internally consistent. It never invents a missing field, so a
+    dataset without ``sample_id`` (the committed one) simply has nothing to
+    compare and produces no duplicate-id error.
+    """
+    errors: list[dict[str, Any]] = []
+    seen_sample_ids: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        sample_id = row.get("sample_id")
+        if _is_nonempty_str(sample_id):
+            sample_id = str(sample_id)
+            if sample_id in seen_sample_ids:
+                errors.append(
+                    {
+                        "sample_id": sample_id,
+                        "reason": f"duplicate_sample_id: first seen at row {seen_sample_ids[sample_id]}, again at row {index}",
+                    }
+                )
+            else:
+                seen_sample_ids[sample_id] = index
+        annotations = row.get("annotations")
+        if not isinstance(annotations, list):
+            continue
+        seen_keys: set[str] = set()
+        for position, annotation in enumerate(annotations):
+            if not isinstance(annotation, Mapping):
+                continue
+            key = _annotation_key(annotation)
+            if key is None:
+                continue
+            if key in seen_keys:
+                errors.append(
+                    {
+                        "sample_id": str(sample_id) if sample_id else f"<row {index}>",
+                        "reason": f"duplicate_annotation_identity at position {position}: {key}",
+                    }
+                )
+            else:
+                seen_keys.add(key)
+    return errors
+
+
+def _annotation_key(annotation: Mapping[str, Any]) -> str | None:
+    """The ``doc_id::chunk_id`` identity of one annotation, or ``None``."""
+    doc_id = annotation.get("doc_id")
+    chunk_id = annotation.get("chunk_id")
+    if _is_nonempty_str(chunk_id):
+        if _is_nonempty_str(doc_id):
+            return f"{doc_id}::{chunk_id}"
+        return str(chunk_id)
+    if _is_nonempty_str(doc_id):
+        return str(doc_id)
+    return None
+
+
 def require_attributable(report: ContractReport, min_valid_fraction: float = 1.0) -> None:
     """Raise unless the dataset is attributable enough to be scored.
 

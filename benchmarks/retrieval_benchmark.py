@@ -28,6 +28,7 @@ from benchmarks.dataset import (
     DEFAULT_DATASET_PATH,
     DatasetError,
     bucket_coverage,
+    filter_attributable_queries,
     load_queries,
     load_rows,
     sample_ids_hash,
@@ -35,6 +36,7 @@ from benchmarks.dataset import (
 )
 from benchmarks.golden_set_contract import (
     DatasetContractError,
+    dataset_integrity_errors,
     require_attributable,
     validate_dataset,
 )
@@ -109,6 +111,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="minimum contract-valid fraction required by --require-contract (default 1.0)",
+    )
+    parser.add_argument(
+        "--drop-unattributable",
+        action="store_true",
+        help=(
+            "exclude samples that fail golden-set-contract/v2 instead of scoring them by "
+            "normalized-text matching. The excluded count and reasons are recorded in the "
+            "artifact. If no sample remains, the run refuses (exit 2) rather than scoring an "
+            "empty set (issue #86)."
+        ),
+    )
+    parser.add_argument(
+        "--require-integrity",
+        action="store_true",
+        help=(
+            "fail (exit 2) when the dataset has cross-row integrity errors such as a duplicate "
+            "sample_id or a passage annotated twice in one row"
+        ),
     )
     parser.add_argument("--list-configs", action="store_true", help="print configuration availability and exit")
     return parser
@@ -198,6 +218,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dataset error: {exc}", file=sys.stderr)
         return 2
 
+    # Issue #86: exclude unattributable samples rather than silently scoring them
+    # by normalized-text matching. Exclusion is recorded, and a run left with
+    # nothing to score refuses (exit 2) instead of producing an empty "success".
+    original_query_count = len(queries)
+    unattributable_dropped = 0
+    excluded_samples: list[dict[str, Any]] = []
+    if args.drop_unattributable:
+        kept, excluded_samples = filter_attributable_queries(queries)
+        unattributable_dropped = len(queries) - len(kept)
+        if not kept:
+            reason_counts: dict[str, int] = {}
+            for entry in excluded_samples:
+                for reason in entry["reasons"]:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            print(
+                f"--drop-unattributable removed all {original_query_count} samples "
+                f"(reasons: {reason_counts}); refusing to score. No sample was down-graded to "
+                "normalized-text matching.",
+                file=sys.stderr,
+            )
+            return 2
+        queries = kept
+
+    integrity_errors = dataset_integrity_errors([query.raw for query in queries])
+    if integrity_errors and args.require_integrity:
+        print(f"dataset integrity error: {integrity_errors}", file=sys.stderr)
+        return 2
+
     # The v2 contract is always measured so every artifact states whether its
     # dataset is attributable. It is only a hard gate when --require-contract is
     # set, so an exploratory blocked run still produces a diagnostic artifact.
@@ -263,6 +311,17 @@ def main(argv: list[str] | None = None) -> int:
         # a benchmark result below.
         "dataset_contract": contract_report.as_dict(),
         "attributable": attributable,
+        # What --drop-unattributable excluded, and what the cross-row integrity
+        # check found. Both are recorded even when their gate flags are off, so a
+        # reader can see the exclusion rule and any duplicate identity without
+        # re-running.
+        "unattributable_filter": {
+            "applied": bool(args.drop_unattributable),
+            "original_sample_count": original_query_count,
+            "dropped": unattributable_dropped,
+            "excluded": excluded_samples,
+        },
+        "dataset_integrity_errors": integrity_errors,
         # Which corpus this run read, and whether it actually contains the golden
         # passages. Without it two runs against different indexes are
         # indistinguishable in their provenance.

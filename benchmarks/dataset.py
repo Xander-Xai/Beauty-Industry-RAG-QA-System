@@ -232,6 +232,34 @@ def sample_ids_hash(queries: Sequence[BenchmarkQuery]) -> str:
     return digest.hexdigest()
 
 
+def filter_attributable_queries(
+    queries: Sequence[BenchmarkQuery],
+    resolver: object | None = None,
+) -> tuple[list[BenchmarkQuery], list[dict[str, Any]]]:
+    """Split loaded queries into contract-valid and unattributable ones.
+
+    Implements issue #86's requirement that a sample whose stable identity cannot
+    be produced is **excluded** rather than scored by normalized-text matching.
+    The derived ``sample_id`` is preserved on both sides, so a filtered run scores
+    the same queries under the same ids as an unfiltered one.
+
+    Returns ``(kept, excluded)`` where ``excluded`` records each dropped query's
+    id and machine-readable reasons. The caller is responsible for refusing a run
+    whose kept set is empty.
+    """
+    from benchmarks.golden_set_contract import STATUS_VALID, validate_row
+
+    kept: list[BenchmarkQuery] = []
+    excluded: list[dict[str, Any]] = []
+    for query in queries:
+        verdict = validate_row(query.raw, resolver=resolver)  # type: ignore[arg-type]
+        if verdict.status == STATUS_VALID:
+            kept.append(query)
+        else:
+            excluded.append({"sample_id": query.sample_id, "reasons": list(verdict.reasons)})
+    return kept, excluded
+
+
 def bucket_coverage(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Field coverage used to state which breakdowns are supported."""
     keys = ("question", "answer", "ground_truth", "contexts", "business_type", "difficulty") + KNOWN_UNAVAILABLE_BUCKETS
