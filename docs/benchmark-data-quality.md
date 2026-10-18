@@ -2,7 +2,8 @@
 
 This document records the data-quality gaps that limit the current retrieval
 benchmark, measured against `tests/evaluation/golden_set.jsonl` at
-`main` @ `aa189d9`.
+`main` @ `b711d99` (re-measured; the coverage below is unchanged from the earlier
+`aa189d9` anchor).
 
 Nothing here is inferred. Every count below is the measured field coverage of
 the dataset as committed.
@@ -165,3 +166,43 @@ python3 scripts/validation/audit_annotations.py \
 
 Full per-metric readiness (what is `VERIFIED`, `BLOCKED`, and why) is recorded in
 [RAG evaluation readiness](validation/rag-eval-readiness.md).
+
+## Data requirement and blocker evidence (issue #86)
+
+The identity gap is not an oversight that can be patched by filling in blank fields; the
+identifiers have no real source to be recovered from. Traced to origin:
+
+- Every passage in `golden_set.jsonl` and its variants is a **synthetic fixture**. The
+  passage texts appear only inside `tests/evaluation/golden_set.jsonl`,
+  `golden_set_expanded.jsonl`, `sample_golden_set.jsonl` and the v2 workpackage — they do
+  not occur as a document in any source corpus. (See `tests/evaluation/DATA_PROVENANCE.md`:
+  the regulation names, limits and registry formats are fabricated placeholders.)
+- There is no built corpus in the working tree: no `corpus/` directory and no sealed index.
+- The v2 identifier resolvers (`qdrant_resolver` / `elasticsearch_resolver`) are
+  existence-only, but they require a **live** Elasticsearch (`:9200`) and Qdrant (`:6333`).
+  Neither is reachable here, so no `(doc_id, chunk_id)` can be resolved even if one were
+  written.
+
+Therefore `doc_id` / `chunk_id` / `source_id` **cannot be restored from a real source and
+must not be invented**. Writing plausible-looking identifiers that no index resolves is the
+exact failure `require_attributable()` exists to catch.
+
+What the data task requires, and why each item is external:
+
+1. **An authorised corpus.** Licensed or otherwise cleared source documents. The fixtures
+   cannot substitute; `offline/source_trust.py` gates unlicensed material as `UNTRUSTED`.
+2. **A sealed epoch.** `corpus_version` plus its `corpus_sha256`, so the identifiers bind
+   to one immutable index state — otherwise a rebuild silently changes what a `doc_id`
+   means.
+3. **Per-passage resolution against the built index** (existence only, never relevance):
+   each of the 1081 ground-truth passages needs its own real `(doc_id, chunk_id)`. This
+   crosses into the shared prerequisite stack of issue #18 (running Elasticsearch + Qdrant
+   + the offline pipeline).
+4. **Human annotation and review.** `visual_required`, `complexity_label`, the annotator,
+   and a distinct reviewer with an ISO date. No tool may substitute for this.
+
+Until all four exist, issues #86 (dataset identity/labels) and #18 (real benchmark
+execution) stay **OPEN/BLOCKED**. Field/format compliance is **not** relevance-label
+validation: the format validator now prints this distinction itself
+(`python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden_set.jsonl`),
+and `--require-attributable` turns the 0/301 state into a non-zero exit for a real gate.
