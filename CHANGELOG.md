@@ -4,6 +4,23 @@
 
 ### Changed
 
+- **The CLIP query encoder is warmed up at start-up and its normalisation contract is
+  uniform.** The shared query-side encoder (`ParallelRecallManager.clip_embedding_service`)
+  loads lazily, so the first multimodal request after every process start paid the
+  weight load inside the synchronous `clip_sync.timeout_ms` budget, abandoned the attempt
+  and returned a thinner result set. `EmbeddingService.warm_up_clip` /
+  `ParallelRecallManager.warm_up_clip` now perform the load at start-up; `app.py` and
+  `retrieval-service/main.py` call it, and the service exposes the outcome on `/health` as
+  `clip.state` (`READY`/`DEGRADED`). A process without CLIP weights still starts and
+  reports the degradation instead of raising `model_unavailable` per request. Separately,
+  `encode_text_clip` returned an unnormalised vector while `encode_texts_clip_batch`
+  L2-normalised; both now return unit vectors, so the query scale no longer depends on
+  which entry point was called, and the query side accepts the same optional `device`
+  knob as `offline/embeddings.py::CLIPImageEmbedder`. Contract tests:
+  `tests/test_clip_warmup_and_normalization.py`. Real CLIP recall quality and any real
+  timing figure remain `PENDING` (`VAL-MODEL-002`, issue #8) — no real weights are loaded
+  by these tests.
+
 - **The duplicated Rerank implementations are consolidated into one per stage.** The
   repository carried two parallel Rerank stacks: the canonical `retrieval/{bi_encoder,
   cross_encoder_ensemble,rerank_batch_aggregator}.py` and a served copy under
