@@ -130,6 +130,16 @@ def build_parser() -> argparse.ArgumentParser:
             "sample_id or a passage annotated twice in one row"
         ),
     )
+    parser.add_argument(
+        "--executor",
+        choices=("none", "real"),
+        default="none",
+        help=(
+            "retrieval executor: 'none' (default) blocks every configuration because no executor is "
+            "wired; 'real' wires the production BM25 / dense / hybrid-RRF executors. A 'real' run still "
+            "requires every backend probe to pass, so an unavailable stack stays BLOCKED."
+        ),
+    )
     parser.add_argument("--list-configs", action="store_true", help="print configuration availability and exit")
     return parser
 
@@ -265,6 +275,17 @@ def main(argv: list[str] | None = None) -> int:
 
     run_id = new_run_id()
     effective_config = effective_retrieval_config()
+    # Wire a real executor only for configurations that pass live backend probes.
+    # An unavailable stack remains BLOCKED, never an all-zero successful result.
+    executor_factories: dict[str, Any] = {}
+    if args.executor == "real":
+        from benchmarks.executors import real_retriever_factory
+
+        factory = real_retriever_factory(distinct_passages(queries))
+        for name in configs:
+            availability = backends.evaluate_config(name, len(queries), golden_passages=distinct_passages(queries))
+            if availability.available:
+                executor_factories[name] = factory
     # Which corpus this run reads, and whether it actually contains the golden
     # passages. Collected before the metadata literal so the artifact can carry
     # it even when every configuration ends up blocked — "blocked because the
@@ -300,6 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         # without guessing which endpoint/collection/model was in effect.
         "effective_config": effective_config,
         "requested_configs": configs,
+        "executor": args.executor,
+        "real_executor_configs": sorted(executor_factories),
         "top_k": args.top_k,
         "allow_dirty": bool(args.allow_dirty),
         # Placeholder: overwritten below from what the runs actually did. It is
@@ -331,7 +354,13 @@ def main(argv: list[str] | None = None) -> int:
     # Coverage describes the samples this run actually used, not the whole file.
     coverage = bucket_coverage([query.raw for query in queries])
 
-    runs = [run_configuration(name, queries, top_k=args.top_k) for name in configs]
+    def _run_configuration(name: str) -> Any:
+        factory = executor_factories.get(name)
+        if factory is None:
+            return run_configuration(name, queries, top_k=args.top_k)
+        return run_configuration(name, queries, top_k=args.top_k, retriever_factory=factory)
+
+    runs = [_run_configuration(name) for name in configs]
     summary = summarize_run(runs, available_buckets=coverage.get("available_buckets"))
     # Derived from the runs, never asserted by the CLI: the CLI itself wires no
     # retriever, so this is False unless a caller injected one.
