@@ -99,7 +99,7 @@ class TestDedicatedModelAvailable:
         inst = BiEncoderReranker()
         inst._bi_encoder_model_path = "/models/dedicated-bi-encoder"
         inst._dedicated_model = None
-        with patch("retrieval_service.rerank.bi_encoder.config") as mock_cfg:
+        with patch("retrieval.bi_encoder.config") as mock_cfg:
             # config.get("embedding", {}).get("text", {}).get("model_path", "")
             mock_cfg.get.side_effect = lambda key, default=None: (
                 {"text": {"model_path": "/models/shared-bge"}} if key == "embedding" else default

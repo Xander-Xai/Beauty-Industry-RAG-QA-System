@@ -5,6 +5,10 @@ BiEncoder 宽保留重排模块（readme 7.3 Stage 1）
 行为：从各路召回 Top100 中，合并保留 Top 150 条
 目标：保证关键证据不会在早期被过滤，为后续投票留出冗余空间
 执行方式：GPU1 上的 BiEncoder Batch Service
+
+这是本仓库唯一的 BiEncoder 重排实现。``retrieval-service/rerank/bi_encoder.py``
+不再维护第二份拷贝：它是微服务部署入口，直接转发到本模块，因此在线管线
+（``core/pipeline.py``）与已部署的 ``retrieval-service`` 使用同一份排序逻辑。
 """
 
 from __future__ import annotations
@@ -52,12 +56,22 @@ class BiEncoderReranker:
 
     Stage 1 Rerank：对 Union Recall Set 进行 BiEncoder 编码，
     保留 Top-150 候选进入 Stage 2 CrossEncoder 精排。
+
+    两条编码路径：
+    - 若配置了专用 BiEncoder（``gpu1.bi_encoder.model_path`` 且与共享
+      ``embedding.text.model_path`` 不同），优先用该模型编码；失败则回退。
+    - 否则使用共享 ``EmbeddingService``。
+    两条路径都按余弦相似度排序并保留 top_k；任一步骤抛错都降级为原始候选顺序。
     """
 
     def __init__(self):
         self._bi_encoder_model = None
         self._bi_encoder_tokenizer = None
         self._embedding_service = None
+        self._bi_encoder_model_path = (
+            config.get("gpu1", {}).get("models", {}).get("bi_encoder", {}).get("model_path", None)
+        )
+        self._dedicated_model = None
         logger.info("BiEncoderReranker 初始化完成")
 
     @property
@@ -67,6 +81,16 @@ class BiEncoderReranker:
 
             self._embedding_service = EmbeddingService()
         return self._embedding_service
+
+    @property
+    def dedicated_model_available(self) -> bool:
+        """检查是否有专用的 BiEncoder 模型（不同于共享 EmbeddingService）。"""
+        if self._dedicated_model is not None:
+            return True
+        if self._bi_encoder_model_path:
+            embedding_path = config.get("embedding", {}).get("text", {}).get("model_path", "")
+            return self._bi_encoder_model_path != embedding_path
+        return False
 
     def rerank(
         self,
@@ -88,6 +112,13 @@ class BiEncoderReranker:
         if not candidates:
             return []
 
+        # 如果有专用 BiEncoder 模型，优先使用
+        if self.dedicated_model_available and self._bi_encoder_model_path:
+            try:
+                return self._rerank_with_dedicated_model(query, candidates, top_k)
+            except Exception as e:
+                logger.warning(f"Dedicated BiEncoder failed, falling back to EmbeddingService: {e}")
+
         try:
             # 批量编码查询和文档
             query_embedding = self.embedding_service.encode_text(query).flatten()
@@ -102,10 +133,7 @@ class BiEncoderReranker:
             # 按相似度降序排序，保留 Top-K
             top_indices = np.argsort(similarities)[::-1][:top_k]
 
-            results = []
-            for idx in top_indices:
-                candidate = candidates[idx]
-                results.append(_to_rerank_result(candidate, bi_score=float(similarities[idx])))
+            results = [_to_rerank_result(candidates[idx], bi_score=float(similarities[idx])) for idx in top_indices]
 
             logger.info(f"BiEncoder 重排完成: {len(candidates)} → {len(results)}")
             return results
@@ -114,3 +142,24 @@ class BiEncoderReranker:
             logger.error(f"BiEncoder 重排失败: {e}")
             # 降级：返回原始候选的前 top_k 条（同样保留溯源字段）
             return [_to_rerank_result(c, bi_score=0.0) for c in candidates[:top_k]]
+
+    def _rerank_with_dedicated_model(self, query: str, candidates: list, top_k: int) -> list:
+        """使用专用 BiEncoder 模型进行重排序（不同于共享 EmbeddingService）。"""
+        if self._dedicated_model is None and self._bi_encoder_model_path:
+            from sentence_transformers import SentenceTransformer
+
+            self._dedicated_model = SentenceTransformer(self._bi_encoder_model_path)
+
+        if self._dedicated_model is None:
+            raise RuntimeError(f"Dedicated BiEncoder model not loaded from {self._bi_encoder_model_path}")
+
+        query_emb = self._dedicated_model.encode(query, normalize_embeddings=True)
+        doc_embs = self._dedicated_model.encode(
+            [c.content for c in candidates],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        similarities = np.dot(doc_embs, query_emb)
+        top_indices = np.argsort(similarities)[::-1][:top_k]
+
+        return [_to_rerank_result(candidates[idx], bi_score=float(similarities[idx])) for idx in top_indices]
