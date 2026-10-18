@@ -228,7 +228,7 @@ python3 run_offline.py seal-epoch --epoch phase_2 --skip-validation
 - 每个 point 记录 `embedding_version`（模型 revision + 预处理契约）。
 - 每个 epoch 通过持久 manifest 固定为一个 embedding version；同 epoch 混入不同版本会被拒绝。
 - 模型权重、tokenizer 或 pooling/归一化契约变化时，必须提升 revision 并构建新 epoch。
-- 文本契约：attention-mask-aware mean pooling；图像契约：CLIP `get_image_features` + L2 归一化。
+- 文本契约：attention-mask-aware mean pooling；图像契约：CLIP `get_image_features` + L2 归一化。查询侧 CLIP 文本编码（`EmbeddingService.encode_text_clip` 与 `encode_texts_clip_batch`）同样 L2 归一化，与图像向量同处一个联合空间。
 
 ## 13. legacy default epoch
 

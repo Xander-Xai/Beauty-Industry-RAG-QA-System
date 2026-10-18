@@ -143,6 +143,37 @@ class ParallelRecallManager:
         with self._clip_status_lock:
             self._clip_status = status
 
+    def warm_up_clip(self) -> tuple[bool, str]:
+        """Load the shared query-side CLIP encoder before the first request.
+
+        The encoder is shared across requests (``clip_embedding_service``), but its weights
+        load lazily. Without an explicit warm-up the first multimodal request after every
+        process start pays the load inside ``clip_sync.timeout_ms``, abandons the attempt
+        and returns no visual hits — a self-healing but silently thinner first result. This
+        runs the load (and one encode) at start-up instead.
+
+        Returns ``(ok, detail)`` and never raises. On failure the caller keeps the process
+        running: the state is reported through :meth:`clip_warmup_status` rather than
+        surfaced as a per-request ``model_unavailable`` surprise.
+        """
+        self._ensure_clip_runtime()
+        ok, detail = self.clip_embedding_service.warm_up_clip()
+        with self._clip_status_lock:
+            self._clip_warmup = {"state": "READY" if ok else "DEGRADED", "detail": detail}
+        return ok, detail
+
+    def clip_warmup_status(self) -> dict:
+        """Start-up warm-up state of the CLIP query encoder.
+
+        ``PENDING`` means warm-up has not been attempted; ``READY`` / ``DEGRADED`` are the
+        outcomes of the last attempt. This is the health surface for the cold-start fix.
+        """
+        self._ensure_clip_runtime()
+        state = getattr(self, "_clip_warmup", None)
+        if state is None:
+            return {"state": "PENDING", "detail": ""}
+        return dict(state)
+
     @property
     def dense_retriever(self):
         if self._dense_retriever is None:

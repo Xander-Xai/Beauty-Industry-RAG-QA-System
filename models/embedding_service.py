@@ -56,13 +56,25 @@ class EmbeddingService:
     - 统一接口封装，支持模型热切换
     """
 
-    def __init__(self, model_path: str | None = None, clip_model_path: str | None = None):
+    def __init__(
+        self,
+        model_path: str | None = None,
+        clip_model_path: str | None = None,
+        clip_device: str | None = None,
+    ):
         self._bge_model = None
         self._bge_tokenizer = None
         self._bge_model_path = model_path or config["embedding"]["text"]["model_path"]
         self._clip_model = None
         self._clip_processor = None
         self._clip_model_path = clip_model_path or config["embedding"]["image_clip"]["model_path"]
+        # The image side (``offline/embeddings.py::CLIPImageEmbedder``) already takes a
+        # ``device``; the query side gains the same knob so both halves of the joint space
+        # can be placed identically. Default is the configured value, else ``None`` (CPU):
+        # the shipped config sets no device, so this changes nothing until an operator opts in.
+        self._clip_device = (
+            clip_device if clip_device is not None else (config["embedding"]["image_clip"].get("device") or None)
+        )
         self._qdrant_client = None
         logger.info("EmbeddingService 初始化完成（模型懒加载）")
 
@@ -97,8 +109,31 @@ class EmbeddingService:
             from transformers import CLIPModel
 
             self._clip_model = CLIPModel.from_pretrained(self._clip_model_path)
+            if self._clip_device:
+                self._clip_model.to(self._clip_device)
             self._clip_model.eval()
         return self._clip_model
+
+    def _clip_inputs_to_device(self, inputs):
+        """Move processor outputs onto the configured CLIP device, if any.
+
+        With no configured device this is the identity, so the default CPU path is
+        unchanged.
+        """
+        if not self._clip_device:
+            return inputs
+        return {key: value.to(self._clip_device) for key, value in inputs.items()}
+
+    @staticmethod
+    def _l2_normalize(features):
+        """L2-normalize each row of a torch feature matrix to a unit vector.
+
+        This is the single normalisation contract for the CLIP text encoder. Both the
+        single-text and batch-text entry points return unit vectors, so a caller cannot
+        get a differently-scaled query depending on which method it happened to call.
+        The clamp only guards an exactly-zero row; it is not a threshold.
+        """
+        return features / features.norm(dim=-1, keepdim=True).clamp(min=1e-12)
 
     @property
     def qdrant_client(self):
@@ -162,17 +197,23 @@ class EmbeddingService:
         """
         CLIP 文本编码（512d）
 
+        Returns an **L2-normalized** vector, identical in contract to
+        :meth:`encode_texts_clip_batch`. The two used to differ (this one returned an
+        unnormalized vector); both now return a unit vector in the CLIP joint space.
+
         Args:
             text: 输入文本
 
         Returns:
-            512维向量
+            512维单位向量
         """
         import torch
 
         inputs = self.clip_processor(text=[text], return_tensors="pt", padding=True)
+        inputs = self._clip_inputs_to_device(inputs)
         with torch.no_grad():
             text_features = self.clip_model.get_text_features(**inputs)
+        text_features = self._l2_normalize(text_features)
         return text_features.cpu().numpy().flatten()
 
     def encode_texts_clip_batch(self, texts: list[str]) -> np.ndarray:
@@ -183,16 +224,47 @@ class EmbeddingService:
             texts: 输入文本列表
 
         Returns:
-            (N, 512) 向量矩阵
+            (N, 512) L2 归一化向量矩阵
         """
         import torch
 
         inputs = self.clip_processor(text=texts, return_tensors="pt", padding=True, truncation=True)
+        inputs = self._clip_inputs_to_device(inputs)
         with torch.no_grad():
             text_features = self.clip_model.get_text_features(**inputs)
-        # L2 归一化
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        # L2 归一化（与 encode_text_clip 同一契约）
+        text_features = self._l2_normalize(text_features)
         return text_features.cpu().numpy()
+
+    def warm_up_clip(self) -> tuple[bool, str]:
+        """Load the CLIP text encoder eagerly so the first request finds weights resident.
+
+        The shared query-side encoder loads lazily, so without this the first multimodal
+        request after every process start pays the weight-load inside the synchronous
+        ``clip_sync.timeout_ms`` budget, abandons the attempt and returns a thinner result
+        set. This method pays that cost at start-up instead.
+
+        Returns ``(ok, detail)``. ``detail`` is drawn from the closed set
+        ``{"", "not_installed", "missing_weights", "loader_error", "non_finite_vector"}``
+        and never carries an exception message. On failure the caller must keep the
+        process running and report the degraded state — this method does not raise, so a
+        missing model is a start-up observation rather than a per-request surprise.
+        """
+        try:
+            # Touch both lazy accessors so the processor and the weights are resident.
+            _ = self.clip_processor
+            _ = self.clip_model
+            # One real encode materialises the first forward pass, not just the weights.
+            vector = self.encode_text_clip("warm-up")
+        except ImportError:
+            return False, "not_installed"
+        except (FileNotFoundError, OSError):
+            return False, "missing_weights"
+        except Exception:
+            return False, "loader_error"
+        if not np.isfinite(vector).all():
+            return False, "non_finite_vector"
+        return True, ""
 
     def get_image_centroid(self) -> np.ndarray | None:
         """PRD §4.5: 获取图像库质心向量

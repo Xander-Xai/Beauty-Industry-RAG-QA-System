@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -58,10 +59,40 @@ logger = logging.getLogger("retrieval-service")
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Warm up the shared query-side CLIP encoder before the process serves traffic.
+
+    The first multimodal request would otherwise pay the lazy weight load inside the
+    synchronous ``clip_sync.timeout_ms`` budget and return no visual hits. A missing model
+    must **not** stop the service: warm-up records ``state="DEGRADED"`` with a bounded
+    ``detail`` token, which ``/health`` reports, and the process starts normally.
+    """
+    global _clip_warmup
+    try:
+        ok, detail = _get_recall_manager().warm_up_clip()
+        _clip_warmup = {"state": "READY" if ok else "DEGRADED", "detail": detail}
+        if ok:
+            logger.info("CLIP query encoder warm-up complete")
+        else:
+            logger.warning(
+                "CLIP query encoder warm-up failed (%s); the service starts degraded and the "
+                "first multimodal request will not pay the load.",
+                detail or "unknown",
+            )
+    except Exception as exc:  # noqa: BLE001 - start-up must never be fatal
+        _clip_warmup = {"state": "DEGRADED", "detail": "warmup_error"}
+        logger.warning("CLIP query encoder warm-up raised: %s", type(exc).__name__)
+    yield
+
+
 app = FastAPI(
     title="Retrieval Service",
     description="Multi-path recall, reranking, evidence gate and answer gate",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -74,6 +105,10 @@ _evidence_gate = None
 _answer_gate = None
 _embedding_service = None
 _metrics = None
+
+#: CLIP query-encoder warm-up state, set by ``lifespan`` and reported by ``/health``.
+#: ``PENDING`` until start-up runs; ``READY`` / ``DEGRADED`` afterwards.
+_clip_warmup: dict[str, str] = {"state": "PENDING", "detail": ""}
 
 
 def _get_metrics():
@@ -177,10 +212,18 @@ class AnswerGateRequest(BaseModel):
     is_regulation: bool = False
 
 
+class ClipWarmUpStatus(BaseModel):
+    """Start-up warm-up state of the shared query-side CLIP encoder."""
+
+    state: str = "PENDING"  # PENDING | READY | DEGRADED
+    detail: str = ""
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "retrieval-service"
     timestamp: float = Field(default_factory=time.time)
+    clip: ClipWarmUpStatus = Field(default_factory=ClipWarmUpStatus)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -190,8 +233,13 @@ class HealthResponse(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
-    """Liveness / readiness probe."""
-    return HealthResponse()
+    """Liveness / readiness probe.
+
+    ``clip`` reports the start-up warm-up of the shared query-side encoder, so a process
+    that came up without CLIP weights shows the degradation here instead of returning
+    ``model_unavailable`` on the first multimodal request.
+    """
+    return HealthResponse(clip=ClipWarmUpStatus(**_clip_warmup))
 
 
 @app.post("/api/recall", response_model=RecallResponse)

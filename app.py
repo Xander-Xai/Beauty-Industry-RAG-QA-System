@@ -66,6 +66,20 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error("OnlineRAGPipeline 初始化失败: %s", e)
 
+        # CLIP 查询编码器预热：共享编码器只在首个多模态请求时懒加载权重，否则该请求会在
+        # clip_sync.timeout_ms 内放弃并返回更少的结果。预热把这次加载放到启动阶段；权重
+        # 缺失时服务照常启动并记录降级状态，绝不因此崩溃。
+        try:
+            ok, clip_detail = get_pipeline().parallel_recall.warm_up_clip()
+            if ok:
+                logger.info("CLIP 查询编码器预热完成")
+            else:
+                logger.warning(
+                    "CLIP 查询编码器预热失败(%s)：服务仍启动，首个多模态请求将走降级路径", clip_detail or "unknown"
+                )
+        except Exception as e:
+            logger.warning("CLIP 查询编码器预热异常: %s", type(e).__name__)
+
         # 预初始化 metrics
         try:
             get_metrics()
