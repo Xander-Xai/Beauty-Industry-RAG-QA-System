@@ -122,9 +122,7 @@ def _shared_model_reranker(module, vectors_by_doc):
     inst._dedicated_model = None
     emb = MagicMock()
     emb.encode_text.return_value.flatten.return_value = np.array([1.0, 0.0])
-    emb.encode_texts_batch.side_effect = lambda texts: np.array(
-        [vectors_by_doc[text] for text in texts], dtype=float
-    )
+    emb.encode_texts_batch.side_effect = lambda texts: np.array([vectors_by_doc[text] for text in texts], dtype=float)
     inst._embedding_service = emb
     return inst
 
