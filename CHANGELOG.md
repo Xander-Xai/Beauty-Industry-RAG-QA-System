@@ -25,7 +25,7 @@
   - `format_comparison_markdown` renders an absent delta as `—`. It previously
     printed `+0.0000 →` for a metric nobody compared, which reads as "measured,
     no change".
-  - Adds 8 regression tests (`tests/evaluation/test_ragas_report.py`,
+  - Adds 9 regression tests (`tests/evaluation/test_ragas_report.py`,
     `TestUnavailableRunIsNotAZero`, `TestCategoryBreakdownNeverReportsZero`).
   - This changes **no** existing score. RAGAS stays `PENDING` (`VAL-RAGAS-001`,
     issue #12); the harness has still never produced a real evaluator result
