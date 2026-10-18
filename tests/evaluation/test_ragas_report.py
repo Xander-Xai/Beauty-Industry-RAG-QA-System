@@ -429,3 +429,123 @@ class TestFormatMarkdown:
         """指标显示名称应包含中文说明。"""
         assert "忠实度" in METRIC_LABELS["faithfulness"]
         assert len(METRIC_LABELS) == 4
+
+
+# ---------------------------------------------------------------------------
+# Regression: a run that never executed must not be reported as a result
+# ---------------------------------------------------------------------------
+
+
+def _report(tag: str, scores: dict[str, float], status: str = "available", reason: str | None = None):
+    return EvaluationReport(
+        tag=tag,
+        timestamp="2026-06-27T12:00:00",
+        overall_scores=scores,
+        per_sample_scores=[],
+        category_breakdown={},
+        dataset_size=2,
+        metadata={},
+        evaluator_status=status,
+        unavailable_reason=reason,
+    )
+
+
+class TestUnavailableRunIsNotAZero:
+    """`{}` used to be differenced against as `0.0` for every metric."""
+
+    def test_an_unavailable_baseline_cannot_be_reported_as_an_improvement(self):
+        baseline = _report("baseline", {}, status="unavailable", reason="OPENAI_API_KEY 未配置")
+        improved = _report("v2", {"faithfulness": 0.9, "answer_relevancy": 0.9})
+        reporter = RAGASReporter.__new__(RAGASReporter)
+
+        result = reporter.compare_reports(baseline, improved)
+
+        assert result.verdict == "not_comparable"
+        assert result.overall_deltas == {}
+        assert result.significant_changes == []
+        assert any("baseline" in note for note in result.notes)
+
+    def test_an_unavailable_comparison_side_cannot_be_reported_as_a_regression(self):
+        baseline = _report("baseline", {"faithfulness": 0.9})
+        broken = _report("v2", {}, status="unavailable", reason="ragas 未安装")
+        reporter = RAGASReporter.__new__(RAGASReporter)
+
+        result = reporter.compare_reports(baseline, broken)
+
+        assert result.verdict == "not_comparable"
+        assert result.overall_deltas == {}
+
+    def test_the_markdown_never_prints_an_improvement_for_an_unrun_baseline(self):
+        reporter = RAGASReporter.__new__(RAGASReporter)
+        result = reporter.compare_reports(
+            _report("baseline", {}, status="unavailable", reason="no key"),
+            _report("v2", {"faithfulness": 0.9}),
+        )
+        md = reporter.format_comparison_markdown(result)
+
+        assert "✅ 总体提升" not in md
+        assert "不可对比" in md
+        assert "+0.9000" not in md
+
+    def test_a_metric_only_one_side_measured_is_skipped_not_counted_as_zero(self):
+        baseline = _report("baseline", {"faithfulness": 0.5})
+        later = _report("v2", {"faithfulness": 0.8, "context_recall": 0.7})
+        reporter = RAGASReporter.__new__(RAGASReporter)
+
+        result = reporter.compare_reports(baseline, later)
+
+        # `context_recall` had no baseline; it must not appear as +0.7.
+        assert "context_recall" not in result.overall_deltas
+        assert result.overall_deltas == {"faithfulness": 0.3}
+        assert any("上下文召回率" in note for note in result.notes)
+
+    def test_two_runs_sharing_no_metric_are_not_a_mixed_result(self):
+        reporter = RAGASReporter.__new__(RAGASReporter)
+        result = reporter.compare_reports(
+            _report("baseline", {"faithfulness": 0.5}),
+            _report("v2", {"context_recall": 0.7}),
+        )
+        assert result.verdict == "not_comparable"
+        assert result.overall_deltas == {}
+
+    def test_a_legacy_report_with_unknown_status_is_compared_but_flagged(self):
+        """A pre-`evaluator_status` report file defaults to `unknown`."""
+        reporter = RAGASReporter.__new__(RAGASReporter)
+        result = reporter.compare_reports(
+            _report("baseline", {"faithfulness": 0.5}, status="unknown"),
+            _report("v2", {"faithfulness": 0.8}),
+        )
+        assert result.verdict == "improved"
+        assert result.notes, "an unattested provenance must be stated, not silently trusted"
+
+
+class TestCategoryBreakdownNeverReportsZero:
+    def test_a_category_without_observations_is_none_not_zero(self):
+        reporter = RAGASReporter.__new__(RAGASReporter)
+        breakdown = reporter._compute_category_breakdown(
+            [
+                {"question": "q1", "faithfulness": 0.8, "business_type": "regulation", "difficulty": "easy"},
+                {"question": "q2", "business_type": "ingredient", "difficulty": "easy"},
+            ]
+        )
+        # `ingredient` produced no faithfulness observation.
+        assert breakdown["business_type:ingredient"]["faithfulness"] is None
+        assert breakdown["business_type:regulation"]["faithfulness"] == 0.8
+        # Both rows are `easy`, so that cell is observed.
+        assert breakdown["difficulty:easy"]["faithfulness"] == 0.8
+
+    def test_an_unobserved_metric_renders_as_a_dash_not_a_score(self):
+        reporter = RAGASReporter.__new__(RAGASReporter)
+        report = _report("v2", {"faithfulness": 0.8})
+        report.category_breakdown = {"business_type:ingredient": {"faithfulness": None}}
+        md = reporter.format_report_markdown(report)
+
+        assert "| Faithfulness（忠实度） | 0.8000 |" in md
+        assert "0.0000" not in md
+        assert "| — |" in md
+
+    def test_a_run_that_measured_one_metric_does_not_invent_the_others(self):
+        report = _report("v2", {"faithfulness": 0.8})
+        md = RAGASReporter.__new__(RAGASReporter).format_report_markdown(report)
+        assert "| Faithfulness（忠实度） | 0.8000 |" in md
+        assert md.count("| — |") == 3

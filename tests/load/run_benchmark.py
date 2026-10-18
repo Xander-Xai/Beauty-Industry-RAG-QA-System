@@ -66,19 +66,61 @@ def run_benchmark(host: str, users: int, spawn_rate: int, run_time: str, token: 
         "10",
     ]
 
+    # Record when this run starts, so the report picked up afterwards can be
+    # tied to it. Without this, `REPORT_DIR` may already hold a
+    # `benchmark_*.json` from an earlier session: locust exiting 0 without
+    # writing anything made that stale file the "latest report" for this run,
+    # and the caller then published it and printed "✅ 基准测试完成" for a run
+    # that measured nothing.
+    started_at = time.time()
+
     result = subprocess.run(cmd, env={**__import__("os").environ, **env}, cwd=str(REPORT_DIR.parent.parent.parent))
 
     if result.returncode != 0:
         print(f"❌ Locust 退出码: {result.returncode}")
         return None
 
-    # 找到最新生成的报告
-    report_files = sorted(REPORT_DIR.glob("benchmark_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # Only reports this invocation could have produced.
+    report_files = [
+        path
+        for path in REPORT_DIR.glob("benchmark_*.json")
+        if path.stat().st_mtime >= started_at - 1  # 1s tolerance for filesystem mtime granularity
+    ]
     if report_files:
-        latest = report_files[0]
+        latest = max(report_files, key=lambda p: p.stat().st_mtime)
         with open(latest, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        data.setdefault("_provenance", {})
+        data["_provenance"]["report_source_file"] = latest.name
+        return data
+    print("❌ Locust 退出码为 0，但本次运行没有产出报告文件（不采用历史报告顶替）")
     return None
+
+
+def _fmt(value: object, suffix: str = "", digits: int = 1) -> str:
+    """Format a measured value, or `未测量` when it was not measured.
+
+    A missing latency percentile or error count is not a zero latency and not a
+    zero error rate. This report is a publishable artifact, so an absent value is
+    rendered explicitly rather than defaulted to `0`.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "未测量"
+    return f"{float(value):.{digits}f}{suffix}"
+
+
+def _error_rate_class(value: object) -> str:
+    """Colour band for an error rate. Unmeasured is grey, not green.
+
+    The previous expression defaulted a missing error rate to `0`, so a run that
+    measured no errors and a run that measured no error rate at all both painted
+    the card green.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "grey"
+    if value < 1:
+        return "green"
+    return "orange" if value < 5 else "red"
 
 
 def generate_html_report(data: dict) -> str:
@@ -108,6 +150,7 @@ def generate_html_report(data: dict) -> str:
   .card .value.blue {{ color: #0984e3; }}
   .card .value.orange {{ color: #e17055; }}
   .card .value.red {{ color: #d63031; }}
+  .card .value.grey {{ color: #636e72; font-size: 1.1rem; }}
   table {{ width: 100%; border-collapse: collapse; margin: 1rem 0; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
   th, td {{ padding: 0.75rem 1rem; text-align: left; }}
   th {{ background: #4361ee; color: #fff; font-weight: 600; }}
@@ -127,37 +170,37 @@ def generate_html_report(data: dict) -> str:
 <table>
   <tr><th>参数</th><th>值</th></tr>
   <tr><td>并发用户数</td><td>{bm.get("concurrent_users", "N/A")}</td></tr>
-  <tr><td>测试时长</td><td>{bm.get("duration_seconds", 0):.1f} 秒</td></tr>
-  <tr><td>总请求数</td><td>{bm.get("total_requests", 0)}</td></tr>
+  <tr><td>测试时长</td><td>{_fmt(bm.get("duration_seconds"), " 秒")}</td></tr>
+  <tr><td>总请求数</td><td>{_fmt(bm.get("total_requests"), digits=0)}</td></tr>
 </table>
 
 <h2>⏱ 延迟分布</h2>
 <div class="summary">
   <div class="card">
     <div class="label">平均延迟</div>
-    <div class="value blue">{lat.get("avg", 0):.1f} <small>ms</small></div>
+    <div class="value blue">{_fmt(lat.get("avg"))} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">P50（中位数）</div>
-    <div class="value green">{lat.get("p50", 0):.1f} <small>ms</small></div>
+    <div class="value green">{_fmt(lat.get("p50"))} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">P95</div>
-    <div class="value orange">{lat.get("p95", 0):.1f} <small>ms</small></div>
+    <div class="value orange">{_fmt(lat.get("p95"))} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">P99</div>
-    <div class="value red">{lat.get("p99", 0):.1f} <small>ms</small></div>
+    <div class="value red">{_fmt(lat.get("p99"))} <small>ms</small></div>
   </div>
 </div>
 <div class="summary" style="margin-top: 0.5rem;">
   <div class="card">
     <div class="label">最低延迟</div>
-    <div class="value green">{lat.get("min", 0):.1f} <small>ms</small></div>
+    <div class="value green">{_fmt(lat.get("min"))} <small>ms</small></div>
   </div>
   <div class="card">
     <div class="label">最高延迟</div>
-    <div class="value red">{lat.get("max", 0):.1f} <small>ms</small></div>
+    <div class="value red">{_fmt(lat.get("max"))} <small>ms</small></div>
   </div>
 </div>
 
@@ -165,25 +208,25 @@ def generate_html_report(data: dict) -> str:
 <div class="summary">
   <div class="card">
     <div class="label">客户端缓存命中率</div>
-    <div class="value blue">{cache.get("client_cache_hit_rate_pct", 0):.1f}%</div>
+    <div class="value blue">{_fmt(cache.get("client_cache_hit_rate_pct"), "%")}</div>
   </div>
   <div class="card">
     <div class="label">L1 命中率（系统级）</div>
-    <div class="value green">{sys_cache.get("L1", 0) * 100:.1f}%</div>
+    <div class="value green">{_fmt(None if sys_cache.get("L1") is None else sys_cache.get("L1") * 100, "%")}</div>
   </div>
   <div class="card">
     <div class="label">L2 命中率（系统级）</div>
-    <div class="value orange">{sys_cache.get("L2", 0) * 100:.1f}%</div>
+    <div class="value orange">{_fmt(None if sys_cache.get("L2") is None else sys_cache.get("L2") * 100, "%")}</div>
   </div>
 </div>
 <div class="summary" style="margin-top: 0.5rem;">
   <div class="card">
     <div class="label">缓存命中次数</div>
-    <div class="value">{cache.get("client_cache_hits", 0)}</div>
+    <div class="value">{_fmt(cache.get("client_cache_hits"), digits=0)}</div>
   </div>
   <div class="card">
     <div class="label">缓存未命中次数</div>
-    <div class="value">{cache.get("client_cache_misses", 0)}</div>
+    <div class="value">{_fmt(cache.get("client_cache_misses"), digits=0)}</div>
   </div>
 </div>
 
@@ -191,19 +234,19 @@ def generate_html_report(data: dict) -> str:
 <div class="summary">
   <div class="card">
     <div class="label">总错误数</div>
-    <div class="value red">{err.get("total", 0)}</div>
+    <div class="value red">{_fmt(err.get("total"), digits=0)}</div>
   </div>
   <div class="card">
     <div class="label">错误率</div>
-    <div class="value {"green" if err.get("error_rate_pct", 0) < 1 else "orange" if err.get("error_rate_pct", 0) < 5 else "red"}">{err.get("error_rate_pct", 0):.2f}%</div>
+    <div class="value {_error_rate_class(err.get("error_rate_pct"))}">{_fmt(err.get("error_rate_pct"), "%", 2)}</div>
   </div>
 </div>
 
 <h2>📈 结论</h2>
 <ul>
-<li><strong>延迟:</strong> P50={lat.get("p50", 0):.1f}ms，P99={lat.get("p99", 0):.1f}ms</li>
-<li><strong>缓存效率:</strong> 客户端命中率 {cache.get("client_cache_hit_rate_pct", 0):.1f}%</li>
-<li><strong>系统稳定性:</strong> 错误率 {err.get("error_rate_pct", 0):.2f}%</li>
+<li><strong>延迟:</strong> P50={_fmt(lat.get("p50"))}ms，P99={_fmt(lat.get("p99"))}ms</li>
+<li><strong>缓存效率:</strong> 客户端命中率 {_fmt(cache.get("client_cache_hit_rate_pct"), "%")}</li>
+<li><strong>系统稳定性:</strong> 错误率 {_fmt(err.get("error_rate_pct"), "%", 2)}</li>
 </ul>
 </body>
 </html>"""
@@ -238,14 +281,32 @@ def compare_runs(path1: str, path2: str):
     print(f"{'指标':<30} {'运行 1':<15} {'运行 2':<15} {'变化':<15}")
     print(f"{'-' * 75}")
     for key in ["avg", "p50", "p95", "p99"]:
-        v1 = lat1.get(key, 0)
-        v2 = lat2.get(key, 0)
+        v1 = lat1.get(key)
+        v2 = lat2.get(key)
+        # A percentile neither run measured is not a 0 ms percentile, and a
+        # change against it is not a percentage.
+        if (
+            isinstance(v1, bool)
+            or not isinstance(v1, (int, float))
+            or isinstance(v2, bool)
+            or not isinstance(v2, (int, float))
+        ):
+            print(f"{f'延迟 {key} (ms)':<30} {_fmt(v1):<15} {_fmt(v2):<15} {'不可比':<15}")
+            continue
         change = f"{((v2 - v1) / max(v1, 0.001) * 100):+.1f}%" if v1 else "N/A"
-        print(f"{f'延迟 {key} (ms)':<30} {v1:<15.1f} {v2:<15.1f} {change:<15}")
-    hr1 = cache1.get("client_cache_hit_rate_pct", 0)
-    hr2 = cache2.get("client_cache_hit_rate_pct", 0)
-    hr_change = f"{hr2 - hr1:+.1f}pct"
-    print(f"{'缓存命中率 (%)':<30} {hr1:<15.1f} {hr2:<15.1f} {hr_change:<15}")
+        print(f"{f'延迟 {key} (ms)':<30} {float(v1):<15.1f} {float(v2):<15.1f} {change:<15}")
+    hr1 = cache1.get("client_cache_hit_rate_pct")
+    hr2 = cache2.get("client_cache_hit_rate_pct")
+    if (
+        isinstance(hr1, bool)
+        or not isinstance(hr1, (int, float))
+        or isinstance(hr2, bool)
+        or not isinstance(hr2, (int, float))
+    ):
+        hr_change = "不可比"
+    else:
+        hr_change = f"{hr2 - hr1:+.1f}pct"
+    print(f"{'缓存命中率 (%)':<30} {_fmt(hr1):<15} {_fmt(hr2):<15} {hr_change:<15}")
     print(f"{'=' * 60}\n")
 
 

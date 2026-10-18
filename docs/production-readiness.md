@@ -30,12 +30,14 @@ the real thing".
 
 ### Why the request path itself is `PENDING`
 
-The five `LOCAL_REAL_VALIDATION` items listed in
+The six `LOCAL_REAL_VALIDATION` items listed in
 [Architecture baseline → local real validation](architecture-baseline.md#可观测性与评测边界)
 are **individual mechanisms**, each exercised against its own real dependency:
 Redis session persistence, Redis cross-process login rate limiting, nginx
-`TRUSTED_PROXIES` client-IP resolution, authenticated Elasticsearch 8.11, and an
-authenticated Prometheus scrape.
+`TRUSTED_PROXIES` client-IP resolution, authenticated Elasticsearch 8.11, an
+authenticated Prometheus scrape, and a real single-host Qdrant 1.12.0 run
+(`VAL-STORE-001`, from the committed `artifacts/qdrant/` record, on deterministic
+vectors).
 
 None of them is a run of `/api/query` or `/api/chat` through the whole stack. In
 that recorded run Qdrant was not exercised and the model stack was blocked, so
