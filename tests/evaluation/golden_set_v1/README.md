@@ -39,20 +39,27 @@
 
 ## 当前实测状态
 
-- 结构审计（`benchmarks.annotation.audit_dataset`）：**27/27 结构有效，0 可评分**。
-- 契约校验（`golden-set-contract/v2`）：**0/27 通过**，唯一原因是
-  `annotation_not_reviewed:DRAFT_UNVERIFIED` 与 `missing_annotation_reviewed_by`
-  （契约对未审核记录本就不给 `reviewed_by`）。
-- ES 存在性解析：27 条候选的全部 `(doc_id, chunk_id)` 均能在索引中解析到，
-  **没有一条**报 `unresolved`（21 个不重复金标段落全部命中，ratio = 1.0）。
-- 语料/索引绑定校验（`scripts/corpus/verify_real_corpus_v1_binding.py`，只读）：
-  `source_bytes` / `local_corpus` / `candidate_binding` / `index_identity` /
-  `index_content` 全部 `PASS`；`trust_state` 与 `config_epoch` 为 `FAIL`
-  （见下）。
-- 来源信任：两份源文件为 `UNTRUSTED / PENDING_REVIEW`，**已审批 0/2**。
-- 签署台账：`review_decisions_v1.jsonl` 为**空白模板**，**已签署 0/27**。
-- AI 预审记录：`ai_review_v1.jsonl`（38 行，`review_type=AI_REVIEW`）+ `AI_REVIEW.md`。
-  逐条结论与证据见 `AI_REVIEW.md`；**AI 结论不是人工签署，不改变任何 `review_status`**。
+- **人工签署：27/27 完成**（2026-10-19，reviewer `Xander-Xai`）。正式金标集为
+  `reviewed/annotations_v1_reviewed.jsonl`，SHA-256 `9621d150…`，27 条全部
+  `REVIEWED` 且可评分。
+- Golden Set Contract v2：**27/27 valid，0 invalid**；数据完整性错误 0。
+- ES 存在性解析：**21/21** 不重复金标段落全部命中，`ratio 1.0`，无 `unresolved`。
+- V1 派生 Schema：与 V2 的差异仅限 `sample_id` 模式；同一批记录用**未修改的 V2
+  schema** 经单射映射复验通过，未放宽任何 V2 门禁。
+- 原始候选文件 `candidates_v1.jsonl` **未被覆盖**（仍为 `7bfd5ac2…`，
+  `source=llm_candidate`、`annotator` 原样保留）；空白模板
+  `review_decisions_v1.jsonl` **未被覆盖**（27 行仍全空白）。
+- **来源审批：1/2**。`regulation_727.jsonl`（`c9499ca5…`）为 `APPROVED`
+  （actor `Xander-Xai`）；`used_ingredients_2021.jsonl`（`3dd67722…`）仍为
+  `PENDING_REVIEW`，因为所有者被明确告知 `--approve` 意味着**可激活**信任状态后
+  选择了只批准条例。
+- **后果已记录、未回避**：13/27 条金标段落来自未批准的目录来源；隔离索引
+  `cosmetics_docs_exp_v2` 以 `--staging-unapproved` 构建，provenance 为
+  82 篇 `APPROVED_EXTERNAL` + 130 篇 `UNTRUSTED`，**不是可激活快照**。
+- 真实 BM25 已运行并写报告：**Recall@10 0.7037、HitRate@10 0.7037、MRR@10 0.4088、
+  NDCG@10 0.4698**，契约干净、干净工作树、Git SHA `227eac9`。
+  **该结果不构成已完全放行的正式 Benchmark（来源门禁 1/2）**，完整证据与适用边界见
+  [`docs/validation/real-v1-bm25-run.md`](../../../docs/validation/real-v1-bm25-run.md)。
 
 ### 探索性 BM25 实测（**不可发布**）
 
