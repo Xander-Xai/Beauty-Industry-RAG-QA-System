@@ -12,6 +12,12 @@
 | `candidates_v1.jsonl` | 27 | 检索候选，每条携带真实 `(doc_id, chunk_id)` |
 | `no_answer_candidates_v1.jsonl` | 3 | 语料无法回答的问题，仅用于 answer-gate 评测 |
 | `candidate_validation.json` | 1 | 本次自动校验结果（结构、ID、审核状态） |
+| `retrieval_review_workpackage.jsonl` | 27 | **人工审核工作表**：问题、来源定位、原文、ID、当前等级、派生风险、遗漏段落线索、空白决定 |
+| `RETRIEVAL_REVIEW_WORKPACKAGE.md` | — | 上表的人读版，逐条展开 |
+| `answer_gate_review_workpackage.jsonl` | 3 | Answer Gate 审核表，**不进入 Retrieval Recall 分母** |
+| `ANSWER_GATE_REVIEW.md` | — | 上表的人读版，附 near-miss 段落与语义判断问题 |
+| `independent_query_proposals.jsonl` | 6 | 独立编写的用户式查询提案，`in_dataset=false`，不参与指标 |
+| `INDEPENDENT_QUERY_PROPOSALS.md` | — | 上表的人读版 |
 
 语料与索引绑定：
 
@@ -38,6 +44,13 @@
 - ES 存在性解析：27 条候选的全部 `(doc_id, chunk_id)` 均能在
   `cosmetics_docs` 索引（`corpus_version=real-v1-20261019`）中解析到，**没有一条**
   报 `unresolved`。
+- 语料/索引绑定校验（`scripts/corpus/verify_real_corpus_v1_binding.py`，只读）：
+  源文件哈希、本地语料指纹、候选绑定、索引 content fingerprint、epoch/文档数、
+  标注可解析性全部 `PASS`；`trust_state` 为 `FAIL`（现有索引仍是旧代码写入的
+  `MANAGED_INTERNAL`），`config_epoch` 为 `FAIL`
+  （`knowledge_version_epoch=default` ≠ `real-v1-20261019`）。
+- 来源信任：两份源文件为 `UNTRUSTED / PENDING_REVIEW`，**已审批 0/2**。在生产
+  索引重建前必须完成具名审批。
 
 复现命令（需要本机 ES；本仓库不提交 ES 数据）：
 
@@ -45,11 +58,27 @@
 # 1) 重建语料切块（不需要服务）
 python3 scripts/corpus/build_real_corpus_v1.py
 
-# 2) 写入 BM25 索引并生成指纹（需要 ES）
-ELASTICSEARCH_HOST=http://127.0.0.1:9200 python3 scripts/corpus/index_real_corpus_v1_es.py
+# 2) 只读预检：不写、不删，报告索引状态、epoch、trust 类别与冲突
+ELASTICSEARCH_HOST=http://127.0.0.1:9200 \
+  python3 scripts/corpus/index_real_corpus_v1_es.py --check-only
 
-# 3) 重建候选工作包
+# 2b) 工程验证用隔离索引（不是可激活快照；来源未审批时需 --staging-unapproved）
+ELASTICSEARCH_HOST=http://127.0.0.1:9200 \
+  python3 scripts/corpus/index_real_corpus_v1_es.py \
+  --profile experiment --index cosmetics_docs_exp_v1 \
+  --staging-unapproved --out artifacts/corpus/cosmetics_docs_exp_v1.json
+
+# 2c) 生产索引只在具名来源审批后重建；必须显式确认索引名
+ELASTICSEARCH_HOST=http://127.0.0.1:9200 \
+  python3 scripts/corpus/index_real_corpus_v1_es.py \
+  --profile production --recreate --confirm-index cosmetics_docs
+
+# 3) 重建候选与人工审核工作包
 python3 scripts/validation/build_real_golden_set_v1.py
+python3 scripts/validation/build_real_golden_set_v1_workpackage.py
+
+# 3b) 校验语料、候选与实时索引是否一致（只读）
+python3 scripts/corpus/verify_real_corpus_v1_binding.py
 
 # 4) 结构审计
 python3 scripts/validation/audit_annotations.py --dataset tests/evaluation/golden_set_v1/candidates_v1.jsonl
@@ -62,8 +91,20 @@ python3 scripts/validation/validate_golden_set_contract.py \
 
 ## 人工审核流程（不可由 AI 代办）
 
-1. 阅读每条候选的 `question`，对照 `annotations[].text` 与索引中的原文，确认
-   `(doc_id, chunk_id)` 指向的段落确实支撑该问题。
+**先做来源审批。** 两份源文件是外部官方文档，当前 `UNTRUSTED / PENDING_REVIEW`。
+在具名审批之前，生产索引写入会被拒绝：
+
+```bash
+python3 run_offline.py review-source corpus/real_v1/sources/regulation_727.jsonl \
+  --source-id corpus/real_v1/sources/regulation_727.jsonl \
+  --approve --actor <具名审核人> --note "<审批依据>"
+```
+
+`used_ingredients_2021.jsonl` 同样处理。审批绑定文件字节哈希；改动文件会使其失效。
+
+1. 打开 `RETRIEVAL_REVIEW_WORKPACKAGE.md`，阅读每条候选的 `question`，对照
+   `annotations[].text` 与索引中的原文，确认 `(doc_id, chunk_id)` 指向的段落确实
+   支撑该问题；检查 `possibly_missing_passages` 中的线索是否需要补入。
 2. 修正错误的映射、补充遗漏段落、删除不相关段落；把 `relevance` 设为
    `2` 高度相关 / `1` 部分相关 / `0` 已考虑但排除。
 3. 审核通过后，由**真实人员**执行提升，二选一：

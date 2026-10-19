@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **The real-corpus indexer no longer destroys the production Elasticsearch
+  index by default.** `scripts/corpus/index_real_corpus_v1_es.py` called
+  `ensure_index(recreate=True, confirm=True)` unconditionally, so any invocation
+  deleted and rebuilt `cosmetics_docs`; the confirmation was hard-coded rather
+  than operator-supplied. The script now refuses to write into an existing
+  non-empty index unless the operator passes `--append-epoch` (new epoch) or
+  `--recreate --confirm-index <exact name>`. `--profile production` only accepts
+  the production index and `--profile experiment` only accepts
+  `cosmetics_docs_exp_*`, so an experiment cannot overwrite production evidence.
+  `--check-only` reports the index name, document count, epoch buckets,
+  provenance classes and content fingerprint without writing anything, and an
+  experiment run may not overwrite the committed
+  `corpus/real_v1/es_fingerprint.json`. A refused run leaves the existing index
+  byte-identical. Tests: `tests/test_real_corpus_v1_safety.py`.
+
+- **External official documents are no longer declared managed-internal.** Both
+  `scripts/corpus/build_real_corpus_v1.py` and the indexer declared the two
+  government documents `MANAGED_INTERNAL / NOT_REQUIRED`, which let external
+  text reach an activatable snapshot with no review decision. They are now
+  `UNTRUSTED / PENDING_REVIEW`, resolved through the existing
+  `offline.source_trust.TrustRegistry` and bound to the committed source-file
+  hash. A production write with unapproved sources is refused; an experiment
+  index may stage them only with `--staging-unapproved` and records that it is
+  not activatable. No reviewer, approval or trust conclusion is fabricated.
+  `corpus/real_v1/SOURCES.md` now separates the official-document basis from the
+  third-party INCI-name provenance it cannot settle.
+
+- **The review work package for the 27 candidates now exists and promotes
+  nothing.** `scripts/validation/build_real_golden_set_v1_workpackage.py` renders
+  `RETRIEVAL_REVIEW_WORKPACKAGE.md`, `ANSWER_GATE_REVIEW.md` and
+  `INDEPENDENT_QUERY_PROPOSALS.md`. Each retrieval row carries the question,
+  official source and locator, verbatim passage, `doc_id`/`chunk_id`, current
+  relevance, difficulty/complexity, possibly-missing passages, a question-
+  derivation risk signal, and blank decision/reviewer/date/notes fields. The 3
+  no-answer candidates are in a separate Answer Gate table explicitly excluded
+  from the Retrieval Recall denominator, and the worksheet states that keyword
+  absence is not proof of semantic unanswerability. Six independently written
+  user queries are proposals only (`in_dataset=false`). All records stay
+  `DRAFT_UNVERIFIED`.
+
+- **The authenticated-ES runtime validation no longer writes to or deletes the
+  production index.** `scripts/validation/validate_es_auth.py` used
+  `cosmetics_docs` as its scratch index and ended with
+  `indices.delete(index=TEST_INDEX)`, so running the validation on a host with a
+  real corpus destroyed it. It now uses `cosmetics_docs_validation` and refuses
+  to run if that name ever equals the production index. The test index is still
+  created, exercised and deleted, which is the point of the validation.
+
 ### Changed
 
 - **The retrieval benchmark CLI can now execute the production retrievers (issue

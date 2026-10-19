@@ -132,6 +132,10 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   coverage (0/301 valid), the answer-level harness, and the exact reason Hit@5/NDCG@10
   ablation A–E, answer-quality metrics and QPS are `BLOCKED` here — with the environment
   checklist that would promote them.
+- [Real corpus V1 pre-review report](validation/real-corpus-v1-pre-review.md): the
+  index-rebuild safety contract, the corrected source-trust classification, the 27+3
+  review worksheets, the exploratory-BM25 boundary (cold vs steady latency) and the
+  exact human actions still outstanding. No label is promoted by it.
 - [Deferred runtime validation index](deferred-runtime-validation.md): the single
   index of every runtime validation, each with its required environment, procedure,
   expected artifact and evidence-promotion rule. `VAL-DEGRADE-001` and `VAL-STORE-001`

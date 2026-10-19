@@ -57,6 +57,9 @@
 | `tests/evaluation/golden_set_v1/candidates_v1.jsonl` | 27 | `CANDIDATE` | AI 起草的检索候选，全部 `DRAFT_UNVERIFIED` | **不是** ground truth；未经真实人员审核不得评分 |
 | `tests/evaluation/golden_set_v1/no_answer_candidates_v1.jsonl` | 3 | `CANDIDATE` | AI 起草的无答案候选，仅用于 answer-gate | **不是** ground truth；缺席性只相对本语料成立 |
 | `tests/evaluation/golden_set_v1/candidate_validation.json` | — | `CANDIDATE` | 候选自动校验结果 | 记录结构审计与语料绑定；不含审核结论 |
+| `tests/evaluation/golden_set_v1/retrieval_review_workpackage.jsonl` | 27 | `GOVERNANCE` | 由候选派生的逐条人工审核工作表（含问题派生风险与遗漏段落线索） | **不是**标注结论；decision/reviewer/date 全部留空，`DRAFT_UNVERIFIED` |
+| `tests/evaluation/golden_set_v1/answer_gate_review_workpackage.jsonl` | 3 | `GOVERNANCE` | 3 条无答案候选的 Answer Gate 审核表，明确排除在 Retrieval Recall 分母外 | **不是**语义不可回答的结论；关键词缺失只是线索，须人工判断 |
+| `tests/evaluation/golden_set_v1/independent_query_proposals.jsonl` | 6 | `GOVERNANCE` | 独立编写的用户式查询提案，`in_dataset=false` | 不进数据集、不可评分、不参与任何指标 |
 | `docs/finalization/REGULATORY_REVIEW_CHECKLIST.json` | 15 条目 | `GOVERNANCE` | 逐条法规断言的人工复核状态追踪器，机器可读 | **不主张任何法规结论**；15 条全部处于 `SYNTHETIC_ONLY`，无一条 `VERIFIED_WITH_SOURCE` |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json` | — | `RUNTIME_EVIDENCE` | 单台本地主机上对真实 Qdrant 1.12.0 服务的验证检查项 | 仅含 localhost 端点与版本信息；不含语料内容、日志或凭据 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` | — | `RUNTIME_EVIDENCE` | 同一次验证的来源与兼容性记录 | 同上 |

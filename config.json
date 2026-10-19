@@ -290,6 +290,8 @@
       { "path_pattern": "**/imports/**", "source_trust": "UNTRUSTED" },
       { "path_pattern": "**/第三方/**", "source_trust": "UNTRUSTED" },
       { "path_pattern": "**/inbound/**", "source_trust": "UNTRUSTED" },
+      { "path_pattern": "corpus/real_v1/sources/**", "source_trust": "UNTRUSTED" },
+      { "path_pattern": "**/corpus/real_v1/sources/**", "source_trust": "UNTRUSTED" },
       { "path_pattern": "**/公开/**", "source_trust": "MANAGED_INTERNAL" }
     ],
     "default_source_trust": "MANAGED_INTERNAL",

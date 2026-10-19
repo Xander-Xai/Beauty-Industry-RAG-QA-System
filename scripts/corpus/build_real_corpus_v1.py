@@ -28,8 +28,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from offline.document_processor import DocumentProcessor  # noqa: E402
 from offline.source_trust import (  # noqa: E402
-    APPROVAL_NOT_REQUIRED,
-    TRUST_MANAGED_INTERNAL,
+    APPROVAL_PENDING_REVIEW,
+    CLASS_UNTRUSTED,
+    TRUST_UNTRUSTED,
     SourceTrustRecord,
 )
 
@@ -71,10 +72,21 @@ def _safe_filename(logical_id: str) -> str:
 
 
 def _provenance(logical_id: str) -> dict:
+    """Declare these external official documents as UNTRUSTED, unreviewed.
+
+    The corpus is imported from outside the managed data root, so the honest
+    provenance claim is ``UNTRUSTED`` and the honest approval state is
+    ``PENDING_REVIEW``. Declaring it ``MANAGED_INTERNAL`` would let external text
+    reach an activatable snapshot with no review decision at all — the exact
+    bypass the trust contract exists to prevent. A named reviewer promotes the
+    committed source file through the existing ``run_offline.py review-source``
+    flow; nothing here does.
+    """
     return SourceTrustRecord(
         source_id=logical_id,
-        source_trust=TRUST_MANAGED_INTERNAL,
-        approval_status=APPROVAL_NOT_REQUIRED,
+        source_trust=TRUST_UNTRUSTED,
+        approval_status=APPROVAL_PENDING_REVIEW,
+        trust_class=CLASS_UNTRUSTED,
     ).to_payload()
 
 
