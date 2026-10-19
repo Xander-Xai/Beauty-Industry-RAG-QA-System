@@ -307,6 +307,16 @@
         "question"
       ],
       "regulatory_shaped_fields_evidence": "6 proposals, each with in_dataset=false and scorable=false; no passage, doc_id or chunk_id."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/review_decisions_v1.jsonl",
+      "class": "GOVERNANCE",
+      "purpose": "blank human review-decision ledger: 27 rows, each bound to the sha256 of the exact candidate row a reviewer is signing, with decision/reviewer/reviewed_at/promoted_by left empty",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Contains no question text and no passage text, only identifiers, hex digests and empty decision fields. It records that a human decision is still outstanding; it does not make one.",
+      "record_marker_absent_reason": "The importer enforces a closed field set (DECISION_FIELDS) so that no ai_* field can ever appear in a signed decision; an inline marker would be rejected by the gate it exists to satisfy. Review state travels in the ledger's own decision/reviewer/reviewed_at columns, which are empty on every committed row."
     }
   ]
 }

@@ -42,16 +42,64 @@
 - 契约校验（`golden-set-contract/v2`）：**0/27 通过**，唯一原因是
   `annotation_not_reviewed:DRAFT_UNVERIFIED` 与 `missing_annotation_reviewed_by`
   （契约对未审核记录本就不给 `reviewed_by`）。
-- ES 存在性解析：27 条候选的全部 `(doc_id, chunk_id)` 均能在
-  `cosmetics_docs` 索引（`corpus_version=real-v1-20261019`）中解析到，**没有一条**
-  报 `unresolved`。
+- ES 存在性解析：27 条候选的全部 `(doc_id, chunk_id)` 均能在索引中解析到，
+  **没有一条**报 `unresolved`（21 个不重复金标段落全部命中，ratio = 1.0）。
 - 语料/索引绑定校验（`scripts/corpus/verify_real_corpus_v1_binding.py`，只读）：
-  源文件哈希、本地语料指纹、候选绑定、索引 content fingerprint、epoch/文档数、
-  标注可解析性全部 `PASS`；`trust_state` 为 `FAIL`（现有索引仍是旧代码写入的
-  `MANAGED_INTERNAL`），`config_epoch` 为 `FAIL`
-  （`knowledge_version_epoch=default` ≠ `real-v1-20261019`）。
-- 来源信任：两份源文件为 `UNTRUSTED / PENDING_REVIEW`，**已审批 0/2**。在生产
-  索引重建前必须完成具名审批。
+  `source_bytes` / `local_corpus` / `candidate_binding` / `index_identity` /
+  `index_content` 全部 `PASS`；`trust_state` 与 `config_epoch` 为 `FAIL`
+  （见下）。
+- 来源信任：两份源文件为 `UNTRUSTED / PENDING_REVIEW`，**已审批 0/2**。
+- 签署台账：`review_decisions_v1.jsonl` 为**空白模板**，**已签署 0/27**。
+
+### 探索性 BM25 实测（**不可发布**）
+
+`results_are_benchmark=false`、`data_class=CANDIDATE`、`attributable=false`、
+`git_dirty=false`，git SHA `a703eb8`，dataset SHA-256 `1aa7c835…`。
+
+| 指标 | 值 |
+|---|---|
+| Recall@1 / @3 / @5 / @10 | 0.296 / 0.426 / 0.537 / 0.722 |
+| HitRate@1 / @3 / @5 / @10 | 0.333 / 0.444 / 0.556 / 0.741 |
+| MRR@10 | 0.421 |
+| NDCG@10 | 0.477 |
+| 延迟（冷启首条 / 稳态均值 / p50 / p95） | 769.7 ms / 17.9 ms / 17.2 ms / 29.5 ms |
+
+**这是 27 条草稿、固定历史语料快照上的小样本结果，不代表现行法规问答准确率，
+也不代表生产性能。** 3 条 answer-gate 样本不参与这些指标。
+
+> **口径提醒**：早前 PR 正文公布的 `Recall@10 0.852 / MRR@10 0.653 / NDCG@10 0.677`
+> 对应的是 **628a244 重新分级之前**的候选集（已用 `git show 39afa0e:` 复现，数值逐位一致）。
+> 该提交给 REAL-V1-002 增加第二金标、修正 021/023/024 的分级后，分母与相关集改变，
+> 数字随之下降。上表是**当前提交候选集**可复现的值。
+
+### `config_epoch` FAIL 会让 BM25 返回零行（已实测确认）
+
+提交的 `config.json` 中 `knowledge_version_epoch = "default"`，而索引内文档的
+`doc_version_epoch` 是 `real-v1-20261019`。`retrieval/bm25_retriever.py`
+会把这个字段作为 `term` 过滤器下推，因此**按提交配置查询该索引会返回 0 条**——
+本轮首次运行即复现全 0 指标（`retrieved_items` 27/27 为空）。
+
+绑定校验器早已以明文指出这一点：
+`"retrieval filters on a different epoch; BM25 would return zero rows against this index"`。
+上表的数字是在**临时 CONFIG_PATH**（指向隔离索引且 `knowledge_version_epoch`
+与语料 epoch 一致）下取得的。生产配置的 epoch 对齐属于本 PR 范围之外的独立决策。
+
+复现方式：
+
+```bash
+python3 - <<'EOF'
+import json, pathlib
+c = json.load(open('config.json'))
+c['elasticsearch'] = {"host": "http://127.0.0.1:9200", "index": "cosmetics_docs_exp_v1",
+                      "enabled": True, "username": "", "password": ""}
+c['knowledge_version_epoch'] = "real-v1-20261019"   # 与索引内 doc_version_epoch 对齐
+pathlib.Path('/tmp/config_es_exp.json').write_text(json.dumps(c, ensure_ascii=False, indent=2), encoding='utf-8')
+EOF
+CONFIG_PATH=/tmp/config_es_exp.json python3 -m benchmarks.retrieval_benchmark \
+  --config bm25 --executor real \
+  --dataset tests/evaluation/golden_set_v1/candidates_v1.jsonl --top-k 10 \
+  --output-dir /tmp/bench_exp
+```
 
 复现命令（需要本机 ES；本仓库不提交 ES 数据）：
 
