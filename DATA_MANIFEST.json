@@ -7,7 +7,9 @@
     "EMPTY_BY_DESIGN": "Committed empty on purpose. Writing synthetic or model-generated records into it is a CI failure.",
     "SCHEMA": "Structural definition only. Carries no business data.",
     "RUNTIME_EVIDENCE": "Recorded observation of a real dependency on a single local host. Contains no corpus content, logs or credentials.",
-    "GOVERNANCE": "Review-tracker metadata. Records the state of outstanding human verification work. Asserts no regulatory conclusion of its own; every entry names what still has to be decided."
+    "GOVERNANCE": "Review-tracker metadata. Records the state of outstanding human verification work. Asserts no regulatory conclusion of its own; every entry names what still has to be decided.",
+    "PUBLIC_OFFICIAL_DOCUMENT": "Text derived from a published official government document. Redistribution basis and provenance are recorded in corpus/real_v1/SOURCES.md. Real regulatory claims are present, so carries_real_regulatory_claims is true.",
+    "CANDIDATE": "AI-proposed, unreviewed annotation candidate. Never ground truth and never scorable; the scoring gate refuses it until a named human promotes it."
   },
   "disclosure_vocabulary": {
     "record_marker": "How a single record identifies itself when separated from this manifest. 'inline:<field>' means the named field travels inside every record, and CI verifies the field is present in every one. 'file' means one declaration at the top of the file covers the whole file. 'none' means a record carries no self-description, and record_marker_absent_reason explains why.",
@@ -146,6 +148,84 @@
       "record_marker_absent_reason": "Declared for consistency with the rest of the evaluation fixtures, but the file quotes no regulation instrument and carries no limit-shaped value, so there is nothing to mark. The sidecar still documents the intent.",
       "regulatory_shaped_fields": [],
       "regulatory_shaped_fields_evidence": "0 of 6 rows name a regulation instrument; 0 carry a limit-shaped value. The questions are phrased as regulatory questions but carry no asserted conclusion."
+    },
+    {
+      "path": "corpus/real_v1/sources/regulation_727.jsonl",
+      "class": "PUBLIC_OFFICIAL_DOCUMENT",
+      "marker": "corpus/real_v1/SOURCES.md",
+      "purpose": "derived article-level text of State Council Order No. 727 from www.gov.cn; the raw HTML is not redistributed",
+      "carries_real_regulatory_claims": true,
+      "record_marker": "inline:_data_class",
+      "regulatory_shaped_fields": ["text"],
+      "regulatory_shaped_fields_evidence": "81 records: 1 front matter + 80 articles; every article quotes the official regulation text."
+    },
+    {
+      "path": "corpus/real_v1/sources/used_ingredients_2021.jsonl",
+      "class": "PUBLIC_OFFICIAL_DOCUMENT",
+      "marker": "corpus/real_v1/SOURCES.md",
+      "purpose": "derived notice plus selected rows of NMPA announcement 2021 No. 62; the raw xlsx is not redistributed",
+      "carries_real_regulatory_claims": true,
+      "record_marker": "inline:_data_class",
+      "regulatory_shaped_fields": ["text"],
+      "regulatory_shaped_fields_evidence": "128 records: 1 notice + 127 selected ingredient rows, each carrying a name, INCI and historical-use value."
+    },
+    {
+      "path": "corpus/real_v1/chunks.jsonl",
+      "class": "PUBLIC_OFFICIAL_DOCUMENT",
+      "marker": "corpus/real_v1/SOURCES.md",
+      "purpose": "deterministic chunk view produced by offline/document_processor from the two official source files",
+      "carries_real_regulatory_claims": true,
+      "record_marker": "inline:_data_class",
+      "regulatory_shaped_fields": ["text"],
+      "regulatory_shaped_fields_evidence": "212 chunks; every chunk quotes official source text and carries source_url/locator."
+    },
+    {
+      "path": "corpus/real_v1/manifest.json",
+      "class": "PUBLIC_OFFICIAL_DOCUMENT",
+      "marker": "corpus/real_v1/SOURCES.md",
+      "purpose": "corpus version, local fingerprint, source hashes and per-document mapping; contains locators, not passage text",
+      "carries_real_regulatory_claims": true,
+      "record_marker": "file",
+      "regulatory_shaped_fields": []
+    },
+    {
+      "path": "corpus/real_v1/es_fingerprint.json",
+      "class": "RUNTIME_EVIDENCE",
+      "marker": "corpus/real_v1/SOURCES.md",
+      "purpose": "fingerprint of the real local Elasticsearch index built from chunks.jsonl (BM25 path only)",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Contains only an index fingerprint and counts, no passage text."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/candidates_v1.jsonl",
+      "class": "CANDIDATE",
+      "purpose": "27 AI-proposed retrieval candidates with real doc_id/chunk_id; all DRAFT_UNVERIFIED and unscorable",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "The v2 annotation schema sets additionalProperties:false at the record top level, so an inline marker would violate the schema the record is meant to satisfy. Review state travels inside annotation.review_status and is checked by benchmarks.annotation.validate_annotation.",
+      "regulatory_shaped_fields": ["question", "contexts[]", "annotations[].text"],
+      "regulatory_shaped_fields_evidence": "27 rows quote official regulation and catalogue text; all are draft candidates, not claims."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/no_answer_candidates_v1.jsonl",
+      "class": "CANDIDATE",
+      "purpose": "3 AI-proposed questions the corpus cannot answer; answer-gate evaluation only, never retrieval ground truth",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "record_marker_absent_reason": "Same reason as candidates_v1.jsonl: a per-record marker would alter the reviewed record shape. Absence evidence is carried by searched_pairs and matched_chunk_ids.",
+      "regulatory_shaped_fields": ["question", "searched_pairs"],
+      "regulatory_shaped_fields_evidence": "3 rows name a substance and a limit-shaped question, none of which the corpus answers."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/candidate_validation.json",
+      "class": "CANDIDATE",
+      "marker": "file",
+      "purpose": "machine-readable result of the candidate build: counts, annotation audit and corpus binding",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": []
     }
   ]
 }

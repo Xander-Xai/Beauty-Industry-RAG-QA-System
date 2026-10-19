@@ -49,6 +49,14 @@
 | `tests/evaluation/golden_set_v2/annotation_workpackage_v1.jsonl` | 70 | `SYNTHETIC` | 由 `scripts/validation/build_annotation_workpackage.py` 从黄金集派生的候选标注工作表 | 是**待人工评审的候选**，不是标注结论 |
 | `tests/evaluation/golden_set_v2/annotations.schema.json` | — | `SCHEMA` | JSON Schema 定义 | 不含业务数据 |
 | `tests/integration/testdata/queries.json` | 6 | `SYNTHETIC` | 人工构造的集成冒烟查询集 | 含与黄金集相同的**虚构**成分限量问题，见第 4 节 |
+| `corpus/real_v1/sources/regulation_727.jsonl` | 81 | `PUBLIC_OFFICIAL_DOCUMENT` | 国务院令第727号《化妆品监督管理条例》派生摘录，来源见 `corpus/real_v1/SOURCES.md` | **真实**官方文本；仅提交派生摘录，不提交原始 HTML；不得篡改原意 |
+| `corpus/real_v1/sources/used_ingredients_2021.jsonl` | 128 | `PUBLIC_OFFICIAL_DOCUMENT` | NMPA 2021年第62号公告附件派生摘录，来源见 `corpus/real_v1/SOURCES.md` | **真实**官方文本；仅提交派生摘录，不提交原始 xlsx；INCI 名称来源与残余风险见 SOURCES.md |
+| `corpus/real_v1/chunks.jsonl` | 212 | `PUBLIC_OFFICIAL_DOCUMENT` | 由上述两个源文件经 `offline/document_processor` 确定性切块 | 同上；每条 chunk 带 `source_url` 与 `locator` |
+| `corpus/real_v1/manifest.json` | — | `PUBLIC_OFFICIAL_DOCUMENT` | 语料版本、指纹、源文件哈希与文档映射 | 不含正文；用于把 `doc_id`/`chunk_id` 绑定到 `corpus_version` |
+| `corpus/real_v1/es_fingerprint.json` | — | `RUNTIME_EVIDENCE` | 本机真实 Elasticsearch 索引指纹（仅 BM25 路径） | 仅含指纹与计数，不含语料正文；不声称 dense/hybrid 已验证 |
+| `tests/evaluation/golden_set_v1/candidates_v1.jsonl` | 27 | `CANDIDATE` | AI 起草的检索候选，全部 `DRAFT_UNVERIFIED` | **不是** ground truth；未经真实人员审核不得评分 |
+| `tests/evaluation/golden_set_v1/no_answer_candidates_v1.jsonl` | 3 | `CANDIDATE` | AI 起草的无答案候选，仅用于 answer-gate | **不是** ground truth；缺席性只相对本语料成立 |
+| `tests/evaluation/golden_set_v1/candidate_validation.json` | — | `CANDIDATE` | 候选自动校验结果 | 记录结构审计与语料绑定；不含审核结论 |
 | `docs/finalization/REGULATORY_REVIEW_CHECKLIST.json` | 15 条目 | `GOVERNANCE` | 逐条法规断言的人工复核状态追踪器，机器可读 | **不主张任何法规结论**；15 条全部处于 `SYNTHETIC_ONLY`，无一条 `VERIFIED_WITH_SOURCE` |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json` | — | `RUNTIME_EVIDENCE` | 单台本地主机上对真实 Qdrant 1.12.0 服务的验证检查项 | 仅含 localhost 端点与版本信息；不含语料内容、日志或凭据 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` | — | `RUNTIME_EVIDENCE` | 同一次验证的来源与兼容性记录 | 同上 |
@@ -116,6 +124,10 @@
 
 **本仓库数据集中的法规、标准号、成分限量与安全结论均为人工构造的占位内容，
 不是真实法规知识，也未经任何监管机构或第三方标准原文校对。**
+
+> **范围说明（自 Golden Set V1 起）：** 上面这句描述的是**合成夹具**。仓库现在另有一份
+> **真实公开语料** `corpus/real_v1/`，其文本来自官方文档并带来源与许可证据，见第 4.1 节。
+> 两者不得混用：合成夹具用于形状测试，真实语料用于检索评测；任何法规结论仍须回到官方现行文本核对。
 
 具体而言，下列内容出现在 `offline/finetune_data.json`、
 `tests/evaluation/golden_set*.jsonl`、`tests/evaluation/sample_golden_set.jsonl` 与
@@ -238,10 +250,41 @@ CI 中强制第 1、2 条的是 `check_public_repository_boundary.py` 的第 6 �
 `tests/test_check_public_repository_boundary.py`。第 3 条无法自动化，只能由
 具备资质的人判断，清单见
 [`docs/finalization/DATA_REVIEW_BACKLOG.md`](docs/finalization/DATA_REVIEW_BACKLOG.md)。
-
-需要替换为真实语料时，按 [`docs/benchmark-data-quality.md`](docs/benchmark-data-quality.md)
-的数据准入流程执行，来源许可无法确认的材料先进入隔离区
+需要替换为真实语料时，按 [`docs/benchmark-data-quality.md`](docs/benchmark-data-quality.md) 的数据准入流程执行，来源许可无法确认的材料先进入隔离区
 （`offline/source_trust.py` 的 `UNTRUSTED` 信任级别），经人工批准后才可激活。
+
+### 4.1 真实公开语料（`corpus/real_v1/` V1）
+
+自 Issue #86 / #18 的推进起，仓库包含**第一份真实公开语料**，用于把检索评测从
+"规范化精确文本匹配"提升到真实 `(doc_id, chunk_id)` 归因：
+
+| 项 | 内容 |
+|---|---|
+| `corpus_version` | `real-v1-20261019` |
+| 数据类别 | `PUBLIC_OFFICIAL_DOCUMENT`（在 `DATA_MANIFEST.json` 中声明） |
+| 来源 1 | 《化妆品监督管理条例》国务院令第727号，www.gov.cn 官方全文 |
+| 来源 2 | 《已使用化妆品原料目录（2021年版）》NMPA 2021年第62号公告附件 |
+| 许可依据 | 《中华人民共和国著作权法》第五条第（一）项：国家机关的决议、决定、命令和其他具有立法、行政、司法性质的文件不适用著作权法 |
+| 再分发 | **允许**（官方文件）。仓库只提交**派生摘录**与来源/许可说明，不提交原始 `.xlsx` 或官方 HTML |
+| 可信性 | 最高：两份文件均为发布机构的官方文本 |
+| 指纹 | 本地指纹 `manifest.json::corpus_sha256_local`；ES 索引指纹 `es_fingerprint.json::fingerprint.content_sha256` |
+
+**边界与限制**
+
+1. 本语料是 **2021 年版快照**，不声称是最新版本；语料更新必须生成新的
+   `corpus_version` 与指纹，不能原地覆盖。
+2. 目录中的"最高历史使用量"在说明第八条中被定义为安全评估证据类型之一，
+   **不是**强制法规限量；任何把它当作限量的回答都是对原意的篡改。
+3. INCI 名称的原始词典来源是 PCPC；本仓库只摘取事实性名称/数值字段，不复制
+   词典解释文本。残余风险已在 `corpus/real_v1/SOURCES.md` 如实记录。
+4. `tests/evaluation/golden_set_v1/` 下的候选标注**全部**为 AI 起草的
+   `DRAFT_UNVERIFIED`，`scorable: false`。只有具名人员审核并按
+   `benchmarks/annotation.py` 提升为 `REVIEWED` 后，才允许进入评测。
+5. 真实语料的存在**不**降低对合成夹具的披露要求；`DATA_MANIFEST.json` 中两份
+   数据的类别、`carries_real_regulatory_claims` 与 `regulatory_shaped_fields`
+   分别声明，不得互相覆盖。
+
+
 
 ---
 

@@ -1,0 +1,183 @@
+{
+  "annotation_audit": {
+    "corpus_sha256": "38849be7fe8ce077ea5a5e61fa1fa3909143b8a9088dd55d372b3d1c64711a1c",
+    "corpus_versions": [
+      "real-v1-20261019"
+    ],
+    "draft_count": 27,
+    "schema_version": "golden-set-annotation/v1",
+    "scorable_count": 0,
+    "total": 27,
+    "valid_count": 27,
+    "verdicts": [
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-001",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-002",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-003",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-004",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-005",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-006",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-007",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-008",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-009",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-010",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-011",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-012",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-013",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-014",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-015",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-016",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-017",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-018",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-019",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-020",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-021",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-022",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-023",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-024",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-025",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-026",
+        "scorable": false,
+        "valid": true
+      },
+      {
+        "reasons": [],
+        "sample_id": "REAL-V1-027",
+        "scorable": false,
+        "valid": true
+      }
+    ]
+  },
+  "candidate_count": 27,
+  "corpus_sha256": "38849be7fe8ce077ea5a5e61fa1fa3909143b8a9088dd55d372b3d1c64711a1c",
+  "corpus_version": "real-v1-20261019",
+  "draft_count": 27,
+  "no_answer_count": 3,
+  "reviewed_count": 0
+}
