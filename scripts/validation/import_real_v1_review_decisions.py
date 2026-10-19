@@ -23,19 +23,32 @@ Three separation rules shape everything here.
 
 3. **Nothing is promoted without a name and a date the reviewer chose.**
    There is no ``--reviewer``, no ``--reviewed-at`` and no default reviewer. A row
-   whose decision is blank stays ``DRAFT_UNVERIFIED``; a row missing a reviewer,
-   a date, or the ``promoted_by`` an ``llm_candidate`` needs is an error, not a
-   silent demotion to draft. Dates are read, never generated.
+   whose decision is blank stays ``DRAFT_UNVERIFIED``; a row missing a reviewer, a
+   date, or the ``promoted_by`` an ``llm_candidate`` needs is an error, not a silent
+   demotion to draft. Dates are read, never generated. **REJECT is held to the same
+   identity contract as ACCEPT and MODIFY** -- dropping a sample from the scored
+   dataset is a human judgement, not an administrative tidy-up.
+
+4. **The import is all-or-nothing and commits atomically.** One malformed decision
+   abandons the entire run: no output is written, any previous formal result is left
+   exactly as it was, and the exit code is 2. Outputs are built in full in a scratch
+   directory and swapped into place, so a crash cannot leave a directory holding
+   half of the new dataset and half of the old.
 
 Usage::
+
+    # emit a blank, hash-bound ledger for a reviewer to sign
+    python3 scripts/validation/import_real_v1_review_decisions.py \\
+      --emit-template tests/evaluation/golden_set_v1/review_decisions_v1.jsonl
 
     # report only; writes nothing
     python3 scripts/validation/import_real_v1_review_decisions.py
 
-    # write the outputs once the ledger is signed
+    # write the outputs once the ledger is signed and entirely valid
     python3 scripts/validation/import_real_v1_review_decisions.py --apply
 
-Exit codes: 0 success, 2 refused (bad decision, broken binding, unsigned ledger).
+Exit codes: 0 success (including "signed nothing yet"), 2 refused -- a bad decision,
+a broken hash binding, an anonymous verdict, schema drift, or a missing ledger.
 """
 
 from __future__ import annotations
@@ -43,6 +56,8 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
+import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from datetime import date
@@ -333,15 +348,29 @@ def apply_decision(candidate: Mapping, decision: Mapping) -> dict:
     return updated
 
 
-def promote(candidate: Mapping, decision: Mapping) -> dict:
-    """Apply the decision and promote it, refusing every unsafe combination."""
+def require_human_decision(candidate: Mapping, decision: Mapping) -> None:
+    """Enforce the real-human contract that every non-empty decision must meet.
+
+    This runs for ACCEPT, MODIFY **and** REJECT. Excluding a candidate is a
+    human judgement about a real candidate: an anonymous rejection is
+    indistinguishable from a row somebody deleted because it was inconvenient, and
+    it permanently removes a sample from the scored dataset with no attributable
+    record of who decided that. A rejection is not a lighter decision than an
+    acceptance, so it carries the same identity requirement.
+
+    ``promoted_by`` is deliberately *not* required here. It records who promoted an
+    ``llm_candidate`` to ``REVIEWED``; a REJECT performs no promotion, so demanding
+    it would ask for a field that has no honest value.
+    """
     sample_id = str(candidate["sample_id"])
     reviewer = decision.get("reviewer")
     reviewed_at = decision.get("reviewed_at")
-    promoted_by = decision.get("promoted_by")
 
     if not str(reviewer or "").strip():
-        raise ImportRefused(f"{sample_id}: a signed decision needs a named reviewer; none was recorded")
+        raise ImportRefused(
+            f"{sample_id}: every non-empty decision needs a named reviewer; none was recorded. "
+            "An unsigned or anonymous verdict is refused for ACCEPT, MODIFY and REJECT alike."
+        )
     if not is_iso_date(reviewed_at):
         raise ImportRefused(
             f"{sample_id}: reviewed_at must be the ISO date the reviewer actually decided on, got {reviewed_at!r}. "
@@ -352,18 +381,30 @@ def promote(candidate: Mapping, decision: Mapping) -> dict:
         raise ImportRefused(
             f"{sample_id}: reviewer {reviewer!r} is the original annotator; self-review defeats the second pair of eyes"
         )
-    source = (candidate.get("annotation") or {}).get("source")
-    if source == ANNOTATION_SOURCE_LLM and not str(promoted_by or "").strip():
+
+
+def require_promotion_attribution(candidate: Mapping, decision: Mapping) -> None:
+    """An ``llm_candidate`` may only reach REVIEWED through a named promoter."""
+    if (candidate.get("annotation") or {}).get("source") == ANNOTATION_SOURCE_LLM and not str(
+        decision.get("promoted_by") or ""
+    ).strip():
         raise ImportRefused(
-            f"{sample_id}: an llm_candidate can only be promoted with a real promoted_by, so the promotion is auditable"
+            f"{candidate['sample_id']}: an llm_candidate can only be promoted with a real promoted_by, "
+            "so the promotion itself is auditable"
         )
 
+
+def promote(candidate: Mapping, decision: Mapping) -> dict:
+    """Apply the decision and promote it, refusing every unsafe combination."""
+    require_human_decision(candidate, decision)
+    require_promotion_attribution(candidate, decision)
+    promoted_by = str(decision.get("promoted_by") or "").strip()
     updated = apply_decision(candidate, decision)
     return promote_to_reviewed(
         updated,
-        reviewer=str(reviewer),
-        reviewed_at=str(reviewed_at),
-        promoted_by=str(promoted_by).strip() if str(promoted_by or "").strip() else None,
+        reviewer=str(decision["reviewer"]),
+        reviewed_at=str(decision["reviewed_at"]),
+        promoted_by=promoted_by or None,
     )
 
 
@@ -521,6 +562,9 @@ def main(argv: list[str] | None = None) -> int:
             if verdict == "REJECT":
                 # A rejected candidate never enters the scored dataset. It is
                 # recorded so the exclusion is auditable rather than a silent drop.
+                # Rejecting is a human decision like any other, so it carries the
+                # same identity contract: no anonymous removals.
+                require_human_decision(candidate, decision)
                 rejected.append(project_to_schema(apply_decision(candidate, decision)))
                 counts["REJECT"] += 1
                 continue
@@ -570,8 +614,13 @@ def main(argv: list[str] | None = None) -> int:
         ),
     }
 
-    if refusals and counts["REJECT"] == 0 and not reviewed:
-        print(f"REFUSED: {len(refusals)} problem(s); nothing written")
+    if refusals:
+        # All-or-nothing. A ledger where one row is malformed is a ledger whose
+        # remaining rows cannot be trusted as a set: the reviewer may have signed
+        # it against a candidate set that has since moved, and a partial import
+        # would publish a formal dataset that silently mixes old and new bytes.
+        # Nothing is written and any previous formal result is left untouched.
+        print(f"REFUSED: {len(refusals)} problem(s); the whole import was abandoned and nothing was written")
         for refusal in refusals:
             print(f"  - {refusal}")
         return 2
@@ -582,34 +631,57 @@ def main(argv: list[str] | None = None) -> int:
     print(f"still draft: {len(drafts)}")
     print(f"rejected: {len(rejected)}")
     print(f"v1 schema diff vs v2 (must be sample_id only): {differences}")
-    for refusal in refusals:
-        print(f"  ! {refusal}")
 
     if not args.apply:
         print("dry run; nothing written (pass --apply to write)")
         return 0
 
-    write_jsonl(out_dir / "review_decisions_applied.jsonl", ledger)
-    write_jsonl(out_dir / "annotations_v1_reviewed.jsonl", reviewed)
-    write_jsonl(out_dir / "annotations_v1_drafts.jsonl", drafts)
-    write_jsonl(out_dir / "annotations_v1_rejected.jsonl", rejected)
-    write_jsonl(
-        out_dir / "sample_id_map_v2.jsonl",
-        [
-            {
-                "v1_sample_id": sample_id,
-                "v2_sample_id": v2_id,
-                "mapping": "suffix zero-padded to four digits; V1 identifiers are what the worksheet and candidates use",
-            }
-            for sample_id, v2_id in sorted(id_map.items())
-        ],
-    )
-    (out_dir / "annotations_v1.schema.json").write_text(
-        json.dumps(v1_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    (out_dir / "import_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    # Every output is built in full, in a scratch directory, before anything the
+    # previous run produced is touched. A crash between two file writes can then
+    # never leave a directory holding half of the new dataset and half of the old.
+    staging = out_dir.parent / f".{out_dir.name}.staging-{os.getpid()}"
+    backup = out_dir.parent / f".{out_dir.name}.previous-{os.getpid()}"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        write_jsonl(staging / "review_decisions_applied.jsonl", ledger)
+        write_jsonl(staging / "annotations_v1_reviewed.jsonl", reviewed)
+        write_jsonl(staging / "annotations_v1_drafts.jsonl", drafts)
+        write_jsonl(staging / "annotations_v1_rejected.jsonl", rejected)
+        write_jsonl(
+            staging / "sample_id_map_v2.jsonl",
+            [
+                {
+                    "v1_sample_id": sample_id,
+                    "v2_sample_id": v2_id,
+                    "mapping": (
+                        "suffix zero-padded to four digits; V1 identifiers are what the worksheet and candidates use"
+                    ),
+                }
+                for sample_id, v2_id in sorted(id_map.items())
+            ],
+        )
+        (staging / "annotations_v1.schema.json").write_text(
+            json.dumps(v1_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        (staging / "import_report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        if out_dir.exists():
+            os.replace(out_dir, backup)
+        try:
+            os.replace(staging, out_dir)
+        except OSError:
+            if backup.exists():
+                os.replace(backup, out_dir)
+            raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+
     for name in (
         "review_decisions_applied.jsonl",
         "annotations_v1_reviewed.jsonl",

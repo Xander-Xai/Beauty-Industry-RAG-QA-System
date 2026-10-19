@@ -215,7 +215,7 @@ def build_retrieval_records(candidates: list[dict], chunks: list[dict], sources:
         hard_negative_chunk_id = _extract(notes, "hard_negative_chunk_id")
         query_family = _extract(notes, "query_family")
         correction = _extract_prose(notes, "ai_correction")
-        considered_excluded = re.findall(r"considered_excluded=([^\s(]+)\s*\(([^)]*)\)", notes)
+        considered_excluded = _extract_exclusions(notes)
 
         records.append(
             {
@@ -314,6 +314,30 @@ def _extract_prose(text: str, key: str) -> str:
     """
     match = re.search(rf"{re.escape(key)}=(.*?)(?=;\s*(?:considered_excluded|hard_negative_chunk_id)=|$)", text, re.S)
     return " ".join(match.group(1).split()) if match else ""
+
+
+def _extract_exclusions(notes: str) -> list[tuple[str, str]]:
+    """Read every ``considered_excluded=<id> (<reason>)`` pair out of a note.
+
+    The reason is free prose and may legitimately contain parentheses -- naming a
+    clause or a value ("ordinary=filing)") is normal. The obvious pattern
+    ``\\(([^)]*)\\)`` stops at the *first* closing parenthesis and silently drops
+    the remainder, which loses the audit rationale in the one file a reviewer is
+    supposed to read. So the reason is taken non-greedily up to a closing
+    parenthesis that is followed by the next structured marker or the end of the
+    note, and an inner ``)`` only ends it early if what follows looks like the end
+    of the entry.
+
+    Convention this relies on: a reason must not contain the two-character
+    sequence ``); `` itself. Nothing in the corpus's reasons does.
+    """
+    found: list[tuple[str, str]] = []
+    for match in re.finditer(r"considered_excluded=([^\s(]+)\s*\((.*?)\)(?=\s*(?:;|$))", notes, re.S):
+        reason = " ".join(match.group(2).split())
+        if not reason:
+            continue
+        found.append((match.group(1), reason))
+    return found
 
 
 def _dedupe_leads(leads: list[dict]) -> list[dict]:

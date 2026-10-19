@@ -196,7 +196,7 @@ CANDIDATES: tuple[tuple, ...] = (
     (
         "根据《已使用化妆品原料目录（2021年版）》，积雪草提取物在驻留类产品中的 2021 年版记载最高历史使用量是多少？",
         "ingredient",
-        "medium",
+        "easy",
         "simple",
         "ingredient_query",
         (("nmpa/used-ingredients-2021/row-003171", None, 2),),
@@ -204,7 +204,11 @@ CANDIDATES: tuple[tuple, ...] = (
         {
             "suggestion": "MODIFY",
             "correction": (
-                "re-worded to pin the figure to the 2021 snapshot rather than leaving it readable as a current cap"
+                "re-worded to pin the figure to the 2021 snapshot rather than leaving it readable as a "
+                "current cap; difficulty lowered from medium to easy because this asks one single-cell "
+                "lookup, while REAL-V1-013 asks three (INCI name plus both usage columns) and is easy. "
+                "Labelling the simpler question harder made the difficulty buckets describe the annotator "
+                "rather than the queries, and by_difficulty statistics inherit that"
             ),
         },
     ),
@@ -241,11 +245,20 @@ CANDIDATES: tuple[tuple, ...] = (
     (
         "氢醌在《已使用化妆品原料目录（2021年版）》中的备注是什么？",
         "ingredient",
-        "medium",
+        "easy",
         "simple",
         "ingredient_query",
         (("nmpa/used-ingredients-2021/row-005428", None, 2),),
         None,
+        {
+            "suggestion": "MODIFY",
+            "correction": (
+                "difficulty lowered from medium to easy because this asks one single-cell lookup (the "
+                "remark), while REAL-V1-016 asks two (the usage columns and the remark) and is easy. "
+                "The row itself is no harder than any other catalogue row; 氢醌 is a banned-component "
+                "remark, which makes the answer distinctive to retrieve but not harder to specify"
+            ),
+        },
     ),
     (
         "《化妆品监督管理条例》是怎么定义化妆品的？",
@@ -303,21 +316,33 @@ CANDIDATES: tuple[tuple, ...] = (
         "企业使用已列入目录的原料生产国产普通化妆品，需要办理哪些注册和备案手续？",
         "regulation",
         "medium",
-        "complex",
-        "multi_document",
-        (
-            ("nmpa/regulation-727/article-004", None, 1),
-            ("nmpa/regulation-727/article-017", None, 2),
-        ),
+        "simple",
+        "regulation_precise",
+        (("nmpa/regulation-727/article-017", None, 2),),
         None,
         {
             "suggestion": "MODIFY",
             "correction": (
-                "re-graded: article-017 is the passage that actually answers 'which procedures' (filing "
-                "timing, authority, and the import variant), so it is the highly relevant passage. "
-                "article-004 only states that ordinary cosmetics are filed rather than registered, which "
-                "supports the answer but cannot answer it alone, so it was graded partially relevant"
+                "re-graded on the repository's own rel=1 definition, which is 'the answer is incomplete "
+                "without it', not 'it carries more detail'. article-017 already answers the question on "
+                "its own: 国产普通化妆品 is filed 上市销售前 with the 省、自治区、直辖市 drug regulator "
+                "where the filer is located, which is the whole of 'which procedures'. article-004 is "
+                "background classification -- it states the abstract 分类管理 principle that article-017 "
+                "already applies concretely -- so it was graded 0 (considered and excluded) rather than 1. "
+                "It was not kept at 1 to preserve the multi_document bucket: a second gold passage that "
+                "does not change the answer is a false recall penalty, not a harder question. With one "
+                "gold passage the sample is no longer multi_document and complexity_label was reduced "
+                "from complex to simple, because a single retrieval hop now suffices. The question was "
+                "left unchanged; inventing difficulty to justify a second gold would be the wrong fix"
             ),
+            "considered_excluded": [
+                (
+                    "nmpa/regulation-727/article-004",
+                    "states the classification principle behind article-017 (special=registration, "
+                    "ordinary=filing) but supplies no procedure, authority or timing for the domestic "
+                    "ordinary cosmetic the question asks about; the answer is already complete without it",
+                )
+            ],
         },
     ),
     (

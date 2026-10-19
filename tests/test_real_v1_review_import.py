@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "validation"))
 
+import build_real_golden_set_v1_workpackage as importer_workpackage  # noqa: E402
 import import_real_v1_review_decisions as importer  # noqa: E402
 
 from benchmarks.annotation import (  # noqa: E402
@@ -169,21 +170,44 @@ def test_reject_never_enters_the_scored_dataset(tmp_path: Path) -> None:
 
 
 def test_modify_applies_relevance_change_and_removal(tmp_path: Path) -> None:
-    candidate = _candidate("REAL-V1-021")
+    candidate = _candidate("REAL-V1-002")
     article_004 = next(a for a in candidate["annotations"] if a["_locator"] == "第四条")
     ledger = tmp_path / "decisions.jsonl"
     _sign(
         tmp_path,
-        "REAL-V1-021",
+        "REAL-V1-002",
         decision="MODIFY",
         removed_passages=[{"chunk_id": article_004["chunk_id"]}],
-        relevance_changes=[{"chunk_id": article_004["chunk_id"], "from": 1, "to": 0}],
+        relevance_changes=[{"chunk_id": article_004["chunk_id"], "from": 2, "to": 0}],
     )
     assert _run(tmp_path, ledger) == 0
     reviewed = load_records(tmp_path / "out/annotations_v1_reviewed.jsonl")
     assert len(reviewed) == 1
     grades = {a["relevance"] for a in reviewed[0]["annotations"]}
     assert 0 in grades, "a considered-and-excluded passage must be graded 0, not deleted"
+    assert 2 in grades, "the untouched gold passage must keep its grade"
+
+
+def test_real_v1_021_no_longer_carries_article_004_as_a_gold() -> None:
+    """Pin the AI re-grade so a regeneration cannot quietly restore the second gold.
+
+    article-017 alone answers "which procedures", so article-004 was moved out of
+    the gold set. It must not reappear as relevance 1 just to keep the sample in a
+    multi-document bucket -- that would be a recall penalty for a passage that does
+    not change the answer.
+    """
+    candidate = _candidate("REAL-V1-021")
+    locators = [a["_locator"] for a in candidate["annotations"]]
+    assert locators == ["第十七条"], f"REAL-V1-021 gold set changed unexpectedly: {locators}"
+    assert candidate["complexity_label"] == "simple", (
+        "one gold passage means a single retrieval hop suffices, so complexity_label must be simple"
+    )
+    # The passage is still in the corpus and still surfaced to the reviewer as an
+    # exclusion lead, so the decision remains auditable rather than invisible.
+    workpackage = REPO_ROOT / "tests/evaluation/golden_set_v1/retrieval_review_workpackage.jsonl"
+    row = next(r for r in load_records(workpackage) if r["sample_id"] == "REAL-V1-021")
+    excluded = {item["logical_id"] for item in row.get("considered_excluded") or []}
+    assert "nmpa/regulation-727/article-004" in excluded
 
 
 def test_missing_reviewer_is_refused_not_silently_drafted(tmp_path: Path) -> None:
@@ -355,3 +379,300 @@ def test_workpackage_builder_still_regenerates_an_unsigned_worksheet(tmp_path: P
     )
     assert result.returncode == 0, result.stderr
     assert (work_dir / "retrieval_review_workpackage.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# Defect A -- an anonymous REJECT.
+#
+# REJECT permanently removes a sample from the scored dataset. It used to skip the
+# reviewer / reviewed_at / promoted_by contract entirely, so a row with
+# {"decision": "REJECT"} and no person attached was imported cleanly and the
+# dataset silently lost a sample with no attributable record of who decided that.
+# These tests pin the fix.
+# ---------------------------------------------------------------------------
+
+
+def test_reject_without_a_reviewer_is_refused(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-023", decision="REJECT", reviewer="", reviewed_at="", promoted_by="")
+    assert _run(tmp_path, ledger) == 2
+    assert not (tmp_path / "out/annotations_v1_rejected.jsonl").exists()
+
+
+def test_reject_without_a_reviewed_at_is_refused(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-023", decision="REJECT", reviewed_at="")
+    assert _run(tmp_path, ledger) == 2
+    assert not (tmp_path / "out/annotations_v1_rejected.jsonl").exists()
+
+
+def test_reject_with_a_nonsense_date_is_refused(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-023", decision="REJECT", reviewed_at="whenever")
+    assert _run(tmp_path, ledger) == 2
+
+
+def test_self_review_reject_is_refused(tmp_path: Path) -> None:
+    annotator = _candidate("REAL-V1-023")["annotation"]["annotator"]
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-023", decision="REJECT", reviewer=annotator)
+    assert _run(tmp_path, ledger) == 2
+
+
+def test_named_reject_is_accepted_and_never_scorable(tmp_path: Path) -> None:
+    """The positive control: naming the reviewer is all that changed."""
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-023", decision="REJECT")
+    assert _run(tmp_path, ledger) == 0
+    rejected = load_records(tmp_path / "out/annotations_v1_rejected.jsonl")
+    assert [record["sample_id"] for record in rejected] == ["REAL-V1-023"]
+    assert load_records(tmp_path / "out/annotations_v1_reviewed.jsonl") == []
+
+
+def test_reject_does_not_demand_promoted_by(tmp_path: Path) -> None:
+    """promoted_by records a promotion. A REJECT performs none, so it must not
+    be forced to carry a field that would have no honest value."""
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-023", decision="REJECT", promoted_by="")
+    assert _run(tmp_path, ledger) == 0
+    assert len(load_records(tmp_path / "out/annotations_v1_rejected.jsonl")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Defect B -- a partial failure must not be published as a successful import.
+# ---------------------------------------------------------------------------
+
+
+def _existing_formal_result(tmp_path: Path) -> tuple[Path, str]:
+    out = tmp_path / "out"
+    out.mkdir()
+    marker = out / "annotations_v1_reviewed.jsonl"
+    marker.write_text("PREVIOUS FORMAL RESULT\n", encoding="utf-8")
+    return out, "PREVIOUS FORMAL RESULT\n"
+
+
+def test_valid_accept_is_imported(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001")
+    assert _run(tmp_path, ledger) == 0
+    assert len(load_records(tmp_path / "out/annotations_v1_reviewed.jsonl")) == 1
+
+
+def test_valid_accept_plus_invalid_modify_aborts_everything(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001")
+    _sign_again(tmp_path, "REAL-V1-002", decision="MODIFY", relevance_changes=[{"chunk_id": "nope", "to": 2}])
+    assert _run(tmp_path, ledger) == 2
+    # The valid ACCEPT must NOT have been published alongside the broken MODIFY.
+    assert not (tmp_path / "out/annotations_v1_reviewed.jsonl").exists()
+
+
+def test_valid_reject_plus_invalid_accept_aborts_everything(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-023", decision="REJECT")
+    _sign_again(tmp_path, "REAL-V1-001", decision="ACCEPT", reviewed_at="")
+    assert _run(tmp_path, ledger) == 2
+    assert not (tmp_path / "out/annotations_v1_rejected.jsonl").exists()
+    assert not (tmp_path / "out/annotations_v1_reviewed.jsonl").exists()
+
+
+def test_hash_mismatch_aborts_everything(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001")
+    _sign_again(tmp_path, "REAL-V1-002", candidate_sha256="0" * 64)
+    assert _run(tmp_path, ledger) == 2
+    assert not (tmp_path / "out/annotations_v1_reviewed.jsonl").exists()
+
+
+def test_a_failed_import_leaves_a_previous_formal_result_untouched(tmp_path: Path) -> None:
+    out, previous = _existing_formal_result(tmp_path)
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001", reviewed_at="")
+    assert _run(tmp_path, ledger) == 2
+    assert (out / "annotations_v1_reviewed.jsonl").read_text(encoding="utf-8") == previous
+    assert sorted(p.name for p in out.iterdir()) == ["annotations_v1_reviewed.jsonl"]
+
+
+def test_a_successful_import_replaces_a_previous_formal_result(tmp_path: Path) -> None:
+    out, previous = _existing_formal_result(tmp_path)
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001")
+    assert _run(tmp_path, ledger) == 0
+    assert (out / "annotations_v1_reviewed.jsonl").read_text(encoding="utf-8") != previous
+    assert len(load_records(out / "annotations_v1_reviewed.jsonl")) == 1
+
+
+def test_a_successful_import_leaves_no_scratch_or_backup_directory(tmp_path: Path) -> None:
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001")
+    assert _run(tmp_path, ledger) == 0
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["decisions.jsonl", "out"], (
+        "the atomic swap must clean up its staging and backup directories"
+    )
+
+
+def test_unsigned_samples_stay_draft_unverified(tmp_path: Path) -> None:
+    """Signing two of twenty-seven must not promote the other twenty-five."""
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001")
+    _sign_again(tmp_path, "REAL-V1-002")
+    assert _run(tmp_path, ledger) == 0
+    drafts = load_records(tmp_path / "out/annotations_v1_drafts.jsonl")
+    assert len(drafts) == 25
+    assert all(record["annotation"]["review_status"] != REVIEW_STATUS_REVIEWED for record in drafts)
+    assert audit_dataset(load_records(tmp_path / "out/annotations_v1_reviewed.jsonl")).scorable_count == 2
+
+
+def test_ai_review_artifacts_are_never_read_as_a_human_signature(tmp_path: Path) -> None:
+    """An AI pre-review file must not be usable as a signing ledger.
+
+    This is the property the whole separation rests on: an AI verdict, however
+    confident, must not reach the dataset through the human channel.
+    """
+    ledger = tmp_path / "decisions.jsonl"
+    decision = _sign(tmp_path, "REAL-V1-001")
+    decision["review_type"] = "AI_REVIEW"
+    decision["ai_verdict"] = "AI_ACCEPT"
+    _write_ledger(tmp_path, [decision])
+    assert _run(tmp_path, ledger) == 2, "an ai_review row must be refused by the human ledger"
+    assert not (tmp_path / "out/annotations_v1_reviewed.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# The exclusion-reason parser used to truncate at the first ')'.
+# ---------------------------------------------------------------------------
+
+
+def test_exclusion_reason_with_inner_parentheses_survives() -> None:
+    """A reviewer's rationale must not be silently shortened.
+
+    The parser used ``\\(([^)]*)\\)``, which stops at the first closing
+    parenthesis. Any rationale that cites a clause or a value -- "…(ordinary=filing)
+    but supplies no procedure…" -- was cut at that point, and the reviewer was
+    shown an incomplete reason in the one file whose job is to explain a decision.
+    """
+    cases = [
+        (
+            "x; considered_excluded=nmpa/a (has parens (inner) and more); ai_suggestion=ACCEPT",
+            [("nmpa/a", "has parens (inner) and more")],
+        ),
+        (
+            "x; considered_excluded=nmpa/a (plain reason, no parens); ai_suggestion=ACCEPT",
+            [("nmpa/a", "plain reason, no parens")],
+        ),
+        (
+            "x; considered_excluded=A (first); considered_excluded=B (second); ai_suggestion=ACCEPT",
+            [("A", "first"), ("B", "second")],
+        ),
+        ("x; considered_excluded=A (only one at end)", [("A", "only one at end")]),
+        ("x; ai_suggestion=ACCEPT", []),
+    ]
+    for text, expected in cases:
+        assert importer_workpackage._extract_exclusions(text) == expected, text
+
+
+def test_committed_exclusion_reasons_are_complete() -> None:
+    """No committed worksheet may hold a rationale that was cut mid-sentence."""
+    workpackage = REPO_ROOT / "tests/evaluation/golden_set_v1/retrieval_review_workpackage.jsonl"
+    for record in load_records(workpackage):
+        for excluded in record.get("considered_excluded") or []:
+            reason = excluded["reason"]
+            assert reason, f"{record['sample_id']} carries an empty exclusion reason"
+            assert reason == reason.strip(), f"{record['sample_id']} exclusion reason has stray whitespace"
+            # A truncated reason stops mid-clause at the first ')' it happened to
+            # contain, which always leaves the sentence unbalanced.
+            assert reason.count("(") == reason.count(")"), (
+                f"{record['sample_id']} exclusion reason is truncated: {reason!r}"
+            )
+            assert not reason.endswith(("that", "and", "the", "a")), f"{record['sample_id']}: {reason!r}"
+
+
+# ---------------------------------------------------------------------------
+# The AI review record is a record, not a channel.
+# ---------------------------------------------------------------------------
+
+AI_REVIEW = REPO_ROOT / "tests/evaluation/golden_set_v1/ai_review_v1.jsonl"
+
+AI_VERDICTS = {
+    "AI_ACCEPT",
+    "AI_MODIFY",
+    "AI_REJECT",
+    "AI_NEEDS_MORE_EVIDENCE",
+    "AI_SOURCE_VERIFIED_WITH_LIMITATIONS",
+    "AI_SOURCE_NEEDS_CORRECTION",
+}
+
+
+def _ai_rows() -> list[dict]:
+    return load_records(AI_REVIEW)
+
+
+def test_ai_review_record_exists_and_covers_every_sample() -> None:
+    rows = _ai_rows()
+    targets = {}
+    for row in rows:
+        targets.setdefault(row["review_target"], set()).add(row["sample_id"])
+    assert len(targets["retrieval_candidate"]) == 27
+    assert len(targets["answer_gate"]) == 3
+    assert len(targets["independent_query"]) == 6
+    assert len(targets["source"]) == 2
+    assert {r["sample_id"] for r in load_records(CANDIDATES)} == targets["retrieval_candidate"]
+
+
+def test_every_ai_row_declares_itself_as_ai_and_not_a_signature() -> None:
+    for row in _ai_rows():
+        assert row["review_type"] == "AI_REVIEW", row["sample_id"]
+        assert row["is_human_signature"] is False, row["sample_id"]
+        assert row["promotable_without_human"] is False, row["sample_id"]
+        assert row["ai_reviewer"].startswith("llm:"), row["sample_id"]
+        assert row["ai_reviewed_at"], row["sample_id"]
+        assert row["verdict"] in AI_VERDICTS, f"{row['sample_id']}: unknown verdict {row['verdict']}"
+
+
+def test_ai_recommended_gold_matches_the_committed_candidates() -> None:
+    """The record must describe the data that actually ships.
+
+    If a regeneration changes a gold set without the AI record following, the
+    record is stale and would misrepresent what was reviewed.
+    """
+    candidates = {r["sample_id"]: r for r in load_records(CANDIDATES)}
+    checked = 0
+    for row in _ai_rows():
+        if row["review_target"] != "retrieval_candidate":
+            continue
+        candidate = candidates[row["sample_id"]]
+        actual = [
+            {"_logical_id": a["_logical_id"], "_locator": a["_locator"], "relevance": a["relevance"]}
+            for a in candidate["annotations"]
+        ]
+        assert row["recommended_annotations"] == actual, row["sample_id"]
+        assert row["recommended_difficulty"] == candidate["difficulty"], row["sample_id"]
+        assert row["recommended_complexity_label"] == candidate["complexity_label"], row["sample_id"]
+        checked += 1
+    assert checked == 27
+
+
+def test_ai_source_rows_carry_the_committed_source_hashes() -> None:
+    manifest = json.loads((REPO_ROOT / "corpus/real_v1/manifest.json").read_text(encoding="utf-8"))
+    declared = {
+        row["sample_id"].split("/")[-1]: row["content_sha256"] for row in _ai_rows() if row["review_target"] == "source"
+    }
+    assert declared == manifest["source_files"], "the AI source review must cite the committed bytes"
+
+
+def test_ai_verdicts_never_change_a_candidate_review_status() -> None:
+    """Loading the AI record must not mutate anything the gates read."""
+    before = [(r["sample_id"], r["annotation"]["review_status"]) for r in load_records(CANDIDATES)]
+    _ai_rows()
+    after = [(r["sample_id"], r["annotation"]["review_status"]) for r in load_records(CANDIDATES)]
+    assert before == after
+    assert audit_dataset(load_records(CANDIDATES)).scorable_count == 0
+
+
+def test_ai_review_records_no_human_reviewer_name() -> None:
+    """No row may name a person as the human reviewer."""
+    forbidden = ("human_review", "founder", "human reviewer", "human-reviewer")
+    for row in _ai_rows():
+        blob = json.dumps(row, ensure_ascii=False).lower()
+        for token in forbidden:
+            assert token not in blob, f"{row['sample_id']} mentions {token!r}"
