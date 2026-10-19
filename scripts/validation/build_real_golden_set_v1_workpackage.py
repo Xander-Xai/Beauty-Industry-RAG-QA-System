@@ -33,6 +33,7 @@ import json
 import re
 import sys
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -798,6 +799,59 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def assert_no_human_annotations(path: Path) -> None:
+    """Refuse to regenerate a worksheet a real person has already worked through.
+
+    This script rebuilds the worksheet with blank ``review`` fields every time it
+    runs. That is correct while the worksheet is unsigned, but once a reviewer
+    has written a decision, a reviewer name and a date into it, regenerating
+    would silently destroy the only record that a human decision was ever made.
+
+    The candidate generator already refuses this overwrite
+    (``build_real_golden_set_v1.assert_no_human_annotations``). The worksheet
+    needs the same guard, because it is where a reviewer actually types.
+
+    A worksheet carrying AI pre-review text (``ai_suggestion`` / ``ai_correction``)
+    is *not* a human record and is regenerated freely; only a filled-in ``review``
+    block stops the rebuild.
+    """
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        review = record.get("review") or {}
+        if not isinstance(review, Mapping):
+            continue
+        filled = sorted(
+            field
+            for field in (
+                "decision",
+                "reviewer",
+                "reviewed_at",
+                "notes",
+                "relevance_changes",
+                "added_passages",
+                "removed_passages",
+                "confirmed_difficulty",
+                "confirmed_complexity_label",
+            )
+            if review.get(field)
+        )
+        if filled:
+            raise SystemExit(
+                f"refusing to overwrite {path}: record {record.get('sample_id')!r} already carries a human "
+                f"review decision ({', '.join(filled)}); export it to the review-decision ledger with "
+                "scripts/validation/import_real_v1_review_decisions.py before regenerating"
+            )
+
+
+def assert_no_human_annotations_all(out_dir: Path) -> None:
+    for name in (RETRIEVAL_FILE, ANSWER_FILE, INDEPENDENT_FILE):
+        assert_no_human_annotations(out_dir / name)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--candidates", default="tests/evaluation/golden_set_v1/candidates_v1.jsonl")
@@ -821,6 +875,7 @@ def main(argv: list[str] | None = None) -> int:
     independent = build_independent_records()
 
     out_dir = Path(args.out_dir)
+    assert_no_human_annotations_all(out_dir)
     write_jsonl(out_dir / RETRIEVAL_FILE, retrieval)
     write_jsonl(out_dir / ANSWER_FILE, answer_gate)
     write_jsonl(out_dir / INDEPENDENT_FILE, independent)

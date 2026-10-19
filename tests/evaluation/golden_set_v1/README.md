@@ -18,6 +18,7 @@
 | `ANSWER_GATE_REVIEW.md` | — | 上表的人读版，附 near-miss 段落与语义判断问题 |
 | `independent_query_proposals.jsonl` | 6 | 独立编写的用户式查询提案，`in_dataset=false`，不参与指标 |
 | `INDEPENDENT_QUERY_PROPOSALS.md` | — | 上表的人读版 |
+| `review_decisions_v1.jsonl` | 27 | **空白人工签署台账**，已绑定每条候选的 `candidate_sha256` |
 
 语料与索引绑定：
 
@@ -119,6 +120,76 @@ python3 run_offline.py review-source corpus/real_v1/sources/regulation_727.jsonl
 `reviewed_by == annotator` 会被拒绝；没有具名审核人的记录无法通过
 `audit_annotations.py`。请勿为了跑通 benchmark 而伪造审核。
 
+## 签署 → 正式数据集的导入链路
+
+工作表是给人看的，正式数据集是给评测用的。两者之间原本没有程序化通道，
+`import_real_v1_review_decisions.py` 补上了这一段。它不新增审核平台，只读取
+已经存在的文件、写入已经有归属的目录。
+
+### 三条物理隔离规则
+
+1. **AI 预审与人工签署是两个文件。** `retrieval_review_workpackage.jsonl` 带
+   `ai_suggestion` / `ai_correction`，由生成器随时重建；`review_decisions_v1.jsonl`
+   只放人写的字段，任何生成器都不会改写它。导入器**拒绝**读取带 `ai_*` 字段的
+   决定行，机器建议无法被当成签署。
+2. **决定绑定它审核过的那份字节。** 每条决定带 `candidate_sha256` 与
+   `candidate_dataset_sha256`。候选集若在审核开始后被重建，绑定失效，导入失败，
+   而不是把决定套用到已经不同的文本上。
+3. **没有真名和日期就不提升。** 导入器没有 `--reviewer`，没有 `--reviewed-at`，
+   也没有任何默认审核人。决定为空 → 保持 `DRAFT_UNVERIFIED`；缺审核人、缺日期、
+   缺 `llm_candidate` 必需的 `promoted_by`、审核人等于原作者 → **报错退出**，
+   而不是悄悄降级成草稿。日期只读取，不生成。
+
+### 用法
+
+```bash
+# 1) 生成空白台账（已存在的已签署台账不会被覆盖）
+python3 scripts/validation/import_real_v1_review_decisions.py \
+  --emit-template tests/evaluation/golden_set_v1/review_decisions_v1.jsonl
+
+# 2) 人工填 decision / reviewer / reviewed_at（llm_candidate 行还需 promoted_by）
+
+# 3) 预演：只报告，不写任何文件
+python3 scripts/validation/import_real_v1_review_decisions.py
+
+# 4) 写入正式数据集
+python3 scripts/validation/import_real_v1_review_decisions.py --apply
+```
+
+### 输出（`tests/evaluation/golden_set_v1/reviewed/`，不提交仓库）
+
+| 文件 | 内容 |
+|---|---|
+| `annotations_v1_reviewed.jsonl` | 已签署并提升的 `REVIEWED` 记录，**唯一可评分的数据集** |
+| `annotations_v1_drafts.jsonl` | 未签署或被拒绝导入的记录，保持 `DRAFT_UNVERIFIED` |
+| `annotations_v1_rejected.jsonl` | 被 `REJECT` 的候选，**永不进入评分集**，但保留可审计 |
+| `sample_id_map_v2.jsonl` | `REAL-V1-001` → `0001` 的无损映射 |
+| `annotations_v1.schema.json` | 从 V2 派生的 V1 正式 schema |
+| `import_report.json` | 计数、哈希、拒绝原因 |
+
+### V1 / V2 schema 兼容：不是放宽，是派生
+
+V2 schema 把 `sample_id` 钉死为 `^[0-9]{4}$`，因为它的编号是某份源金标集的**行号**；
+V1 用的是工作表标识 `REAL-V1-001`。把它改写成四位数字会切断记录与审核人实际签署的
+那一行之间的唯一联系。
+
+因此导入器**从 V2 schema 派生** V1 schema，只改 `sample_id` 这一处，
+`required`、`additionalProperties: false`、`REVIEWED` 条件与全部枚举逐字继承。
+`assert_schema_not_relaxed()` 把两者的差异与一个**精确的允许集合**比对：
+出现任何预期之外的差异就报错退出；缺少应有差异（说明根本没派生）同样报错。
+测试里有一条专门把 V1 的 `allOf` 删掉，验证这个检查确实会失败——它不是装饰。
+
+映射 `REAL-V1-007 → 0007` 因 `^REAL-V1-[0-9]{3}$` 限定 000–999 而**单射**，
+测试对真实提升过的记录同时用**未经修改的 V2 schema** 复验一遍内容：
+如果 V1 在别处被放松过，这一步会失败。
+
+### 生成器不会吃掉人工决定
+
+- `build_real_golden_set_v1.py` 早已拒绝覆盖带人工审核字段的候选文件。
+- `build_real_golden_set_v1_workpackage.py` 现在**同样**拒绝重建已被签署的工作表
+  （本次新增）。此前它每次都无条件重写并清空 `review` 字段——审核人在工作表上
+  写下决定后，任何人重跑一次生成器就会静默抹掉唯一一份人工记录。
+
 ## 多金标与 relevance 的评分口径（复核 `benchmarks/metrics.py` 后订正）
 
 以下是对评分口径的**解释**，不是对 `benchmarks/metrics.py` 的修改。指标实现本身
@@ -166,6 +237,8 @@ python3 run_offline.py review-source corpus/real_v1/sources/regulation_727.jsonl
 - 三类 `no_answer` 样本按设计**不参与检索指标**；它们用于 answer-gate 评测。
   缺席性只相对本语料成立，不是一般性法律结论。
 - 候选的 `difficulty` / `complexity_label` 由 AI 初判，人工审核时应重新确认。
-- 本目录的候选文件不是 `annotations.schema.json` 的最终数据集；提升后的记录
-  才写入 `tests/evaluation/golden_set_v2/annotations_v1.jsonl` 或新的 V1 正式集。
+- 本目录的候选文件不是 `annotations.schema.json` 的最终数据集；经
+  `import_real_v1_review_decisions.py` 签署导入后，记录落在
+  `tests/evaluation/golden_set_v1/reviewed/annotations_v1_reviewed.jsonl`
+  （V1 正式集，schema 从 V2 派生）。该目录由台账重建，不提交仓库。
 - 不包含 `visual_required = true` 样本：本 V1 语料为纯文本，无法验证视觉路径。

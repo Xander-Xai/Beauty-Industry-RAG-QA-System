@@ -119,3 +119,9 @@ corpus/real_v1/.generated/
 # index state). They are produced with --profile experiment and never replace
 # the committed corpus/real_v1/es_fingerprint.json.
 artifacts/corpus/*
+
+# Import outputs of scripts/validation/import_real_v1_review_decisions.py. The
+# blank review_decisions_v1.jsonl ledger that a reviewer signs IS tracked, so the
+# unsigned state is visible in the diff; the promoted/draft/rejected datasets are
+# regenerated from that ledger and are not committed.
+tests/evaluation/golden_set_v1/reviewed/
