@@ -1,0 +1,599 @@
+{
+  "dataset": {
+    "contract": "golden-set-contract/v2",
+    "path": "tests/evaluation/golden_set_v1/reviewed/annotations_v1_reviewed.jsonl",
+    "samples": 27,
+    "sha256": "9621d150996f9144d7d4b8af486ec5f4cccfbf29dc3a31599b82c328349159d1",
+    "signed_at": "2026-10-19",
+    "signed_by": "Xander-Xai"
+  },
+  "es_version": "8.11.0",
+  "generated_from": "local run artifacts; raw artifacts are not committed",
+  "git_sha": "1d146d3147de1cc3199d5aa36222d96f9151576a",
+  "ledger_notice": "data/offline_source_trust.sqlite3 is NOT committed. The two rows above are the published projection of it; they are re-verified against the ledger and the source bytes at run time by benchmarks/source_approval.py.",
+  "runs": {
+    "ab_ik_smart": {
+      "analyzer": "ik_smart",
+      "artifact_sha256": {
+        "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
+        "latency_metrics.json": "a5f9fe6eb5c3a07738cb707b0344a1f86b1db42ace5c6f2064b6b90207d6fa85",
+        "metadata.json": "741819436e6a94993f2088a92390d8fe61d63e1b9c6ba982aaa692ee6800ea55",
+        "per_query_results.jsonl": "a1400198cab6fdb6aa6fcba815576bc52092ff6aca151108360c50722a2fcc8b",
+        "report.md": "c082fdcb5005bee54b649fc0cc9b7435f2b0e0cdf2ee82371b0293760bea1e8a",
+        "retrieval_metrics.json": "7a3bc8b54aa054af15ed9631398ef3b2418cd4d8b8f51009e2ae314fd0f3324e"
+      },
+      "by_business_type": {
+        "ingredient": {
+          "hit_rate_at_1": 0.15384615384615385,
+          "hit_rate_at_10": 1.0,
+          "hit_rate_at_3": 0.3076923076923077,
+          "hit_rate_at_5": 0.9230769230769231,
+          "mrr_at_10": 0.3435897435897436,
+          "ndcg_at_10": 0.49781036814399415,
+          "recall_at_1": 0.15384615384615385,
+          "recall_at_10": 1.0,
+          "recall_at_3": 0.3076923076923077,
+          "recall_at_5": 0.9230769230769231,
+          "sample_count": 13,
+          "scored_sample_count": 13
+        },
+        "regulation": {
+          "hit_rate_at_1": 0.42857142857142855,
+          "hit_rate_at_10": 0.9285714285714286,
+          "hit_rate_at_3": 0.6428571428571429,
+          "hit_rate_at_5": 0.7857142857142857,
+          "mrr_at_10": 0.5720238095238095,
+          "ndcg_at_10": 0.6472238493494655,
+          "recall_at_1": 0.35714285714285715,
+          "recall_at_10": 0.9285714285714286,
+          "recall_at_3": 0.6071428571428571,
+          "recall_at_5": 0.7857142857142857,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "hit_rate_at_1": 0.14285714285714285,
+          "hit_rate_at_10": 0.9285714285714286,
+          "hit_rate_at_3": 0.35714285714285715,
+          "hit_rate_at_5": 0.8571428571428571,
+          "mrr_at_10": 0.3541666666666667,
+          "ndcg_at_10": 0.4821540608275848,
+          "recall_at_1": 0.10714285714285714,
+          "recall_at_10": 0.9285714285714286,
+          "recall_at_3": 0.32142857142857145,
+          "recall_at_5": 0.8571428571428571,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        },
+        "hard": {
+          "hit_rate_at_1": 0.0,
+          "hit_rate_at_10": 1.0,
+          "hit_rate_at_3": 0.0,
+          "hit_rate_at_5": 1.0,
+          "mrr_at_10": 0.2,
+          "ndcg_at_10": 0.38685280723454163,
+          "recall_at_1": 0.0,
+          "recall_at_10": 1.0,
+          "recall_at_3": 0.0,
+          "recall_at_5": 1.0,
+          "sample_count": 1,
+          "scored_sample_count": 1
+        },
+        "medium": {
+          "hit_rate_at_1": 0.5,
+          "hit_rate_at_10": 1.0,
+          "hit_rate_at_3": 0.6666666666666666,
+          "hit_rate_at_5": 0.8333333333333334,
+          "mrr_at_10": 0.6097222222222222,
+          "ndcg_at_10": 0.6996382514953092,
+          "recall_at_1": 0.4583333333333333,
+          "recall_at_10": 1.0,
+          "recall_at_3": 0.6666666666666666,
+          "recall_at_5": 0.8333333333333334,
+          "sample_count": 12,
+          "scored_sample_count": 12
+        }
+      },
+      "config_sha256": "b127900e568ddd9a501942fbca454ffe60ac6fade1f1eb290e8de082f7bf4b33",
+      "corpus_content_sha256": "dd5719442674fa1b678b465b35c08904a32984a2ad0f24c4cbe5bbdd42d598f6",
+      "corpus_correspondence": "full",
+      "failed_sample_count": 0,
+      "gate": {
+        "allow_dirty": false,
+        "attributable": true,
+        "provenance_verified": true,
+        "publishable": true,
+        "results_are_benchmark": true,
+        "source_approval_verified": true,
+        "synthetic_retriever": false
+      },
+      "index": "cosmetics_docs_exp_v3_ab_ik_smart",
+      "knowledge_version_epoch": "real-v1-20261019",
+      "latency_ms": {
+        "count": 27,
+        "max": 5575.944676005747,
+        "mean": 217.79336226043395,
+        "min": 8.271107013570145,
+        "p50": 11.926506005693227,
+        "p90": 15.628549404209481,
+        "p95": 17.195106204599142,
+        "p99": 4130.808199325684
+      },
+      "metrics": {
+        "hit_rate_at_1": 0.2962962962962963,
+        "hit_rate_at_10": 0.9629629629629629,
+        "hit_rate_at_3": 0.48148148148148145,
+        "hit_rate_at_5": 0.8518518518518519,
+        "mrr_at_10": 0.46203703703703697,
+        "ndcg_at_10": 0.5752840250653497,
+        "recall_at_1": 0.25925925925925924,
+        "recall_at_10": 0.9629629629629629,
+        "recall_at_3": 0.46296296296296297,
+        "recall_at_5": 0.8518518518518519,
+        "sample_count": 27,
+        "scored_sample_count": 27
+      },
+      "run_id": "20261019T184217Z-64a7b09b",
+      "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
+      "source_approval": {
+        "approval_status_counts": {
+          "APPROVED": 212
+        },
+        "document_count": 212,
+        "documents_verified": 212,
+        "gold_chunk_resolved": 21,
+        "gold_chunk_total": 21,
+        "issues": {},
+        "trust_class_counts": {
+          "APPROVED_EXTERNAL": 212
+        },
+        "verified": true
+      }
+    },
+    "ab_smartcn": {
+      "analyzer": "smartcn",
+      "artifact_sha256": {
+        "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
+        "latency_metrics.json": "24db5a575a3000c6b360ecd9cd3b57eff8832b1ae89ef7f190c52d29516a03eb",
+        "metadata.json": "7e253a641367af73e4962ee58c70ba366ce65091f33c8b86fde1107178f741ab",
+        "per_query_results.jsonl": "180ea262d17cf8fee00a42fb8731b8f4753443edad0a5cbf2ed8722685940cf6",
+        "report.md": "1fe9b8ce193f5485da547ab148f0f8376e8f1c52880f6fc39033254c0a646161",
+        "retrieval_metrics.json": "2a51a516a017035be16ce5a6ca91eb4939abcf35edf95ea646608eee0ca758b3"
+      },
+      "by_business_type": {
+        "ingredient": {
+          "hit_rate_at_1": 0.15384615384615385,
+          "hit_rate_at_10": 0.9230769230769231,
+          "hit_rate_at_3": 0.38461538461538464,
+          "hit_rate_at_5": 0.7692307692307693,
+          "mrr_at_10": 0.33351648351648355,
+          "ndcg_at_10": 0.47267341951370967,
+          "recall_at_1": 0.15384615384615385,
+          "recall_at_10": 0.9230769230769231,
+          "recall_at_3": 0.38461538461538464,
+          "recall_at_5": 0.7692307692307693,
+          "sample_count": 13,
+          "scored_sample_count": 13
+        },
+        "regulation": {
+          "hit_rate_at_1": 0.42857142857142855,
+          "hit_rate_at_10": 0.9285714285714286,
+          "hit_rate_at_3": 0.7142857142857143,
+          "hit_rate_at_5": 0.8571428571428571,
+          "mrr_at_10": 0.5916666666666667,
+          "ndcg_at_10": 0.673971147111348,
+          "recall_at_1": 0.35714285714285715,
+          "recall_at_10": 0.9285714285714286,
+          "recall_at_3": 0.7142857142857143,
+          "recall_at_5": 0.8571428571428571,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "hit_rate_at_1": 0.14285714285714285,
+          "hit_rate_at_10": 0.9285714285714286,
+          "hit_rate_at_3": 0.42857142857142855,
+          "hit_rate_at_5": 0.8571428571428571,
+          "mrr_at_10": 0.3613945578231293,
+          "ndcg_at_10": 0.49715238819445345,
+          "recall_at_1": 0.10714285714285714,
+          "recall_at_10": 0.9285714285714286,
+          "recall_at_3": 0.42857142857142855,
+          "recall_at_5": 0.8571428571428571,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        },
+        "hard": {
+          "hit_rate_at_1": 0.0,
+          "hit_rate_at_10": 1.0,
+          "hit_rate_at_3": 1.0,
+          "hit_rate_at_5": 1.0,
+          "mrr_at_10": 0.3333333333333333,
+          "ndcg_at_10": 0.5,
+          "recall_at_1": 0.0,
+          "recall_at_10": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "sample_count": 1,
+          "scored_sample_count": 1
+        },
+        "medium": {
+          "hit_rate_at_1": 0.5,
+          "hit_rate_at_10": 0.9166666666666666,
+          "hit_rate_at_3": 0.6666666666666666,
+          "hit_rate_at_5": 0.75,
+          "mrr_at_10": 0.6021825396825397,
+          "ndcg_at_10": 0.6766847565428957,
+          "recall_at_1": 0.4583333333333333,
+          "recall_at_10": 0.9166666666666666,
+          "recall_at_3": 0.6666666666666666,
+          "recall_at_5": 0.75,
+          "sample_count": 12,
+          "scored_sample_count": 12
+        }
+      },
+      "config_sha256": "b9e3a4df65a5f54452796845b1e4f67252ac6eb49bcf8c6b0c42ed805b4644ea",
+      "corpus_content_sha256": "dd5719442674fa1b678b465b35c08904a32984a2ad0f24c4cbe5bbdd42d598f6",
+      "corpus_correspondence": "full",
+      "failed_sample_count": 0,
+      "gate": {
+        "allow_dirty": false,
+        "attributable": true,
+        "provenance_verified": true,
+        "publishable": true,
+        "results_are_benchmark": true,
+        "source_approval_verified": true,
+        "synthetic_retriever": false
+      },
+      "index": "cosmetics_docs_exp_v3_ab_smartcn",
+      "knowledge_version_epoch": "real-v1-20261019",
+      "latency_ms": {
+        "count": 27,
+        "max": 5452.513161988463,
+        "mean": 210.0490472965046,
+        "min": 7.371418992988765,
+        "p50": 8.245447999797761,
+        "p90": 9.232569782761857,
+        "p95": 11.229845701018347,
+        "p99": 4037.995259534792
+      },
+      "metrics": {
+        "hit_rate_at_1": 0.2962962962962963,
+        "hit_rate_at_10": 0.9259259259259259,
+        "hit_rate_at_3": 0.5555555555555556,
+        "hit_rate_at_5": 0.8148148148148148,
+        "mrr_at_10": 0.4673721340388006,
+        "ndcg_at_10": 0.5770500190087814,
+        "recall_at_1": 0.25925925925925924,
+        "recall_at_10": 0.9259259259259259,
+        "recall_at_3": 0.5555555555555556,
+        "recall_at_5": 0.8148148148148148,
+        "sample_count": 27,
+        "scored_sample_count": 27
+      },
+      "run_id": "20261019T183903Z-9e88322f",
+      "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
+      "source_approval": {
+        "approval_status_counts": {
+          "APPROVED": 212
+        },
+        "document_count": 212,
+        "documents_verified": 212,
+        "gold_chunk_resolved": 21,
+        "gold_chunk_total": 21,
+        "issues": {},
+        "trust_class_counts": {
+          "APPROVED_EXTERNAL": 212
+        },
+        "verified": true
+      }
+    },
+    "ab_standard": {
+      "analyzer": "standard (index default)",
+      "artifact_sha256": {
+        "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
+        "latency_metrics.json": "50881c8bc4074f374ef6cf6e67255d43b641448c67ff206af9894387d26b4c6d",
+        "metadata.json": "0c030a388d6387075ec98f29fa32ae2f3865b75b82a9b3598bdd035dbbbff873",
+        "per_query_results.jsonl": "cb4c430465a10f192cbd68128313d6a062e6642bbe9e4c3b493791301ca7030d",
+        "report.md": "709638abeaac1791ec88e544523c2c28976da13d8cbe71ffc7307e38f557ad48",
+        "retrieval_metrics.json": "106adc630f83e15b562eef5315078dfaa2a8b7f072505e8d3152a5a89206314f"
+      },
+      "by_business_type": {
+        "ingredient": {
+          "hit_rate_at_1": 0.15384615384615385,
+          "hit_rate_at_10": 0.6923076923076923,
+          "hit_rate_at_3": 0.23076923076923078,
+          "hit_rate_at_5": 0.38461538461538464,
+          "mrr_at_10": 0.24816849816849818,
+          "ndcg_at_10": 0.34823334828398167,
+          "recall_at_1": 0.15384615384615385,
+          "recall_at_10": 0.6923076923076923,
+          "recall_at_3": 0.23076923076923078,
+          "recall_at_5": 0.38461538461538464,
+          "sample_count": 13,
+          "scored_sample_count": 13
+        },
+        "regulation": {
+          "hit_rate_at_1": 0.5,
+          "hit_rate_at_10": 0.7142857142857143,
+          "hit_rate_at_3": 0.5714285714285714,
+          "hit_rate_at_5": 0.6428571428571429,
+          "mrr_at_10": 0.557936507936508,
+          "ndcg_at_10": 0.5827324381975968,
+          "recall_at_1": 0.42857142857142855,
+          "recall_at_10": 0.7142857142857143,
+          "recall_at_3": 0.5714285714285714,
+          "recall_at_5": 0.6428571428571429,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "hit_rate_at_1": 0.21428571428571427,
+          "hit_rate_at_10": 0.7142857142857143,
+          "hit_rate_at_3": 0.2857142857142857,
+          "hit_rate_at_5": 0.42857142857142855,
+          "mrr_at_10": 0.3137755102040816,
+          "ndcg_at_10": 0.3984060050293862,
+          "recall_at_1": 0.17857142857142858,
+          "recall_at_10": 0.7142857142857143,
+          "recall_at_3": 0.2857142857142857,
+          "recall_at_5": 0.42857142857142855,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        },
+        "hard": {
+          "hit_rate_at_1": 0.0,
+          "hit_rate_at_10": 1.0,
+          "hit_rate_at_3": 1.0,
+          "hit_rate_at_5": 1.0,
+          "mrr_at_10": 0.3333333333333333,
+          "ndcg_at_10": 0.5,
+          "recall_at_1": 0.0,
+          "recall_at_10": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "sample_count": 1,
+          "scored_sample_count": 1
+        },
+        "medium": {
+          "hit_rate_at_1": 0.5,
+          "hit_rate_at_10": 0.6666666666666666,
+          "hit_rate_at_3": 0.5,
+          "hit_rate_at_5": 0.5833333333333334,
+          "mrr_at_10": 0.525925925925926,
+          "ndcg_at_10": 0.5506336326705592,
+          "recall_at_1": 0.4583333333333333,
+          "recall_at_10": 0.6666666666666666,
+          "recall_at_3": 0.5,
+          "recall_at_5": 0.5833333333333334,
+          "sample_count": 12,
+          "scored_sample_count": 12
+        }
+      },
+      "config_sha256": "f4648bbf5a14a20c6e4bff67f1c474ac03e10dbc932c010f06edcaf199bcb0e9",
+      "corpus_content_sha256": "dd5719442674fa1b678b465b35c08904a32984a2ad0f24c4cbe5bbdd42d598f6",
+      "corpus_correspondence": "full",
+      "failed_sample_count": 0,
+      "gate": {
+        "allow_dirty": false,
+        "attributable": true,
+        "provenance_verified": true,
+        "publishable": true,
+        "results_are_benchmark": true,
+        "source_approval_verified": true,
+        "synthetic_retriever": false
+      },
+      "index": "cosmetics_docs_exp_v3_ab_std",
+      "knowledge_version_epoch": "real-v1-20261019",
+      "latency_ms": {
+        "count": 27,
+        "max": 5542.2289880225435,
+        "mean": 218.93655174278172,
+        "min": 8.557871013181284,
+        "p50": 12.575355009175837,
+        "p90": 23.812259192345678,
+        "p95": 38.92525989504064,
+        "p99": 4112.510904196524
+      },
+      "metrics": {
+        "hit_rate_at_1": 0.3333333333333333,
+        "hit_rate_at_10": 0.7037037037037037,
+        "hit_rate_at_3": 0.4074074074074074,
+        "hit_rate_at_5": 0.5185185185185185,
+        "mrr_at_10": 0.4087889476778366,
+        "ndcg_at_10": 0.4698254689799302,
+        "recall_at_1": 0.2962962962962963,
+        "recall_at_10": 0.7037037037037037,
+        "recall_at_3": 0.4074074074074074,
+        "recall_at_5": 0.5185185185185185,
+        "sample_count": 27,
+        "scored_sample_count": 27
+      },
+      "run_id": "20261019T183831Z-17a6cc85",
+      "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
+      "source_approval": {
+        "approval_status_counts": {
+          "APPROVED": 212
+        },
+        "document_count": 212,
+        "documents_verified": 212,
+        "gold_chunk_resolved": 21,
+        "gold_chunk_total": 21,
+        "issues": {},
+        "trust_class_counts": {
+          "APPROVED_EXTERNAL": 212
+        },
+        "verified": true
+      }
+    },
+    "approved_standard": {
+      "analyzer": "standard (index default)",
+      "artifact_sha256": {
+        "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
+        "latency_metrics.json": "6361446f5dfe28f643fd33fc02900723e65bddfffe4bceb489999c4ba6d7ba25",
+        "metadata.json": "965b11d38e4657e8e40e6f32f4134ec8abda9b1fc854cdd9cbb45b093ffc9e8a",
+        "per_query_results.jsonl": "12777a86713755b5fdb20294f59ea64899837bc2d476dbd614a529565613b9f2",
+        "report.md": "c870f8fa976104d7ed677e375df7ee45050f501e90b82c1c324d92c8691e1d8a",
+        "retrieval_metrics.json": "214d8ac42cc4c45598a6656909a957b89dd4eb94f1f9cfcb059200f8461e2749"
+      },
+      "by_business_type": {
+        "ingredient": {
+          "hit_rate_at_1": 0.15384615384615385,
+          "hit_rate_at_10": 0.6923076923076923,
+          "hit_rate_at_3": 0.23076923076923078,
+          "hit_rate_at_5": 0.38461538461538464,
+          "mrr_at_10": 0.24816849816849818,
+          "ndcg_at_10": 0.34823334828398167,
+          "recall_at_1": 0.15384615384615385,
+          "recall_at_10": 0.6923076923076923,
+          "recall_at_3": 0.23076923076923078,
+          "recall_at_5": 0.38461538461538464,
+          "sample_count": 13,
+          "scored_sample_count": 13
+        },
+        "regulation": {
+          "hit_rate_at_1": 0.5,
+          "hit_rate_at_10": 0.7142857142857143,
+          "hit_rate_at_3": 0.5714285714285714,
+          "hit_rate_at_5": 0.6428571428571429,
+          "mrr_at_10": 0.557936507936508,
+          "ndcg_at_10": 0.5827324381975968,
+          "recall_at_1": 0.42857142857142855,
+          "recall_at_10": 0.7142857142857143,
+          "recall_at_3": 0.5714285714285714,
+          "recall_at_5": 0.6428571428571429,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        }
+      },
+      "by_difficulty": {
+        "easy": {
+          "hit_rate_at_1": 0.21428571428571427,
+          "hit_rate_at_10": 0.7142857142857143,
+          "hit_rate_at_3": 0.2857142857142857,
+          "hit_rate_at_5": 0.42857142857142855,
+          "mrr_at_10": 0.3137755102040816,
+          "ndcg_at_10": 0.3984060050293862,
+          "recall_at_1": 0.17857142857142858,
+          "recall_at_10": 0.7142857142857143,
+          "recall_at_3": 0.2857142857142857,
+          "recall_at_5": 0.42857142857142855,
+          "sample_count": 14,
+          "scored_sample_count": 14
+        },
+        "hard": {
+          "hit_rate_at_1": 0.0,
+          "hit_rate_at_10": 1.0,
+          "hit_rate_at_3": 1.0,
+          "hit_rate_at_5": 1.0,
+          "mrr_at_10": 0.3333333333333333,
+          "ndcg_at_10": 0.5,
+          "recall_at_1": 0.0,
+          "recall_at_10": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "sample_count": 1,
+          "scored_sample_count": 1
+        },
+        "medium": {
+          "hit_rate_at_1": 0.5,
+          "hit_rate_at_10": 0.6666666666666666,
+          "hit_rate_at_3": 0.5,
+          "hit_rate_at_5": 0.5833333333333334,
+          "mrr_at_10": 0.525925925925926,
+          "ndcg_at_10": 0.5506336326705592,
+          "recall_at_1": 0.4583333333333333,
+          "recall_at_10": 0.6666666666666666,
+          "recall_at_3": 0.5,
+          "recall_at_5": 0.5833333333333334,
+          "sample_count": 12,
+          "scored_sample_count": 12
+        }
+      },
+      "config_sha256": "b3fa48e3a1cec55da2e37844c44965066fad2bfb0e75eeaf8c02dcb5ccc670d8",
+      "corpus_content_sha256": "dd5719442674fa1b678b465b35c08904a32984a2ad0f24c4cbe5bbdd42d598f6",
+      "corpus_correspondence": "full",
+      "failed_sample_count": 0,
+      "gate": {
+        "allow_dirty": false,
+        "attributable": true,
+        "provenance_verified": true,
+        "publishable": true,
+        "results_are_benchmark": true,
+        "source_approval_verified": true,
+        "synthetic_retriever": false
+      },
+      "index": "cosmetics_docs_exp_v3_approved",
+      "knowledge_version_epoch": "real-v1-20261019",
+      "latency_ms": {
+        "count": 27,
+        "max": 5536.208017991157,
+        "mean": 216.58247951806212,
+        "min": 5.865705985343084,
+        "p50": 13.810600998112932,
+        "p90": 17.001504387008026,
+        "p95": 18.61030279251281,
+        "p99": 4101.805327753527
+      },
+      "metrics": {
+        "hit_rate_at_1": 0.3333333333333333,
+        "hit_rate_at_10": 0.7037037037037037,
+        "hit_rate_at_3": 0.4074074074074074,
+        "hit_rate_at_5": 0.5185185185185185,
+        "mrr_at_10": 0.4087889476778366,
+        "ndcg_at_10": 0.4698254689799302,
+        "recall_at_1": 0.2962962962962963,
+        "recall_at_10": 0.7037037037037037,
+        "recall_at_3": 0.4074074074074074,
+        "recall_at_5": 0.5185185185185185,
+        "sample_count": 27,
+        "scored_sample_count": 27
+      },
+      "run_id": "20261019T183347Z-70eddc47",
+      "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
+      "source_approval": {
+        "approval_status_counts": {
+          "APPROVED": 212
+        },
+        "document_count": 212,
+        "documents_verified": 212,
+        "gold_chunk_resolved": 21,
+        "gold_chunk_total": 21,
+        "issues": {},
+        "trust_class_counts": {
+          "APPROVED_EXTERNAL": 212
+        },
+        "verified": true
+      }
+    }
+  },
+  "schema_version": "retrieval-benchmark-evidence/1",
+  "sources": [
+    {
+      "approval_actor": "Xander-Xai",
+      "approval_decided_at": "2026-10-19T15:45:47.887813+00:00",
+      "approval_status": "APPROVED",
+      "content_sha256": "c9499ca5eefa368328a0ecbe57ea0410687fafcd32bbb5c9d0aa9014f6075c91",
+      "document_count": 82,
+      "ledger_revision": 1,
+      "source_id": "corpus/real_v1/sources/regulation_727.jsonl",
+      "trust_class": "APPROVED_EXTERNAL"
+    },
+    {
+      "approval_actor": "Xander-Xai",
+      "approval_decided_at": "2026-10-20T02:20:59.214516+00:00",
+      "approval_status": "APPROVED",
+      "content_sha256": "3dd67722972d7a10dd3da56028bd85d649e68b17a87c0499f169252527c0c06b",
+      "document_count": 130,
+      "ledger_revision": 1,
+      "source_id": "corpus/real_v1/sources/used_ingredients_2021.jsonl",
+      "trust_class": "APPROVED_EXTERNAL"
+    }
+  ]
+}
