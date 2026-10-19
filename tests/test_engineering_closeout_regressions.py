@@ -197,6 +197,48 @@ def test_F4_session_state_does_not_leak_across_owners():
     assert alice_again.locked_doc_ids == ["rd-confidential-77"]
 
 
+def test_F4_query_handler_scopes_the_session_to_the_verified_identity(monkeypatch):
+    """`/api/query` must not let the request body choose the session owner.
+
+    ``ctx.user_id`` becomes the ``SessionState`` owner in ``core/pipeline.py``.
+    ``/api/query`` was the one handler that took ``req.user_id or identity.user_id``,
+    so a caller could present another principal's ``user_id`` + ``session_id`` and
+    generation would load and inject that principal's dialog history (control I in
+    docs/security-regression-coverage.md). The body value may only supplement an
+    identity that carries no ``user_id``.
+    """
+    import types
+
+    from api import routes as routes_module
+    from api.models import QueryRequest
+    from common.models import UserIdentity
+
+    captured: dict[str, str] = {}
+
+    class _Pipeline:
+        def process(self, ctx):
+            captured["user_id"] = ctx.user_id
+            ctx.final_response = "ok"
+
+    monkeypatch.setattr(routes_module, "get_pipeline", lambda: _Pipeline())
+    monkeypatch.setattr(
+        routes_module,
+        "get_metrics",
+        lambda: types.SimpleNamespace(record_request=lambda ctx: None),
+    )
+
+    req = QueryRequest(query="q", session_id="shared", user_id="alice")
+
+    # The verified identity wins, even though the body names another principal.
+    routes_module.query_handler(req, UserIdentity(user_id="bob", user_role_mask=1, user_dept_mask=1))
+    assert captured["user_id"] == "bob", "the request body overrode the verified identity"
+
+    # Positive control: with no verified user_id, the body value is still honoured.
+    captured.clear()
+    routes_module.query_handler(req, UserIdentity(user_id="", user_role_mask=1, user_dept_mask=1))
+    assert captured["user_id"] == "alice"
+
+
 # ── F5: the P2 overload must be a real 503 ──────────────────────────────────
 
 

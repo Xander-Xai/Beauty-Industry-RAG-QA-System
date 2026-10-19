@@ -739,9 +739,12 @@ class ParallelRecallManager:
 
         try:
             from auth.bitmask_rbac import build_qdrant_image_filter
-            from models.embedding_service import EmbeddingService
 
-            embedding_svc = EmbeddingService()
+            # Reuse the manager-scoped, warm-up-loaded encoder. Constructing a fresh
+            # EmbeddingService here (as the sync path did before #99) reloads the CLIP
+            # weights on every async call, which both exceeds the 0.5s background budget
+            # the caller allows and holds a second copy of the model in memory.
+            embedding_svc = self.clip_embedding_service
             clip_embedding = embedding_svc.encode_text_clip(query)
             if qdrant_filter is None:
                 active_epoch = config.get("knowledge_version_epoch", "default")

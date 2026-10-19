@@ -30,7 +30,7 @@ from benchmarks.executors import (
     _items_from_hits,
     build_executor,
 )
-from benchmarks.models import BackendAvailability, BenchmarkQuery
+from benchmarks.models import BackendAvailability, BenchmarkQuery, RelevantItem, RetrievedItem
 
 
 def _available(name: str) -> list[BackendAvailability]:
@@ -252,3 +252,56 @@ def test_cli_default_executor_is_none(tmp_path, monkeypatch):
     assert metadata["executor"] == "none"
     assert metadata["real_executor_configs"] == []
     assert metadata["results_are_benchmark"] is False
+
+
+# ── a declared-real factory is not mislabelled synthetic ─────────────────────
+
+
+class _OneHitRetriever:
+    name = "bm25"
+
+    def retrieve(self, query, top_k):
+        return [RetrievedItem(rank=1, key=query.relevant_items[0].key, score=1.0, source="bm25", text="")]
+
+
+def _one_query():
+    item = RelevantItem(key="doc-1::chunk-1", text="passage")
+    return [
+        BenchmarkQuery(
+            sample_id="0000",
+            question="q",
+            business_type="general",
+            difficulty="easy",
+            relevant_items=(item,),
+        )
+    ]
+
+
+def test_a_declared_real_factory_run_is_not_synthetic():
+    """``--executor real`` must not be labelled "synthetic fixture retriever".
+
+    The runner assumed every injected factory was a test fixture, so a genuine
+    ``--executor real`` run would carry ``synthetic_retriever: true`` and
+    ``results_are_benchmark: false`` even with a real corpus — unpublishable by label.
+    """
+    from benchmarks.runner import run_configuration
+
+    run = run_configuration(
+        "bm25",
+        _one_query(),
+        retriever_factory=lambda name: _OneHitRetriever(),
+        synthetic_retriever=False,
+    )
+
+    assert run.executed
+    assert run.synthetic is False
+    assert run.outcome.reason != "synthetic fixture retriever (not a benchmark)"
+
+
+def test_an_injected_fixture_factory_stays_synthetic_by_default():
+    from benchmarks.runner import run_configuration
+
+    run = run_configuration("bm25", _one_query(), retriever_factory=lambda name: _OneHitRetriever())
+
+    assert run.synthetic is True
+    assert run.outcome.reason == "synthetic fixture retriever (not a benchmark)"

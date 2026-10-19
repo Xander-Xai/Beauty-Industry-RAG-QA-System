@@ -358,12 +358,21 @@ def main(argv: list[str] | None = None) -> int:
         factory = executor_factories.get(name)
         if factory is None:
             return run_configuration(name, queries, top_k=args.top_k)
-        return run_configuration(name, queries, top_k=args.top_k, retriever_factory=factory)
+        # ``--executor real`` wires the production adapters, so the run is not a
+        # synthetic fixture. The runner keeps its default (synthetic) for tests.
+        return run_configuration(
+            name,
+            queries,
+            top_k=args.top_k,
+            retriever_factory=factory,
+            synthetic_retriever=False,
+        )
 
     runs = [_run_configuration(name) for name in configs]
     summary = summarize_run(runs, available_buckets=coverage.get("available_buckets"))
-    # Derived from the runs, never asserted by the CLI: the CLI itself wires no
-    # retriever, so this is False unless a caller injected one.
+    # Derived from the runs, never asserted by the CLI: a run is synthetic only
+    # when a caller injected a fixture factory (tests) — a ``--executor real`` run
+    # is declared producible by the CLI itself.
     used_synthetic = bool(summary.get("any_synthetic"))
     metadata["synthetic_retriever"] = used_synthetic
     # A blocked run contains no retrieval-quality result, a run on a dataset that

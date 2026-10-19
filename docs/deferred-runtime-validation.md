@@ -53,8 +53,8 @@
 - **Reason deferred:** no committed benchmark corpus with ground-truth passages and no real Qdrant/Elasticsearch run; a metric cannot be produced honestly without them.
 - **Required environment:** Qdrant and Elasticsearch populated from the same epoch; configured BGE and CrossEncoder assets.
 - **Required data / models:** an independent golden set with ground-truth passages; the configured text embedder.
-- **Prerequisite:** a real retrieval executor wired into the benchmark CLI. `artifacts/benchmarks/README.md` records that `run_configuration` receives no `retriever_factory` from the CLI, so every real configuration currently stops with "no real retrieval executor is wired"; wiring that factory is part of this validation, not assumed by it.
-- **Exact procedure:** wire the executor, populate both stores, run the executor under `benchmarks/`, and commit the six-file artifact contract under `artifacts/benchmarks/<run-id>/`.
+- **Prerequisite:** an independently sourced corpus that contains the golden-set ground-truth passages, plus Qdrant/Elasticsearch populated from the same epoch. The real retrieval executor is already wired into the benchmark CLI (`--executor real` → `benchmarks/executors.py`; issue #18 Blocker A closed), so no executor work remains — a run still blocks on `corpus_does_not_contain_ground_truth` until the corpus exists.
+- **Exact procedure:** populate both stores from one sealed epoch, run `python -m benchmarks.retrieval_benchmark --executor real --configs bm25,dense,hybrid_rrf`, and commit the six-file artifact contract under `artifacts/benchmarks/<run-id>/`.
 - **Expected artifact:** `artifacts/benchmarks/<run-id>/` meeting the six-file contract in `artifacts/benchmarks/README.md`.
 - **Acceptance criteria:** the artifact records git SHA, dataset and config hashes, model name/revision, hardware, sample count, retrieval metrics, latency, success/failure counts, commands and limitations; the numbers are reproducible from the artifact.
 - **Failure interpretation:** a `BLOCKED` run with a `blocked_reason` is a failed attempt, not a zero; it produces no publishable metric.

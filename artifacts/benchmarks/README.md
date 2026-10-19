@@ -34,32 +34,49 @@ python -m benchmarks.retrieval_benchmark --list-configs
 python -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 ```
 
-## Not wired yet: a real run still cannot produce a metric
+## The real executor is wired (issue #18)
 
-Two structural gaps mean `--config bm25` reports `BLOCKED` even on a machine with
-live Elasticsearch, Qdrant, BGE and CrossEncoder weights. Both are deliberate
-refusals rather than defects, but they are the work still outstanding for a first
-real artifact:
+`benchmarks/executors.py` supplies the production-retriever adapters the CLI
+previously lacked. `--executor real` wires them for every configuration whose
+live backend probes pass:
 
-1. **No real retrieval executor is constructed.** `run_configuration` receives a
-   `retriever_factory` only from tests. A CLI run passes none, so once every
-   probe passes the run still stops with `no real retrieval executor is wired for
-   this configuration yet`. The metric, aggregation, provenance and artifact code
-   is exercised; the BM25 / dense / RRF / BiEncoder / CrossEncoder executors that
-   would call the real clients are not written.
-2. **No corpus can satisfy the `corpus` backend.** This is measured, not assumed:
-   `probe_corpus` fingerprints the configured Elasticsearch index and Qdrant
-   collection and reports how many of the sampled golden-set passages they
-   actually contain. On this host the answer is **0 of 60** (there are 262
-   distinct passages across 301 queries), so every configuration blocks on
-   `corpus_does_not_contain_ground_truth`. Indexing the ground truth itself would
-   make every configuration score recall 1.0 by construction, so the probe is
-   read-only and refuses that shortcut. Unblocking this needs an independently
-   sourced corpus plus a way to register and verify it; inventing either would
-   produce a meaningless number.
+```bash
+python -m benchmarks.retrieval_benchmark --executor real --config bm25 --limit 5
+```
 
-Until both are resolved, `--list-configs` is the honest ceiling of what this
-harness can do, and no configuration may be reported as `EXECUTED`.
+* The default is still `--executor none`, so a run without the flag blocks every
+  configuration with `no real retrieval executor is wired for this
+  configuration yet` — an explicit refusal, not a defect.
+* The adapters call the **production** code paths
+  (`retrieval.bm25_retriever`, `retrieval.dense_retriever`,
+  `retrieval_service.rerank.rrf_fusion`), and item identity is derived by
+  `benchmarks.relevance.relevance_key`, so ground truth and hits agree on what
+  "the same passage" means.
+* They are **fail-closed**: a backend that does not answer a real probe raises
+  instead of returning an empty ranking, so an unreachable stack stays `BLOCKED`
+  rather than scoring an all-zero "success".
+* Only `bm25`, `dense` and `hybrid_rrf` have a real executor. The BiEncoder /
+  CrossEncoder rerank configurations stay scoped out of issue #18 until real
+  weights exist, and `build_executor` raises for them rather than falling back.
+
+## What still blocks a real result on this host
+
+One measured gap remains, so even `--executor real` reports `BLOCKED` here:
+
+* **No corpus can satisfy the `corpus` backend.** This is measured, not assumed:
+  `probe_corpus` fingerprints the configured Elasticsearch index and Qdrant
+  collection and reports how many of the sampled golden-set passages they
+  actually contain. On this host the answer is **0 of 60** (there are 262
+  distinct passages across 301 queries), so every configuration blocks on
+  `corpus_does_not_contain_ground_truth`. Indexing the ground truth itself would
+  make every configuration score recall 1.0 by construction, so the probe is
+  read-only and refuses that shortcut. Unblocking this needs an independently
+  sourced corpus plus a way to register and verify it; inventing either would
+  produce a meaningless number.
+
+Until this is resolved, `--list-configs` is the honest ceiling of what this
+harness can do on this host, and no configuration may be reported as `EXECUTED`.
+The retrieval benchmark **result** therefore stays `PENDING`.
 
 ## Reading the output honestly
 
@@ -68,8 +85,9 @@ harness can do, and no configuration may be reported as `EXECUTED`.
 * A run that used a **synthetic fixture retriever** is a metric self-check, not a
   benchmark. `metadata.json` records `synthetic_retriever: true` and
   `results_are_benchmark: false`, and `report.md` carries the warning. The CLI
-  wires no retriever of its own, so this state arises only when a caller injects
-  one — but the flag is derived from what the run did, never asserted.
+  never wires a synthetic retriever of its own — `--executor real` wires the
+  production adapters, not a fixture — so this state arises only when a caller
+  injects one — but the flag is derived from what the run did, never asserted.
 * `latency_metrics.json` uses `null` (never `0`) for stages that did not run.
 * Results in this directory are repository benchmark results. They are **not**
   historical production metrics.

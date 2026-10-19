@@ -252,6 +252,50 @@ class TestManagerWarmUpStatus:
         assert manager.clip_warmup_status()["state"] == "DEGRADED"
 
 
+class _RecordingEncoder:
+    """Counts encodes so the async path's encoder choice is observable."""
+
+    def __init__(self):
+        self.encoded: list[str] = []
+
+    def encode_text_clip(self, text):
+        self.encoded.append(text)
+        return np.ones(512, dtype=np.float32)
+
+
+class _FakeClipRetriever:
+    def search(self, embedding, qdrant_filter, top_k):
+        return []
+
+
+def test_async_clip_reuses_the_shared_warmable_encoder(monkeypatch):
+    """``recall_async_clip`` must not cold-load a second CLIP encoder.
+
+    The sync path was fixed to reuse the manager-scoped warmable encoder (#99/#102);
+    the async path still constructed a fresh ``EmbeddingService`` per call, which
+    reloads the CLIP weights inside the background 0.5s budget and holds a second
+    copy of the model in memory.
+    """
+    from retrieval import parallel_recall
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    manager = ParallelRecallManager()
+    encoder = _RecordingEncoder()
+    manager._clip_embedding_service = encoder
+    manager._clip_retriever = _FakeClipRetriever()
+
+    monkeypatch.setitem(parallel_recall.config, "clip_async", {"enabled": True})
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("the async path constructed a fresh EmbeddingService")
+
+    with patch("models.embedding_service.EmbeddingService", _forbidden):
+        results = manager.recall_async_clip("q", None, session=None, user_role_mask=1, user_dept_mask=1)
+
+    assert results == []
+    assert encoder.encoded == ["q"], "the shared warmable encoder was not used"
+
+
 # ── start-up wiring on the two entry points ─────────────────────────────────
 
 
