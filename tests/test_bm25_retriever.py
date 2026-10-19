@@ -265,3 +265,41 @@ class TestEpochBinding:
         # without restarting the process.
         client._epochs = ["default"]
         assert r.probe_epoch_binding(refresh=True)["bound"] is True
+
+    def test_a_client_without_the_probe_surface_is_reported_not_disabled(self):
+        """A purpose-built adapter must not take the lexical path down.
+
+        `AttributeError` says the *client* lacks `count`, not that the index is
+        wrong. Disabling production retrieval for that would be this change
+        breaking its caller instead of protecting anyone.
+        """
+
+        class NoCountClient:
+            def search(self, index, body):
+                return {"hits": {"hits": []}}
+
+        r, mod = self._make(NoCountClient())
+        verdict = r.probe_epoch_binding()
+        assert verdict["bound"] is True
+        assert "probe unsupported" in verdict["reason"]
+        assert r.enabled is True, "an unsupported probe must not disable the path"
+        assert r.search("烟酰胺", 0, 0, 10) == []
+        assert r.enabled is True
+
+    def test_a_retriever_built_without_init_still_probes(self):
+        """`__new__` construction is how query building is unit-tested.
+
+        Those call sites never run ``__init__``, so the cached-probe attribute
+        does not exist yet. Reading it defensively is what keeps them working.
+        """
+        import retrieval.bm25_retriever as mod
+
+        r = mod.BM25Retriever.__new__(mod.BM25Retriever)
+        r._es_client = _FakeEpochClient(212, ["real-v1-20261019"])
+        r.enabled = True
+        original = mod.config.get("knowledge_version_epoch")
+        mod.config["knowledge_version_epoch"] = "real-v1-20261019"
+        try:
+            assert r.probe_epoch_binding()["bound"] is True
+        finally:
+            mod.config["knowledge_version_epoch"] = original

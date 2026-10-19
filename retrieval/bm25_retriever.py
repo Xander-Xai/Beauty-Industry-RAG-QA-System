@@ -86,9 +86,18 @@ class BM25Retriever:
         which is a deliberate configuration rather than a mismatch. An index with
         no documents is never "bound": it cannot answer anything, and reporting
         success there would hide an empty or wrong index.
+
+        A client that does not implement the probe surface is also reported as
+        bound, with a reason saying so: that is a fact about the caller, not
+        about the index, and it must not take the lexical path down.
         """
-        if self._epoch_binding is not None and not refresh:
-            return self._epoch_binding
+        # ``getattr`` rather than a direct read: tests and integrations construct
+        # a retriever via ``__new__`` to exercise query building without a
+        # cluster, and a cached-probe fast path must not be the thing that breaks
+        # them. Absence of the cache is simply "probe again".
+        cached = getattr(self, "_epoch_binding", None)
+        if cached is not None and not refresh:
+            return cached
 
         index_name = str(config.get("elasticsearch", {}).get("index", "") or "")
         configured_epoch = str(config.get("knowledge_version_epoch", "") or "")
@@ -125,6 +134,17 @@ class BM25Retriever:
                 for bucket in (response.get("aggregations", {}).get("epochs", {}) or {}).get("buckets", []) or ()
             ]
             verdict["present_epochs"] = present
+        except (AttributeError, NotImplementedError, TypeError) as exc:
+            # The client does not implement the probe surface at all — it is a
+            # purpose-built adapter, not an Elasticsearch client. That is a fact
+            # about the *caller*, not about the index, and it is not evidence
+            # that the corpus is unbound. Disabling the production lexical path
+            # because an adapter stub lacks `count` would be this change breaking
+            # its caller rather than protecting anyone. Recorded, not fatal.
+            verdict["bound"] = True
+            verdict["reason"] = f"epoch probe unsupported by this client ({type(exc).__name__}); query unverified"
+            self._epoch_binding = verdict
+            return verdict
         except Exception as exc:  # noqa: BLE001 - a probe reports, it does not raise
             verdict["reason"] = f"could not inspect index {index_name!r}: {type(exc).__name__}: {exc}"
             self._epoch_binding = verdict
