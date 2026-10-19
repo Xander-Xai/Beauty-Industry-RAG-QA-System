@@ -61,22 +61,50 @@ python -m benchmarks.retrieval_benchmark --executor real --config bm25 --limit 5
 
 ## What still blocks a real result on this host
 
-One measured gap remains, so even `--executor real` reports `BLOCKED` here:
+Two gaps, and they are different kinds of gap:
 
-* **No corpus can satisfy the `corpus` backend.** This is measured, not assumed:
-  `probe_corpus` fingerprints the configured Elasticsearch index and Qdrant
-  collection and reports how many of the sampled golden-set passages they
-  actually contain. On this host the answer is **0 of 60** (there are 262
-  distinct passages across 301 queries), so every configuration blocks on
-  `corpus_does_not_contain_ground_truth`. Indexing the ground truth itself would
-  make every configuration score recall 1.0 by construction, so the probe is
-  read-only and refuses that shortcut. Unblocking this needs an independently
-  sourced corpus plus a way to register and verify it; inventing either would
-  produce a meaningless number.
+* **Dataset (blocking, human).** The only corpus-bound dataset is the 27
+  `DRAFT_UNVERIFIED` candidates, so `golden-set-contract/v2` is 0/27. A run with
+  `--require-contract` refuses (exit 2) and the artifact records
+  `attributable: false`. This is cleared by a named reviewer promoting records,
+  not by code.
+* **Corpus (cleared for real-v1).** `corpus/real_v1/` satisfies the `corpus`
+  backend: the probe reports `22/22` distinct golden passages present with
+  `corpus.verdict = full`. The old "0 of 60 / no corpus" state describes the
+  synthetic 301-row set, which still has no independent corpus and stays
+  blocked. Indexing the ground truth itself would make every configuration
+  score recall 1.0 by construction, so the probe remains read-only.
 
-Until this is resolved, `--list-configs` is the honest ceiling of what this
-harness can do on this host, and no configuration may be reported as `EXECUTED`.
-The retrieval benchmark **result** therefore stays `PENDING`.
+So on this host BM25 can now *execute* against a real corpus, but no run is a
+**benchmark result** until the labels are reviewed. `results_are_benchmark`
+stays `false` and the retrieval benchmark **result** stays `PENDING`.
+
+## Real corpus V1: what changed, and what still blocks
+
+`corpus/real_v1/` (209 documents / 212 chunks) now exists and a real BM25 index
+answers the corpus probe: `all 22/22 distinct golden passages are present`,
+`corpus.verdict = full`. That removes the **corpus** blocker for the 27 real-v1
+candidates. It does **not** remove the **dataset** blocker:
+
+* All 27 candidates are `DRAFT_UNVERIFIED`, so `golden-set-contract/v2` is
+  0/27 and `--require-contract` exits 2. No official result exists.
+* The exploratory BM25 run against them is recorded in
+  `docs/validation/real-corpus-v1-pre-review.md` with
+  `results_are_benchmark=false` and `attributable=false`. It is a wiring check,
+  not a benchmark: the labels are unreviewed, 27 samples is small, and two
+  questions lexically overlap their passage enough to suggest reverse
+  generation.
+* Dense / hybrid stay `BLOCKED` on missing BGE weights.
+
+The formal gate is unchanged and runs only after human review:
+
+```bash
+python3 -m benchmarks.retrieval_benchmark \
+  --executor real --config bm25 \
+  --dataset <reviewed dataset path> \
+  --require-contract --require-integrity --require-results \
+  --output-dir artifacts/benchmarks
+```
 
 ## Reading the output honestly
 

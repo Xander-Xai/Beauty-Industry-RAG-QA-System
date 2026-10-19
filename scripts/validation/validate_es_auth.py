@@ -26,7 +26,11 @@ sys.path.insert(0, str(ROOT))
 ES_HOST = os.environ.get("VALIDATION_ES_HOST", "http://127.0.0.1:9200")
 ES_USER = os.environ.get("ELASTICSEARCH_USERNAME", "elastic")
 ES_PASSWORD = os.environ.get("ELASTICSEARCH_PASSWORD", "validation-es-password")
-TEST_INDEX = "cosmetics_docs"
+#: A validation run writes, then deletes, its index. It must never be the
+#: production index: an operator running the runtime validation would otherwise
+#: destroy the corpus they were validating against.
+TEST_INDEX = "cosmetics_docs_validation"
+PRODUCTION_INDEX = "cosmetics_docs"
 
 
 def _log(ok: bool, message: str) -> None:
@@ -41,6 +45,10 @@ def _make_client(password: str):
 
 def main() -> int:
     from elasticsearch import AuthenticationException
+
+    if TEST_INDEX == PRODUCTION_INDEX:
+        _log(False, f"validation index {TEST_INDEX!r} is the production index; refusing to run")
+        return 1
 
     failures = 0
 

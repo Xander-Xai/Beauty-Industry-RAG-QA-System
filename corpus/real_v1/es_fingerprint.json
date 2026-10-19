@@ -1,0 +1,19 @@
+{
+  "chunks_written": 212,
+  "corpus_version": "real-v1-20261019",
+  "elasticsearch_version": "8.11.0",
+  "fingerprint": {
+    "content_sha256": "38849be7fe8ce077ea5a5e61fa1fa3909143b8a9088dd55d372b3d1c64711a1c",
+    "document_count": 212,
+    "error": null,
+    "name": "cosmetics_docs",
+    "reachable": true,
+    "sampled_documents": 212,
+    "system": "elasticsearch"
+  },
+  "host": "http://127.0.0.1:9200",
+  "index_name": "cosmetics_docs",
+  "note": "BM25-only index built from corpus/real_v1/chunks.jsonl with the production ES writer. No dense vectors were written: the BGE weights are absent, so the dense collection is intentionally unbuilt and dense/hybrid retrieval is not claimed.",
+  "schema_version": "real-corpus-es-fingerprint/1",
+  "timestamp_utc": "2026-10-19T07:04:08+00:00"
+}

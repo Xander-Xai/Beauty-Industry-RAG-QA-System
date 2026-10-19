@@ -726,16 +726,20 @@ def test_committed_manifest_declares_a_disclosure_state_for_every_asset() -> Non
 
 
 def test_committed_manifest_does_not_overclaim_fixture_content() -> None:
-    """No committed fixture may assert that it carries real regulatory claims.
+    """A real-regulatory-claims flag must be backed by a public official source.
 
-    That flag is the machine-readable half of the provenance statement. If it
-    ever flips to true the asset needs a source, a licence and a regression test,
-    which is a reviewable event rather than a quiet edit.
+    That flag is the machine-readable half of the provenance statement. A
+    ``SYNTHETIC`` asset may never carry it, and an asset that does must be a
+    ``PUBLIC_OFFICIAL_DOCUMENT`` with a recorded source (`corpus/real_v1/SOURCES.md`
+    via its marker). Flipping the flag is a reviewable event, not a quiet edit.
     """
     manifest = json.loads((ROOT_SCRIPT().parents[1] / DATA_MANIFEST).read_text(encoding="utf-8"))
 
-    offenders = [a["path"] for a in manifest["assets"] if a.get("carries_real_regulatory_claims")]
-    assert offenders == []
+    for asset in manifest["assets"]:
+        if not asset.get("carries_real_regulatory_claims"):
+            continue
+        assert asset.get("class") == "PUBLIC_OFFICIAL_DOCUMENT", asset["path"]
+        assert asset.get("marker"), asset["path"]
 
 
 # --------------------------------------------------------------------------
