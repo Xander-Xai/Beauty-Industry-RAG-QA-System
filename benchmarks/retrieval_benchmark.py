@@ -10,6 +10,14 @@ Attempt a real run (writes an artifact set even when everything is blocked)::
 
     python -m benchmarks.retrieval_benchmark --config bm25 --limit 5
 
+A run is only publishable as a benchmark result when all of five independent
+facts hold: something executed, the golden set is attributable, the retriever was
+not a fixture, the working tree is attributable, and **every document in the
+Elasticsearch index the run queried is backed by a named reviewer's approval of
+the exact bytes reviewed**. The last one is checked by
+:mod:`benchmarks.source_approval` and reported in the artifact as
+``source_approval_verified`` / ``publication_blockers``.
+
 The CLI has no flag that installs a fake retriever. A synthetic retriever can
 only be supplied programmatically by tests, and any run that used one is flagged
 in its artifacts.
@@ -53,6 +61,7 @@ from benchmarks.provenance import (
     write_gitignore_entry,
 )
 from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
+from benchmarks.source_approval import gather_source_approval_evidence
 
 DEFAULT_OUTPUT_DIR = "artifacts/benchmarks"
 
@@ -74,6 +83,35 @@ def corpus_evidence_for(passages: list[str], dataset_queries: int) -> dict[str, 
             "fingerprints": [],
             "correspondence": None,
         }
+
+
+def _publication_blockers(
+    *,
+    any_results: bool,
+    attributable: bool,
+    used_synthetic: bool,
+    source_approval: dict[str, Any],
+) -> list[str]:
+    """Name every reason this run may not be published, most specific first.
+
+    A run that fails several operands at once would otherwise report only that
+    it failed, leaving an operator to guess which one to fix. Listing them is
+    also what makes the source-approval gap visible in *old* artifacts' terms:
+    a mixed-provenance run now names ``source_approval`` rather than looking
+    merely unlucky.
+    """
+    blockers: list[str] = []
+    if not any_results:
+        blockers.append("no_configuration_executed")
+    if not attributable:
+        blockers.append("dataset_not_attributable")
+    if used_synthetic:
+        blockers.append("synthetic_retriever")
+    if not source_approval.get("verified"):
+        issues = (source_approval.get("issues") or {}).get("by_code") or {}
+        detail = ", ".join(f"{code}×{count}" for code, count in sorted(issues.items()))
+        blockers.append(f"source_approval_not_verified: {detail or 'no evidence collected'}")
+    return blockers
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -138,6 +176,16 @@ def build_parser() -> argparse.ArgumentParser:
             "retrieval executor: 'none' (default) blocks every configuration because no executor is "
             "wired; 'real' wires the production BM25 / dense / hybrid-RRF executors. A 'real' run still "
             "requires every backend probe to pass, so an unavailable stack stays BLOCKED."
+        ),
+    )
+    parser.add_argument(
+        "--require-source-approval",
+        action="store_true",
+        help=(
+            "exit non-zero unless every document in the Elasticsearch index this run queries "
+            "resolves to a source a named reviewer approved for the exact bytes reviewed "
+            "(benchmarks.source_approval). Implied by --require-results only for publication; "
+            "this flag makes the check a hard process exit as well as an artifact field"
         ),
     )
     parser.add_argument("--list-configs", action="store_true", help="print configuration availability and exit")
@@ -292,6 +340,13 @@ def main(argv: list[str] | None = None) -> int:
     # corpus does not contain the ground truth" is only credible if the artifact
     # shows what was inspected.
     corpus_evidence = corpus_evidence_for(distinct_passages(queries), len(queries))
+    # Whether every document in the index this run actually queried is backed by
+    # a reviewer's approval. Collected before the runs so a blocked run still
+    # carries the answer: "blocked because the corpus is unapproved" is only
+    # credible if the artifact shows what was inspected. Collected the same way
+    # for every configuration, because the question is about the corpus, not
+    # about which retriever happened to execute.
+    source_approval = gather_source_approval_evidence(gold_rows=[query.raw for query in queries])
     config_payload = {
         "configs": configs,
         "top_k": args.top_k,
@@ -349,6 +404,15 @@ def main(argv: list[str] | None = None) -> int:
         # passages. Without it two runs against different indexes are
         # indistinguishable in their provenance.
         "corpus": corpus_evidence,
+        # Whether every document in the queried index is backed by an attributed
+        # review approval. The full evidence lives in `source_approval`; the
+        # three flags below are the reading order a reviewer uses: did the index
+        # answer, was its provenance intact, and may it be published.
+        "source_approval": source_approval,
+        "source_approval_verified": bool(source_approval.get("verified")),
+        "provenance_verified": bool(source_approval.get("verified"))
+        and int(source_approval.get("documents_verified", 0) or 0)
+        == int(source_approval.get("document_count", 0) or 0),
     }
     environment = render_environment(collect_environment())
     # Coverage describes the samples this run actually used, not the whole file.
@@ -369,14 +433,33 @@ def main(argv: list[str] | None = None) -> int:
     # production adapters declare ``is_production``; a fixture (tests) does not.
     used_synthetic = bool(summary.get("any_synthetic"))
     metadata["synthetic_retriever"] = used_synthetic
-    # Publication is the conjunction of four independent facts, none of which may be
-    # asserted by the caller:
-    #   * ``any_results``   — a configuration actually executed (backend probes passed),
-    #   * ``attributable``  — the golden set satisfies the v2 contract (identity + labels),
-    #   * ``not synthetic`` — the retriever declared production provenance (``is_production``),
+    # Publication is the conjunction of five independent facts, none of which may
+    # be asserted by the caller:
+    #   * ``any_results``          — a configuration actually executed (backend probes passed),
+    #   * ``attributable``         — the golden set satisfies the v2 contract (identity + labels),
+    #   * ``not synthetic``        — the retriever declared production provenance (``is_production``),
+    #   * ``source_approval_verified`` — every document in the queried Elasticsearch index
+    #     resolves to a source a named reviewer approved for the exact bytes reviewed,
     #   * the per-run BLOCKED/all-failed paths already produced no result above.
     # A synthetic fixture cannot be published by passing a flag; the flag no longer exists.
-    metadata["results_are_benchmark"] = bool(summary.get("any_results")) and attributable and not used_synthetic
+    # The fourth operand is the one this gate used to omit: retrieval could succeed
+    # out of an index whose documents were `UNTRUSTED`, or mixed approved/unapproved,
+    # and the artifact still said `results_are_benchmark: true`. The number was real;
+    # the corpus it came from was not reviewable. Both facts now have to hold.
+    source_approval_verified = bool(source_approval.get("verified"))
+    results_are_benchmark = (
+        bool(summary.get("any_results")) and attributable and not used_synthetic and source_approval_verified
+    )
+    metadata["results_are_benchmark"] = results_are_benchmark
+    # `publishable` is the reader-facing column: everything a downstream artifact
+    # would need in order to quote a number as this project's retrieval benchmark.
+    metadata["publishable"] = results_are_benchmark
+    metadata["publication_blockers"] = _publication_blockers(
+        any_results=bool(summary.get("any_results")),
+        attributable=attributable,
+        used_synthetic=used_synthetic,
+        source_approval=source_approval,
+    )
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id
@@ -419,6 +502,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.require_results:
             return 5
+
+    if args.require_source_approval and not source_approval_verified:
+        issues = (source_approval.get("issues") or {}).get("issues") or []
+        print(
+            f"\nSource approval not verified for index {source_approval.get('index_name') or '<unconfigured>'!r}: "
+            f"{(source_approval.get('issues') or {}).get('issue_count', 0)} blocking issue(s).",
+            file=sys.stderr,
+        )
+        for issue in issues[:10]:
+            print(f"  - {issue['code']}: {issue['detail']}", file=sys.stderr)
+        if len(issues) > 10:
+            print(f"  ... and {(source_approval.get('issues') or {}).get('issue_count', 0) - 10} more", file=sys.stderr)
+        return 6
+
+    if not metadata["publishable"]:
+        print(
+            "\nThis run is not publishable as a benchmark result. Blockers:\n"
+            + "".join(f"  - {blocker}\n" for blocker in metadata["publication_blockers"]),
+            file=sys.stderr,
+        )
     return 0
 
 
