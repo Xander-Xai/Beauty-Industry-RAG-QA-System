@@ -35,12 +35,77 @@ quality. The table below reports a lexical heuristic, not a verdict:
 
 | risk | rows | meaning |
 |---|---:|---|
-| `HIGH` | 2 | long shared run or almost all question bigrams occur in the passage |
-| `MEDIUM` | 8 | partial overlap; read the question again as a user would ask it |
-| `LOW` | 17 | little lexical overlap; the question is phrased more independently |
+| `HIGH` | 0 | long shared run or almost all question bigrams occur in the passage |
+| `MEDIUM` | 7 | partial overlap; read the question again as a user would ask it |
+| `LOW` | 20 | little lexical overlap; the question is phrased more independently |
 
 `HIGH` is not automatically a defect. It means: rewrite the question in user language before
 accepting it, or record why the exact wording is realistic.
+
+## Sign-off table
+
+Everything left of the divider was produced automatically and is reproducible from the
+generator. Everything right of it is **not filled in**: no human has reviewed these rows.
+
+| sample_id | gold chunks (relevance) | risk | difficulty / complexity | AI suggestion |
+|---|---|---|---|---|
+| `REAL-V1-001` | `article-003` = **2** | LOW | easy / simple | **ACCEPT** |
+| `REAL-V1-002` | `article-004` = **2**, `article-017` = **2** | MEDIUM | easy / simple | **MODIFY** |
+| `REAL-V1-003` | `article-011` = **2** | LOW | medium / simple | **ACCEPT** |
+| `REAL-V1-004` | `article-014` = **2** | MEDIUM | medium / simple | **ACCEPT** |
+| `REAL-V1-005` | `article-016` = **2** | MEDIUM | easy / simple | **ACCEPT** |
+| `REAL-V1-006` | `article-017` = **2** | LOW | medium / simple | **ACCEPT** |
+| `REAL-V1-007` | `article-022` = **2** | LOW | medium / simple | **ACCEPT** |
+| `REAL-V1-008` | `article-036` = **2** | MEDIUM | easy / simple | **MODIFY** |
+| `REAL-V1-009` | `article-037` = **2** | MEDIUM | easy / simple | **MODIFY** |
+| `REAL-V1-010` | `row-006722` = **2** | LOW | easy / simple | **MODIFY** |
+| `REAL-V1-011` | `row-007359` = **2** | LOW | easy / simple | **ACCEPT** |
+| `REAL-V1-012` | `row-002292` = **2** | LOW | easy / simple | **MODIFY** |
+| `REAL-V1-013` | `row-006016` = **2** | LOW | easy / simple | **MODIFY** |
+| `REAL-V1-014` | `row-003171` = **2** | LOW | medium / simple | **MODIFY** |
+| `REAL-V1-015` | `row-006405` = **2** | LOW | medium / simple | **MODIFY** |
+| `REAL-V1-016` | `row-001294` = **2** | LOW | easy / simple | **MODIFY** |
+| `REAL-V1-017` | `row-005428` = **2** | LOW | medium / simple | **ACCEPT** |
+| `REAL-V1-018` (family: `REAL-V1-001`) | `article-003` = **2** | LOW | easy / simple | **ACCEPT** |
+| `REAL-V1-019` (family: `REAL-V1-003`) | `article-011` = **2** | LOW | medium / simple | **ACCEPT** |
+| `REAL-V1-020` (family: `REAL-V1-010`) | `row-006722` = **2** | LOW | medium / simple | **ACCEPT** |
+| `REAL-V1-021` | `article-004` = **1**, `article-017` = **2** | LOW | medium / complex | **MODIFY** |
+| `REAL-V1-022` | `article-036` = **2**, `article-022` = **2** | LOW | medium / complex | **ACCEPT** |
+| `REAL-V1-023` | `notice` = **2** | MEDIUM | medium / simple | **MODIFY** |
+| `REAL-V1-024` | `notice` = **2** | LOW | hard / complex | **MODIFY** |
+| `REAL-V1-025` | `row-001279` = **2** | LOW | easy / simple | **MODIFY** |
+| `REAL-V1-026` | `article-017` = **2** | MEDIUM | medium / simple | **ACCEPT** |
+| `REAL-V1-027` | `row-000970` = **2** | LOW | medium / simple | **MODIFY** |
+
+| sample_id | human decision | reviewer | reviewed_at | notes |
+|---|---|---|---|---|
+| `REAL-V1-001` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-002` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-003` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-004` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-005` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-006` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-007` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-008` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-009` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-010` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-011` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-012` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-013` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-014` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-015` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-016` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-017` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-018` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-019` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-020` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-021` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-022` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-023` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-024` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-025` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-026` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
+| `REAL-V1-027` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |
 
 ## Review table
 
@@ -53,26 +118,26 @@ accepting it, or record why the exact wording is realistic.
 | `REAL-V1-005` | 哪些类别的化妆品属于特殊化妆品？ | MEDIUM | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-006` | 特殊化妆品和普通化妆品分别由谁负责注册或备案？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-007` | 化妆品的功效宣称需要满足什么条件，注册人、备案人有什么公开义务？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-008` | 化妆品标签应当标注哪些内容？ | HIGH | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-009` | 化妆品标签禁止标注哪些内容？ | HIGH | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-010` | 透明质酸钠的 INCI 名称是什么？它在淋洗类产品中的最高历史使用量是多少？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-008` | 化妆品标签上必须标注哪些内容？ | MEDIUM | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-009` | 化妆品标签上哪些内容是禁止标注的？ | MEDIUM | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-010` | 根据《已使用化妆品原料目录（2021年版）》，透明质酸钠的 INCI 名称是什么？2021 年版记载的淋洗类产品最高历史使用量是多少？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-011` | 烟酰胺在《已使用化妆品原料目录（2021年版）》中是否给出了最高历史使用量？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-012` | 泛醇在驻留类产品中的最高历史使用量是多少？ | MEDIUM | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-013` | 神经酰胺 NP 的 INCI 名称和驻留类产品最高历史使用量分别是什么？ | MEDIUM | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-014` | 积雪草提取物在驻留类产品中的最高历史使用量是多少？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-015` | 水杨酸在目录中是否给出了具体数值的最高历史使用量？备注栏写了什么？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-016` | 苯氧乙醇在目录中的最高历史使用量是如何标注的？ | MEDIUM | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-012` | 根据《已使用化妆品原料目录（2021年版）》，泛醇在驻留类产品中的 2021 年版记载最高历史使用量是多少？淋洗类产品当时是否给出了数值？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-013` | 根据《已使用化妆品原料目录（2021年版）》，神经酰胺 NP 的 INCI 名称和 2021 年版记载的驻留类产品最高历史使用量分别是什么？淋洗类产品当时是否给出了数值？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-014` | 根据《已使用化妆品原料目录（2021年版）》，积雪草提取物在驻留类产品中的 2021 年版记载最高历史使用量是多少？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-015` | 根据《已使用化妆品原料目录（2021年版）》，水杨酸的最高历史使用量当时是否给出了具体数值？备注栏写的是什么？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-016` | 根据《已使用化妆品原料目录（2021年版）》，苯氧乙醇的最高历史使用量栏当时标注了什么？备注栏写的是什么？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-017` | 氢醌在《已使用化妆品原料目录（2021年版）》中的备注是什么？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-018` | 《化妆品监督管理条例》是怎么定义化妆品的？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-019` | 给化妆品新原料办注册和备案，分别在哪些情形下适用？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-020` | 透明质酸钠在冲洗类产品里最多能用多少（按历史使用量口径）？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-020` | 透明质酸钠在冲洗类产品里最多能用多少（按2021年版记载的最高历史使用量口径）？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-021` | 企业使用已列入目录的原料生产国产普通化妆品，需要办理哪些注册和备案手续？ | LOW | medium | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-022` | 化妆品标签上的全成分标注和功效宣称的科学依据，分别规定在哪两条？ | LOW | medium | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-023` | 目录中已列入禁用、限用或准用组分的原料，使用时应当遵守什么要求？ | LOW | hard | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-024` | 目录给出的最高历史使用量，能否在安全评估中直接当作法规限量？ | LOW | hard | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-025` | 苯甲醇在驻留类产品中的最高历史使用量是多少？ | MEDIUM | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-023` | 根据《已使用化妆品原料目录（2021年版）》，目录中已列入禁用、限用或准用组分的原料，使用时应当遵守什么要求？ | MEDIUM | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-024` | 根据《已使用化妆品原料目录（2021年版）》及其当时的使用说明，最高历史使用量能否直接视为法定限量？ | LOW | hard | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-025` | 根据《已使用化妆品原料目录（2021年版）》，苯甲醇在驻留类产品中的最高历史使用量当时是否给出了数值？如果未给出数值，是否等于允许无限制使用？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-026` | 国产普通化妆品上市前，应当向哪一级药品监督管理部门备案？ | MEDIUM | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-027` | 对苯二胺在目录中的备注是什么？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-027` | 根据《已使用化妆品原料目录（2021年版）》，对苯二胺的备注栏当时写的是什么？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 
 ---
 
@@ -88,6 +153,13 @@ accepting it, or record why the exact wording is realistic.
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 3 chars, ratio 0.136, bigram coverage 0.176) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -177,11 +249,19 @@ accepting it, or record why the exact wording is realistic.
 | derivation risk | **MEDIUM** (LCS 11 chars, ratio 0.44, bigram coverage 0.762) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
 
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | added article-017 as a second gold passage; both articles independently answer the question (004 states the management model, 017 states the same split with the filing timing and authority). Recall@1 <= 0.5 is the normal many-relevant-document definition, not a scoring defect; the passage was not dropped to protect the metric |
+
 **Official source and locator**
 
 | logical_id | document | locator | URL |
 |---|---|---|---|
 | `nmpa/regulation-727/article-004` | 国务院令第727号（2020-06-16公布，2021-01-01施行） | 第四条 | https://www.gov.cn/zhengce/zhengceku/2020-06/29/content_5522593.htm |
+| `nmpa/regulation-727/article-017` | 国务院令第727号（2020-06-16公布，2021-01-01施行） | 第十七条 | https://www.gov.cn/zhengce/zhengceku/2020-06/29/content_5522593.htm |
 
 **Annotated passages (verbatim from the corpus)**
 
@@ -197,13 +277,26 @@ accepting it, or record why the exact wording is realistic.
 化妆品原料分为新原料和已使用的原料。国家对风险程度较高的化妆品新原料实行注册管理，对其他化妆品新原料实行备案管理。
 ```
 
-**Possibly missing / related passages** (review leads, not added automatically)
-
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-017` / `5a899c7e-8834-56b2-b2d3-123f5001129d` (token overlap 9)
+- `doc_id`: `579cdf45e400516fd34709d6771ec754dda923a6a7ca41bc15dd982a0359ae2a`
+  `chunk_id`: `5a899c7e-8834-56b2-b2d3-123f5001129d`
+  `locator`: `第十七条`
+  current relevance: **2**
 
 ```text
 第十七条
 特殊化妆品经国务院药品监督管理部门注册后方可生产、进口。国产普通化妆品应当在上市销售前向备案人所在地省、自治区、直辖市人民政府药品监督管理部门备案。进口普通化妆品应当在进口前向国务院药品监督管理部门备案。
+```
+
+**Possibly missing / related passages** (review leads, not added automatically)
+
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-059` / `3aa937b8-5bd1-5d91-9bee-5765dbbf27a2` (token overlap 8)
+
+```text
+第五十九条
+有下列情形之一的，由负责药品监督管理的部门没收违法所得、违法生产经营的化妆品和专门用于违法生产经营的原料、包装材料、工具、设备等物品；违法生产经营的化妆品货值金额不足1万元的，并处5万元以上15万元以下罚款；货值金额1万元以上的，并处货值金额15倍以上30倍以下罚款；情节严重的，责令停产停业、由备案部门取消备案或者由原发证部门吊销化妆品许可证件，10年内不予办理其提出的化妆品备案或者受理其提出的化妆品行政许可申请，对违法单位的法定代表人或者主要负责人、直接负责的主管人员和其他直接责任人员处以其上一年度从本单位取得收入的3倍以上5倍以下罚款，终身禁止其从事化妆品生产经营活动；构成犯罪的，依法追究刑事责任：
+（一）未经许可从事化妆品生产活动，或者化妆品注册人、备案人委托未取得相应化妆品生产许可的企业生产化妆品；
+（二）生产经营或者进口未经注册的特殊化妆品；
+（三）使用禁止用于化妆品生产的原料、应当注册但未经注册的新原料生产化妆品，在化妆品中非法添加可能危害人体健康的物质，或者使用超过使用期限、废弃、回收的化妆品或者原料生产化妆品。
 ```
 
 - `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-019` / `7b6011b2-cf86-5666-b57c-9aecaa89fbbc` (token overlap 9)
@@ -260,6 +353,13 @@ accepting it, or record why the exact wording is realistic.
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 6 chars, ratio 0.24, bigram coverage 0.368) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -333,6 +433,13 @@ accepting it, or record why the exact wording is realistic.
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **MEDIUM** (LCS 11 chars, ratio 0.379, bigram coverage 0.577) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -409,6 +516,13 @@ accepting it, or record why the exact wording is realistic.
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **MEDIUM** (LCS 5 chars, ratio 0.333, bigram coverage 0.417) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -488,6 +602,13 @@ accepting it, or record why the exact wording is realistic.
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 5 chars, ratio 0.227, bigram coverage 0.421) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -574,6 +695,13 @@ accepting it, or record why the exact wording is realistic.
 | derivation risk | **LOW** (LCS 8 chars, ratio 0.276, bigram coverage 0.44) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
 
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
+
 **Official source and locator**
 
 | logical_id | document | locator | URL |
@@ -637,7 +765,7 @@ accepting it, or record why the exact wording is realistic.
 
 ## REAL-V1-008
 
-**Question:** 化妆品标签应当标注哪些内容？
+**Question:** 化妆品标签上必须标注哪些内容？
 
 | field | value |
 |---|---|
@@ -645,8 +773,15 @@ accepting it, or record why the exact wording is realistic.
 | `business_type` | `regulation` |
 | `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **HIGH** (LCS 9 chars, ratio 0.692, bigram coverage 0.75) |
+| derivation risk | **MEDIUM** (LCS 5 chars, ratio 0.357, bigram coverage 0.462) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to drop the near-verbatim overlap with article 036 that scored derivation risk HIGH; the gold passage is unchanged and the sample still measures precise clause lookup, not hard semantic retrieval |
 
 **Official source and locator**
 
@@ -676,19 +811,28 @@ accepting it, or record why the exact wording is realistic.
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-039` / `628cbcf8-ab6b-523c-b340-ab053a409030` (token overlap 5)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-039` / `628cbcf8-ab6b-523c-b340-ab053a409030` (token overlap 4)
 
 ```text
 第三十九条
 化妆品生产经营者应当依照有关法律、法规的规定和化妆品标签标示的要求贮存、运输化妆品，定期检查并及时处理变质或者超过使用期限的化妆品。
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-035` / `aa06d8ba-9735-5762-9ec4-bf75c9f1cc03` (token overlap 6)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-019` / `7b6011b2-cf86-5666-b57c-9aecaa89fbbc` (token overlap 4)
 
 ```text
-第三十五条
-化妆品的最小销售单元应当有标签。标签应当符合相关法律、行政法规、强制性国家标准，内容真实、完整、准确。
-进口化妆品可以直接使用中文标签，也可以加贴中文标签；加贴中文标签的，中文标签内容应当与原标签内容一致。
+第十九条
+申请特殊化妆品注册或者进行普通化妆品备案，应当提交下列资料：
+（一）注册申请人、备案人的名称、地址、联系方式；
+（二）生产企业的名称、地址、联系方式；
+（三）产品名称；
+（四）产品配方或者产品全成分；
+（五）产品执行的标准；
+（六）产品标签样稿；
+（七）产品检验报告；
+（八）产品安全评估资料。
+注册申请人首次申请特殊化妆品注册或者备案人首次进行普通化妆品备案的，应当提交其符合本条例第十八条规定条件的证明资料。申请进口特殊化妆品注册或者进行进口普通化妆品备案的，应当同时提交产品在生产国（地区）已经上市销售的证明文件以及境外生产企业符合化妆品生产质量管理规范的证明资料；专为向我国出口生产、无法提交产品在生产国（地区）已经上市销售的证明文件的，应当提交面向我国消费者开展的相关研究和试验的资料。
+注册申请人、备案人应当对所提交资料的真实性、科学性负责。
 ```
 
 - `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-037` / `dc3874cd-8b9e-52ce-b127-c49e75b45949` (token overlap 6)
@@ -720,7 +864,7 @@ accepting it, or record why the exact wording is realistic.
 
 ## REAL-V1-009
 
-**Question:** 化妆品标签禁止标注哪些内容？
+**Question:** 化妆品标签上哪些内容是禁止标注的？
 
 | field | value |
 |---|---|
@@ -728,8 +872,15 @@ accepting it, or record why the exact wording is realistic.
 | `business_type` | `regulation` |
 | `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **HIGH** (LCS 9 chars, ratio 0.692, bigram coverage 0.75) |
+| derivation risk | **MEDIUM** (LCS 5 chars, ratio 0.312, bigram coverage 0.6) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to drop the near-verbatim overlap with article 037 that scored derivation risk HIGH; the gold passage is unchanged and difficulty stays easy because it is a precise clause lookup |
 
 **Official source and locator**
 
@@ -755,7 +906,7 @@ accepting it, or record why the exact wording is realistic.
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-036` / `22a41675-73e0-518c-a62d-9285fea03b2c` (token overlap 6)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-036` / `22a41675-73e0-518c-a62d-9285fea03b2c` (token overlap 7)
 
 ```text
 第三十六条
@@ -808,7 +959,7 @@ accepting it, or record why the exact wording is realistic.
 
 ## REAL-V1-010
 
-**Question:** 透明质酸钠的 INCI 名称是什么？它在淋洗类产品中的最高历史使用量是多少？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，透明质酸钠的 INCI 名称是什么？2021 年版记载的淋洗类产品最高历史使用量是多少？
 
 | field | value |
 |---|---|
@@ -816,8 +967,15 @@ accepting it, or record why the exact wording is realistic.
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **LOW** (LCS 7 chars, ratio 0.206, bigram coverage 0.571) |
+| derivation risk | **LOW** (LCS 12 chars, ratio 0.211, bigram coverage 0.447) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to pin the figure to the 2021 snapshot; the catalog dropped the maximum-historical-usage column in 2025, so an unqualified 'highest historical usage' reads as a current limit |
 
 **Official source and locator**
 
@@ -843,7 +1001,16 @@ INCI名称/英文名称：SODIUM HYALURONATE
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006723` / `d4bee355-b4a4-538a-946a-19286f8ac1ca` (token overlap 16)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 17)
+
+```text
+或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购货凭证；使用过该原料的产品注册/备案信息、配方及生产投料记录等。
+    七、一个序号后列出了两个名称的，表示为同一原料，使用时应选择INCI收录或以标准中文名称命名原则命名的植物原料名称，不建议使用已标注为“曾用名”的名称。
+    八、本目录载明的原料最高历史使用量，可作为化妆品安全评估报告（简化版）的证据类型，为化妆品安全评估提供参考，化妆品注册人、备案人应当结合产品类型正确使用原料最高历史使用量，只有驻留类产品最高历史使用量信息的原料，淋洗类产品可参照驻留类产品信息使用。
+    九、对目录未提供最高历史使用量的原料，化妆品注册人、备案人可按照《化妆品安全评估技术导则》要求，提供相应的材料作为评估证据，或者按风险评估程序进行安全风险评估，确保原料的使用安全。
+```
+
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006723` / `d4bee355-b4a4-538a-946a-19286f8ac1ca` (token overlap 17)
 
 ```text
 序号：06723
@@ -854,7 +1021,7 @@ INCI名称/英文名称：SODIUM HYALURONATE CROSSPOLYMER
 备注：未提供
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-007772` / `fa8a418b-6a46-5ff7-9db6-df7760bf2555` (token overlap 16)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-007772` / `fa8a418b-6a46-5ff7-9db6-df7760bf2555` (token overlap 17)
 
 ```text
 序号：07772
@@ -862,17 +1029,6 @@ INCI名称/英文名称：SODIUM HYALURONATE CROSSPOLYMER
 INCI名称/英文名称：SODIUM ACETYLATED HYALURONATE
 淋洗类产品最高历史使用量（%）：未提供
 驻留类产品最高历史使用量（%）：10
-备注：未提供
-```
-
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006354` / `fcf16fb3-9c2b-5d05-8e01-5913eef06b2b` (token overlap 16)
-
-```text
-序号：06354
-中文名称：水解透明质酸钠
-INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：2.25
 备注：未提供
 ```
 
@@ -904,6 +1060,13 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 7 chars, ratio 0.212, bigram coverage 0.333) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -974,7 +1137,7 @@ INCI名称/英文名称：NIACINAMIDE
 
 ## REAL-V1-012
 
-**Question:** 泛醇在驻留类产品中的最高历史使用量是多少？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，泛醇在驻留类产品中的 2021 年版记载最高历史使用量是多少？淋洗类产品当时是否给出了数值？
 
 | field | value |
 |---|---|
@@ -982,8 +1145,15 @@ INCI名称/英文名称：NIACINAMIDE
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **MEDIUM** (LCS 7 chars, ratio 0.35, bigram coverage 0.579) |
+| derivation risk | **LOW** (LCS 7 chars, ratio 0.117, bigram coverage 0.31) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to pin the figure to the 2021 snapshot and to add the rinse column, which the row leaves as 未提供, so the sample also tests that a missing figure is reported as missing rather than as unlimited |
 
 **Official source and locator**
 
@@ -1009,29 +1179,29 @@ INCI名称/英文名称：PANTHENOL
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-004100` / `04a45e3e-bcb6-58eb-ab75-508dd0ee0169` (token overlap 10)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-000368` / `0b8fb3b7-60fe-5681-9685-4e8cde2c2ceb` (token overlap 14)
 
 ```text
-序号：04100
-中文名称：抗坏血酸磷酸酯钠
-INCI名称/英文名称：SODIUM ASCORBYL PHOSPHATE
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：未提供
-备注：未提供
+序号：00368
+中文名称：CI 77492
+INCI名称/英文名称：CI 77492
+淋洗类产品最高历史使用量（%）：/
+驻留类产品最高历史使用量（%）：/
+备注：按照《化妆品安全技术规范》要求使用
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006015` / `05e69ca9-1c6d-5412-acea-c15a93ab1606` (token overlap 10)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-005649` / `10690f42-dd76-545c-a905-08b0e1521086` (token overlap 14)
 
 ```text
-序号：06015
-中文名称：神经酰胺 NS/神经酰胺 NG
-INCI名称/英文名称：CERAMIDE NS/CERAMIDE NG
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：25
-备注：未提供
+序号：05649
+中文名称：乳酸
+INCI名称/英文名称：LACTIC ACID
+淋洗类产品最高历史使用量（%）：/
+驻留类产品最高历史使用量（%）：/
+备注：按照《化妆品安全技术规范》要求使用
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 18)
 
 ```text
 或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购货凭证；使用过该原料的产品注册/备案信息、配方及生产投料记录等。
@@ -1058,7 +1228,7 @@ INCI名称/英文名称：CERAMIDE NS/CERAMIDE NG
 
 ## REAL-V1-013
 
-**Question:** 神经酰胺 NP 的 INCI 名称和驻留类产品最高历史使用量分别是什么？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，神经酰胺 NP 的 INCI 名称和 2021 年版记载的驻留类产品最高历史使用量分别是什么？淋洗类产品当时是否给出了数值？
 
 | field | value |
 |---|---|
@@ -1066,8 +1236,15 @@ INCI名称/英文名称：CERAMIDE NS/CERAMIDE NG
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **MEDIUM** (LCS 12 chars, ratio 0.387, bigram coverage 0.708) |
+| derivation risk | **LOW** (LCS 12 chars, ratio 0.167, bigram coverage 0.396) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to pin the figure to the 2021 snapshot and to add the rinse column, which the row leaves as 未提供, so a missing figure is reported as missing |
 
 **Official source and locator**
 
@@ -1093,7 +1270,7 @@ INCI名称/英文名称：CERAMIDE NP
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006015` / `05e69ca9-1c6d-5412-acea-c15a93ab1606` (token overlap 16)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006015` / `05e69ca9-1c6d-5412-acea-c15a93ab1606` (token overlap 18)
 
 ```text
 序号：06015
@@ -1104,7 +1281,16 @@ INCI名称/英文名称：CERAMIDE NS/CERAMIDE NG
 备注：未提供
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006014` / `2a1c2153-0713-5365-8480-c828b12370b1` (token overlap 16)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 20)
+
+```text
+或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购货凭证；使用过该原料的产品注册/备案信息、配方及生产投料记录等。
+    七、一个序号后列出了两个名称的，表示为同一原料，使用时应选择INCI收录或以标准中文名称命名原则命名的植物原料名称，不建议使用已标注为“曾用名”的名称。
+    八、本目录载明的原料最高历史使用量，可作为化妆品安全评估报告（简化版）的证据类型，为化妆品安全评估提供参考，化妆品注册人、备案人应当结合产品类型正确使用原料最高历史使用量，只有驻留类产品最高历史使用量信息的原料，淋洗类产品可参照驻留类产品信息使用。
+    九、对目录未提供最高历史使用量的原料，化妆品注册人、备案人可按照《化妆品安全评估技术导则》要求，提供相应的材料作为评估证据，或者按风险评估程序进行安全风险评估，确保原料的使用安全。
+```
+
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006014` / `2a1c2153-0713-5365-8480-c828b12370b1` (token overlap 18)
 
 ```text
 序号：06014
@@ -1112,17 +1298,6 @@ INCI名称/英文名称：CERAMIDE NS/CERAMIDE NG
 INCI名称/英文名称：CERAMIDE EOP
 淋洗类产品最高历史使用量（%）：未提供
 驻留类产品最高历史使用量（%）：0.08
-备注：未提供
-```
-
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006013` / `5c88dbf1-91ec-5667-b3c9-166be843c2a9` (token overlap 16)
-
-```text
-序号：06013
-中文名称：神经酰胺 EOP
-INCI名称/英文名称：CERAMIDE EOP
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：2
 备注：未提供
 ```
 
@@ -1144,7 +1319,7 @@ INCI名称/英文名称：CERAMIDE EOP
 
 ## REAL-V1-014
 
-**Question:** 积雪草提取物在驻留类产品中的最高历史使用量是多少？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，积雪草提取物在驻留类产品中的 2021 年版记载最高历史使用量是多少？
 
 | field | value |
 |---|---|
@@ -1152,8 +1327,15 @@ INCI名称/英文名称：CERAMIDE EOP
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `medium` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **LOW** (LCS 7 chars, ratio 0.292, bigram coverage 0.609) |
+| derivation risk | **LOW** (LCS 7 chars, ratio 0.14, bigram coverage 0.4) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to pin the figure to the 2021 snapshot rather than leaving it readable as a current cap |
 
 **Official source and locator**
 
@@ -1179,35 +1361,35 @@ INCI名称/英文名称：CENTELLA ASIATICA EXTRACT
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-004100` / `04a45e3e-bcb6-58eb-ab75-508dd0ee0169` (token overlap 10)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-000368` / `0b8fb3b7-60fe-5681-9685-4e8cde2c2ceb` (token overlap 12)
 
 ```text
-序号：04100
-中文名称：抗坏血酸磷酸酯钠
-INCI名称/英文名称：SODIUM ASCORBYL PHOSPHATE
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：未提供
-备注：未提供
+序号：00368
+中文名称：CI 77492
+INCI名称/英文名称：CI 77492
+淋洗类产品最高历史使用量（%）：/
+驻留类产品最高历史使用量（%）：/
+备注：按照《化妆品安全技术规范》要求使用
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-005649` / `10690f42-dd76-545c-a905-08b0e1521086` (token overlap 12)
+
+```text
+序号：05649
+中文名称：乳酸
+INCI名称/英文名称：LACTIC ACID
+淋洗类产品最高历史使用量（%）：/
+驻留类产品最高历史使用量（%）：/
+备注：按照《化妆品安全技术规范》要求使用
+```
+
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 15)
 
 ```text
 或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购货凭证；使用过该原料的产品注册/备案信息、配方及生产投料记录等。
     七、一个序号后列出了两个名称的，表示为同一原料，使用时应选择INCI收录或以标准中文名称命名原则命名的植物原料名称，不建议使用已标注为“曾用名”的名称。
     八、本目录载明的原料最高历史使用量，可作为化妆品安全评估报告（简化版）的证据类型，为化妆品安全评估提供参考，化妆品注册人、备案人应当结合产品类型正确使用原料最高历史使用量，只有驻留类产品最高历史使用量信息的原料，淋洗类产品可参照驻留类产品信息使用。
     九、对目录未提供最高历史使用量的原料，化妆品注册人、备案人可按照《化妆品安全评估技术导则》要求，提供相应的材料作为评估证据，或者按风险评估程序进行安全风险评估，确保原料的使用安全。
-```
-
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-003173` / `d309cfc0-15fc-5a1d-8375-9f6ed0c9a317` (token overlap 12)
-
-```text
-序号：03173
-中文名称：积雪草苷
-INCI名称/英文名称：ASIATICOSIDE
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：4
-备注：未提供
 ```
 
 **Decision (fill by hand)**
@@ -1228,7 +1410,7 @@ INCI名称/英文名称：ASIATICOSIDE
 
 ## REAL-V1-015
 
-**Question:** 水杨酸在目录中是否给出了具体数值的最高历史使用量？备注栏写了什么？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，水杨酸的最高历史使用量当时是否给出了具体数值？备注栏写的是什么？
 
 | field | value |
 |---|---|
@@ -1236,8 +1418,15 @@ INCI名称/英文名称：ASIATICOSIDE
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `medium` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **LOW** (LCS 9 chars, ratio 0.29, bigram coverage 0.31) |
+| derivation risk | **LOW** (LCS 7 chars, ratio 0.146, bigram coverage 0.289) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to pin the row to the 2021 snapshot; both usage columns are '/', so the question must ask whether a figure was given, not what it was |
 
 **Official source and locator**
 
@@ -1263,18 +1452,7 @@ INCI名称/英文名称：SALICYLIC ACID
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-004100` / `04a45e3e-bcb6-58eb-ab75-508dd0ee0169` (token overlap 7)
-
-```text
-序号：04100
-中文名称：抗坏血酸磷酸酯钠
-INCI名称/英文名称：SODIUM ASCORBYL PHOSPHATE
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：未提供
-备注：未提供
-```
-
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 9)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 12)
 
 ```text
 或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购货凭证；使用过该原料的产品注册/备案信息、配方及生产投料记录等。
@@ -1283,7 +1461,7 @@ INCI名称/英文名称：SODIUM ASCORBYL PHOSPHATE
     九、对目录未提供最高历史使用量的原料，化妆品注册人、备案人可按照《化妆品安全评估技术导则》要求，提供相应的材料作为评估证据，或者按风险评估程序进行安全风险评估，确保原料的使用安全。
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006413` / `9de6bf66-c611-5698-a596-dbe60e2da85c` (token overlap 9)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006413` / `9de6bf66-c611-5698-a596-dbe60e2da85c` (token overlap 11)
 
 ```text
 序号：06413
@@ -1292,6 +1470,16 @@ INCI名称/英文名称：ETHYLHEXYL SALICYLATE
 淋洗类产品最高历史使用量（%）：/
 驻留类产品最高历史使用量（%）：/
 备注：按照《化妆品安全技术规范》要求使用
+```
+
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `b115cecc-c655-5894-98d4-8e293100c030` (token overlap 10)
+
+```text
+国家药监局公告2021年第62号《已使用化妆品原料目录（2021年版）》
+说   明
+    一、本目录是对在我国境内生产、销售的化妆品所已使用原料的客观收录。国家药品监督管理局未组织对原料安全性进行系统评价，化妆品注册人、备案人在选用本目录所列原料时，应当符合国家有关法律法规、强制性国家标准、技术规范的相关要求，并承担产品质量安全责任。
+    二、在本目录中收录的原料已被列为化妆品禁用组分、限用组分或者准用组分管理的，化妆品注册人、备案人应当按照《化妆品安全技术规范》规定，选择使用符合法律法规、强制性国家标准、技术规范相关要求的原料。
+    三、本目录所列原料的标准中文名称与INCI（International Nomenclature Cosmetic Ingredietn)名称/英文名称，参考《国际化妆品原料标准中文名称目录（2010年版）》与美国个人护理品协会（PCPC）编撰的《International Cosmetic Ingredient Dictionary and Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使用时需予以说明。目录“IN
 ```
 
 **Decision (fill by hand)**
@@ -1312,7 +1500,7 @@ INCI名称/英文名称：ETHYLHEXYL SALICYLATE
 
 ## REAL-V1-016
 
-**Question:** 苯氧乙醇在目录中的最高历史使用量是如何标注的？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，苯氧乙醇的最高历史使用量栏当时标注了什么？备注栏写的是什么？
 
 | field | value |
 |---|---|
@@ -1320,8 +1508,15 @@ INCI名称/英文名称：ETHYLHEXYL SALICYLATE
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **MEDIUM** (LCS 7 chars, ratio 0.318, bigram coverage 0.429) |
+| derivation risk | **LOW** (LCS 7 chars, ratio 0.152, bigram coverage 0.343) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to pin the row to the 2021 snapshot and to ask what the column was filled with; both usage columns are '/', and '如何标注' did not make the expected 'not provided' answer explicit |
 
 **Official source and locator**
 
@@ -1347,7 +1542,7 @@ INCI名称/英文名称：PHENOXYETHANOL
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 8)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 11)
 
 ```text
 或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购货凭证；使用过该原料的产品注册/备案信息、配方及生产投料记录等。
@@ -1356,26 +1551,25 @@ INCI名称/英文名称：PHENOXYETHANOL
     九、对目录未提供最高历史使用量的原料，化妆品注册人、备案人可按照《化妆品安全评估技术导则》要求，提供相应的材料作为评估证据，或者按风险评估程序进行安全风险评估，确保原料的使用安全。
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-001365` / `4dd43a3f-70ba-5b9a-be00-025cda664959` (token overlap 7)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `b115cecc-c655-5894-98d4-8e293100c030` (token overlap 10)
 
 ```text
-序号：01365
-中文名称：变性乙醇
-INCI名称/英文名称：ALCOHOL DENAT.
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：90.65
-备注：未提供
+国家药监局公告2021年第62号《已使用化妆品原料目录（2021年版）》
+说   明
+    一、本目录是对在我国境内生产、销售的化妆品所已使用原料的客观收录。国家药品监督管理局未组织对原料安全性进行系统评价，化妆品注册人、备案人在选用本目录所列原料时，应当符合国家有关法律法规、强制性国家标准、技术规范的相关要求，并承担产品质量安全责任。
+    二、在本目录中收录的原料已被列为化妆品禁用组分、限用组分或者准用组分管理的，化妆品注册人、备案人应当按照《化妆品安全技术规范》规定，选择使用符合法律法规、强制性国家标准、技术规范相关要求的原料。
+    三、本目录所列原料的标准中文名称与INCI（International Nomenclature Cosmetic Ingredietn)名称/英文名称，参考《国际化妆品原料标准中文名称目录（2010年版）》与美国个人护理品协会（PCPC）编撰的《International Cosmetic Ingredient Dictionary and Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使用时需予以说明。目录“IN
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-007676` / `8afe76c3-c979-5831-a2e9-760d912fb1a1` (token overlap 7)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-005819` / `f956364c-7dc0-50eb-b2b6-24418925e84a` (token overlap 10)
 
 ```text
-序号：07676
-中文名称：乙醇
-INCI名称/英文名称：ALCOHOL
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：90.75
-备注：未提供
+序号：05819
+中文名称：三乙醇胺
+INCI名称/英文名称：TRIETHANOLAMINE
+淋洗类产品最高历史使用量（%）：/
+驻留类产品最高历史使用量（%）：/
+备注：按照《化妆品安全技术规范》要求使用
 ```
 
 **Decision (fill by hand)**
@@ -1406,6 +1600,13 @@ INCI名称/英文名称：ALCOHOL
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 3 chars, ratio 0.115, bigram coverage 0.278) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -1487,6 +1688,15 @@ INCI名称/英文名称：HYDROQUINONE
 | derivation risk | **LOW** (LCS 3 chars, ratio 0.167, bigram coverage 0.214) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
 
+> **Paraphrase-robustness probe.** This is the deliberate variant of `REAL-V1-001`: same gold passage, different phrasing and register. It is not a duplicate and is not scored as one.
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | kept deliberately as a paraphrase-robustness probe: asks in colloquial register ('是怎么定义的') where REAL-V1-001 uses the statutory register ('法定定义'), so the two differ in phrasing while sharing one gold passage |
+
 **Official source and locator**
 
 | logical_id | document | locator | URL |
@@ -1565,6 +1775,15 @@ INCI名称/英文名称：HYDROQUINONE
 | derivation risk | **LOW** (LCS 6 chars, ratio 0.261, bigram coverage 0.333) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
 
+> **Paraphrase-robustness probe.** This is the deliberate variant of `REAL-V1-003`: same gold passage, different phrasing and register. It is not a duplicate and is not scored as one.
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | kept deliberately as a paraphrase-robustness probe: framed from the applicant's side ('给...办') where REAL-V1-003 states the rule abstractly, so the two differ in voice while sharing one gold passage |
+
 **Official source and locator**
 
 | logical_id | document | locator | URL |
@@ -1627,7 +1846,7 @@ INCI名称/英文名称：HYDROQUINONE
 
 ## REAL-V1-020
 
-**Question:** 透明质酸钠在冲洗类产品里最多能用多少（按历史使用量口径）？
+**Question:** 透明质酸钠在冲洗类产品里最多能用多少（按2021年版记载的最高历史使用量口径）？
 
 | field | value |
 |---|---|
@@ -1635,8 +1854,17 @@ INCI名称/英文名称：HYDROQUINONE
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `medium` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **LOW** (LCS 5 chars, ratio 0.192, bigram coverage 0.458) |
+| derivation risk | **LOW** (LCS 7 chars, ratio 0.189, bigram coverage 0.433) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+> **Paraphrase-robustness probe.** This is the deliberate variant of `REAL-V1-010`: same gold passage, different phrasing and register. It is not a duplicate and is not scored as one.
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | kept deliberately as a paraphrase-robustness probe: uses the colloquial category word '冲洗' where the catalog says '淋洗', asks the usage figure alone where REAL-V1-010 also asks the INCI name, and the qualifier now says '2021年版记载' so the figure cannot be read as a current limit |
 
 **Official source and locator**
 
@@ -1662,7 +1890,7 @@ INCI名称/英文名称：SODIUM HYALURONATE
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006723` / `d4bee355-b4a4-538a-946a-19286f8ac1ca` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006723` / `d4bee355-b4a4-538a-946a-19286f8ac1ca` (token overlap 13)
 
 ```text
 序号：06723
@@ -1673,7 +1901,7 @@ INCI名称/英文名称：SODIUM HYALURONATE CROSSPOLYMER
 备注：未提供
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-007772` / `fa8a418b-6a46-5ff7-9db6-df7760bf2555` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-007772` / `fa8a418b-6a46-5ff7-9db6-df7760bf2555` (token overlap 13)
 
 ```text
 序号：07772
@@ -1684,7 +1912,7 @@ INCI名称/英文名称：SODIUM ACETYLATED HYALURONATE
 备注：未提供
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006354` / `fcf16fb3-9c2b-5d05-8e01-5913eef06b2b` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-006354` / `fcf16fb3-9c2b-5d05-8e01-5913eef06b2b` (token overlap 13)
 
 ```text
 序号：06354
@@ -1724,6 +1952,13 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
 | derivation risk | **LOW** (LCS 7 chars, ratio 0.206, bigram coverage 0.281) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
 
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-graded: article-017 is the passage that actually answers 'which procedures' (filing timing, authority, and the import variant), so it is the highly relevant passage. article-004 only states that ordinary cosmetics are filed rather than registered, which supports the answer but cannot answer it alone, so it was graded partially relevant |
+
 **Official source and locator**
 
 | logical_id | document | locator | URL |
@@ -1736,7 +1971,7 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
 - `doc_id`: `a00981633fdd3d7c81bf40dc4ce52420d3dec94814cf5b5305f02d2cef90dee2`
   `chunk_id`: `14413877-9b00-58c4-9de5-25aedf8bcbb6`
   `locator`: `第四条`
-  current relevance: **2**
+  current relevance: **1**
 
 ```text
 第四条
@@ -1817,6 +2052,13 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
 | `complexity_label` (draft) | `complex` |
 | derivation risk | **LOW** (LCS 5 chars, ratio 0.167, bigram coverage 0.357) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -1914,22 +2156,32 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
 
 ## REAL-V1-023
 
-**Question:** 目录中已列入禁用、限用或准用组分的原料，使用时应当遵守什么要求？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，目录中已列入禁用、限用或准用组分的原料，使用时应当遵守什么要求？
 
 | field | value |
 |---|---|
 | `sample_id` | `REAL-V1-023` |
-| `business_type` | `regulation` |
-| `difficulty` (draft) | `hard` |
-| `complexity_label` (draft) | `complex` |
-| derivation risk | **LOW** (LCS 4 chars, ratio 0.138, bigram coverage 0.5) |
+| `business_type` | `ingredient` |
+| `difficulty` (draft) | `medium` |
+| `complexity_label` (draft) | `simple` |
+| derivation risk | **MEDIUM** (LCS 16 chars, ratio 0.34, bigram coverage 0.588) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-graded on evidence, not on bucket size. article-015 only says who compiles the banned ingredient catalog; it does not state any usage requirement, so it was dropped from the gold set. The catalog notice's second clause is the sole passage that actually answers the question. With one gold passage the sample is no longer multi_document and its complexity_label was reduced from complex to simple accordingly |
+
+**Considered and excluded by the AI pass**
+
+- `nmpa/regulation-727/article-015` — defines the compiling authority for the banned-ingredient catalog, not any usage requirement for an ingredient already listed as restricted
 
 **Official source and locator**
 
 | logical_id | document | locator | URL |
 |---|---|---|---|
-| `nmpa/regulation-727/article-015` | 国务院令第727号（2020-06-16公布，2021-01-01施行） | 第十五条 | https://www.gov.cn/zhengce/zhengceku/2020-06/29/content_5522593.htm |
 | `nmpa/used-ingredients-2021/notice` | 国家药监局公告2021年第62号《已使用化妆品原料目录（2021年版）》 | 说明 | https://www.nmpa.gov.cn/directory/web/nmpa/images/1619771157857007835.xlsx |
 
 **Annotated passages (verbatim from the corpus)**
@@ -1945,16 +2197,6 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
     一、本目录是对在我国境内生产、销售的化妆品所已使用原料的客观收录。国家药品监督管理局未组织对原料安全性进行系统评价，化妆品注册人、备案人在选用本目录所列原料时，应当符合国家有关法律法规、强制性国家标准、技术规范的相关要求，并承担产品质量安全责任。
     二、在本目录中收录的原料已被列为化妆品禁用组分、限用组分或者准用组分管理的，化妆品注册人、备案人应当按照《化妆品安全技术规范》规定，选择使用符合法律法规、强制性国家标准、技术规范相关要求的原料。
     三、本目录所列原料的标准中文名称与INCI（International Nomenclature Cosmetic Ingredietn)名称/英文名称，参考《国际化妆品原料标准中文名称目录（2010年版）》与美国个人护理品协会（PCPC）编撰的《International Cosmetic Ingredient Dictionary and Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使用时需予以说明。目录“IN
-```
-
-- `doc_id`: `78fcd5b8c05cc0ee70893f9129ffbfc48414c7743c4076691f99647b3d367f27`
-  `chunk_id`: `1af3bfb1-f452-5053-95f4-457fd17e8d3f`
-  `locator`: `第十五条`
-  current relevance: **2**
-
-```text
-第十五条
-禁止用于化妆品生产的原料目录由国务院药品监督管理部门制定、公布。
 ```
 
 **Possibly missing / related passages** (review leads, not added automatically)
@@ -1977,17 +2219,19 @@ Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使�
     六、中文名称栏中标注了“**”的原料，其名称表述不规范且动植物基原不清，使用时应当标注规范的具体原料名称，并提供该原料已在我国注册或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-060` / `7f4fe221-77fa-525a-bb73-c21f3e95accd` (token overlap 5)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-014` / `0a01d354-4771-5cfb-967f-ff0a23fd2957` (token overlap 9)
 
 ```text
-第六十条
-有下列情形之一的，由负责药品监督管理的部门没收违法所得、违法生产经营的化妆品和专门用于违法生产经营的原料、包装材料、工具、设备等物品；违法生产经营的化妆品货值金额不足1万元的，并处1万元以上5万元以下罚款；货值金额1万元以上的，并处货值金额5倍以上20倍以下罚款；情节严重的，责令停产停业、由备案部门取消备案或者由原发证部门吊销化妆品许可证件，对违法单位的法定代表人或者主要负责人、直接负责的主管人员和其他直接责任人员处以其上一年度从本单位取得收入的1倍以上3倍以下罚款，10年内禁止其从事化妆品生产经营活动；构成犯罪的，依法追究刑事责任：
-（一）使用不符合强制性国家标准、技术规范的原料、直接接触化妆品的包装材料，应当备案但未备案的新原料生产化妆品，或者不按照强制性国家标准或者技术规范使用原料；
-（二）生产经营不符合强制性国家标准、技术规范或者不符合化妆品注册、备案资料载明的技术要求的化妆品；
-（三）未按照化妆品生产质量管理规范的要求组织生产；
-（四）更改化妆品使用期限；
-（五）化妆品经营者擅自配制化妆品，或者经营变质、超过使用期限的化妆品；
-（六）在负责药品监督管理的部门责令其实
+第十四条
+经注册、备案的化妆品新原料投入使用后3年内，新原料注册人、备案人应当每年向国务院药品监督管理部门报告新原料的使用和安全情况。对存在安全问题的化妆品新原料，由国务院药品监督管理部门撤销注册或者取消备案。3年期满未发生安全问题的化妆品新原料，纳入国务院药品监督管理部门制定的已使用的化妆品原料目录。
+经注册、备案的化妆品新原料纳入已使用的化妆品原料目录前，仍然按照化妆品新原料进行管理。
+```
+
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-055` / `8ad30066-b362-5ae0-892c-5561bb97a81e` (token overlap 9)
+
+```text
+第五十五条
+根据科学研究的发展，对化妆品、化妆品原料的安全性有认识上的改变的，或者有证据表明化妆品、化妆品原料可能存在缺陷的，省级以上人民政府药品监督管理部门可以责令化妆品、化妆品新原料的注册人、备案人开展安全再评估或者直接组织开展安全再评估。再评估结果表明化妆品、化妆品原料不能保证安全的，由原注册部门撤销注册、备案部门取消备案，由国务院药品监督管理部门将该化妆品原料纳入禁止用于化妆品生产的原料目录，并向社会公布。
 ```
 
 **Decision (fill by hand)**
@@ -2008,7 +2252,7 @@ Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使�
 
 ## REAL-V1-024
 
-**Question:** 目录给出的最高历史使用量，能否在安全评估中直接当作法规限量？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》及其当时的使用说明，最高历史使用量能否直接视为法定限量？
 
 | field | value |
 |---|---|
@@ -2016,15 +2260,25 @@ Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使�
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `hard` |
 | `complexity_label` (draft) | `complex` |
-| derivation risk | **LOW** (LCS 7 chars, ratio 0.25, bigram coverage 0.385) |
+| derivation risk | **LOW** (LCS 7 chars, ratio 0.159, bigram coverage 0.364) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-graded on evidence. The catalog notice clause 8 is the passage that answers the question: it defines the figure as one evidence type for a simplified safety assessment report. row-006016 was dropped because it merely carries a figure and contributes nothing the notice does not already state. The sample stays hard/complex (it needs clause 8 plus clause 9 read together) but is no longer multi_document, since one source answers it |
+
+**Considered and excluded by the AI pass**
+
+- `nmpa/used-ingredients-2021/row-006016` — an example row carrying a number, not support for whether the number is a legal limit
 
 **Official source and locator**
 
 | logical_id | document | locator | URL |
 |---|---|---|---|
 | `nmpa/used-ingredients-2021/notice` | 国家药监局公告2021年第62号《已使用化妆品原料目录（2021年版）》 | 说明 | https://www.nmpa.gov.cn/directory/web/nmpa/images/1619771157857007835.xlsx |
-| `nmpa/used-ingredients-2021/row-006016` | 国家药监局公告2021年第62号《已使用化妆品原料目录（2021年版）》 | 序号06016 | https://www.nmpa.gov.cn/directory/web/nmpa/images/1619771157857007835.xlsx |
 
 **Annotated passages (verbatim from the corpus)**
 
@@ -2038,20 +2292,6 @@ Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使�
     七、一个序号后列出了两个名称的，表示为同一原料，使用时应选择INCI收录或以标准中文名称命名原则命名的植物原料名称，不建议使用已标注为“曾用名”的名称。
     八、本目录载明的原料最高历史使用量，可作为化妆品安全评估报告（简化版）的证据类型，为化妆品安全评估提供参考，化妆品注册人、备案人应当结合产品类型正确使用原料最高历史使用量，只有驻留类产品最高历史使用量信息的原料，淋洗类产品可参照驻留类产品信息使用。
     九、对目录未提供最高历史使用量的原料，化妆品注册人、备案人可按照《化妆品安全评估技术导则》要求，提供相应的材料作为评估证据，或者按风险评估程序进行安全风险评估，确保原料的使用安全。
-```
-
-- `doc_id`: `dc55c4a92dfe457ea1a5dfa80580e03c5d40cc73f81284642f26c166d4b3affb`
-  `chunk_id`: `94e1e128-8444-58dc-b05a-6b96ec0996e7`
-  `locator`: `序号06016`
-  current relevance: **2**
-
-```text
-序号：06016
-中文名称：神经酰胺 NP
-INCI名称/英文名称：CERAMIDE NP
-淋洗类产品最高历史使用量（%）：未提供
-驻留类产品最高历史使用量（%）：22.5
-备注：未提供
 ```
 
 **Possibly missing / related passages** (review leads, not added automatically)
@@ -2075,34 +2315,20 @@ Handbook（2018版）》，同一原料使用了不同版本INCI名称的，使�
     六、中文名称栏中标注了“**”的原料，其名称表述不规范且动植物基原不清，使用时应当标注规范的具体原料名称，并提供该原料已在我国注册或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-000368` / `0b8fb3b7-60fe-5681-9685-4e8cde2c2ceb` (token overlap 7)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-014` / `0a01d354-4771-5cfb-967f-ff0a23fd2957` (token overlap 9)
+
+```text
+第十四条
+经注册、备案的化妆品新原料投入使用后3年内，新原料注册人、备案人应当每年向国务院药品监督管理部门报告新原料的使用和安全情况。对存在安全问题的化妆品新原料，由国务院药品监督管理部门撤销注册或者取消备案。3年期满未发生安全问题的化妆品新原料，纳入国务院药品监督管理部门制定的已使用的化妆品原料目录。
+经注册、备案的化妆品新原料纳入已使用的化妆品原料目录前，仍然按照化妆品新原料进行管理。
+```
+
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-000368` / `0b8fb3b7-60fe-5681-9685-4e8cde2c2ceb` (token overlap 8)
 
 ```text
 序号：00368
 中文名称：CI 77492
 INCI名称/英文名称：CI 77492
-淋洗类产品最高历史使用量（%）：/
-驻留类产品最高历史使用量（%）：/
-备注：按照《化妆品安全技术规范》要求使用
-```
-
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-005649` / `10690f42-dd76-545c-a905-08b0e1521086` (token overlap 7)
-
-```text
-序号：05649
-中文名称：乳酸
-INCI名称/英文名称：LACTIC ACID
-淋洗类产品最高历史使用量（%）：/
-驻留类产品最高历史使用量（%）：/
-备注：按照《化妆品安全技术规范》要求使用
-```
-
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-000294` / `1506375c-7aee-5437-b143-af79ee8d1df5` (token overlap 7)
-
-```text
-序号：00294
-中文名称：CI 42090
-INCI名称/英文名称：AO205
 淋洗类产品最高历史使用量（%）：/
 驻留类产品最高历史使用量（%）：/
 备注：按照《化妆品安全技术规范》要求使用
@@ -2126,7 +2352,7 @@ INCI名称/英文名称：AO205
 
 ## REAL-V1-025
 
-**Question:** 苯甲醇在驻留类产品中的最高历史使用量是多少？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，苯甲醇在驻留类产品中的最高历史使用量当时是否给出了数值？如果未给出数值，是否等于允许无限制使用？
 
 | field | value |
 |---|---|
@@ -2134,8 +2360,15 @@ INCI名称/英文名称：AO205
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **MEDIUM** (LCS 7 chars, ratio 0.333, bigram coverage 0.6) |
+| derivation risk | **LOW** (LCS 7 chars, ratio 0.111, bigram coverage 0.292) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded: the row's leave-on usage column is '/', so the previous '是多少' presupposed a figure that does not exist; the new wording asks whether one was given and adds the explicit trap that absence is not permission to use without limit |
 
 **Official source and locator**
 
@@ -2161,7 +2394,7 @@ INCI名称/英文名称：BENZYL ALCOHOL
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `1706e18e-53eb-54b4-b791-55e664ca674e` (token overlap 16)
 
 ```text
 或备案产品中使用的证明材料。证明材料包括且不限于：原料生产商出具的具体原料的说明和企业采购该原料的购货凭证；使用过该原料的产品注册/备案信息、配方及生产投料记录等。
@@ -2170,7 +2403,7 @@ INCI名称/英文名称：BENZYL ALCOHOL
     九、对目录未提供最高历史使用量的原料，化妆品注册人、备案人可按照《化妆品安全评估技术导则》要求，提供相应的材料作为评估证据，或者按风险评估程序进行安全风险评估，确保原料的使用安全。
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-005214` / `26248723-bd56-59ef-934c-f53370e02da5` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-005214` / `26248723-bd56-59ef-934c-f53370e02da5` (token overlap 13)
 
 ```text
 序号：05214
@@ -2181,7 +2414,7 @@ INCI名称/英文名称：METHYLPARABEN
 备注：按照《化妆品安全技术规范》要求使用
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-001955` / `826fcf01-6430-5c29-8dfe-3f75e47d0fc6` (token overlap 11)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-001955` / `826fcf01-6430-5c29-8dfe-3f75e47d0fc6` (token overlap 13)
 
 ```text
 序号：01955
@@ -2222,6 +2455,13 @@ INCI名称/英文名称：BUTYL METHOXYDIBENZOYLMETHANE
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **MEDIUM** (LCS 10 chars, ratio 0.385, bigram coverage 0.708) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **ACCEPT** |
+| AI correction this round | _none; record carried over unchanged_ |
 
 **Official source and locator**
 
@@ -2292,7 +2532,7 @@ INCI名称/英文名称：BUTYL METHOXYDIBENZOYLMETHANE
 
 ## REAL-V1-027
 
-**Question:** 对苯二胺在目录中的备注是什么？
+**Question:** 根据《已使用化妆品原料目录（2021年版）》，对苯二胺的备注栏当时写的是什么？
 
 | field | value |
 |---|---|
@@ -2300,8 +2540,15 @@ INCI名称/英文名称：BUTYL METHOXYDIBENZOYLMETHANE
 | `business_type` | `ingredient` |
 | `difficulty` (draft) | `medium` |
 | `complexity_label` (draft) | `simple` |
-| derivation risk | **LOW** (LCS 4 chars, ratio 0.286, bigram coverage 0.308) |
+| derivation risk | **LOW** (LCS 4 chars, ratio 0.121, bigram coverage 0.28) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
+
+**AI recommendation (not a human decision)**
+
+| field | value |
+|---|---|
+| AI suggestion | **MODIFY** |
+| AI correction this round | re-worded to pin the row to the 2021 snapshot; the remark text changed across the 2025-2026 catalog adjustments |
 
 **Official source and locator**
 
@@ -2327,29 +2574,22 @@ INCI名称/英文名称：p-PHENYLENEDIAMINE
 
 **Possibly missing / related passages** (review leads, not added automatically)
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-003372` / `56e47cad-3220-5b30-b128-592116e512e7` (token overlap 2)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-014` / `0a01d354-4771-5cfb-967f-ff0a23fd2957` (token overlap 8)
 
 ```text
-序号：03372
-中文名称：间苯二酚
-INCI名称/英文名称：RESORCINOL
-淋洗类产品最高历史使用量（%）：/
-驻留类产品最高历史使用量（%）：/
-备注：按照《化妆品安全技术规范》要求使用
+第十四条
+经注册、备案的化妆品新原料投入使用后3年内，新原料注册人、备案人应当每年向国务院药品监督管理部门报告新原料的使用和安全情况。对存在安全问题的化妆品新原料，由国务院药品监督管理部门撤销注册或者取消备案。3年期满未发生安全问题的化妆品新原料，纳入国务院药品监督管理部门制定的已使用的化妆品原料目录。
+经注册、备案的化妆品新原料纳入已使用的化妆品原料目录前，仍然按照化妆品新原料进行管理。
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/row-000041` / `a81ebeb4-f79a-5145-bd91-f2c5db3d6ced` (token overlap 2)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/regulation-727/article-055` / `8ad30066-b362-5ae0-892c-5561bb97a81e` (token overlap 7)
 
 ```text
-序号：00041
-中文名称：2-甲基间苯二酚
-INCI名称/英文名称：2-METHYLRESORCINOL
-淋洗类产品最高历史使用量（%）：/
-驻留类产品最高历史使用量（%）：/
-备注：按照《化妆品安全技术规范》要求使用
+第五十五条
+根据科学研究的发展，对化妆品、化妆品原料的安全性有认识上的改变的，或者有证据表明化妆品、化妆品原料可能存在缺陷的，省级以上人民政府药品监督管理部门可以责令化妆品、化妆品新原料的注册人、备案人开展安全再评估或者直接组织开展安全再评估。再评估结果表明化妆品、化妆品原料不能保证安全的，由原注册部门撤销注册、备案部门取消备案，由国务院药品监督管理部门将该化妆品原料纳入禁止用于化妆品生产的原料目录，并向社会公布。
 ```
 
-- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `b115cecc-c655-5894-98d4-8e293100c030` (token overlap 2)
+- `REVIEW_LEAD_NOT_ANNOTATED` — `nmpa/used-ingredients-2021/notice` / `b115cecc-c655-5894-98d4-8e293100c030` (token overlap 10)
 
 ```text
 国家药监局公告2021年第62号《已使用化妆品原料目录（2021年版）》

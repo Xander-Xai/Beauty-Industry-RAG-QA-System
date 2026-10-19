@@ -12,7 +12,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 from offline.source_trust import file_content_hash
 
@@ -72,6 +75,88 @@ def test_candidates_are_drafts_and_never_scorable() -> None:
         assert candidate["annotation"]["source"] == "llm_candidate"
         assert "reviewed_by" not in candidate["annotation"]
         assert "reviewed_at" not in candidate["annotation"]
+
+
+def test_committed_candidates_are_reproducible_from_the_generator() -> None:
+    """The committed drafts must equal what the generator produces right now.
+
+    Corrections are made in ``build_real_golden_set_v1.py`` and regenerated, so a
+    hand-edited artifact that drifts from its generator would silently become a
+    second source of truth.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(
+            [
+                sys.executable,
+                "scripts/validation/build_real_golden_set_v1.py",
+                "--out-dir",
+                tmp,
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+        )
+        assert _load_jsonl(Path(tmp) / "candidates_v1.jsonl") == _load_jsonl(GOLDEN_DIR / "candidates_v1.jsonl")
+        assert _load_jsonl(Path(tmp) / "no_answer_candidates_v1.jsonl") == _load_jsonl(
+            GOLDEN_DIR / "no_answer_candidates_v1.jsonl"
+        )
+
+
+def test_generator_refuses_to_overwrite_a_reviewed_record() -> None:
+    """Regeneration is how a correction lands, so it must not eat a real review."""
+    from scripts.validation import build_real_golden_set_v1 as builder
+
+    reviewed = _load_jsonl(GOLDEN_DIR / "candidates_v1.jsonl")[0]
+    reviewed["annotation"] = dict(reviewed["annotation"])
+    reviewed["annotation"]["review_status"] = "REVIEWED"
+    reviewed["annotation"]["reviewed_by"] = "someone-real"
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "candidates_v1.jsonl"
+        target.write_text(json.dumps(reviewed, ensure_ascii=False) + "\n", encoding="utf-8")
+        with pytest.raises(SystemExit, match="refusing to overwrite"):
+            builder.assert_no_human_annotations(target)
+
+    # The committed drafts are all still drafts, so regeneration stays allowed.
+    builder.assert_no_human_annotations(GOLDEN_DIR / "candidates_v1.jsonl")
+
+
+def test_workpackage_carries_ai_recommendations_but_no_human_verdicts() -> None:
+    """A reviewer must be able to see what the AI concluded and what is still blank."""
+    records = _load_jsonl(GOLDEN_DIR / "retrieval_review_workpackage.jsonl")
+    assert len(records) == len(_load_jsonl(GOLDEN_DIR / "candidates_v1.jsonl"))
+    for record in records:
+        assert record["review_status"] == "DRAFT_UNVERIFIED"
+        assert record["scorable"] is False
+        assert record["ai_suggestion"] in {"ACCEPT", "MODIFY", "REJECT"}
+        review = record["review"]
+        assert review["decision"] == ""
+        assert review["reviewer"] == ""
+        assert review["reviewed_at"] == ""
+        assert review["notes"] == ""
+
+
+def test_paraphrase_pairs_are_marked_and_not_treated_as_duplicates() -> None:
+    records = {record["sample_id"]: record for record in _load_jsonl(GOLDEN_DIR / "retrieval_review_workpackage.jsonl")}
+    for variant, original in (
+        ("REAL-V1-018", "REAL-V1-001"),
+        ("REAL-V1-019", "REAL-V1-003"),
+        ("REAL-V1-020", "REAL-V1-010"),
+    ):
+        record = records[variant]
+        assert record["query_family"] == original, variant
+        assert record["derivation_risk"]["level"] in {"LOW", "MEDIUM"}, variant
+        assert record["question"] != records[original]["question"], variant
+
+
+def test_ingredient_questions_pin_the_2021_snapshot() -> None:
+    """The usage column was withdrawn in 2025, so no question may read as a current cap."""
+    candidates = {c["sample_id"]: c for c in _load_jsonl(GOLDEN_DIR / "candidates_v1.jsonl")}
+    for sample_id in ("REAL-V1-010", "REAL-V1-012", "REAL-V1-013", "REAL-V1-014", "REAL-V1-015", "REAL-V1-016"):
+        question = candidates[sample_id]["question"]
+        assert "2021年版" in question, sample_id
+        assert candidates[sample_id]["business_type"] == "ingredient"
+    for sample_id in ("REAL-V1-011", "REAL-V1-017", "REAL-V1-025", "REAL-V1-027"):
+        assert "2021年版" in candidates[sample_id]["question"], sample_id
 
 
 def test_corpus_sha256_binds_candidates_to_the_index_fingerprint() -> None:

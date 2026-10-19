@@ -212,6 +212,9 @@ def build_retrieval_records(candidates: list[dict], chunks: list[dict], sources:
         # surfaced as a lead so the reviewer can confirm the exclusion.
         notes = str((candidate.get("annotation") or {}).get("notes", ""))
         hard_negative_chunk_id = _extract(notes, "hard_negative_chunk_id")
+        query_family = _extract(notes, "query_family")
+        correction = _extract_prose(notes, "ai_correction")
+        considered_excluded = re.findall(r"considered_excluded=([^\s(]+)\s*\(([^)]*)\)", notes)
 
         records.append(
             {
@@ -249,6 +252,12 @@ def build_retrieval_records(candidates: list[dict], chunks: list[dict], sources:
                 "derivation_risk": derivation_risk(candidate["question"], passages),
                 "possibly_missing_passages": leads,
                 "hard_negative_chunk_id": hard_negative_chunk_id,
+                "query_family": query_family,
+                "ai_correction": correction,
+                "ai_suggestion": _extract(notes, "ai_suggestion"),
+                "considered_excluded": [
+                    {"logical_id": logical_id, "reason": reason.strip()} for logical_id, reason in considered_excluded
+                ],
                 "review": {
                     "decision": "",
                     "reviewer": "",
@@ -292,6 +301,18 @@ def _embedded_in_longer_name(text: str, term: str) -> bool:
 def _extract(text: str, key: str) -> str:
     match = re.search(rf"{re.escape(key)}=([^;\s]+)", text)
     return match.group(1) if match else ""
+
+
+def _extract_prose(text: str, key: str) -> str:
+    """Read a free-form note value that may itself contain semicolons.
+
+    ``_extract`` stops at the first ``;`` so it can read list-like values, but a
+    correction sentence legitimately uses semicolons as clause separators. This
+    reads until the next structured ``key=`` marker or the end of the note, so
+    the full sentence survives.
+    """
+    match = re.search(rf"{re.escape(key)}=(.*?)(?=;\s*(?:considered_excluded|hard_negative_chunk_id)=|$)", text, re.S)
+    return " ".join(match.group(1).split()) if match else ""
 
 
 def _dedupe_leads(leads: list[dict]) -> list[dict]:
@@ -498,6 +519,34 @@ def render_retrieval_markdown(records: list[dict]) -> str:
         "`HIGH` is not automatically a defect. It means: rewrite the question in user language before",
         "accepting it, or record why the exact wording is realistic.",
         "",
+        "## Sign-off table",
+        "",
+        "Everything left of the divider was produced automatically and is reproducible from the",
+        "generator. Everything right of it is **not filled in**: no human has reviewed these rows.",
+        "",
+        "| sample_id | gold chunks (relevance) | risk | difficulty / complexity | AI suggestion |",
+        "|---|---|---|---|---|",
+    ]
+    for record in records:
+        gold = ", ".join(
+            f"`{annotation['logical_id'].split('/')[-1]}` = **{annotation['current_relevance']}**"
+            for annotation in record["annotations"]
+        )
+        family = f" (family: `{record['query_family']}`)" if record.get("query_family") else ""
+        lines.append(
+            f"| `{record['sample_id']}`{family} | {gold} | {record['derivation_risk']['level']} | "
+            f"{record['difficulty']} / {record['complexity_label']} | **{record.get('ai_suggestion') or 'ACCEPT'}** |"
+        )
+    lines += [
+        "",
+        "| sample_id | human decision | reviewer | reviewed_at | notes |",
+        "|---|---|---|---|---|",
+    ]
+    for record in records:
+        lines.append(f"| `{record['sample_id']}` | ☐ ACCEPT ☐ MODIFY ☐ REJECT |  |  |  |")
+
+    lines += [
+        "",
         "## Review table",
         "",
         "| sample_id | question | risk | difficulty | complexity | decisions |",
@@ -533,6 +582,29 @@ def _render_retrieval_entry(record: dict) -> list[str]:
         f"ratio {risk['lcs_ratio_of_question']}, bigram coverage {risk['question_bigram_coverage']}) |",
         "| current `review_status` | `DRAFT_UNVERIFIED` |",
         "",
+    ]
+    if record.get("query_family"):
+        lines += [
+            f"> **Paraphrase-robustness probe.** This is the deliberate variant of "
+            f"`{record['query_family']}`: same gold passage, different phrasing and register. "
+            "It is not a duplicate and is not scored as one.",
+            "",
+        ]
+    lines += [
+        "**AI recommendation (not a human decision)**",
+        "",
+        "| field | value |",
+        "|---|---|",
+        f"| AI suggestion | **{record.get('ai_suggestion') or 'ACCEPT'}** |",
+        f"| AI correction this round | {record.get('ai_correction') or '_none; record carried over unchanged_'}" + " |",
+        "",
+    ]
+    if record.get("considered_excluded"):
+        lines += ["**Considered and excluded by the AI pass**", ""]
+        for excluded in record["considered_excluded"]:
+            lines.append(f"- `{excluded['logical_id']}` — {excluded['reason']}")
+        lines.append("")
+    lines += [
         "**Official source and locator**",
         "",
         "| logical_id | document | locator | URL |",
