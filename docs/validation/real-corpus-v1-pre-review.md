@@ -4,7 +4,7 @@
 正式评测边界）的结论记录。它记录**实测**状态，不是审核结论，也不提升任何样本。
 
 - 分支：`feat/real-corpus-golden-set-v1`
-- 复核基线 HEAD：`f80e1138bd60bb455b431409a28648a7ef375b3e`（本轮修正提交：`456d57eeb5c914527948156f775f7433a4751d49`）
+- 复核基线 HEAD：`f80e1138bd60bb455b431409a28648a7ef375b3e`（本轮修正提交：`347c617`）
 - PR：#111（保持 Draft，未合并）
 - 语料：`real-v1-20261019`，209 逻辑文档 / 212 chunks
 
@@ -196,7 +196,7 @@ python3 scripts/corpus/verify_real_corpus_v1_binding.py
 | 公开仓库边界检查 | PASS |
 | 全量测试 | `3290 passed, 16 skipped`（排除 `e2e_remote` / `runtime` / `load`） |
 | 专项测试 | 语料 5 项 + 安全 24 项 + 边界 122 项 + 一致性 610 项，全部通过 |
-| PR HEAD | `456d57eeb5c914527948156f775f7433a4751d49` |
+| PR HEAD | `347c617`（CI 全绿：Ruff / 测试 3.10 / 3.11 / 边界 / 确定性守卫 / pip-audit） |
 | PR 状态 | **Draft**，未合并，未关闭 #86 / #18 |
 
 ## 8. 是否允许进入真实人工审核阶段
