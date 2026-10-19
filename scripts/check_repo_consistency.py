@@ -442,6 +442,7 @@ def benchmark_evidence_exists() -> bool:
     """True when a recomputable, committed benchmark evidence package exists."""
     return any(any(ROOT.glob(pattern)) for pattern in BENCHMARK_EVIDENCE_GLOBS)
 
+
 # Docs that must keep the framework/result split visible. A reader who sees only
 # "Recall@10" deserves to know whether a number can exist yet.
 BENCHMARK_CLASSIFICATION_DOCS = [
