@@ -198,6 +198,34 @@ def build_report(
         )
     lines.append("")
 
+    lines += ["## Publication Gate", ""]
+    lines.append(f"- `results_are_benchmark`: {metadata.get('results_are_benchmark')}")
+    lines.append(f"- `publishable`: {metadata.get('publishable')}")
+    lines.append(f"- `source_approval_verified`: {metadata.get('source_approval_verified')}")
+    lines.append(f"- `provenance_verified`: {metadata.get('provenance_verified')}")
+    lines.append(f"- `attributable`: {metadata.get('attributable')}")
+    lines.append(f"- `synthetic_retriever`: {metadata.get('synthetic_retriever')}")
+    source_approval = metadata.get("source_approval") or {}
+    if source_approval:
+        lines.append(
+            f"- verified index: `{source_approval.get('index_name') or 'none'}` "
+            f"(epoch {source_approval.get('expected_epoch') or 'unset'}), "
+            f"{source_approval.get('documents_verified', 0)}/{source_approval.get('document_count', 0)} documents read, "
+            f"{source_approval.get('source_count', 0)} source(s)"
+        )
+        issues = source_approval.get("issues") or {}
+        by_code = issues.get("by_code") or {}
+        if by_code:
+            lines.append(
+                "- source-approval issues: " + ", ".join(f"`{code}`×{count}" for code, count in sorted(by_code.items()))
+            )
+            for issue in (issues.get("issues") or [])[:10]:
+                lines.append(f"  - `{issue['code']}`: {issue['detail']}")
+    blockers = metadata.get("publication_blockers") or []
+    if blockers:
+        lines += ["", "> **Not publishable as a benchmark result.** Blockers: " + "; ".join(f"`{b}`" for b in blockers)]
+    lines.append("")
+
     lines += ["## Environment", ""]
     for key in (
         "python_version",
@@ -221,6 +249,17 @@ def build_report(
         )
     if not executed:
         lines.append("- No configuration executed, so this run contains no retrieval-quality evidence.")
+    if not metadata.get("source_approval_verified"):
+        lines.append(
+            "- **Source approval was not verified for the queried index.** These numbers were measured "
+            "over a corpus whose per-document review provenance could not be fully cross-checked against "
+            "an attributed approval decision, so they are not publishable as a benchmark result."
+        )
+    if metadata.get("publishable"):
+        lines.append(
+            "- Source approval, dataset attributability and a production retriever all verified: these "
+            "numbers are this repository's retrieval benchmark result for the recorded index and epoch."
+        )
     lines.append("- Graded relevance is not available in the dataset; NDCG uses binary relevance.")
     lines.append("- `visual_required` and stored complexity labels are absent from the dataset and are not produced.")
     lines.append("")

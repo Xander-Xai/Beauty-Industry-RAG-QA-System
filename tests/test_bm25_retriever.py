@@ -132,3 +132,174 @@ class TestBM25QueryBuilding:
                 if s.get("script", {}).get("script", {}).get("params", {}).get("user_dept_mask") == 4:
                     dept_found = True
         assert dept_found, "非零 dept_mask 应添加部门过滤"
+
+
+class _FakeIndices:
+    def __init__(self, names):
+        self._names = set(names)
+
+    def exists(self, index):
+        return index in self._names
+
+
+class _FakeEpochClient:
+    """Enough Elasticsearch to answer the epoch-binding probe."""
+
+    def __init__(self, count, epochs, *, error=None, index="cosmetics_docs"):
+        self._count = count
+        self._epochs = epochs
+        self._error = error
+        self.indices = _FakeIndices({index})
+        self.searches = 0
+
+    def info(self):
+        return {"version": {"number": "8.11.0"}}
+
+    def count(self, *, index):
+        if self._error:
+            raise RuntimeError("cluster unavailable")
+        return {"count": self._count}
+
+    def search(self, *, index, body):
+        self.searches += 1
+        if self._error:
+            raise RuntimeError("cluster unavailable")
+        return {
+            "hits": {"hits": []},
+            "aggregations": {"epochs": {"buckets": [{"key": e, "doc_count": 1} for e in self._epochs]}},
+        }
+
+
+class TestEpochBinding:
+    """配置 epoch 与索引内容必须对得上，否则检索结果没有意义。
+
+    The committed ``config.json`` declares ``knowledge_version_epoch: "default"``
+    while the real corpus indexes at ``real-v1-20261019``. Every query against
+    that pairing matches no document and returns ``[]``, which is
+    indistinguishable from "nothing relevant exists". These tests pin that the
+    retriever finds the mismatch instead of reporting an empty result.
+    """
+
+    def _make(self, client, *, index="cosmetics_docs", epoch="default"):
+        import retrieval.bm25_retriever as mod
+
+        r = mod.BM25Retriever.__new__(mod.BM25Retriever)
+        r._es_client = client
+        r._epoch_binding = None
+        r.enabled = True
+        mod.config["elasticsearch"]["index"] = index
+        mod.config["knowledge_version_epoch"] = epoch
+        return r, mod
+
+    def test_a_matching_epoch_is_bound(self):
+        r, mod = self._make(_FakeEpochClient(212, ["real-v1-20261019"]), epoch="real-v1-20261019")
+        verdict = r.probe_epoch_binding()
+        assert verdict["bound"] is True
+        assert verdict["configured_epoch"] == "real-v1-20261019"
+        assert verdict["present_epochs"] == ["real-v1-20261019"]
+        assert verdict["document_count"] == 212
+        assert r.enabled is True
+
+    def test_the_real_config_mismatch_is_detected(self):
+        """The shipped pairing: config says `default`, the corpus is real-v1."""
+        r, mod = self._make(_FakeEpochClient(212, ["real-v1-20261019"]), epoch="default")
+        verdict = r.probe_epoch_binding()
+        assert verdict["bound"] is False
+        assert verdict["present_epochs"] == ["real-v1-20261019"]
+        assert "knowledge_version_epoch is 'default'" in verdict["reason"]
+        # The reason has to name both sides, or it cannot be acted on.
+        assert "cosmetics_docs" in verdict["reason"]
+
+    def test_a_search_against_a_mismatched_index_is_refused_not_emptied(self):
+        r, mod = self._make(_FakeEpochClient(212, ["real-v1-20261019"]), epoch="default")
+        assert r.search("烟酰胺", 0, 0, 10) == []
+        # Disabled rather than "ran and found nothing": an empty list from a
+        # broken binding is the exact failure this class exists to prevent.
+        assert r.enabled is False
+
+    def test_a_matching_epoch_still_searches(self):
+        client = _FakeEpochClient(212, ["real-v1-20261019"])
+        r, mod = self._make(client, epoch="real-v1-20261019")
+        r.search("烟酰胺", 0, 0, 10)
+        assert r.enabled is True
+
+    def test_an_empty_index_is_never_bound(self):
+        r, mod = self._make(_FakeEpochClient(0, []), epoch="real-v1-20261019")
+        verdict = r.probe_epoch_binding()
+        assert verdict["bound"] is False
+        assert "no documents" in verdict["reason"]
+
+    def test_no_configured_epoch_is_a_deliberate_choice_not_a_mismatch(self):
+        r, mod = self._make(_FakeEpochClient(212, ["real-v1-20261019"]), epoch="")
+        verdict = r.probe_epoch_binding()
+        assert verdict["bound"] is True
+        assert "no knowledge_version_epoch configured" in verdict["reason"]
+
+    def test_an_unreachable_cluster_fails_closed_without_raising(self):
+        client = _FakeEpochClient(0, [], error="down")
+        r, mod = self._make(client, epoch="real-v1-20261019")
+        verdict = r.probe_epoch_binding()
+        assert verdict["bound"] is False
+        assert "could not inspect" in verdict["reason"]
+        # The probe itself only reports — an operator calls it to *understand* the
+        # state, and a diagnostic that mutated the retriever would be unusable
+        # for that. Disabling is the consumption side.
+        assert r.enabled is True
+        assert r.search("烟酰胺", 0, 0, 10) == []
+        assert r.enabled is False
+
+    def test_the_probe_is_cached_not_repeated_per_query(self):
+        client = _FakeEpochClient(212, ["real-v1-20261019"])
+        r, mod = self._make(client, epoch="real-v1-20261019")
+        r.probe_epoch_binding()
+        before = client.searches
+        r.probe_epoch_binding()
+        r.probe_epoch_binding()
+        assert client.searches == before, "the probe must not run once per query"
+
+    def test_refresh_re_reads_the_cluster(self):
+        client = _FakeEpochClient(212, ["real-v1-20261019"])
+        r, mod = self._make(client, epoch="default")
+        assert r.probe_epoch_binding()["bound"] is False
+        # An epoch rebuilt underneath a long-lived retriever must be visible
+        # without restarting the process.
+        client._epochs = ["default"]
+        assert r.probe_epoch_binding(refresh=True)["bound"] is True
+
+    def test_a_client_without_the_probe_surface_is_reported_not_disabled(self):
+        """A purpose-built adapter must not take the lexical path down.
+
+        `AttributeError` says the *client* lacks `count`, not that the index is
+        wrong. Disabling production retrieval for that would be this change
+        breaking its caller instead of protecting anyone.
+        """
+
+        class NoCountClient:
+            def search(self, index, body):
+                return {"hits": {"hits": []}}
+
+        r, mod = self._make(NoCountClient())
+        verdict = r.probe_epoch_binding()
+        assert verdict["bound"] is True
+        assert "probe unsupported" in verdict["reason"]
+        assert r.enabled is True, "an unsupported probe must not disable the path"
+        assert r.search("烟酰胺", 0, 0, 10) == []
+        assert r.enabled is True
+
+    def test_a_retriever_built_without_init_still_probes(self):
+        """`__new__` construction is how query building is unit-tested.
+
+        Those call sites never run ``__init__``, so the cached-probe attribute
+        does not exist yet. Reading it defensively is what keeps them working.
+        """
+        import retrieval.bm25_retriever as mod
+
+        r = mod.BM25Retriever.__new__(mod.BM25Retriever)
+        r._es_client = _FakeEpochClient(212, ["real-v1-20261019"])
+        r.enabled = True
+        original = mod.config.get("knowledge_version_epoch")
+        mod.config["knowledge_version_epoch"] = "real-v1-20261019"
+        try:
+            assert r.probe_epoch_binding()["bound"] is True
+        finally:
+            mod.config["knowledge_version_epoch"] = original

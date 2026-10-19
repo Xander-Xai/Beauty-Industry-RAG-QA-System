@@ -1084,13 +1084,48 @@ def test_forbidden_evidence_claims_allow_required_denials():
 
 
 def test_current_docs_have_no_unevidenced_evidence_claims():
-    from scripts.check_repo_consistency import CANONICAL_DOCS
+    from scripts.check_repo_consistency import (
+        CANONICAL_DOCS,
+        benchmark_artifact_exists,
+        benchmark_evidence_exists,
+        forbidden_evidence_claims,
+    )
 
+    # A canonical doc may state a measured metric only when committed evidence
+    # exists for it — a raw run artifact, or the recomputable evidence package.
+    # Before either existed this guard was unconditional, which encoded the
+    # pre-evidence world: a number was forbidden by its mere presence, so no
+    # report could ever publish a real result. The condition, not the ban, is
+    # the control; the ban is what applies when the condition is false.
+    evidenced = benchmark_artifact_exists() or benchmark_evidence_exists()
     for path in CANONICAL_DOCS:
         if not path.exists():
             continue
-        claims = forbidden_evidence_claims(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        claims = forbidden_evidence_claims(text)
+        if claims and evidenced:
+            # A claimed metric must point at committed evidence, not merely be
+            # tolerated because some evidence happens to exist elsewhere.
+            assert "docs/validation/evidence/" in text, (
+                f"{path} states a measured metric without naming the committed evidence that backs it: {claims}"
+            )
+            continue
         assert not claims, f"{path} claims unevidenced evidence: {claims}"
+
+
+def test_the_metric_ban_still_applies_without_committed_evidence():
+    """Lifting the condition must not lift the guard.
+
+    A repo with no committed evidence is the state this guard exists for, so it
+    is asserted directly rather than inferred from the current tree.
+    """
+    from scripts.check_repo_consistency import forbidden_evidence_claims
+
+    assert forbidden_evidence_claims("The retrieval benchmark reports Recall@10 = 0.87.")
+    assert forbidden_evidence_claims("NDCG@10：0.61")
+    # A denial is never a claim, with or without evidence present.
+    assert not forbidden_evidence_claims("Recall@k is not claimed; no run artifact is committed.")
+    assert not forbidden_evidence_claims("Recall@10 = 0.70 is the pending target, not a result.")
 
 
 def test_benchmark_framework_result_split_is_documented():

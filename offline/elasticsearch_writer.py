@@ -9,6 +9,7 @@ content coexists across epochs without collisions.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Protocol
 
 from offline.source_trust import enforce_writable_provenance
@@ -98,16 +99,34 @@ def document_id(logical_id: str, epoch: str) -> str:
 
 
 class ElasticsearchWriter:
-    """Upsert/replace documents in the BM25 index with explicit mapping checks."""
+    """Upsert/replace documents in the BM25 index with explicit mapping checks.
 
-    def __init__(self, client, index_name: str = DEFAULT_INDEX_NAME, page_size: int = 1000):
+    ``analyzer`` optionally names the text analyzer used for ``content`` at both
+    index and query time. It exists so a tokenization A/B can hold everything else
+    fixed — same chunks, same ids, same mapping, same provenance — and vary only
+    the declared analyzer. It is applied to ``content`` only; every other field
+    stays a keyword or a number, so changing it cannot silently re-type the RBAC
+    masks or the epoch.
+    """
+
+    def __init__(self, client, index_name: str = DEFAULT_INDEX_NAME, page_size: int = 1000, analyzer: str = ""):
         if not index_name:
             raise ValueError("an index name is required")
         if type(page_size) is not int or page_size <= 0:
             raise ValueError("page_size must be a positive integer")
+        if analyzer and not isinstance(analyzer, str):
+            raise ValueError("analyzer must be a non-empty string naming an Elasticsearch analyzer")
         self.client = client
         self.index_name = index_name
         self.page_size = page_size
+        self.analyzer = analyzer
+
+    def mappings(self) -> dict:
+        """Return the index mappings, applying ``analyzer`` to ``content`` only."""
+        mappings = json.loads(json.dumps(INDEX_MAPPING["mappings"]))
+        if self.analyzer:
+            mappings["properties"]["content"] = {"type": "text", "analyzer": self.analyzer}
+        return mappings
 
     def ensure_index(self, *, recreate: bool = False, confirm: bool = False) -> None:
         exists = bool(self.client.indices.exists(index=self.index_name))
@@ -119,7 +138,7 @@ class ElasticsearchWriter:
         if not exists:
             self.client.indices.create(
                 index=self.index_name,
-                mappings=INDEX_MAPPING["mappings"],
+                mappings=self.mappings(),
                 settings=INDEX_MAPPING["settings"],
             )
         self.validate_mapping()
@@ -133,6 +152,19 @@ class ElasticsearchWriter:
                 raise ValueError(
                     f"index {self.index_name!r} field {field!r} must be {expected!r}, found {actual.get('type')!r}"
                 )
+
+    def applied_analyzer(self) -> str:
+        """Return the analyzer Elasticsearch actually holds for ``content``.
+
+        Read back from the cluster rather than echoed from the constructor: a
+        tokenization experiment that only *believed* it applied its analyzer
+        would compare two default-analyzer indexes and conclude the analyzer
+        makes no difference. An empty string means the field is using the index
+        default, which is Elasticsearch's own answer rather than an assumption.
+        """
+        mapping = self.client.indices.get_mapping(index=self.index_name)
+        properties = _extract_properties(mapping, self.index_name)
+        return str((properties.get("content", {}) or {}).get("analyzer", "") or "")
 
     def build_document(self, chunk) -> dict:
         validate_permissions(chunk.role_mask, chunk.dept_mask)

@@ -160,6 +160,9 @@ def _args(**overrides):
         "staging_unapproved": False,
         "approval_store": ":memory:",
         "corpus_version": None,
+        # Mirrors the CLI default: an empty string means "leave `content` on the
+        # index default analyzer", not "no analyzer configured".
+        "analyzer": "",
     }
     defaults.update(overrides)
     return type("Args", (), defaults)()
@@ -358,6 +361,89 @@ class TestExternalSourcesStayUnreviewed:
         assert payload["source_trust_policy"]["staging_unapproved"] is True
         assert "cosmetics_docs" not in client.store, "an experiment must not touch the production index"
         assert "cosmetics_docs_exp_v1" in client.store
+
+
+# ── 3b. a declared analyzer reaches the cluster ──────────────────────────────
+
+
+class TestDeclaredAnalyzerReachesTheCluster:
+    """The tokenization A/B is only valid if the analyzer actually applied.
+
+    Without this, ``--analyzer`` could be accepted and silently dropped, and the
+    experiment would compare two default-analyzer indexes and report a
+    real-looking null result. So the tests pin three separate things: the mapping
+    the writer asks for, the mapping the cluster is read back as holding, and
+    that it is the ``content`` field only.
+    """
+
+    def test_the_declared_analyzer_lands_on_the_content_field_only(self):
+        from offline.elasticsearch_writer import ElasticsearchWriter
+
+        client = FakeIndexClient()
+        writer = ElasticsearchWriter(client, "cosmetics_docs_exp_ab", analyzer="smartcn")
+        writer.ensure_index()
+        properties = client.store["cosmetics_docs_exp_ab"]["mappings"]["properties"]
+
+        assert properties["content"] == {"type": "text", "analyzer": "smartcn"}
+        # Every other field keeps its declared type: a tokenization choice must
+        # not be able to re-type the RBAC masks, the epoch or the ids.
+        assert properties["doc_id"] == {"type": "keyword"}
+        assert properties["role_mask"] == {"type": "long"}
+        assert properties["doc_version_epoch"] == {"type": "keyword"}
+
+    def test_the_applied_analyzer_is_read_back_from_the_cluster(self):
+        from offline.elasticsearch_writer import ElasticsearchWriter
+
+        client = FakeIndexClient()
+        writer = ElasticsearchWriter(client, "cosmetics_docs_exp_ab", analyzer="smartcn")
+        writer.ensure_index()
+        assert writer.applied_analyzer() == "smartcn"
+
+        # An index created without the option reports the cluster's own answer —
+        # no analyzer on the field — rather than an assumption.
+        default = ElasticsearchWriter(client, "cosmetics_docs_exp_default")
+        default.ensure_index()
+        assert default.applied_analyzer() == ""
+
+    def test_the_writers_mapping_does_not_mutate_the_module_constant(self):
+        from offline.elasticsearch_writer import INDEX_MAPPING, ElasticsearchWriter
+
+        ElasticsearchWriter(FakeIndexClient(), "cosmetics_docs_exp_ab", analyzer="smartcn").mappings()
+        # A shared module-level mapping mutated in place would silently re-type
+        # every index built afterwards in the same process.
+        assert INDEX_MAPPING["mappings"]["properties"]["content"] == {"type": "text"}
+
+    def test_the_fingerprint_records_the_applied_analyzer_not_only_the_request(self, tmp_path):
+        out = tmp_path / "ab.json"
+        code = indexer.run(
+            _args(
+                profile="experiment",
+                index="cosmetics_docs_exp_v3_ab",
+                staging_unapproved=True,
+                analyzer="smartcn",
+                out=str(out),
+            ),
+            client=FakeIndexClient(),
+            registry=indexer.TrustRegistry(":memory:"),
+        )
+        assert code == 0
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        assert payload["analyzer"]["requested"] == "smartcn"
+        assert payload["analyzer"]["applied"] == "smartcn"
+        assert payload["analyzer"]["field"] == "content"
+
+    def test_a_preflight_states_only_what_it_can_know(self, tmp_path, capsys):
+        """A preflight inspects an index that may not exist yet."""
+        indexer.run(
+            _args(profile="experiment", index="cosmetics_docs_exp_v3_ab", analyzer="smartcn", check_only=True),
+            client=FakeIndexClient(),
+            registry=indexer.TrustRegistry(":memory:"),
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["analyzer_requested"] == "smartcn"
+        # Claiming an applied analyzer before the index exists would be asserting
+        # a fact about a cluster state the run has not reached.
+        assert "analyzer" not in payload
 
 
 # ── 4. the review workpackage promotes nothing ──────────────────────────────

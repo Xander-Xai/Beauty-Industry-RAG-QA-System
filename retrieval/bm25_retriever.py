@@ -29,10 +29,20 @@ class BM25Retriever:
     ES Fallback 与稀疏权限兜底（readme 7.1）：
     - 向量库不可用或召回有效文档数 < 50 时自动切换
     - 权限过滤统一走 painless 位运算，没有按 ES 版本分支的兜底实现
+
+    **版本绑定（epoch binding）**：`_build_es_query` 会按配置的
+    `knowledge_version_epoch` 过滤 `doc_version_epoch`。若索引里根本没有这个
+    epoch，过滤条件匹配不到任何文档，接口会返回"没有相关结果"——而真实原因是
+    "配置与索引版本不一致"。这两种情况对调用方完全一样，于是配置错误被读成
+    检索失败。
+    `probe_epoch_binding()` 把这个事实查出来，`_ensure_epoch_bound()` 在首次
+    检索时消费它：绑定不成立时关闭词法检索路径并以 ERROR 级别记录具体是哪
+    个 index、期望哪个 epoch、实际有哪些 epoch，而不是安静地返回空。
     """
 
     def __init__(self):
         self._es_client = None
+        self._epoch_binding = None
         self.enabled = config.get("elasticsearch", {}).get("enabled", True)
         logger.info(f"BM25Retriever 初始化完成 (enabled={self.enabled})")
 
@@ -61,6 +71,119 @@ class BM25Retriever:
                 self.enabled = False
         return self._es_client
 
+    def probe_epoch_binding(self, *, refresh: bool = False) -> dict:
+        """检查配置的 epoch 是否真的存在于目标索引中。
+
+        Read-only and cached: it is one aggregation, not a per-query cost. The
+        returned dict is the evidence an operator needs to tell "this corpus has
+        nothing relevant" apart from "this corpus was never asked for":
+
+        ``{"bound": bool, "index": str, "configured_epoch": str, "present_epochs": [...],
+        "document_count": int, "reason": str}``
+
+        ``bound`` is true when the configured epoch is present *or* when no epoch
+        is configured at all — an unconfigured epoch means no filter is applied,
+        which is a deliberate configuration rather than a mismatch. An index with
+        no documents is never "bound": it cannot answer anything, and reporting
+        success there would hide an empty or wrong index.
+
+        A client that does not implement the probe surface is also reported as
+        bound, with a reason saying so: that is a fact about the caller, not
+        about the index, and it must not take the lexical path down.
+        """
+        # ``getattr`` rather than a direct read: tests and integrations construct
+        # a retriever via ``__new__`` to exercise query building without a
+        # cluster, and a cached-probe fast path must not be the thing that breaks
+        # them. Absence of the cache is simply "probe again".
+        cached = getattr(self, "_epoch_binding", None)
+        if cached is not None and not refresh:
+            return cached
+
+        index_name = str(config.get("elasticsearch", {}).get("index", "") or "")
+        configured_epoch = str(config.get("knowledge_version_epoch", "") or "")
+        verdict = {
+            "index": index_name,
+            "configured_epoch": configured_epoch,
+            "present_epochs": [],
+            "document_count": 0,
+            "bound": False,
+            "reason": "",
+        }
+
+        if not self.enabled or self.es_client is None:
+            verdict["reason"] = "Elasticsearch client is unavailable, so the index cannot be inspected"
+            self._epoch_binding = verdict
+            return verdict
+        if not index_name:
+            verdict["reason"] = "no elasticsearch.index is configured"
+            self._epoch_binding = verdict
+            return verdict
+
+        try:
+            count = int(self.es_client.count(index=index_name).get("count", 0))
+            verdict["document_count"] = count
+            response = self.es_client.search(
+                index=index_name,
+                body={
+                    "size": 0,
+                    "aggs": {"epochs": {"terms": {"field": "doc_version_epoch", "size": 50}}},
+                },
+            )
+            present = [
+                str(bucket.get("key"))
+                for bucket in (response.get("aggregations", {}).get("epochs", {}) or {}).get("buckets", []) or ()
+            ]
+            verdict["present_epochs"] = present
+        except (AttributeError, NotImplementedError, TypeError) as exc:
+            # The client does not implement the probe surface at all — it is a
+            # purpose-built adapter, not an Elasticsearch client. That is a fact
+            # about the *caller*, not about the index, and it is not evidence
+            # that the corpus is unbound. Disabling the production lexical path
+            # because an adapter stub lacks `count` would be this change breaking
+            # its caller rather than protecting anyone. Recorded, not fatal.
+            verdict["bound"] = True
+            verdict["reason"] = f"epoch probe unsupported by this client ({type(exc).__name__}); query unverified"
+            self._epoch_binding = verdict
+            return verdict
+        except Exception as exc:  # noqa: BLE001 - a probe reports, it does not raise
+            verdict["reason"] = f"could not inspect index {index_name!r}: {type(exc).__name__}: {exc}"
+            self._epoch_binding = verdict
+            return verdict
+
+        if count == 0:
+            verdict["reason"] = f"index {index_name!r} contains no documents"
+        elif not configured_epoch:
+            verdict["bound"] = True
+            verdict["reason"] = f"no knowledge_version_epoch configured; index {index_name!r} holds {list(present)}"
+        elif configured_epoch in present:
+            verdict["bound"] = True
+            verdict["reason"] = f"epoch {configured_epoch!r} is present in {index_name!r}"
+        else:
+            verdict["reason"] = (
+                f"index {index_name!r} holds epoch(s) {list(present)} but knowledge_version_epoch is "
+                f"{configured_epoch!r}; the retrieval filter would match none of its documents, so every "
+                "query would read as 'no results' instead of 'wrong corpus configured'"
+            )
+        self._epoch_binding = verdict
+        return verdict
+
+    def _ensure_epoch_bound(self) -> bool:
+        """Refuse to query an index that does not hold the configured epoch.
+
+        Disabling the lexical path is the same response the retriever already
+        gives an unreachable cluster, and it is deliberate: continuing would
+        return an empty result list that reads as "nothing relevant exists".
+        Failing loudly is the only way the misconfiguration becomes visible
+        before someone concludes the corpus is simply small.
+        """
+        verdict = self.probe_epoch_binding()
+        if verdict.get("bound"):
+            return True
+        if self.enabled:
+            logger.error(f"BM25 epoch binding failed, lexical path disabled: {verdict.get('reason', '')}")
+            self.enabled = False
+        return False
+
     def search(
         self,
         query: str,
@@ -81,6 +204,8 @@ class BM25Retriever:
             [{"doc_id": str, "content": str, "score": float, "metadata": dict}]
         """
         if not self.enabled or self.es_client is None:
+            return []
+        if not self._ensure_epoch_bound():
             return []
 
         try:
@@ -235,6 +360,8 @@ class BM25Retriever:
         readme 7.1: 当向量库不可用或召回有效文档数 < 50 时自动切换
         """
         if not self.enabled or self.es_client is None:
+            return []
+        if not self._ensure_epoch_bound():
             return []
 
         try:

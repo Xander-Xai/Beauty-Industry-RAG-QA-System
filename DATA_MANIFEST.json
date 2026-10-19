@@ -418,6 +418,35 @@
         "rationale"
       ],
       "regulatory_shaped_fields_evidence": "Contains only a reviewer name, an ISO decision date, a decision verb, hex digests and the sign-off basis statement; no corpus text and no regulatory assertion."
+    },
+    {
+      "path": "docs/validation/evidence/real-v1-approved-bm25-evidence.json",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "published projection of one publishable BM25 run over the fully approved real-corpus-V1 index: gate flags, all retrieval metrics, latency, source approvals, index identity and the digests of the raw local artifacts; exists so a third party can recompute the metrics without Elasticsearch",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Machine-readable run metadata: hex digests, metric floats, index names, timestamps and actor names. No corpus text and no regulatory assertion."
+    },
+    {
+      "path": "docs/validation/evidence/real-v1-approved-bm25-per-sample.jsonl",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "per-sample retrieval results (gold chunk ids, retrieved chunk ids, first-relevant rank, per-arm metrics) for the 27 human-signed real-corpus-V1 records; the committed input scripts/validation/verify_benchmark_evidence.py re-derives every published metric from these rows",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "inline:sample_id",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Chunk identifiers (UUIDs), ranks and metric floats only. Deliberately carries no indexed document text: the questions are the benchmark's own, and the corpus excerpts it refers to are not republished here. Pinned by tests/validation/test_benchmark_evidence_package.py."
+    },
+    {
+      "path": "docs/validation/evidence/chinese-analyzer-tokenisation.json",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "verbatim Elasticsearch _analyze output for eight sample inputs under each of the three analyzers compared in docs/validation/chinese-analyzer-ab.md (standard, smartcn, ik_smart)",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [
+        "samples.real-v1.input_text"
+      ],
+      "regulatory_shaped_fields_evidence": "Input texts are the benchmark's own questions plus five generic technical strings (an INCI name, a regulation number, ingredient names). They are not excerpts of the indexed corpus and assert nothing about the law."
     }
   ]
 }

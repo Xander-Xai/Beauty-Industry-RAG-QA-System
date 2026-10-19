@@ -64,7 +64,7 @@
 | `tests/evaluation/golden_set_v1/ai_review_v1.jsonl` | 38 | `GOVERNANCE` | **机器可读 AI 预审记录**（`review_type=AI_REVIEW`）：27 条检索候选 + 3 条 Answer Gate + 6 条独立查询 + 2 份来源，逐行给出 verdict、证据、原始与建议金标、已应用变更、未决问题 | **不是人工签署**：每行 `is_human_signature=false`、`promotable_without_human=false`，且不被导入器读取。`AI_ACCEPT` 不等于 `REVIEWED`；来源行的 `AI_SOURCE_VERIFIED_WITH_LIMITATIONS` **不写入** TrustRegistry 审批台账 |
 | `tests/evaluation/golden_set_v1/review_signoff_v1.jsonl` | 27 | `HUMAN_SIGNOFF` | **真实人工签署台账**：`Xander-Xai` 于 2026-10-19 确认已审阅并接受 AI_REVIEW 结果后，对 27 条候选全部记录 `ACCEPT`；每行绑定所审候选行的 `candidate_sha256` 与候选集 `candidate_dataset_sha256` | 依据为**仓库所有者本人在对话中的声明**，不是第三方独立审计。原始 `source=llm_candidate` 与 `annotator=llm:opencode-deepseek-v4.1-flash` 保留未改；空白模板 `review_decisions_v1.jsonl` 未被覆盖 |
 | `tests/evaluation/golden_set_v1/review_signoff_nonretrieval_v1.jsonl` | 9 | `HUMAN_SIGNOFF` | 同一声明人对 3 条 Answer Gate 与 6 条独立查询提案的签署记录 | **不进入任何评分数据集**：3 条 Answer Gate 仍排除在 Retrieval Recall 分母外，6 条独立查询 `in_dataset=false`。NOANSWER-002 的 `expected_behavior` 按签署结论由 `refuse` 改为 `partial_answer_and_state_gap` |
-| `tests/evaluation/golden_set_v1/reviewed/annotations_v1_reviewed.jsonl` | 27 | `REVIEWED_GOLDEN_SET` | **正式人工审核金标集**：由 `candidates_v1.jsonl` + `review_signoff_v1.jsonl` 确定性导入生成，27 条全部 `REVIEWED` 且可评分 | 引用的官方法规文本与 `corpus/real_v1/sources` 同源、同许可依据。**13 条金标来自 `used_ingredients_2021.jsonl`，该来源仍为 `PENDING_REVIEW`（所有者明确只批准了 `regulation_727.jsonl`）** |
+| `tests/evaluation/golden_set_v1/reviewed/annotations_v1_reviewed.jsonl` | 27 | `REVIEWED_GOLDEN_SET` | **正式人工审核金标集**：由 `candidates_v1.jsonl` + `review_signoff_v1.jsonl` 确定性导入生成，27 条全部 `REVIEWED` 且可评分 | 引用的官方法规文本与 `corpus/real_v1/sources` 同源、同许可依据。**13 条金标来自 `used_ingredients_2021.jsonl`；该来源已于 2026-10-20 由所有者 `Xander-Xai` 具名审批，两份来源均为 `APPROVED_EXTERNAL`** |
 | `tests/evaluation/golden_set_v1/reviewed/annotations_v1_drafts.jsonl` | 0 | `EMPTY_BY_DESIGN` | 27 条全部已签署，无候选残留 `DRAFT_UNVERIFIED` | 有意置空 |
 | `tests/evaluation/golden_set_v1/reviewed/annotations_v1_rejected.jsonl` | 0 | `EMPTY_BY_DESIGN` | 所有者未拒绝任何候选 | 有意置空 |
 | `tests/evaluation/golden_set_v1/reviewed/review_decisions_applied.jsonl` | 27 | `HUMAN_SIGNOFF` | 本次导入实际生效的决定索引（`sample_id` + `decision`） | 派生自签署台账，无独立断言 |
@@ -74,6 +74,9 @@
 | `docs/finalization/REGULATORY_REVIEW_CHECKLIST.json` | 15 条目 | `GOVERNANCE` | 逐条法规断言的人工复核状态追踪器，机器可读 | **不主张任何法规结论**；15 条全部处于 `SYNTHETIC_ONLY`，无一条 `VERIFIED_WITH_SOURCE` |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json` | — | `RUNTIME_EVIDENCE` | 单台本地主机上对真实 Qdrant 1.12.0 服务的验证检查项 | 仅含 localhost 端点与版本信息；不含语料内容、日志或凭据 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` | — | `RUNTIME_EVIDENCE` | 同一次验证的来源与兼容性记录 | 同上 |
+| `docs/validation/evidence/real-v1-approved-bm25-evidence.json` | 4 次运行 | `RUNTIME_EVIDENCE` | 已发布 BM25 运行的机器可读投影：门禁标志、全部检索指标、延迟、来源审批、索引身份与原始产物的 SHA-256 | 仅为门禁状态与指标；**原始运行产物按既有规则不提交**（`artifacts/benchmarks/README.md`）。`source_approval_verified=true` **只表示语料通过来源审批门禁**，不表示可用于生产或代表现行法规结论 |
+| `docs/validation/evidence/real-v1-approved-bm25-per-sample.jsonl` | 27 | `RUNTIME_EVIDENCE` | 27 条逐样本检索结果（Gold Chunk ID、召回 Chunk ID、首个命中名次、逐臂指标），是 `scripts/validation/verify_benchmark_evidence.py` 重算全部已发布指标的输入 | **只含 chunk ID 与名次，不含任何索引文档正文**——由 `tests/validation/test_benchmark_evidence_package.py` 断言。问题文本是基准自撰；它引用的语料摘录不在此文件内重复发布 |
+| `docs/validation/evidence/chinese-analyzer-tokenisation.json` | 8 组采样 | `RUNTIME_EVIDENCE` | 三种分析器（standard / smartcn / ik_smart）对同一批输入的 Elasticsearch `_analyze` 真实输出 | 输入是基准自撰问题与 5 个通用技术串（INCI 名、法规编号、原料名），**不是索引语料的摘录**，不主张任何法规结论 |
 | `docs/assets/demo-request-evidence-flow.webp` | — | `SYNTHETIC` | 由 `docs/demo/capture_demo.py` 从上述合成语料渲染 | 画面内所有数值均为合成值 |
 
 ### 不在清单内的内容
