@@ -49,17 +49,35 @@
 - 原始候选文件 `candidates_v1.jsonl` **未被覆盖**（仍为 `7bfd5ac2…`，
   `source=llm_candidate`、`annotator` 原样保留）；空白模板
   `review_decisions_v1.jsonl` **未被覆盖**（27 行仍全空白）。
-- **来源审批：1/2**。`regulation_727.jsonl`（`c9499ca5…`）为 `APPROVED`
-  （actor `Xander-Xai`）；`used_ingredients_2021.jsonl`（`3dd67722…`）仍为
-  `PENDING_REVIEW`，因为所有者被明确告知 `--approve` 意味着**可激活**信任状态后
-  选择了只批准条例。
-- **后果已记录、未回避**：13/27 条金标段落来自未批准的目录来源；隔离索引
+- **来源审批：2/2（已补齐，2026-10-20）**。`regulation_727.jsonl`（`c9499ca5…`）与
+  `used_ingredients_2021.jsonl`（`3dd67722…`）均由所有者 `Xander-Xai` 具名审批，
+  两者在 TrustRegistry 中均为 `APPROVED` → `APPROVED_EXTERNAL`，审批绑定到各自的
+  文件字节哈希。审批台账（`data/offline_source_trust.sqlite3`）本身不提交仓库。
+- **正式 Benchmark 已产出**。全审批隔离索引 `cosmetics_docs_exp_v3_approved`
+  （212/212 篇 `APPROVED_EXTERNAL`，非暂存构建）上的正式 BM25 运行
+  `20261019T190215Z-b679c73e`（git `c8e49e2`）通过全部发布门禁：
+  `results_are_benchmark=true`、`publishable=true`、`source_approval_verified=true`。
+  指标 Recall@10 0.7037、HitRate@10 0.7037、MRR@10 0.4088、NDCG@10 0.4698
+  （与下述历史运行逐位相同，因为两次语料字节一致，改变的是审批状态而非可检索内容）。
+  完整证据与适用边界见
+  [`docs/validation/real-v1-approved-bm25-run.md`](../../../docs/validation/real-v1-approved-bm25-run.md)；
+  中文分词对照见
+  [`docs/validation/chinese-analyzer-ab.md`](../../../docs/validation/chinese-analyzer-ab.md)。
+- **历史运行记录保留原状**：下述 `cosmetics_docs_exp_v2` 运行（来源门禁 1/2）**不**回填
+  改写成通过新门禁的样子；它保留当时的真实状态，作为「新门禁会拒绝什么」的对照。
+
+### 历史：来源门禁 1/2 时的 BM25 实测（`cosmetics_docs_exp_v2`）
+
+- 当时的后果已记录、未回避：13/27 条金标段落来自未批准的目录来源；隔离索引
   `cosmetics_docs_exp_v2` 以 `--staging-unapproved` 构建，provenance 为
   82 篇 `APPROVED_EXTERNAL` + 130 篇 `UNTRUSTED`，**不是可激活快照**。
 - 真实 BM25 已运行并写报告：**Recall@10 0.7037、HitRate@10 0.7037、MRR@10 0.4088、
   NDCG@10 0.4698**，契约干净、干净工作树、Git SHA `227eac9`。
   **该结果不构成已完全放行的正式 Benchmark（来源门禁 1/2）**，完整证据与适用边界见
   [`docs/validation/real-v1-bm25-run.md`](../../../docs/validation/real-v1-bm25-run.md)。
+  该运行按当前门禁**不可发布**，已由
+  `tests/benchmark/test_source_approval_gate.py::test_pr113_mixed_index_result_is_not_publishable`
+  端到端复现并锁定。
 
 ### 探索性 BM25 实测（**不可发布**）
 
@@ -162,8 +180,11 @@ python3 scripts/validation/validate_golden_set_contract.py \
 
 ## 人工审核流程（不可由 AI 代办）
 
-**先做来源审批。** 两份源文件是外部官方文档，当前 `UNTRUSTED / PENDING_REVIEW`。
-在具名审批之前，生产索引写入会被拒绝：
+**先做来源审批。** 两份源文件是外部官方文档，声明为 `UNTRUSTED`；在具名审批之前，
+生产索引写入会被拒绝。
+
+> **状态：本步骤已完成（2026-10-20）。** 两份源文件均已由 `Xander-Xai` 具名审批，
+> 见上文「当前实测状态」。下面保留审批流程本身，供后续语料版本复用。
 
 ```bash
 python3 run_offline.py review-source corpus/real_v1/sources/regulation_727.jsonl \

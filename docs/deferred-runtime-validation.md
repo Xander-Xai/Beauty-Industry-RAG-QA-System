@@ -26,7 +26,7 @@
 
 | ID | Capability | Level | Issue | Execution |
 |---|---|---|---|---|
-| VAL-RETRIEVAL-001 | Real retrieval benchmark result | `PENDING` | [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) | `NOT EXECUTED` |
+| VAL-RETRIEVAL-001 | Real retrieval benchmark result | `PENDING` | [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) | `PARTIAL` — **BM25 臂已执行**（Real Corpus V1，`LOCAL_REAL_VALIDATION`）；Dense / Hybrid 臂仍未执行（缺真实 BGE 权重） |
 | VAL-PERF-001 | Real performance artifact (QPS / P95 / P99) | `PENDING` | [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32) | `NOT EXECUTED` |
 | VAL-OBS-001 | OTLP runtime export closure (app → exporter → collector → backend → span) | `PENDING` | [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32) | `NOT EXECUTED` |
 | VAL-OBS-002 | Grafana panels populated + Prometheus alerts evaluated | `PENDING` | [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32) | `NOT EXECUTED` |
@@ -49,17 +49,25 @@
 ## VAL-RETRIEVAL-001 — Real retrieval benchmark result
 
 - **Capability:** BM25 / Dense / Hybrid+RRF retrieval metrics over a real corpus.
-- **Current evidence level:** `PENDING` (framework `REPO_VERIFIED`).
-- **Reason deferred:** no committed benchmark corpus with ground-truth passages and no real Qdrant/Elasticsearch run; a metric cannot be produced honestly without them.
+- **Current evidence level:** `PENDING` overall — the **BM25 arm is executed** (`LOCAL_REAL_VALIDATION`); the Dense / Hybrid arms are not, so the capability as written is not met.
+- **Status of each arm:**
+
+  | arm | execution | evidence | note |
+  |---|---|---|---|
+  | BM25 | **EXECUTED** | `LOCAL_REAL_VALIDATION` | Real Corpus V1, 27 human-signed records, two approved sources, real Elasticsearch 8.11.0, `results_are_benchmark=true`. See [Real Corpus V1 正式 BM25 运行报告](validation/real-v1-approved-bm25-run.md) and the recomputable evidence under `docs/validation/evidence/`. |
+  | Dense | `NOT EXECUTED` | — | blocked on the real BGE weights, which are not in this repository (`EXTERNAL_MODEL_ASSET_REQUIRED`). |
+  | Hybrid+RRF | `NOT EXECUTED` | — | blocked on the same BGE weights. **No mock or substitute number was produced for either arm.** |
+
+- **Reason deferred (remaining arms):** the configured BGE text embedder and CrossEncoder assets are absent, so a Dense or Hybrid metric cannot be produced honestly. The corpus and executor preconditions that used to block this item are now met.
 - **Required environment:** Qdrant and Elasticsearch populated from the same epoch; configured BGE and CrossEncoder assets.
-- **Required data / models:** an independent golden set with ground-truth passages; the configured text embedder.
-- **Prerequisite:** an independently sourced corpus that contains the golden-set ground-truth passages, plus Qdrant/Elasticsearch populated from the same epoch. The real retrieval executor is already wired into the benchmark CLI (`--executor real` → `benchmarks/executors.py`; issue #18 Blocker A closed), so no executor work remains — a run still blocks on `corpus_does_not_contain_ground_truth` until the corpus exists.
-- **Exact procedure:** populate both stores from one sealed epoch, run `python -m benchmarks.retrieval_benchmark --executor real --configs bm25,dense,hybrid_rrf`, and commit the six-file artifact contract under `artifacts/benchmarks/<run-id>/`.
+- **Required data / models:** an independent golden set with ground-truth passages (met by Real Corpus V1 for the BM25 arm); the configured text embedder (still missing).
+- **Prerequisite:** met for BM25 — an independently sourced corpus that contains the golden-set ground-truth passages, plus Elasticsearch populated from the same epoch, with every indexed document carrying an attributed reviewer's approval. The real retrieval executor is wired into the benchmark CLI (`--executor real` → `benchmarks/executors.py`; issue #18 Blocker A closed).
+- **Exact procedure (remaining arms):** populate both stores from one sealed epoch, run `python -m benchmarks.retrieval_benchmark --executor real --configs dense,hybrid_rrf`, and commit the six-file artifact contract under `artifacts/benchmarks/<run-id>/`.
 - **Expected artifact:** `artifacts/benchmarks/<run-id>/` meeting the six-file contract in `artifacts/benchmarks/README.md`.
 - **Acceptance criteria:** the artifact records git SHA, dataset and config hashes, model name/revision, hardware, sample count, retrieval metrics, latency, success/failure counts, commands and limitations; the numbers are reproducible from the artifact.
 - **Failure interpretation:** a `BLOCKED` run with a `blocked_reason` is a failed attempt, not a zero; it produces no publishable metric.
-- **Evidence promotion rule:** `PENDING` → `REPO_VERIFIED` (result) only with a committed reproducible artifact; never to `LOCAL_REAL_VALIDATION` without the real-service run.
-- **Related issue:** #18. **Status:** `NOT EXECUTED`.
+- **Evidence promotion rule:** `PENDING` → `REPO_VERIFIED` (result) only with a committed reproducible artifact; never to `LOCAL_REAL_VALIDATION` without the real-service run. The BM25 arm has met this bar on its own scope; the item as a whole stays `PENDING` because Dense and Hybrid have not run.
+- **Related issue:** #18. **Status:** `PARTIAL` (BM25 executed; Dense / Hybrid not executed).
 
 ## VAL-PERF-001 — Real performance artifact
 

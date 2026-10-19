@@ -258,3 +258,58 @@ python3 scripts/validation/verify_benchmark_evidence.py
   [`production-index-governance.md`](production-index-governance.md) §1。
 
 Refs #18. Refs #86.
+
+---
+
+## 9. 阶段基线冻结声明
+
+> 🧊 **Real Corpus V1 Benchmark 阶段已验收完成，技术基线自此冻结。**
+
+### 冻结的内容
+
+本阶段基线由以下**一组**要素共同定义，任何一个都不是可单独复现的实验：
+
+| 要素 | 冻结值 |
+|---|---|
+| 语料与版本 | `corpus/real_v1/`，`corpus_version = real-v1-20261019`，`content_sha256 = 38849be7fe8ce077ea5a5e61fa1fa3909143b8a9088dd55d372b3d1c64711a1c` |
+| 批准来源 | `regulation_727.jsonl`（`c9499ca5…`）+ `used_ingredients_2021.jsonl`（`3dd67722…`），均由 `Xander-Xai` 具名审批 |
+| 正式金标 | `tests/evaluation/golden_set_v1/reviewed/annotations_v1_reviewed.jsonl`，27 条，`sha256 = 9621d150996f9144d7d4b8af486ec5f4cccfbf29dc3a31599b82c328349159d1` |
+| Standard BM25 | 正式运行 `20261019T190215Z-b679c73e`，git `c8e49e2db6383fd23c09a78c4408c1e9cbcd1166` |
+| SmartCN A/B | 正式运行 `20261019T190332Z-c5140f03` |
+| IK A/B | 正式运行 `20261019T190404Z-71e0863e` |
+| 发布门禁 | `benchmarks/source_approval.py` + `tests/benchmark/test_source_approval_gate.py`（33 个测试） |
+| 指标复算脚本 | `scripts/validation/verify_benchmark_evidence.py` |
+| 生产隔离 | 全部实验索引为 `cosmetics_docs_exp_*` 隔离索引；生产索引 `cosmetics_docs` 未被改动 |
+
+### 冻结的规则
+
+**后续任何模型、数据、索引或金标变更，必须采用新的实验版本，不得覆写本阶段基线。**
+
+具体地：
+
+- **不得**修改 `annotations_v1_reviewed.jsonl`、两份已审批源文件或其字节哈希。
+  改动会使审批绑定失效（哈希不匹配即回到 `PENDING_REVIEW`），也使本阶段的
+  `dataset_sha256` 与 `content_sha256` 绑定失效。
+- **不得**改写本报告、`chinese-analyzer-ab.md` 或
+  `docs/validation/evidence/` 下的任何已发布证据文件来反映新结果。
+  历史记录必须如实保留其当时的执行状态。
+- **不得**让新的实验复用本阶段的 `run_id`、索引名或 artifact 路径。
+- 新的模型 / 数据 / 索引 / 金标组合 = **新的实验版本**：
+  新的 `corpus_version`、新的 `run_id`、新的隔离索引名，以及一份**新的**运行报告。
+- 本阶段的报告与证据**不因**新实验而改写；两者的差异由新的实验文档说明。
+
+### 冻结的不是整个仓库
+
+「阶段基线冻结」指的是**这一阶段的实验结论**不再被后续改动静默覆盖。它**不**意味着：
+
+- 仓库停止维护；
+- 新模型 / 新数据 / 新索引不能做——只是必须走新的实验版本；
+- 范围 B 的未完成项（301 条数据集的稳定标识与标注、Answer Eval 观测数据与入口、
+  Dense / Hybrid 的真实 BGE 实验、生产上线验证、版本适用性控制）被冻结——
+  它们**仍然是待办**，跟踪于 issue [#86](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/86)
+  与 [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18)。
+
+### 没有发布版本策略
+
+本仓库当前**没有**明确的 Release / Tag 发布策略，因此本阶段**不**创建 Release 或 Tag。
+上表即是基线定义本身：任何人都可以用「语料哈希 + 金标哈希 + run_id + git SHA」定位到这一阶段。

@@ -125,7 +125,7 @@
 - [ ] 启用 OTLP 导出并在后端实际查询到本服务产生的 span。默认 `OTEL_EXPORT_ENABLED=false`，exporter 包是可选依赖；**exporter 已实现且有测试覆盖，不代表闭环已验证**
 - [ ] 在运行中的 Prometheus 里导入并评估 `monitoring/prometheus/alerts.yml`，确认规则能被加载且指标可抓取（需先生成 scrape bearer token 文件）
 - [ ] 导入 Grafana 仪表盘，确认面板能被真实数据填充
-- [ ] 产出 retrieval benchmark artifact（`artifacts/benchmarks/<run-id>/`），并核对 `docs/repository-truth-audit.md` 中的 artifact 验收字段。**当前没有 artifact，benchmark 框架 = `REPO_VERIFIED`，benchmark 结果 = `PENDING`**
+- [ ] 产出 Dense / Hybrid retrieval benchmark artifact（`artifacts/benchmarks/<run-id>/`），并核对 `docs/repository-truth-audit.md` 中的 artifact 验收字段。**BM25 已完成**（Real Corpus V1：27 条具名签署金标、两份已审批来源、真实 ES 8.11.0，`results_are_benchmark=true`，逐样本证据可离线复算，见 `docs/validation/real-v1-approved-bm25-run.md`）；**Dense / Hybrid 仍缺真实 BGE 权重**，`VAL-RETRIEVAL-001` 因此整体仍为 `PENDING`
 - [ ] 产出负载/性能 artifact（吞吐、P95/P99、并发），或明确记录 PRD 中的延迟/QPS 数字仍为设计目标
 - [ ] 记录真实 RAGAS evaluator 运行结果，或明确记录其依赖/凭据仍阻塞
 - [ ] 完成真实 4B/14B vLLM GPU 拓扑验证（需要模型权重与 GPU）。**外部运行环境经验不能替代本仓库的验证证据**

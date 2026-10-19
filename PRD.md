@@ -463,7 +463,11 @@ Union Recall Set = R_bge ∪ R_bm25 ∪ R_clip ∪ R_rewrite
 系统虽不依赖显式 NER 组件，但通过 Query Rewrite 的 standardized_entities 字段实现实体级控制。为保证召回稳定性，引入离线评估机制：
 ● ★ **未实现**：每月在标注语料库上计算实体召回 Recall@K 与 F1，并用结果调整 Prompt、检索权重与 RRF 系数。
   仓库中既没有该标注语料库，也没有这条月度评估的调度；`standardized_entities` 目前只是 Rewrite 输出的
-  一个字段。检索 benchmark 的 `Recall@1/3/5/10` 是**框架**（`benchmarks/`），结果为 `PENDING`。
+  一个字段。检索 benchmark 的 `Recall@1/3/5/10` 早期只有**框架**（`benchmarks/`）；现已产出一次
+  正式结果——**Real Corpus V1 的 27 条具名签署金标 + 全审批语料 + 真实 ES 8.11.0 的单路 BM25**
+  （`results_are_benchmark=true`，逐样本证据可离线复算，见
+  `docs/validation/real-v1-approved-bm25-run.md`）。**Dense / Hybrid 与旧版 301 条数据集仍为
+  `PENDING`**（缺真实 BGE 权重 / 缺稳定标识）。
 7.3 两阶段 Rerank（GPU 批处理化重构）
 Stage 1：BiEncoder（宽保留策略，GPU Batch）
 ● 输入：Union Recall Set（去重后约 150~200 条候选）

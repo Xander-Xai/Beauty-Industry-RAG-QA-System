@@ -202,7 +202,7 @@ RRF 融合与去重之后，先由 BiEncoder 宽保留 Top 150，再由两个 Cr
 - Grafana 面板被真实数据填充 — PENDING：JSON 从未导入过运行中的 Grafana
 - 真实 RAGAS 质量结果 — PENDING：无获批 evaluator 凭据
 - 真实 4B/14B vLLM GPU 拓扑 — PENDING：权重不在仓库，`vllm` 未安装
-- 真实检索 benchmark 结果 — PENDING：框架已实现，无可复现 artifact
+- 真实检索 benchmark 结果 — **Real Corpus V1 的 BM25 已产出**（`LOCAL_REAL_VALIDATION`：27 条具名签署金标、全审批语料、真实 ES 8.11.0、逐样本证据可离线复算，见 `docs/validation/real-v1-approved-bm25-run.md`）；Dense / Hybrid 与旧版 301 条数据集仍 `PENDING`
 - 真实 BGE / CLIP / PaddleOCR smoke — PENDING：`EXTERNAL_MODEL_ASSET_REQUIRED`
 
 ### 追踪钩子的准确说法

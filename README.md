@@ -41,8 +41,8 @@
 | 嵌入模型 | `bge-base-zh-v1.5`（768 维）/ `clip-vit-base-patch16`（512 维） | `config.json` → `embedding` |
 | 权限模型 | uint32 位掩码 RBAC（`role_mask` / `dept_mask`） | `common/auth.py` · `config.json` → `rbac` |
 | 一致性守卫 | `scripts/check_repo_consistency.py` 在 CI 中运行 | [Quick Start](#quick-start) → 开发与检查 |
-| 检索 benchmark 结果 | **结果 `PENDING`**（框架 `REPO_VERIFIED`） | [Evaluation](#evaluation) |
-| 生产上线验收 | **未完成**：17 项门禁中 15 项 `NOT EXECUTED`、2 项已 `EXECUTED` | [Limitations](#limitations) |
+| 检索 benchmark 结果 | **Real Corpus V1 的 BM25 已产出并可离线复算**（`LOCAL_REAL_VALIDATION`）；Dense / Hybrid 与旧版 301 条数据集仍 `PENDING` | [Evaluation](#evaluation) |
+| 生产上线验收 | **未完成**：17 项门禁中 14 项 `NOT EXECUTED`、1 项 `PARTIAL`（BM25 臂已执行）、2 项已 `EXECUTED` | [Limitations](#limitations) |
 
 > 精确计数（测试用例数、代码行数、面板数）刻意不写死在此表，避免随迭代漂移成假声明；
 > 按 [Evidence Boundary → 复核方式](#复核方式) 给出的命令在当前 commit 现场计算。
@@ -59,9 +59,9 @@
 | 4 | **企业工程化** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook、Docker Compose + Kubernetes 双形态 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) |
 | 5 | **怎么跑** | `pip install -r requirements.txt && cp .env.example .env && python3 app.py` → `http://localhost:8000/docs` | [Quick Start](#quick-start) |
 | 6 | **检索怎么做的、为什么这么做** | 动态 2–4 路 → 单入口加权 RRF → 两级重排 → 双 Gate；含「为什么不用微调 / 为什么 Hybrid / 为什么 Rerank」的设计取舍 | [Retrieval Pipeline](#retrieval-pipeline) |
-| 7 | **效果怎么评估** | 评测框架已实现（检索指标 + RAGAS + 性能产物契约）；**结果未产出**，golden set 缺稳定标识，相关性只能按规范化精确文本匹配 | [Evaluation](#evaluation) |
+| 7 | **效果怎么评估** | 评测框架已实现（检索指标 + RAGAS + 性能产物契约）。**Real Corpus V1（27 条具名签署金标 + 两份已审批来源 + 真实 ES 8.11.0）已产出一次正式 BM25 结果，逐样本证据已提交、可离线复算**；Dense / Hybrid、RAGAS 质量分、性能产物与**旧版 301 条数据集**仍为 `PENDING` | [Evaluation](#evaluation) |
 | 8 | **已验证 / 未验证在哪看** | 边界一节讲清：[Evidence Boundary](#evidence-boundary)；逐项「已实现 / 未验证 + 升级判据」见 [Production Readiness](#production-readiness) | [docs/production-readiness.md](docs/production-readiness.md) |
-| 9 | **已知未收敛的实现细节** | 六个微服务目录可导入但未联调、未部署 · 无 CrossEncoder 权重时全链路拒答 · 检索 benchmark 与性能产物均未执行 | [Production Readiness](#production-readiness) |
+| 9 | **已知未收敛的实现细节** | 六个微服务目录可导入但未联调、未部署 · 无 CrossEncoder 权重时全链路拒答 · Dense / Hybrid 检索与性能产物均未执行 | [Production Readiness](#production-readiness) |
 
 ---
 
@@ -75,7 +75,7 @@
 - [Demo](#demo) — 合成数据下的权限隔离与拒答演示
 - [Quick Start](#quick-start) — 最小可跑路径与检查命令
 - [Tech Stack](#tech-stack) — 选型一览
-- [Evaluation](#evaluation) — 框架已实现，结果未产出
+- [Evaluation](#evaluation) — 框架已实现；Real Corpus V1 的 BM25 结果已产出并可复算，Dense / Hybrid 与旧版 301 条数据集仍为 `PENDING`
 - [Limitations](#limitations) — **先读这一节**
 - [Roadmap](#roadmap) — 已登记的 P0 / P1 / P2 待办
 - [Documentation](#documentation) — 文档入口
@@ -396,11 +396,16 @@ python3 -m benchmarks.retrieval_benchmark --list-configs
 python3 -m benchmarks.retrieval_benchmark --executor real --config bm25 --limit 5
 ```
 
-框架为 `REPO_VERIFIED`；**结果为 `PENDING`**。真实执行器（`benchmarks/executors.py`）已接入 CLI 的
+框架为 `REPO_VERIFIED`；**Real Corpus V1 的 BM25 结果已产出**（正式运行报告见
+[Real Corpus V1 正式 BM25 运行报告](docs/validation/real-v1-approved-bm25-run.md)），
+**Dense / Hybrid 仍为 `PENDING`**（缺真实 BGE 权重）。真实执行器（`benchmarks/executors.py`）已接入 CLI 的
 `--executor real`，覆盖 `bm25` / `dense` / `hybrid_rrf`；后端探针未通过或缺少独立语料时配置以
-`BLOCKED` 与原因记录，**不会**产出数字。评估口径与数据质量缺口见 [Evaluation](#evaluation) 与 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 契约见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
+`BLOCKED` 与原因记录，**不会**产出数字。发布门禁另要求**被检索索引里的每篇文档都带具名审核人的
+来源审批**（`benchmarks/source_approval.py`）：缺审批、混合审批、索引内哈希与审批台账或磁盘源文件
+对不上，都会让 `results_are_benchmark` 为 false。评估口径与数据质量缺口见 [Evaluation](#evaluation) 与
+[docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 契约见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
 
-数据归属契约（`golden-set-contract/v2`，`benchmarks/golden_set_contract.py`）：所有样本都必须带稳定 `sample_id`、真实 `(doc_id, chunk_id)` + `corpus_version`、人工 `visual_required` / `complexity_label` 与标注溯源，否则判 `INVALID`。当前 301 条实测 **0/301 合规**；评测脚本会拒绝在无效数据上输出百分比：
+数据归属契约（`golden-set-contract/v2`，`benchmarks/golden_set_contract.py`）：所有样本都必须带稳定 `sample_id`、真实 `(doc_id, chunk_id)` + `corpus_version`、人工 `visual_required` / `complexity_label` 与标注溯源，否则判 `INVALID`。**旧版 301 条数据集实测 0/301 合规**（范围 B，见 [Evaluation](#evaluation)）；**Real Corpus V1 的 27 条实测 27/27 合规**（范围 A）。评测脚本会拒绝在无效数据上输出百分比：
 
 ```bash
 python3 scripts/validation/validate_golden_set_contract.py --dataset tests/evaluation/golden_set.jsonl
@@ -457,10 +462,91 @@ python3 scripts/check_repo_consistency.py
 
 ## Evaluation
 
-> **状态：Framework ready. Benchmark execution pending. Production validation pending.**
-> 三套评测框架（检索指标 · RAGAS 质量 · 性能产物）的代码与 artifact 契约都是 `REPO_VERIFIED`；**本仓库没有任何一次真实评测的结果，也没有可复现的 artifact**。这一节给出的是「怎么评、评什么、缺什么才能出数」，不是分数。
+> **状态：Real Corpus V1 的 BM25 已产出并可复算；Dense / Hybrid、性能产物、RAGAS 与旧版 301 条数据集仍为 `PENDING`。**
+>
+> 本节的评测**分两个范围**，它们的结论不能互相替代：
+>
+> | 范围 | 数据集 | 状态 |
+> |---|---|---|
+> | **A — Real Corpus V1** | 27 条**具名签署**金标 · 两份**已审批**来源 · 212 篇 Chunk 逐篇核验 · 真实 ES 8.11.0 | ✅ BM25 正式结果已产出，逐样本证据已提交并可离线复算 |
+> | **B — 旧版 301 条数据集与完整系统** | 301 条**无稳定标识** · 无真实 Dense / Hybrid · 无 RAGAS 质量分 · 无生产验证 | ❌ 仍为 `PENDING` |
+>
+> 范围 A 的结果**不代表**范围 B 已完成，也不代表生产可用。范围 A 的完整证据见
+> [Real Corpus V1 正式 BM25 运行报告](docs/validation/real-v1-approved-bm25-run.md)，
+> 分词对照实验见 [中文分词 A/B](docs/validation/chinese-analyzer-ab.md)。
 
-### 检索质量：框架与缺口
+### 范围 A：Real Corpus V1 的正式 BM25 结果
+
+一次真实运行，真实 ES 8.11.0，无 Mock retriever，干净工作树，**通过全部发布门禁**
+（含来源审批门禁）：
+
+| 项 | 值 |
+|---|---|
+| 数据集 | `tests/evaluation/golden_set_v1/reviewed/annotations_v1_reviewed.jsonl`（27 条，`REVIEWED`，签署人 `Xander-Xai`） |
+| 数据集 SHA-256 | `9621d150996f9144d7d4b8af486ec5f4cccfbf29dc3a31599b82c328349159d1` |
+| 索引 | `cosmetics_docs_exp_v3_approved`（隔离实验索引，**未触碰** `cosmetics_docs`） |
+| 来源审批 | 2/2 具名审批，212/212 篇 `APPROVED_EXTERNAL`，`PENDING_REVIEW` 0 · `UNTRUSTED` 0 |
+| 门禁 | `results_are_benchmark=true` · `publishable=true` · `source_approval_verified=true` · `provenance_verified=true` · `attributable=true` · `synthetic_retriever=false` |
+| 契约 | Golden Set Contract v2 **27/27 valid**，数据完整性错误 0，Gold Chunk **21/21** 解析且全部来自已审批来源 |
+
+**Standard 分析器**（索引默认）：
+
+| 指标 | 值 |
+|---|---|
+| Recall@1 / @3 / @5 / @10 | 0.2963 / 0.4074 / 0.5185 / 0.7037 |
+| HitRate@1 / @3 / @5 / @10 | 0.3333 / 0.4074 / 0.5185 / 0.7037 |
+| MRR@10 | 0.4088 |
+| NDCG@10 | 0.4698 |
+| 延迟（p50 / p95 / 冷启动） | 13.66 / 18.34 / 5521.6 ms（本地单节点回环） |
+
+**中文分词对照实验**（同一隔离 ES 节点、同一批 Chunk ID、同一 provenance、同一 epoch，
+**只改 `content` 分析器**）：
+
+| 指标 | Standard | SmartCN | IK (`ik_smart`) |
+|---|---:|---:|---:|
+| Recall@1 | 0.2963 | **0.2593** | **0.2593** |
+| Recall@3 | 0.4074 | 0.5556 | 0.4630 |
+| Recall@5 | 0.5185 | 0.8148 | 0.8519 |
+| Recall@10 | 0.7037 | **0.9259** | **0.9630** |
+| MRR@10 | 0.4088 | 0.4674 | 0.4620 |
+| NDCG@10 | 0.4698 | 0.5771 | 0.5753 |
+| 修复的 top-10 未召回 / 新增退化 | — | **6 / 0** | **7 / 0** |
+
+**这些数字的边界，必须一起读**：
+
+- **n = 27**，不支持统计推断。SmartCN 与 IK 各让 **Recall@1 下降 0.0370**（唯一一个方向性回退：
+  `REAL-V1-005` 从第 1 名滑到第 2 名，而 MRR@10 与 NDCG@10 同时上升）。
+- **本地单节点** ES 8.11.0。延迟差异**不能证明性能提升**——换一次提交后 p95 在
+  11.23 ms 与 24.87 ms 之间波动，而语料与索引一字未改。
+- **历史版本语料**：2021 年快照。条例第七十八条过渡期已于 2025-12-31 届满，
+  NMPA 2025 年第 61 号公告已删除「最高历史使用量」栏。**不能声称现行法规准确率。**
+- **IK 是实验性第三方插件**（`com.infinilabs.ik`），版本匹配已核验，但
+  **许可与供应链审查尚未完成**：厂商未提供可核对的校验和（`.sha512` 返回 404），
+  包内无 LICENSE 文件。仅用于隔离容器实验，**未**用于生产索引。
+- **不是生产指标**。生产索引 `cosmetics_docs` 未重建、provenance 仍是撤回前的错误声明、
+  生产 epoch 未切换、无别名切换。治理现状与蓝绿迁移方案见
+  [production-index-governance.md](docs/validation/production-index-governance.md)。
+
+**证据可复算**：逐样本 Gold Chunk ID、召回 Chunk ID 与首个命中名次已提交，
+第三方无需 ES、无需权重、无需网络即可重算全部指标：
+
+```bash
+python3 scripts/validation/verify_benchmark_evidence.py
+# All published metrics reproduced from committed evidence.
+```
+
+证据文件位于 `docs/validation/evidence/`（`real-v1-approved-bm25-evidence.json` ·
+`real-v1-approved-bm25-per-sample.jsonl` · `chinese-analyzer-tokenisation.json`）。
+原始运行产物按仓库规则不提交，本地运行时的 SHA-256 记录在正式运行报告中。
+
+> 🧊 **Real Corpus V1 Benchmark 阶段基线已冻结。** 后续任何模型、数据、索引或金标变更
+> **必须采用新的实验版本**，**不得覆写**本阶段基线（`20261019T190215Z-b679c73e`，
+> git `c8e49e2`）。冻结的是该实验阶段的技术基线，**不是**整个仓库停止维护。
+> 详见[正式运行报告的冻结声明](docs/validation/real-v1-approved-bm25-run.md#9-阶段基线冻结声明)。
+
+### 范围 B：旧版 301 条数据集与完整系统（仍 `PENDING`）
+
+以下全部**未完成**，不因范围 A 完成而改变：
 
 ```bash
 # 列出当前环境实际可执行的配置（实时探测后端，不用替身 retriever）
@@ -472,7 +558,7 @@ python3 -m benchmarks.retrieval_benchmark --executor real --config bm25 --limit 
 
 框架按五档递进配置对比单路与混合检索的收益：`bm25` · `dense` · `hybrid_rrf` · `hybrid_rrf_biencoder` · `hybrid_rrf_biencoder_crossencoder`；指标为 Recall@K、HitRate@{1,3,5,10}、MRR@10、NDCG@10，可按 `business_type` / `difficulty` 分桶。代码：`benchmarks/`（指标实现确定性，与后端无关的部分有完整单测）。
 
-### Golden set 的实测字段覆盖
+### 范围 B 的 Golden set 实测字段覆盖
 
 `tests/evaluation/golden_set.jsonl`，301 条：
 
@@ -487,14 +573,18 @@ python3 -m benchmarks.retrieval_benchmark --executor real --config bm25 --limit 
 
 ground truth 规模：每条 1–4 段（共 1081 段），但只有 **262 个不同段落**被复用。评测时**每一段都会参与打分**——早先的实现只取 `contexts[0]`，会让 4 段 ground truth 变成按 1 段计分，Recall@5 直接虚高成 1.0。
 
-### 关键诚实边界：没有稳定标识，相关性只能按文本精确匹配
+### 范围 B 的关键诚实边界：301 条没有稳定标识，相关性只能按文本精确匹配
 
-相关性判定分两级（`benchmarks/relevance.py`）：**Level 1 稳定标识**，键为 `doc_id::chunk_id` 复合标识（`relevance_key()`），是精确且与语言无关的；**Level 2 规范化精确文本**（NFKC + 空白折叠 + trim）是当前唯一可用的路径——**golden set 的 301 条没有任何稳定标识**。
+> **适用范围：旧版 301 条数据集（`tests/evaluation/golden_set.jsonl`）。**
+> 范围 A 的 Real Corpus V1 已用 `doc_id::chunk_id` 稳定标识判定相关性（`level1_stable_id`），
+> 见上文「范围 A」。下面三条**只**描述 301 条数据集，不适用于范围 A。
 
-这意味着三件事，缺一不可地说明为什么当前不能声称检索指标可信：
+相关性判定分两级（`benchmarks/relevance.py`）：**Level 1 稳定标识**，键为 `doc_id::chunk_id` 复合标识（`relevance_key()`），是精确且与语言无关的；**Level 2 规范化精确文本**（NFKC + 空白折叠 + trim）是当前唯一可用的路径——**范围 B 的 301 条没有任何稳定标识**。
+
+这意味着三件事，缺一不可地说明为什么 301 条上不能声称检索指标可信：
 
 1. 相关性只能靠字符串完全一致来判定。语料一旦重新切块、OCR 文本有细微差异、段落被合并，相关性就会静默归零——**Recall 的高低会由构建流程的偶然性决定，而不是由检索质量决定**。
-2. 因此动态 2–4 路的收益**目前无法度量**：`complexity` 与 `visual_required` 标签全缺，两个分桶都产不出来（跟踪于 issue [#86](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/86)）。
+2. 因此动态 2–4 路的收益**在 301 条上仍无法度量**：`complexity` 与 `visual_required` 标签全缺，两个分桶都产不出来（跟踪于 issue [#86](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/86)）。范围 A 的正式实验只覆盖单路 BM25，**没有**测量多路选择的收益。
 3. 框架刻意**不**使用 LLM judge、embedding 相似度阈值、模糊/编辑距离匹配或人工映射来「补」这个缺口——那些做法会抬高 recall 且不可复现，属于把指标调成好看的形状，不是把检索调好。宁可报不出分，也不报不可归因的分。
 
 补齐路径很明确且成本不高，但**必须按段落逐条补**：为**每一段** ground truth 补上它自己的 `doc_id` + `chunk_id`（离线构建时已生成这两个字段），再人工标注 `complexity` 与 `visual_required`。
@@ -527,22 +617,28 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 [Production Readiness](#production-readiness)。
 
 本仓库区分「代码存在」与「证据支持」，全仓库只用六级 canonical 证据等级。一句话概括当前
-边界：**每一项能力都是 `REPO_VERIFIED`（代码在主链路上且被确定性测试或 CI 覆盖），但几乎
-每一项的真实验证结果都是 `PENDING`。**
+边界：**除 Real Corpus V1 的 BM25 外，能力基本都是 `REPO_VERIFIED`（代码在主链路上且被确定性
+测试或 CI 覆盖），而它们几乎都还没有真实验证结果。**
 
-- **没有真实评测结果。** 检索 Recall / HitRate@1/3/5/10 / MRR@10 / NDCG@10、QPS、P95/P99
-  延迟、RAGAS 质量分，全部 `PENDING`。三套评测**框架**已实现且有测试覆盖，但框架 ≠ 结果；
-  golden set 缺稳定标识，当前任何检索指标都不可归因到文档身份。见 [Evaluation](#evaluation)。
-- **没有生产验证。** [Production Readiness](#production-readiness) 的 17 项门禁中仍有 15 项
-  `NOT EXECUTED`；没有生产部署、没有 HA/SLO 主张、没有生产延迟或吞吐证据。已执行的 2 项是
+- **检索指标有两个范围，不要混用。** 范围 A（Real Corpus V1：27 条具名签署金标、两份已审批
+  来源、真实 ES 8.11.0）**已产出**一次真实 BM25 结果，并提交了可离线复算的逐样本证据。
+  范围 B（旧版 301 条数据集）**仍无稳定标识**，其上任何检索指标仍不可归因到文档身份。
+  **Dense / Hybrid、RAGAS 质量分、QPS / P95 / P99 延迟全部 `PENDING`**——BGE 权重不在本机，
+  未生成任何替代数字。见 [Evaluation](#evaluation)。
+- **没有生产验证。** [Production Readiness](#production-readiness) 的 17 项门禁中仍有 14 项
+  `NOT EXECUTED`、1 项 `PARTIAL`（`VAL-RETRIEVAL-001` 的 BM25 臂已执行，Dense / Hybrid 臂未执行）；没有生产部署、没有 HA/SLO 主张、没有生产延迟或吞吐证据。已执行的 2 项是
   `VAL-STORE-001`（单机真实 Qdrant）与 `VAL-DEGRADE-001`（无权重降级断言），都不是生产验证。
+  **生产索引 `cosmetics_docs` 未重建**：其 provenance 仍是撤回前的 `MANAGED_INTERNAL /
+  NOT_REQUIRED` 错误声明，提交配置 `knowledge_version_epoch: default` 与索引实际的
+  `real-v1-20261019` 不匹配。风险已记录，迁移方案见
+  [production-index-governance.md](docs/validation/production-index-governance.md)。
 - **按当前仓库状态直接部署，所有查询都会被拒答。** 缺 CrossEncoder 权重时重排走确定性降级，
   `ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分
   `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`。
 - **微服务形态未联调。** 六个微服务目录的 `main.py` 现在都能被导入（`tests/test_microservice_imports.py`
   在子进程中逐一断言，issue #84 记录的 5 个 `ModuleNotFoundError` 已修复），但"模块可导入"不等于
   "容器能启动"或"端到端联调通过"，后两者仍为 `PENDING`；`dags/` 只有 DAG 注册，无真实调度记录。
-- **不提供第三方生产数据或历史业务指标。** 所有效果与性能结论必须来自本仓库可复核的运行证据；当前缺少可发布的真实评测结果。
+- **不提供第三方生产数据或历史业务指标。** 所有效果与性能结论必须来自本仓库可复核的运行证据；除 Real Corpus V1 的 BM25 外，当前缺少可发布的真实评测结果。
 
 ---
 
@@ -571,7 +667,7 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 
 | 能力 | 实现 | 结果 | 缺什么才能升级 |
 |---|---|---|---|
-| 检索 benchmark（Recall/HitRate@1/3/5/10、MRR@10、NDCG@10） | `REPO_VERIFIED` | `PENDING` | 一次真实 ES/Qdrant 运行并提交可复现 artifact（含 `git_sha` / 数据集 sha256 / 模型 revision / 硬件 / 样本数 / 延迟 / 命令 / 限制说明，见 [验收标准](docs/evidence-map.md#benchmark-artifact-acceptance-criteria)） |
+| 检索 benchmark（Recall/HitRate@1/3/5/10、MRR@10、NDCG@10） | `REPO_VERIFIED` | `LOCAL_REAL_VALIDATION`（范围 A：Real Corpus V1 BM25 —— 27 条具名签署金标、两份已审批来源、212 篇 Chunk 逐篇核验、真实 ES 8.11.0、`results_are_benchmark=true`，逐样本证据可离线复算）· 旧版 301 条数据集与 Dense / Hybrid 仍 `PENDING` | Dense / Hybrid 需要真实 BGE 权重；旧版 301 条数据集需要逐段补 `doc_id` / `chunk_id` 与 `complexity` / `visual_required` 标签（见 [#86](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/86)） |
 | 性能产物契约（七文件、未测量即 `null`） | `REPO_VERIFIED` | `PENDING` | 对真实 API + LLM + 检索栈执行既定负载并提交一份 artifact |
 | QPS / 延迟数字 | — | `PENDING` | 同上：**本仓库没有可复现的 QPS / 延迟 benchmark 结果** |
 | SLO 目标（5 个）与告警阈值 | `REPO_VERIFIED`（文档 / 配置） | `DESIGN_TARGET` | 在真实环境达成该目标 |
@@ -611,7 +707,7 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 - 排障时引用的 `rag_*` 指标必须真实存在。exporter 只暴露原始计数器与直方图（例如 `rag_cache_hit_L1`、`rag_cache_total`、`rag_evidence_score_seconds`），**没有** `rag_cache_hit_rate` 或 `rag_rewrite_fallback_rate` 这类 series；比率要么用基于已 emit counter 的 PromQL ratio，要么读 `/api/stats` 的计算字段。`scripts/check_repo_consistency.py` 强制这条契约。
 - 本仓库唯一的告警契约是 [`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml)，由外部 Prometheus 加载评估。`monitoring/otel_tracer.py` 里还有一个更早的进程内 `AlertingManager`，**没有**接入 canonical 请求路径，属于遗留代码，喂给它的 `config.json` → `alerting.rules` 配置块也已移除。
 - `/api/stats` 与 `/api/metrics` 需要身份认证（`require_identity`）；`/api/health` 公开；`/docs` 在 `deployment_mode=production` 时关闭。Prometheus 抓取需配置 Bearer token。
-- **评测的诚实边界**：golden set 301 条全部**没有** `doc_id` / `chunk_id` / `source_id`，相关性只能按规范化精确文本判定（Level 2），因此当前任何检索指标都**不可归因**到文档身份；框架刻意不用 LLM judge、embedding 相似度阈值或模糊匹配去补这个缺口。RAGAS harness / reporter / validator 存在（`validate_golden_set` 最小规模 300 条，实际 301 条），但**格式校验通过 ≠ 领域事实正确**；RAGAS 是隔离的可选 evaluator，不在默认依赖中，库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**；`--require-ragas` 在缺少 evaluator 依赖或凭据时 **fail fast**、返回非零且**不生成任何 quality report**——evaluator 不可用是"未成功"，不是"零分"。当前仓库**没有**经过验证的真实 RAGAS quality score。完整论证见 [Evaluation](#evaluation)。
+- **评测的诚实边界（分范围）**：**范围 B** 的 golden set 301 条全部**没有** `doc_id` / `chunk_id` / `source_id`，相关性只能按规范化精确文本判定（Level 2），因此其上任何检索指标都**不可归因**到文档身份；框架刻意不用 LLM judge、embedding 相似度阈值或模糊匹配去补这个缺口。**范围 A**（Real Corpus V1 的 27 条）已具备稳定标识（`level1_stable_id`）并完成了一次正式 BM25 运行，但其发布还额外要求**索引内每篇文档都有具名审核人的来源审批**（`benchmarks/source_approval.py`）——该门禁是本次修复的产物，此前 `results_are_benchmark` 不检查来源审批。RAGAS harness / reporter / validator 存在（`validate_golden_set` 最小规模 300 条，实际 301 条），但**格式校验通过 ≠ 领域事实正确**；RAGAS 是隔离的可选 evaluator，不在默认依赖中，库级 `evaluate()` 保留 evaluator-unavailable fallback，**该结果不是质量结果**；`--require-ragas` 在缺少 evaluator 依赖或凭据时 **fail fast**、返回非零且**不生成任何 quality report**——evaluator 不可用是"未成功"，不是"零分"。当前仓库**没有**经过验证的真实 RAGAS quality score。完整论证见 [Evaluation](#evaluation)。
 
 #### 复核方式
 
@@ -631,18 +727,18 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 | RS256 认证 + uint32 权限掩码契约 + 畸形声明 fail closed | ✅ | 单项 `LOCAL_REAL_VALIDATION`（nginx 代理链解析、Redis 跨进程登录限流）；整条请求路径 `PENDING` |
 | Elasticsearch 8 BM25 稀疏检索 + Painless 位掩码过滤 | ✅ | `LOCAL_REAL_VALIDATION`（认证 ES 8.11：writer mapping、`search_after`、在线 BM25） |
 | 权限纵深：存储侧下推 + 融合前文档级过滤 + L2 缓存物理分区 | ✅ | `LOCAL_REAL_VALIDATION`（真实单主机 Qdrant + 真实 Redis：多身份 RBAC 可见性与缓存键隔离，`VAL-STORE-001`）；`PENDING`（生产策略审计、集群拓扑） |
-| 动态 2–4 路召回选择 | ✅ | `PENDING`（选择逻辑确定且有测试，但**收益无法度量**——golden set 缺 `complexity` / `visual_required` 标签，见 #86） |
+| 动态 2–4 路召回选择 | ✅ | `PENDING`（选择逻辑确定且有测试，但**收益仍无法度量**——Real Corpus V1 的正式实验只覆盖单路 BM25，未测多路选择；旧版 301 条数据集仍缺 `complexity` / `visual_required` 标签，见 #86） |
 | 两级重排调用链（BiEncoder → 150 → CrossEncoder ensemble → 10） | ✅（调用链 + 确定性降级） | `PENDING`（权重不在仓库，实际只跑过降级路径） |
 | Evidence Gate / Answer Gate 判定（含法规类矛盾拒答） | ✅ | `PENDING`（真实 NLI / CrossEncoder 权重下的判定质量）；**无权重时的降级后果已被断言**（`VAL-DEGRADE-001`，见下） |
 | Prompt 信任边界（证据限数据区块、当前请求限指令区块、标记转义） | ✅ | `PENDING`（结构约束，**不是** prompt injection 免疫证明） |
 | 离线 ingestion（多格式解析、扫描页 OCR 路由、确定性切块、内容哈希增量、快照校验、epoch 封存） | ✅ | `PENDING`（无真实语料 ingestion artifact） |
 | 9 字段结构化审计双 sink（Redis Stream + 每日 JSONL） | ✅ | `PENDING` |
 | Prometheus 6 条告警（只引用真实 emit 指标）· Grafana 10 面板 · OTLP exporter（默认关闭） | ✅ | `PENDING`（阈值均为 `DESIGN_TARGET`；运行期闭环未验证） |
-| 检索 benchmark / 性能产物 / RAGAS 三套框架与 artifact 契约 | ✅ | `PENDING`（**结果**未产出，未测量一律 `null`） |
+| 检索 benchmark / 性能产物 / RAGAS 三套框架与 artifact 契约 | ✅ | 检索 **Real Corpus V1 BM25 已产出**（`LOCAL_REAL_VALIDATION`，见 [Evaluation](#evaluation)）；性能产物与 RAGAS 仍 `PENDING`（**结果**未产出，未测量一律 `null`） |
 
 **未验证（`PENDING` / `DESIGN_TARGET`：代码或设计存在，真实资产 / 环境 / 凭据不可得）**
 
-真实 Qdrant 的**集群 / HA / 吞吐 / TLS** 与真实 BGE/CLIP 向量下的召回（单机真实服务已 `EXECUTED`，见上）· 检索指标 Recall / HitRate@K / MRR@10 / NDCG@10 · QPS 与 P95/P99 延迟 · RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` 会 fail-fast 而不是给零分）· BGE / CLIP / PaddleOCR / CrossEncoder 真实权重 · 4B/14B vLLM GPU 拓扑 · Airflow 真实调度 · Kubernetes 真实集群部署 · 浏览器 → 真实后端端到端 · 告警在真实流量下的触发 · OTLP span 回读 · Redis Cluster/Sentinel、多节点 ES、TLS、外部负载均衡。
+真实 Qdrant 的**集群 / HA / 吞吐 / TLS** 与真实 BGE/CLIP 向量下的召回（单机真实服务已 `EXECUTED`，见上）· 检索指标的 **Dense / Hybrid 臂与旧版 301 条数据集**（单路 BM25 已在 Real Corpus V1 范围产出，见 [Evaluation](#evaluation)）· QPS 与 P95/P99 延迟 · RAGAS 真实质量分（需 evaluator 凭据，`--require-ragas` 会 fail-fast 而不是给零分）· BGE / CLIP / PaddleOCR / CrossEncoder 真实权重 · 4B/14B vLLM GPU 拓扑 · Airflow 真实调度 · Kubernetes 真实集群部署 · 浏览器 → 真实后端端到端 · 告警在真实流量下的触发 · OTLP span 回读 · Redis Cluster/Sentinel、多节点 ES、TLS、外部负载均衡。
 
 **必须知道的一条降级事实**：仓库内没有 CrossEncoder 权重时，重排走确定性降级，`ce_top1_score` 与 `ce_top3_mean_score` 恒为 0，Evidence Gate 可得最高分 `0.2·agreement + 0.2·doc_consistency ≤ 0.40`，低于 `low_confidence = 0.55`（`config.json` → `retrieval.evidence_gate`）——**因此按当前仓库状态直接部署，所有查询都会被拒答**。这是 gate 降级时选择关闸的正确方向，但也说明缺失资产不是装饰性问题。这个端到端后果现在**已被断言**
 而不是只被叙述：`tests/test_evidence_gate_degradation.py` 把确定性降级输出喂进 gate，对照配置的阈值
@@ -651,11 +747,11 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 
 #### Production Validation Checklist
 
-从「架构 Demo」走到「可上生产」还需要完成的验证，逐条在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md) 里有可执行的步骤与验收标准。**当前状态：17 项中 15 项 `NOT EXECUTED`；`VAL-STORE-001` 与 `VAL-DEGRADE-001` 已 `EXECUTED`，且都不是生产验证。**
+从「架构 Demo」走到「可上生产」还需要完成的验证，逐条在 [docs/deferred-runtime-validation.md](docs/deferred-runtime-validation.md) 里有可执行的步骤与验收标准。**当前状态：17 项中 14 项 `NOT EXECUTED`、1 项 `PARTIAL`、2 项已 `EXECUTED`；`VAL-STORE-001` 与 `VAL-DEGRADE-001` 已执行，且都不是生产验证。`VAL-RETRIEVAL-001` 为 `PARTIAL`——BM25 臂已执行（Real Corpus V1），Dense / Hybrid 臂未执行。**
 
 | 门禁项 | 需要什么 | 状态 |
 |---|---|---|
-| 检索 benchmark 可归因 | golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required`（#86）；接真实检索执行器；跑五个配置 | ⬜ `VAL-RETRIEVAL-001` |
+| 检索 benchmark 可归因 | **BM25 臂已完成**（Real Corpus V1：27 条具名签署金标、两份已审批来源、真实 ES 8.11.0、逐样本证据可离线复算）；**Dense / Hybrid 臂仍需**真实 BGE 权重；**旧版 301 条**仍需补 `doc_id` / `chunk_id` / `complexity` / `visual_required`（#86） | ⬜ `VAL-RETRIEVAL-001`（`PARTIAL`：BM25 已执行，Dense / Hybrid 未执行） |
 | 真实 Qdrant 服务 | 单机容器 + 封存 epoch 语料；验证 epoch 过滤、epoch 级 point id、payload 过滤 | ✅ `VAL-STORE-001`（已 `EXECUTED`，`LOCAL_REAL_VALIDATION`；**集群 / HA / 吞吐 / TLS 仍 `PENDING`**） |
 | 降级行为可断言 | 无需环境：断言无权重时 Evidence Gate 必然拒答 | ✅ `VAL-DEGRADE-001`（已 `EXECUTED`，`REPO_VERIFIED`；真实权重下的重排收益另见下行） |
 | 两级重排收益 | 真实 CrossEncoder 权重；对比 `hybrid_rrf_biencoder` 与 `+_crossencoder` | ⬜ `VAL-RERANK-001` |
@@ -682,8 +778,8 @@ artifact 加证据等级提升规则。
 
 | 优先级 | 事项 | 状态 |
 |---|---|---|
-| P0 | 检索指标可归因：golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required` | ⬜ issue #86 · `VAL-RETRIEVAL-001` |
-| P0 | 跑一次真实 BM25 / Dense / Hybrid 检索 benchmark 并提交可复现 artifact | ⬜ issue #18 |
+| P0 | 检索指标可归因：**旧版 301 条** golden set 补 `doc_id` / `chunk_id` / `complexity` / `visual_required`（**Real Corpus V1 的 27 条已完成**：具名签署 + 27/27 契约有效） | ⬜ issue #86（V1 子项已完成，301 条子项未完成） |
+| P0 | 跑一次真实 **Dense / Hybrid** 检索 benchmark 并提交可复现 artifact（**BM25 已完成**：Real Corpus V1，27 条签署金标、全审批语料、真实 ES 8.11.0，逐样本证据可复算） | ⬜ issue #18（BM25 子项已完成，Dense / Hybrid 子项未完成） |
 | P0 | 把已断言的降级后果接上真实权重：`VAL-DEGRADE-001` 零环境部分已完成，真实 CrossEncoder 收益待测 | ⬜ `VAL-RERANK-001` |
 | P1 | 真实模型权重 smoke：BGE / CLIP / PaddleOCR | ⬜ issue #8 · `VAL-MODEL-001/002/003` |
 | P1 | 两级重排收益度量：`hybrid_rrf_biencoder` vs `+_crossencoder` | ⬜ `VAL-RERANK-001` |

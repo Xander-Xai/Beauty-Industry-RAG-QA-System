@@ -1,5 +1,18 @@
 # RAG evaluation readiness
 
+> **Scope.** This record covers the **legacy 301-row golden set**
+> (`tests/evaluation/golden_set.jsonl`) and the five-configuration ablation
+> A–E. Every `BLOCKED` row below is about *that* scope, and none of it is
+> changed by the Real Corpus V1 result.
+>
+> A separate scope has since produced retrieval metrics: **Real Corpus V1**
+> (27 human-signed records, two approved sources, real Elasticsearch 8.11.0)
+> has a single-path BM25 result with `results_are_benchmark=true` and
+> recomputable per-sample evidence — see
+> [`real-v1-approved-bm25-run.md`](real-v1-approved-bm25-run.md). The
+> Dense / Hybrid arms of ablation A–E remain blocked on the missing BGE weights
+> and are **not** covered by that result.
+
 This record states, for every metric the retrieval/answer evaluation is meant to
 produce, whether it is measured, partially measured, or blocked, and exactly what
 is missing. It is written from the code and from runs executed in this
