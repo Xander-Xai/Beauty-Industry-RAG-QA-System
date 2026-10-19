@@ -16,7 +16,11 @@ class QueryRequest(BaseModel):
 
     query: str = Field(..., min_length=1, max_length=2000, description="用户查询文本")
     session_id: str | None = Field(None, max_length=64, description="会话 ID（可选）")
-    user_id: str | None = Field(None, max_length=64, description="用户 ID（可选，优先使用 Header）")
+    user_id: str | None = Field(
+        None,
+        max_length=64,
+        description="已弃用：身份一律取自经过认证的请求（JWT）。该字段不再用于解析会话 owner，仅为请求兼容保留。",
+    )
     # PRD §6: 仅支持离线已向量化图像，不支持用户实时上传图片在线解析
     image_path: str | None = Field(None, max_length=512, description="已弃用：系统不支持实时图片上传")
 

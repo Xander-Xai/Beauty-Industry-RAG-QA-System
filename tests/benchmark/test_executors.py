@@ -254,7 +254,7 @@ def test_cli_default_executor_is_none(tmp_path, monkeypatch):
     assert metadata["results_are_benchmark"] is False
 
 
-# ── a declared-real factory is not mislabelled synthetic ─────────────────────
+# ── provenance is the retriever's own marker, not a caller flag ──────────────
 
 
 class _OneHitRetriever:
@@ -262,6 +262,12 @@ class _OneHitRetriever:
 
     def retrieve(self, query, top_k):
         return [RetrievedItem(rank=1, key=query.relevant_items[0].key, score=1.0, source="bm25", text="")]
+
+
+class _ProductionRunnableRetriever(_OneHitRetriever):
+    """Stands in for the real executors: it declares its own provenance."""
+
+    is_production = True
 
 
 def _one_query():
@@ -277,20 +283,23 @@ def _one_query():
     ]
 
 
-def test_a_declared_real_factory_run_is_not_synthetic():
-    """``--executor real`` must not be labelled "synthetic fixture retriever".
+def test_the_real_executors_declare_production_provenance():
+    """The marker the runner reads must be set by every production adapter."""
+    from benchmarks.executors import BM25Executor, DenseExecutor, HybridRRFExecutor
 
-    The runner assumed every injected factory was a test fixture, so a genuine
-    ``--executor real`` run would carry ``synthetic_retriever: true`` and
-    ``results_are_benchmark: false`` even with a real corpus — unpublishable by label.
-    """
+    assert BM25Executor.is_production is True
+    assert DenseExecutor.is_production is True
+    assert HybridRRFExecutor.is_production is True
+
+
+def test_a_production_retriever_run_is_not_labelled_synthetic():
+    """A genuine ``--executor real`` run must not read as a synthetic fixture."""
     from benchmarks.runner import run_configuration
 
     run = run_configuration(
         "bm25",
         _one_query(),
-        retriever_factory=lambda name: _OneHitRetriever(),
-        synthetic_retriever=False,
+        retriever_factory=lambda name: _ProductionRunnableRetriever(),
     )
 
     assert run.executed
@@ -298,7 +307,8 @@ def test_a_declared_real_factory_run_is_not_synthetic():
     assert run.outcome.reason != "synthetic fixture retriever (not a benchmark)"
 
 
-def test_an_injected_fixture_factory_stays_synthetic_by_default():
+def test_a_fixture_retriever_is_synthetic_even_if_it_looks_production_shaped():
+    """A test double is synthetic by construction; there is no flag to override it."""
     from benchmarks.runner import run_configuration
 
     run = run_configuration("bm25", _one_query(), retriever_factory=lambda name: _OneHitRetriever())

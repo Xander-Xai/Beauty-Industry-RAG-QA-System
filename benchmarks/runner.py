@@ -111,15 +111,16 @@ def run_configuration(
     top_k: int = DEFAULT_TOP_K,
     retriever_factory: Callable[[str], Retriever] | None = None,
     force_block_reason: str | None = None,
-    synthetic_retriever: bool = True,
 ) -> ConfigRun:
     """Execute or block one configuration, returning its outcome and metrics.
 
-    ``synthetic_retriever`` labels a run that used an injected ``retriever_factory``.
-    It defaults to ``True`` because every factory a test injects is a fixture. The CLI
-    passes ``False`` only for the real production executors (``--executor real``), so a
-    genuine run is not mislabelled "synthetic fixture retriever (not a benchmark)" and
-    can reach publication once the corpus and dataset contract allow it.
+    A run is labelled synthetic from the **retriever's own provenance**, never from
+    a caller-supplied flag: the production adapters in ``benchmarks/executors.py``
+    declare ``is_production = True``; any other injected retriever (a test fixture)
+    omits it and is treated as synthetic. A fixture therefore cannot be published as
+    a real benchmark by passing an argument, and a genuine ``--executor real`` run is
+    not mislabelled. Publication still additionally requires ``results_are_benchmark``
+    (a contract-attributable golden set) — see ``benchmarks/retrieval_benchmark.py``.
     """
     if top_k < MIN_TOP_K:
         raise ValueError(
@@ -158,6 +159,10 @@ def run_configuration(
         return ConfigRun(outcome)
 
     retriever = retriever_factory(config_name)
+    # Provenance is the retriever's own declaration, never a caller-supplied flag:
+    # the production adapters set ``is_production``; a test fixture does not, so it
+    # is always labelled synthetic and cannot be published as a real benchmark.
+    synthetic = not getattr(retriever, "is_production", False)
     results: list[QueryBenchmarkResult] = []
     failures: list[dict[str, str]] = []
     for query in queries:
@@ -214,22 +219,16 @@ def run_configuration(
             probed,
         )
         return ConfigRun(outcome, [], failures, requested_sample_count=len(queries))
-    if synthetic_retriever:
+    if synthetic:
         outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "synthetic fixture retriever (not a benchmark)", probed)
-        return ConfigRun(
-            outcome,
-            results,
-            failures,
-            requested_sample_count=len(queries),
-            synthetic=True,
-        )
-    outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "executed with the production retriever", probed)
+    else:
+        outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "executed with the production retriever", probed)
     return ConfigRun(
         outcome,
         results,
         failures,
         requested_sample_count=len(queries),
-        synthetic=False,
+        synthetic=synthetic,
     )
 
 

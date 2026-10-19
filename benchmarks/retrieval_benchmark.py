@@ -358,27 +358,24 @@ def main(argv: list[str] | None = None) -> int:
         factory = executor_factories.get(name)
         if factory is None:
             return run_configuration(name, queries, top_k=args.top_k)
-        # ``--executor real`` wires the production adapters, so the run is not a
-        # synthetic fixture. The runner keeps its default (synthetic) for tests.
-        return run_configuration(
-            name,
-            queries,
-            top_k=args.top_k,
-            retriever_factory=factory,
-            synthetic_retriever=False,
-        )
+        # ``--executor real`` returns the production adapters, which declare their own
+        # provenance (``is_production``); the runner labels them real from that marker,
+        # not from a caller-supplied flag.
+        return run_configuration(name, queries, top_k=args.top_k, retriever_factory=factory)
 
     runs = [_run_configuration(name) for name in configs]
     summary = summarize_run(runs, available_buckets=coverage.get("available_buckets"))
-    # Derived from the runs, never asserted by the CLI: a run is synthetic only
-    # when a caller injected a fixture factory (tests) — a ``--executor real`` run
-    # is declared producible by the CLI itself.
+    # Derived from each retriever's own provenance, never asserted by the CLI: the
+    # production adapters declare ``is_production``; a fixture (tests) does not.
     used_synthetic = bool(summary.get("any_synthetic"))
     metadata["synthetic_retriever"] = used_synthetic
-    # A blocked run contains no retrieval-quality result, a run on a dataset that
-    # fails the v2 contract is not attributable, and a run scored against an
-    # injected retriever is a fixture: none of the three may advertise itself as
-    # benchmark evidence.
+    # Publication is the conjunction of four independent facts, none of which may be
+    # asserted by the caller:
+    #   * ``any_results``   — a configuration actually executed (backend probes passed),
+    #   * ``attributable``  — the golden set satisfies the v2 contract (identity + labels),
+    #   * ``not synthetic`` — the retriever declared production provenance (``is_production``),
+    #   * the per-run BLOCKED/all-failed paths already produced no result above.
+    # A synthetic fixture cannot be published by passing a flag; the flag no longer exists.
     metadata["results_are_benchmark"] = bool(summary.get("any_results")) and attributable and not used_synthetic
 
     output_root = Path(args.output_dir)

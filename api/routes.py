@@ -128,13 +128,14 @@ def query_handler(
     接收用户查询，经过完整 RAG 管线（Rewrite -> Recall -> Rerank ->
     Evidence Gate -> Generate -> Answer Gate）返回结果。
     """
-    # The verified identity owns the session and the audit/A-B identity. The
-    # request body is unverified, so it may only *supplement* a verified identity
-    # that carries no user_id — it must never override one. `ctx.user_id` becomes
-    # the session owner in `core/pipeline.py`, so trusting the body here would let
-    # a caller present another principal's user_id + session_id and load their
-    # dialog history (see docs/security-regression-coverage.md, control I).
-    user_id = identity.user_id or req.user_id
+    # The session owner is the **verified** identity only. `ctx.user_id` becomes the
+    # `SessionState` owner in `core/pipeline.py`, so a body-supplied value must never
+    # reach it: otherwise a caller could present another principal's user_id +
+    # session_id and load their dialog history (docs/security-regression-coverage.md,
+    # control I). `require_identity` guarantees a non-blank principal in non-dev mode;
+    # `QueryRequest.user_id` is kept only for request-model compatibility and is
+    # ignored here.
+    user_id = identity.user_id
 
     ctx = RequestContext(
         user_input=req.query,

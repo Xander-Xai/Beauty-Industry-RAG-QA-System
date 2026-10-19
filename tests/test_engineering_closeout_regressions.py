@@ -201,11 +201,11 @@ def test_F4_query_handler_scopes_the_session_to_the_verified_identity(monkeypatc
     """`/api/query` must not let the request body choose the session owner.
 
     ``ctx.user_id`` becomes the ``SessionState`` owner in ``core/pipeline.py``.
-    ``/api/query`` was the one handler that took ``req.user_id or identity.user_id``,
-    so a caller could present another principal's ``user_id`` + ``session_id`` and
-    generation would load and inject that principal's dialog history (control I in
-    docs/security-regression-coverage.md). The body value may only supplement an
-    identity that carries no ``user_id``.
+    ``/api/query`` took ``req.user_id or identity.user_id``, so a blank verified
+    principal let the body decide the owner, and a caller could present another
+    principal's ``user_id`` + ``session_id`` and have generation load that
+    principal's dialog history (control I in docs/security-regression-coverage.md).
+    The body value is now ignored entirely for identity resolution.
     """
     import types
 
@@ -233,10 +233,12 @@ def test_F4_query_handler_scopes_the_session_to_the_verified_identity(monkeypatc
     routes_module.query_handler(req, UserIdentity(user_id="bob", user_role_mask=1, user_dept_mask=1))
     assert captured["user_id"] == "bob", "the request body overrode the verified identity"
 
-    # Positive control: with no verified user_id, the body value is still honoured.
+    # A blank verified principal must NOT fall back to the body either: the owner
+    # stays the (blank) identity. Blank principals are rejected upstream by
+    # require_identity in non-dev mode; this pins that the body is never a fallback.
     captured.clear()
     routes_module.query_handler(req, UserIdentity(user_id="", user_role_mask=1, user_dept_mask=1))
-    assert captured["user_id"] == "alice"
+    assert captured["user_id"] == "", "the body supplied the session owner"
 
 
 # ── F5: the P2 overload must be a real 503 ──────────────────────────────────

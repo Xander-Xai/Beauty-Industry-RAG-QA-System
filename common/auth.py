@@ -372,16 +372,35 @@ async def parse_identity(request: Request) -> UserIdentity:
     return UserIdentity(user_id="anonymous", user_role_mask=0, user_dept_mask=0)
 
 
+def is_authenticated_principal(user_id: str | None) -> bool:
+    """True when ``user_id`` names a verified, non-blank principal.
+
+    ``parse_identity`` yields the literal ``"anonymous"`` for a missing or unusable
+    credential, but an identity source can also carry a **blank** principal: a JWT
+    whose ``sub`` / ``user_id`` is ``""``, or an empty ``X-User-ID`` dev header.
+    A blank string is not an authenticated principal, so it must be rejected rather
+    than allowed to own a session or reach the audit trail. Comparing against
+    ``"anonymous"`` alone let a blank principal through and, combined with a
+    body-supplied fallback, let a caller choose the session owner.
+    """
+    if not isinstance(user_id, str):
+        return False
+    stripped = user_id.strip()
+    return bool(stripped) and stripped != "anonymous"
+
+
 async def require_identity(request: Request) -> UserIdentity:
     """
     FastAPI dependency that enforces authentication.
 
     Unlike ``parse_identity``, this raises 401 when no valid credentials
-    are found in non-dev mode.
+    are found in non-dev mode. A missing, blank, or malformed principal (including
+    the ``"anonymous"`` sentinel and an empty ``sub`` / ``X-User-ID``) is treated as
+    unauthenticated and rejected; only a verified, non-blank principal is returned.
     """
     identity = await parse_identity(request)
     cfg = get_config()
-    if not cfg.auth.dev_mode and identity.user_id == "anonymous":
+    if not cfg.auth.dev_mode and not is_authenticated_principal(identity.user_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
