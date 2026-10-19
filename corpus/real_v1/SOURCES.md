@@ -59,22 +59,43 @@
 | 字段 | 值 | 理由 |
 |---|---|---|
 | `source_trust` | `UNTRUSTED` | 来自外部（政府网站 / NMPA 公告附件），不是本项目受管语料 |
-| `approval_status` | `PENDING_REVIEW` | 尚无具名人员对**这些字节**作出审批决定 |
-| 派生 `trust_class` | `UNTRUSTED` | 未审核前不可进入可激活快照 |
+| `approval_status` | `APPROVED` | 所有者 `Xander-Xai` 已对**这两份文件的字节**作出具名审批决定 |
+| 派生 `trust_class` | `APPROVED_EXTERNAL` | 已审批，可进入可激活快照 |
+
+### 当前审批台账（`data/offline_source_trust.sqlite3`，原始台账不提交仓库）
+
+| 源文件 | 字节 SHA-256 | 审批人 | 审批时间（UTC，由 TrustRegistry 写入） | 修订号 |
+|---|---|---|---|---|
+| `regulation_727.jsonl` | `c9499ca5eefa368328a0ecbe57ea0410687fafcd32bbb5c9d0aa9014f6075c91` | `Xander-Xai` | 2026-10-19T15:45:47Z | 1 |
+| `used_ingredients_2021.jsonl` | `3dd67722972d7a10dd3da56028bd85d649e68b17a87c0499f169252527c0c06b` | `Xander-Xai` | 2026-10-20T02:20:59Z | 1 |
+
+两份来源已于 2026-10-20 全部完成审批，因此 `cosmetics_docs_exp_v3_approved`
+中的 212 篇文档全部为 `APPROVED_EXTERNAL`，`PENDING_REVIEW` 与 `UNTRUSTED`
+计数均为 0。
+
+> **审批 ≠ 可用于现行法规问答。** 审批授予的是**可激活信任资格**，它只说明
+> "有人对这些字节负责"。它**不**表示内容是现行有效的监管依据。上文
+> "监管版本时效性核查" 一节列出的时效性限制（条例第七十八条过渡期已于
+> 2025-12-31 届满、2025 年第 61 号公告已删除"最高历史使用量"栏）**不因审批
+> 而消失**。本节不构成法律意见。
 
 **这不是可以为了 seal 而绕过的门禁。** 早先的索引脚本把外部官方文档声明为
 `MANAGED_INTERNAL / NOT_REQUIRED`，等于让外部内容零审核进入可激活状态；该声明
-已撤回。当前状态是：**来源未审核**，必须走既有审批流程
+已撤回，`cosmetics_docs` 上仍然保留着这一错误声明（见
+[`docs/validation/production-index-governance.md`](../../docs/validation/production-index-governance.md)）。
+审批必须走既有流程
 （`run_offline.py review-source --approve --actor <具名审核人>`），审批绑定到
 `corpus/real_v1/sources/*.jsonl` 的文件字节哈希。
 
 - 审批是**按源文件**（`regulation_727.jsonl`、`used_ingredients_2021.jsonl`）作出的，
   不是按 chunk。改了源文件，哈希改变，审批自动失效回到 `PENDING_REVIEW`。
+  `benchmarks/source_approval.py` 在核验时会重新哈希磁盘上的源文件，索引里存的
+  哈希、台账里记的哈希与磁盘上实际的哈希三者必须一致。
 - 审批人必须真实具名。仓库中**没有**、也不允许出现伪造的审核人、来源审批或
   "已人工核实"结论。
-- 在审批完成前，可以构建**实验索引**（`--profile experiment`，索引名必须以
-  `cosmetics_docs_exp_` 开头）用于工程验证；它携带 `UNTRUSTED` provenance，
-  **不是**可激活快照，也不能作为正式 benchmark 的证据。
+- 实验索引（`--profile experiment`，索引名必须以 `cosmetics_docs_exp_` 开头）
+  用于工程验证。以 `--staging-unapproved` 构建的索引携带 `UNTRUSTED` provenance，
+  **不是**可激活快照，不能作为正式 benchmark 的证据。
 - 生产索引（`cosmetics_docs`）在来源未审批时会被索引脚本拒绝写入。
 
 ## 监管版本时效性核查（核查日期 2026-10-19）

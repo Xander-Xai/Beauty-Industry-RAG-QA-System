@@ -1,5 +1,28 @@
 # 真实语料 V1 — BM25 检索实测运行报告
 
+> **本文档是一次历史运行的事实记录，不做任何回填修改。** 文中"来源审批 1/2"、
+> `used_ingredients_2021.jsonl` 为 `PENDING_REVIEW`、`results_are_benchmark=true`
+> 等结论，**全部是该次运行（`20261019T160921Z-f1cda59b`，Git `227eac9`）当时的真实状态**，
+> 不会被事后改写成通过新门禁的样子。
+>
+> 后续事实变更如下，两者并存，不互相覆盖：
+>
+> 1. **2026-10-20：来源审批补齐 2/2。** 所有者 `Xander-Xai` 具名审批了
+>    `used_ingredients_2021.jsonl`（字节 `3dd67722…`）。信任台账与
+>    [`corpus/real_v1/SOURCES.md`](../../corpus/real_v1/SOURCES.md) 已更新。
+> 2. **发布门禁已修复。** `results_are_benchmark` 过去不检查来源审批，本仓库已
+>    加入 `benchmarks/source_approval.py` 并把它纳入该字段的必要条件。按新门禁，
+>    **本文档记录的这次混合索引运行不可发布**——
+>    `tests/benchmark/test_source_approval_gate.py::test_pr113_mixed_index_result_is_not_publishable`
+>    逐条复现并锁定了这一点。
+> 3. **已有一个全部获批的重跑**：`docs/validation/real-v1-approved-bm25-run.md`。
+>    该文数字与本文档的召回数字**相同**——因为两次运行的语料字节完全一致
+>    （`content_sha256 = 38849be7…`），改变的只是这些字节的审批状态，不是可检索内容。
+>
+> 以下为原始运行记录。
+
+---
+
 > **这不是已完全放行的正式 Benchmark。** 数据集是真人签署、契约全通过的正式金标集，
 > 检索是真实 BM25，但**来源审批只完成 1/2**：所有者明确只批准了
 > `regulation_727.jsonl`，`used_ingredients_2021.jsonl` 仍为 `PENDING_REVIEW`，
