@@ -422,6 +422,8 @@ def _fingerprint_payload(
     plan: IndexPlan,
     staging_unapproved: bool,
     approval_store: str,
+    analyzer: str = "",
+    applied_analyzer: str = "",
 ) -> dict:
     trust_counts = _trust_counts(provenance_by_source_id)
     pending = pending_sources(provenance_by_source_id)
@@ -436,6 +438,15 @@ def _fingerprint_payload(
         "source_file_count": len(provenance_by_source_id),
         "corpus_version": chunks[0]["corpus_version"],
         "corpus_sha256_local": _local_corpus_sha256(chunks),
+        # Requested vs actually-applied, because an analyzer that failed to take
+        # effect would silently turn the A/B into a comparison of two default
+        # indexes and produce a real-looking null result.
+        "analyzer": {
+            "requested": analyzer,
+            "applied": applied_analyzer,
+            "field": "content",
+            "query_time": "same analyzer; BM25 queries use match on `content`",
+        },
         "source_trust_policy": {
             "declared_source_trust": DECLARED_SOURCE_TRUST,
             "approval_store": approval_store,
@@ -542,6 +553,9 @@ def run(
                 "index_name": args.index,
                 "corpus_version": chunks[0]["corpus_version"],
                 "corpus_sha256_local": _local_corpus_sha256(chunks),
+                # A preflight cannot know what the cluster would apply to an
+                # index that does not exist yet, so only the request is stated.
+                "analyzer_requested": args.analyzer,
                 "index_state": state_before.as_dict(),
                 "plan": plan.as_dict(),
                 "source_trust_policy": {
@@ -578,7 +592,7 @@ def run(
                 "--staging-unapproved (first: {pending[:5]})"
             )
 
-        writer = ElasticsearchWriter(client, args.index)
+        writer = ElasticsearchWriter(client, args.index, analyzer=args.analyzer)
         if plan.action == "recreate":
             writer.ensure_index(recreate=True, confirm=True)
         else:
@@ -600,6 +614,8 @@ def run(
             plan=plan,
             staging_unapproved=bool(pending),
             approval_store=args.approval_store,
+            analyzer=args.analyzer,
+            applied_analyzer=writer.applied_analyzer(),
         )
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(
@@ -644,6 +660,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--recreate", action="store_true", help="destructively rebuild the existing index")
     parser.add_argument("--confirm-index", default=None, help="exact index name required with --recreate")
     parser.add_argument("--append-epoch", action="store_true", help="add this epoch alongside existing epochs")
+    parser.add_argument(
+        "--analyzer",
+        default="",
+        help=(
+            "Elasticsearch analyzer for the `content` field, applied at index and query time. "
+            "Declared explicitly so a tokenization A/B can vary only this and nothing else; "
+            "the applied analyzer is read back from the cluster and recorded in --out."
+        ),
+    )
     parser.add_argument("--check-only", action="store_true", help="inspect and plan without writing anything")
     parser.add_argument(
         "--staging-unapproved",
