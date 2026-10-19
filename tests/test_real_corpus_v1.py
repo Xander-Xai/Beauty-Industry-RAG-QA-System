@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from offline.source_trust import file_content_hash
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORPUS_DIR = REPO_ROOT / "corpus" / "real_v1"
 GOLDEN_DIR = REPO_ROOT / "tests" / "evaluation" / "golden_set_v1"
@@ -87,3 +89,44 @@ def test_no_answer_candidates_have_no_matching_chunk() -> None:
         assert record["answerable"] is False
         assert record["expected_behavior"] == "refuse"
         assert record["matched_chunk_ids"] == []
+
+
+def test_source_files_still_match_the_hashes_the_approval_binds() -> None:
+    """Documentation edits must not disturb the bytes an approval is bound to.
+
+    ``offline.source_trust.file_content_hash`` hashes the committed source file,
+    so an approval names exactly these bytes. Editing SOURCES.md is safe;
+    editing a source file would silently return both sources to PENDING_REVIEW.
+    """
+    manifest = json.loads((CORPUS_DIR / "manifest.json").read_text(encoding="utf-8"))
+    for name, expected in manifest["source_files"].items():
+        actual = file_content_hash(CORPUS_DIR / "sources" / name)
+        assert actual == expected, f"{name} changed; a prior approval no longer covers these bytes"
+
+
+def test_sources_md_discloses_regulatory_currency_limits() -> None:
+    """The corpus must not let a 2021 snapshot be read as current law.
+
+    Each marker below is a fact that changed after this corpus was extracted and
+    that a reader cannot derive from the corpus text itself, so dropping any of
+    them from SOURCES.md would reintroduce a materially misleading silence.
+    """
+    text = (CORPUS_DIR / "SOURCES.md").read_text(encoding="utf-8")
+
+    # Article 78's transition period expired and its implementing notice is absent.
+    assert "2025-12-31" in text
+    assert "2021年第150号" in text
+    assert "第七十八条" in text
+
+    # The catalog was restructured and the usage field was withdrawn.
+    assert "2025年第61号" in text
+    assert "目录》Ⅰ" in text and "目录》Ⅱ" in text
+    assert "最高历史使用量" in text
+
+    # Each dynamic adjustment is dated, so the timeline stays checkable.
+    for date in ("2025-10-20", "2026-01-04", "2026-04-13", "2026-08-19"):
+        assert date in text, f"missing dynamic-adjustment date {date}"
+
+    # The subset is not the whole catalog, and absence here proves nothing.
+    assert "8965" in text
+    assert "127" in text
