@@ -19,6 +19,7 @@
 | `independent_query_proposals.jsonl` | 6 | 独立编写的用户式查询提案，`in_dataset=false`，不参与指标 |
 | `INDEPENDENT_QUERY_PROPOSALS.md` | — | 上表的人读版 |
 | `review_decisions_v1.jsonl` | 27 | **空白人工签署台账**，已绑定每条候选的 `candidate_sha256` |
+| `ai_review_v1.jsonl` | 38 | **机器可读 AI 预审记录**（`review_type=AI_REVIEW`），与人工台账物理分离 |
 
 语料与索引绑定：
 
@@ -50,39 +51,53 @@
   （见下）。
 - 来源信任：两份源文件为 `UNTRUSTED / PENDING_REVIEW`，**已审批 0/2**。
 - 签署台账：`review_decisions_v1.jsonl` 为**空白模板**，**已签署 0/27**。
+- AI 预审记录：`ai_review_v1.jsonl`（38 行，`review_type=AI_REVIEW`）+ `AI_REVIEW.md`。
+  逐条结论与证据见 `AI_REVIEW.md`；**AI 结论不是人工签署，不改变任何 `review_status`**。
 
 ### 探索性 BM25 实测（**不可发布**）
 
-`results_are_benchmark=false`、`data_class=CANDIDATE`、`attributable=false`、
-`git_dirty=false`，git SHA `a703eb8`，dataset SHA-256 `1aa7c835…`。
+`results_are_benchmark=false`、`review_type=AI_REVIEW`、`publication_status=EXPLORATORY_ONLY`、
+`data_class=CANDIDATE`、`attributable=false`、`git_dirty=false`，
+git SHA `8d882aa`，索引 `cosmetics_docs_exp_v1`，
+索引指纹 `38849be7fe8ce…`，`doc_version_epoch=real-v1-20261019`，212 文档，
+21/21 不重复金标段落全部命中（ratio 1.0）。
 
-| 指标 | 值 |
-|---|---|
-| Recall@1 / @3 / @5 / @10 | 0.296 / 0.426 / 0.537 / 0.722 |
-| HitRate@1 / @3 / @5 / @10 | 0.333 / 0.444 / 0.556 / 0.741 |
-| MRR@10 | 0.421 |
-| NDCG@10 | 0.477 |
-| 延迟（冷启首条 / 稳态均值 / p50 / p95） | 769.7 ms / 17.9 ms / 17.2 ms / 29.5 ms |
+| 指标 | AI 修正后（当前候选集） | AI 修正前（`dd3680b` 候选集） |
+|---|---|---|
+| Recall@1 / @3 / @5 / @10 | **0.296 / 0.407 / 0.519 / 0.704** | 0.296 / 0.426 / 0.537 / 0.722 |
+| HitRate@1 / @3 / @5 / @10 | **0.333 / 0.407 / 0.519 / 0.704** | 0.333 / 0.444 / 0.556 / 0.741 |
+| MRR@10 | **0.409** | 0.421 |
+| NDCG@10 | **0.470** | 0.477 |
+| 延迟（冷启/最大值、稳态均值、p50、p95） | 702.0 ms、42.3 ms、15.5 ms、28.2 ms | 972.1 ms、48.8 ms、12.9 ms、21.5 ms |
 
-**这是 27 条草稿、固定历史语料快照上的小样本结果，不代表现行法规问答准确率，
+**这是 27 条 AI 草稿、固定历史语料快照上的小样本探索结果，不代表现行法规问答准确率，
 也不代表生产性能。** 3 条 answer-gate 样本不参与这些指标。
+**两份候选集的相关集不同，指标不可跨版本横向比较**——差异只来自 REAL-V1-021 的
+金标变更（第四条 rel=1 → 移出），检索器、索引与查询均未改变。
 
-> **口径提醒**：早前 PR 正文公布的 `Recall@10 0.852 / MRR@10 0.653 / NDCG@10 0.677`
-> 对应的是 **628a244 重新分级之前**的候选集（已用 `git show 39afa0e:` 复现，数值逐位一致）。
-> 该提交给 REAL-V1-002 增加第二金标、修正 021/023/024 的分级后，分母与相关集改变，
-> 数字随之下降。上表是**当前提交候选集**可复现的值。
+> **差异来源（已逐条核对）**：两版指标只有 **REAL-V1-021** 一行不同
+> （`Recall@10 0.50 → 0.00`，`MRR 0.333 → 0.000`）。BM25 **从未把第十七条召回到
+> top-10**；修正前该样本之所以"对了一半"，只是因为第四条被召回在 rank 3，
+> 而第四条并非答案所在段落。移除这条不参与作答的金标后，一次此前被假金标
+> 掩盖的检索失败变得可见。指标下降的原因是标注变对，不是标注变错。
+> 详见 `AI_REVIEW.md` §2。
 
-### `config_epoch` FAIL 会让 BM25 返回零行（已实测确认）
+> **口径提醒**：更早 PR 正文公布的 `Recall@10 0.852 / MRR@10 0.653 / NDCG@10 0.677`
+> 对应 **628a244 重新分级之前**的候选集（已用 `git show 39afa0e:` 复现，数值逐位一致）。
+> 那是三个不同候选标签版本中的第三个，同样**不可**与上表横向比较。
 
-提交的 `config.json` 中 `knowledge_version_epoch = "default"`，而索引内文档的
-`doc_version_epoch` 是 `real-v1-20261019`。`retrieval/bm25_retriever.py`
-会把这个字段作为 `term` 过滤器下推，因此**按提交配置查询该索引会返回 0 条**——
-本轮首次运行即复现全 0 指标（`retrieved_items` 27/27 为空）。
+### 已实测确认的两个检索事实
 
-绑定校验器早已以明文指出这一点：
-`"retrieval filters on a different epoch; BM25 would return zero rows against this index"`。
-上表的数字是在**临时 CONFIG_PATH**（指向隔离索引且 `knowledge_version_epoch`
-与语料 epoch 一致）下取得的。生产配置的 epoch 对齐属于本 PR 范围之外的独立决策。
+1. **`config_epoch` FAIL 会让 BM25 返回零行。** 提交的 `config.json` 中
+   `knowledge_version_epoch = "default"`，而索引内文档的 `doc_version_epoch` 是
+   `real-v1-20261019`。`retrieval/bm25_retriever.py` 把该字段作为 `term` 过滤器下推，
+   按提交配置查询该索引会返回 0 条（首次运行即复现：`retrieved_items` 27/27 为空、
+   全指标 0.0）。绑定校验器早已以明文判定该情况。上表数字是在**临时 `CONFIG_PATH`**
+   下取得的。
+2. **索引无中文分词，长查询被稀释。** 默认 `standard` 分析器把 36 字查询切成
+   34 个单字 token。问题长度与召回率负相关：≤25 字 0.833（n=6）、26–35 字 0.750（n=8）、
+   >35 字 0.615（n=13）。这属于索引配置决策，需重建索引才能验证，
+   **不在本 PR 范围内**（本轮不修改 `cosmetics_docs`）。
 
 复现方式：
 

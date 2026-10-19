@@ -317,6 +317,15 @@
       "regulatory_shaped_fields": [],
       "regulatory_shaped_fields_evidence": "Contains no question text and no passage text, only identifiers, hex digests and empty decision fields. It records that a human decision is still outstanding; it does not make one.",
       "record_marker_absent_reason": "The importer enforces a closed field set (DECISION_FIELDS) so that no ai_* field can ever appear in a signed decision; an inline marker would be rejected by the gate it exists to satisfy. Review state travels in the ledger's own decision/reviewer/reviewed_at columns, which are empty on every committed row."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/ai_review_v1.jsonl",
+      "class": "GOVERNANCE",
+      "purpose": "machine-readable AI pre-review record: 38 AI_REVIEW rows (27 retrieval candidates, 3 answer-gate, 6 independent-query proposals, 2 source files) with verdict, evidence and applied changes",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "inline:review_type",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Contains no question text from the corpus and no passage text. Rows quote short analytical phrases in the evidence field, but every row declares review_type=AI_REVIEW, is_human_signature=false and promotable_without_human=false."
     }
   ]
 }

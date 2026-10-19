@@ -62,14 +62,14 @@ generator. Everything right of it is **not filled in**: no human has reviewed th
 | `REAL-V1-011` | `row-007359` = **2** | LOW | easy / simple | **ACCEPT** |
 | `REAL-V1-012` | `row-002292` = **2** | LOW | easy / simple | **MODIFY** |
 | `REAL-V1-013` | `row-006016` = **2** | LOW | easy / simple | **MODIFY** |
-| `REAL-V1-014` | `row-003171` = **2** | LOW | medium / simple | **MODIFY** |
+| `REAL-V1-014` | `row-003171` = **2** | LOW | easy / simple | **MODIFY** |
 | `REAL-V1-015` | `row-006405` = **2** | LOW | medium / simple | **MODIFY** |
 | `REAL-V1-016` | `row-001294` = **2** | LOW | easy / simple | **MODIFY** |
-| `REAL-V1-017` | `row-005428` = **2** | LOW | medium / simple | **ACCEPT** |
+| `REAL-V1-017` | `row-005428` = **2** | LOW | easy / simple | **MODIFY** |
 | `REAL-V1-018` (family: `REAL-V1-001`) | `article-003` = **2** | LOW | easy / simple | **ACCEPT** |
 | `REAL-V1-019` (family: `REAL-V1-003`) | `article-011` = **2** | LOW | medium / simple | **ACCEPT** |
 | `REAL-V1-020` (family: `REAL-V1-010`) | `row-006722` = **2** | LOW | medium / simple | **ACCEPT** |
-| `REAL-V1-021` | `article-004` = **1**, `article-017` = **2** | LOW | medium / complex | **MODIFY** |
+| `REAL-V1-021` | `article-017` = **2** | LOW | medium / simple | **MODIFY** |
 | `REAL-V1-022` | `article-036` = **2**, `article-022` = **2** | LOW | medium / complex | **ACCEPT** |
 | `REAL-V1-023` | `notice` = **2** | MEDIUM | medium / simple | **MODIFY** |
 | `REAL-V1-024` | `notice` = **2** | LOW | hard / complex | **MODIFY** |
@@ -124,14 +124,14 @@ generator. Everything right of it is **not filled in**: no human has reviewed th
 | `REAL-V1-011` | 烟酰胺在《已使用化妆品原料目录（2021年版）》中是否给出了最高历史使用量？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-012` | 根据《已使用化妆品原料目录（2021年版）》，泛醇在驻留类产品中的 2021 年版记载最高历史使用量是多少？淋洗类产品当时是否给出了数值？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-013` | 根据《已使用化妆品原料目录（2021年版）》，神经酰胺 NP 的 INCI 名称和 2021 年版记载的驻留类产品最高历史使用量分别是什么？淋洗类产品当时是否给出了数值？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-014` | 根据《已使用化妆品原料目录（2021年版）》，积雪草提取物在驻留类产品中的 2021 年版记载最高历史使用量是多少？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-014` | 根据《已使用化妆品原料目录（2021年版）》，积雪草提取物在驻留类产品中的 2021 年版记载最高历史使用量是多少？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-015` | 根据《已使用化妆品原料目录（2021年版）》，水杨酸的最高历史使用量当时是否给出了具体数值？备注栏写的是什么？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-016` | 根据《已使用化妆品原料目录（2021年版）》，苯氧乙醇的最高历史使用量栏当时标注了什么？备注栏写的是什么？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-017` | 氢醌在《已使用化妆品原料目录（2021年版）》中的备注是什么？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-017` | 氢醌在《已使用化妆品原料目录（2021年版）》中的备注是什么？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-018` | 《化妆品监督管理条例》是怎么定义化妆品的？ | LOW | easy | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-019` | 给化妆品新原料办注册和备案，分别在哪些情形下适用？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-020` | 透明质酸钠在冲洗类产品里最多能用多少（按2021年版记载的最高历史使用量口径）？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
-| `REAL-V1-021` | 企业使用已列入目录的原料生产国产普通化妆品，需要办理哪些注册和备案手续？ | LOW | medium | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
+| `REAL-V1-021` | 企业使用已列入目录的原料生产国产普通化妆品，需要办理哪些注册和备案手续？ | LOW | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-022` | 化妆品标签上的全成分标注和功效宣称的科学依据，分别规定在哪两条？ | LOW | medium | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-023` | 根据《已使用化妆品原料目录（2021年版）》，目录中已列入禁用、限用或准用组分的原料，使用时应当遵守什么要求？ | MEDIUM | medium | simple | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
 | `REAL-V1-024` | 根据《已使用化妆品原料目录（2021年版）》及其当时的使用说明，最高历史使用量能否直接视为法定限量？ | LOW | hard | complex | ☐ ACCEPT ☐ MODIFY ☐ REJECT |
@@ -1325,7 +1325,7 @@ INCI名称/英文名称：CERAMIDE EOP
 |---|---|
 | `sample_id` | `REAL-V1-014` |
 | `business_type` | `ingredient` |
-| `difficulty` (draft) | `medium` |
+| `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 7 chars, ratio 0.14, bigram coverage 0.4) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
@@ -1335,7 +1335,7 @@ INCI名称/英文名称：CERAMIDE EOP
 | field | value |
 |---|---|
 | AI suggestion | **MODIFY** |
-| AI correction this round | re-worded to pin the figure to the 2021 snapshot rather than leaving it readable as a current cap |
+| AI correction this round | re-worded to pin the figure to the 2021 snapshot rather than leaving it readable as a current cap; difficulty lowered from medium to easy because this asks one single-cell lookup, while REAL-V1-013 asks three (INCI name plus both usage columns) and is easy. Labelling the simpler question harder made the difficulty buckets describe the annotator rather than the queries, and by_difficulty statistics inherit that |
 
 **Official source and locator**
 
@@ -1596,7 +1596,7 @@ INCI名称/英文名称：TRIETHANOLAMINE
 |---|---|
 | `sample_id` | `REAL-V1-017` |
 | `business_type` | `ingredient` |
-| `difficulty` (draft) | `medium` |
+| `difficulty` (draft) | `easy` |
 | `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 3 chars, ratio 0.115, bigram coverage 0.278) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
@@ -1605,8 +1605,8 @@ INCI名称/英文名称：TRIETHANOLAMINE
 
 | field | value |
 |---|---|
-| AI suggestion | **ACCEPT** |
-| AI correction this round | _none; record carried over unchanged_ |
+| AI suggestion | **MODIFY** |
+| AI correction this round | difficulty lowered from medium to easy because this asks one single-cell lookup (the remark), while REAL-V1-016 asks two (the usage columns and the remark) and is easy. The row itself is no harder than any other catalogue row; 氢醌 is a banned-component remark, which makes the answer distinctive to retrieve but not harder to specify |
 
 **Official source and locator**
 
@@ -1948,7 +1948,7 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
 | `sample_id` | `REAL-V1-021` |
 | `business_type` | `regulation` |
 | `difficulty` (draft) | `medium` |
-| `complexity_label` (draft) | `complex` |
+| `complexity_label` (draft) | `simple` |
 | derivation risk | **LOW** (LCS 7 chars, ratio 0.206, bigram coverage 0.281) |
 | current `review_status` | `DRAFT_UNVERIFIED` |
 
@@ -1957,28 +1957,19 @@ INCI名称/英文名称：HYDROLYZED SODIUM HYALURONATE
 | field | value |
 |---|---|
 | AI suggestion | **MODIFY** |
-| AI correction this round | re-graded: article-017 is the passage that actually answers 'which procedures' (filing timing, authority, and the import variant), so it is the highly relevant passage. article-004 only states that ordinary cosmetics are filed rather than registered, which supports the answer but cannot answer it alone, so it was graded partially relevant |
+| AI correction this round | re-graded on the repository's own rel=1 definition, which is 'the answer is incomplete without it', not 'it carries more detail'. article-017 already answers the question on its own: 国产普通化妆品 is filed 上市销售前 with the 省、自治区、直辖市 drug regulator where the filer is located, which is the whole of 'which procedures'. article-004 is background classification -- it states the abstract 分类管理 principle that article-017 already applies concretely -- so it was graded 0 (considered and excluded) rather than 1. It was not kept at 1 to preserve the multi_document bucket: a second gold passage that does not change the answer is a false recall penalty, not a harder question. With one gold passage the sample is no longer multi_document and complexity_label was reduced from complex to simple, because a single retrieval hop now suffices. The question was left unchanged; inventing difficulty to justify a second gold would be the wrong fix |
+
+**Considered and excluded by the AI pass**
+
+- `nmpa/regulation-727/article-004` — states the classification principle behind article-017 (special=registration, ordinary=filing) but supplies no procedure, authority or timing for the domestic ordinary cosmetic the question asks about; the answer is already complete without it
 
 **Official source and locator**
 
 | logical_id | document | locator | URL |
 |---|---|---|---|
-| `nmpa/regulation-727/article-004` | 国务院令第727号（2020-06-16公布，2021-01-01施行） | 第四条 | https://www.gov.cn/zhengce/zhengceku/2020-06/29/content_5522593.htm |
 | `nmpa/regulation-727/article-017` | 国务院令第727号（2020-06-16公布，2021-01-01施行） | 第十七条 | https://www.gov.cn/zhengce/zhengceku/2020-06/29/content_5522593.htm |
 
 **Annotated passages (verbatim from the corpus)**
-
-- `doc_id`: `a00981633fdd3d7c81bf40dc4ce52420d3dec94814cf5b5305f02d2cef90dee2`
-  `chunk_id`: `14413877-9b00-58c4-9de5-25aedf8bcbb6`
-  `locator`: `第四条`
-  current relevance: **1**
-
-```text
-第四条
-国家按照风险程度对化妆品、化妆品原料实行分类管理。
-化妆品分为特殊化妆品和普通化妆品。国家对特殊化妆品实行注册管理，对普通化妆品实行备案管理。
-化妆品原料分为新原料和已使用的原料。国家对风险程度较高的化妆品新原料实行注册管理，对其他化妆品新原料实行备案管理。
-```
 
 - `doc_id`: `579cdf45e400516fd34709d6771ec754dda923a6a7ca41bc15dd982a0359ae2a`
   `chunk_id`: `5a899c7e-8834-56b2-b2d3-123f5001129d`

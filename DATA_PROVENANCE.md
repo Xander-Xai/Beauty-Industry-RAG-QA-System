@@ -61,6 +61,7 @@
 | `tests/evaluation/golden_set_v1/answer_gate_review_workpackage.jsonl` | 3 | `GOVERNANCE` | 3 条无答案候选的 Answer Gate 审核表，明确排除在 Retrieval Recall 分母外 | **不是**语义不可回答的结论；关键词缺失只是线索，须人工判断 |
 | `tests/evaluation/golden_set_v1/independent_query_proposals.jsonl` | 6 | `GOVERNANCE` | 独立编写的用户式查询提案，`in_dataset=false` | 不进数据集、不可评分、不参与任何指标 |
 | `tests/evaluation/golden_set_v1/review_decisions_v1.jsonl` | 27 | `GOVERNANCE` | **空白**人工签署台账，每行绑定其所审核候选行的 `candidate_sha256` 与候选集 `candidate_dataset_sha256` | **不含任何决定**：`decision` / `reviewer` / `reviewed_at` / `promoted_by` 在已提交的行中全部为空。它记录的是"仍待人工决定"，不是决定本身；导入器对带 `ai_*` 字段的行直接拒绝 |
+| `tests/evaluation/golden_set_v1/ai_review_v1.jsonl` | 38 | `GOVERNANCE` | **机器可读 AI 预审记录**（`review_type=AI_REVIEW`）：27 条检索候选 + 3 条 Answer Gate + 6 条独立查询 + 2 份来源，逐行给出 verdict、证据、原始与建议金标、已应用变更、未决问题 | **不是人工签署**：每行 `is_human_signature=false`、`promotable_without_human=false`，且不被导入器读取。`AI_ACCEPT` 不等于 `REVIEWED`；来源行的 `AI_SOURCE_VERIFIED_WITH_LIMITATIONS` **不写入** TrustRegistry 审批台账，两份来源仍为 `PENDING_REVIEW` |
 | `docs/finalization/REGULATORY_REVIEW_CHECKLIST.json` | 15 条目 | `GOVERNANCE` | 逐条法规断言的人工复核状态追踪器，机器可读 | **不主张任何法规结论**；15 条全部处于 `SYNTHETIC_ONLY`，无一条 `VERIFIED_WITH_SOURCE` |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json` | — | `RUNTIME_EVIDENCE` | 单台本地主机上对真实 Qdrant 1.12.0 服务的验证检查项 | 仅含 localhost 端点与版本信息；不含语料内容、日志或凭据 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` | — | `RUNTIME_EVIDENCE` | 同一次验证的来源与兼容性记录 | 同上 |
