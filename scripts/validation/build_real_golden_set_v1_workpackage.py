@@ -132,9 +132,7 @@ def derivation_risk(question: str, passages: list[str]) -> dict:
 def sibling_passages(logical_id: str, chunks: list[dict], annotated: set[str]) -> list[dict]:
     """Other chunks of a multi-chunk source document, not already annotated."""
     return [
-        chunk
-        for chunk in chunks
-        if str(chunk["logical_id"]) == logical_id and str(chunk["chunk_id"]) not in annotated
+        chunk for chunk in chunks if str(chunk["logical_id"]) == logical_id and str(chunk["chunk_id"]) not in annotated
     ]
 
 
@@ -310,9 +308,7 @@ def _dedupe_leads(leads: list[dict]) -> list[dict]:
     return sorted(best.values(), key=lambda item: (order.get(item["status"], 9), item["chunk_id"]))
 
 
-def build_answer_gate_records(
-    no_answer: list[dict], chunks: list[dict], sources: dict[str, dict]
-) -> list[dict]:
+def build_answer_gate_records(no_answer: list[dict], chunks: list[dict], sources: dict[str, dict]) -> list[dict]:
     records: list[dict] = []
     for record in no_answer:
         substance_terms = sorted(
@@ -739,8 +735,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", default="tests/evaluation/golden_set_v1")
     args = parser.parse_args(argv)
 
-    candidates = [json.loads(line) for line in Path(args.candidates).read_text(encoding="utf-8").splitlines() if line.strip()]
-    no_answer = [json.loads(line) for line in Path(args.no_answer).read_text(encoding="utf-8").splitlines() if line.strip()]
+    candidates = [
+        json.loads(line) for line in Path(args.candidates).read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    no_answer = [
+        json.loads(line) for line in Path(args.no_answer).read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
     chunks = [json.loads(line) for line in Path(args.chunks).read_text(encoding="utf-8").splitlines() if line.strip()]
     sources = _source_index(Path(args.sources_dir))
 

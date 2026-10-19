@@ -210,8 +210,7 @@ def check_trust_state(client, index: str) -> dict:
         return {"check": "trust_state", "status": STATUS_BLOCKED, "detail": f"{type(exc).__name__}: {exc}"}
     aggregations = response.get("aggregations") or {}
     trust = {
-        str(bucket["key"]): int(bucket["doc_count"])
-        for bucket in (aggregations.get("trust") or {}).get("buckets", [])
+        str(bucket["key"]): int(bucket["doc_count"]) for bucket in (aggregations.get("trust") or {}).get("buckets", [])
     }
     epochs = [str(bucket["key"]) for bucket in (aggregations.get("epochs") or {}).get("buckets", [])]
     # The current indexer declares external documents UNTRUSTED, so a live index

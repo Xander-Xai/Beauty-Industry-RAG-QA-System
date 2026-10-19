@@ -106,9 +106,7 @@ def _matches(document: dict, query: dict) -> bool:
             return False
         should = clauses.get("should", [])
         if should:
-            return sum(1 for clause in should if _matches(document, clause)) >= clauses.get(
-                "minimum_should_match", 1
-            )
+            return sum(1 for clause in should if _matches(document, clause)) >= clauses.get("minimum_should_match", 1)
         return True
     raise NotImplementedError(query)
 
@@ -181,14 +179,10 @@ class TestIndexRebuildIsFailClosed:
             content_sha256="abc",
         )
         with pytest.raises(indexer.IndexSafetyError, match="refusing to write into existing non-empty index"):
-            indexer.plan_index_write(
-                state, profile="production", target_epoch="real-v1-20261019"
-            )
+            indexer.plan_index_write(state, profile="production", target_epoch="real-v1-20261019")
 
     def test_recreate_requires_the_exact_index_name(self):
-        state = indexer.IndexState(
-            index_name="cosmetics_docs", exists=True, document_count=10, epochs=("old",)
-        )
+        state = indexer.IndexState(index_name="cosmetics_docs", exists=True, document_count=10, epochs=("old",))
         with pytest.raises(indexer.IndexSafetyError, match="confirm-index"):
             indexer.plan_index_write(
                 state, profile="production", target_epoch="new", recreate=True, confirm_index="wrong"
@@ -386,9 +380,7 @@ class TestWorkpackagePromotesNothing:
 
     def test_all_27_candidates_are_present_and_still_drafts(self):
         records = self._records()
-        assert [record["sample_id"] for record in records] == [
-            f"REAL-V1-{index:03d}" for index in range(1, 28)
-        ]
+        assert [record["sample_id"] for record in records] == [f"REAL-V1-{index:03d}" for index in range(1, 28)]
         for record in records:
             assert record["review_status"] == "DRAFT_UNVERIFIED"
             assert record["scorable"] is False
@@ -517,9 +509,7 @@ class TestBindingVerification:
                 "provenance": {"trust_class": "APPROVED_EXTERNAL"},
             }
         config_path = Path(tmp_path) / "config.json"
-        config_path.write_text(
-            json.dumps({"knowledge_version_epoch": manifest["corpus_version"]}), encoding="utf-8"
-        )
+        config_path.write_text(json.dumps({"knowledge_version_epoch": manifest["corpus_version"]}), encoding="utf-8")
         args = type(
             "Args",
             (),
