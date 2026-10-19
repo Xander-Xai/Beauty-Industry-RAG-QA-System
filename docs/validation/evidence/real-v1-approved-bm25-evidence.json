@@ -9,18 +9,18 @@
   },
   "es_version": "8.11.0",
   "generated_from": "local run artifacts; raw artifacts are not committed",
-  "git_sha": "1d146d3147de1cc3199d5aa36222d96f9151576a",
+  "git_sha": "c8e49e2db6383fd23c09a78c4408c1e9cbcd1166",
   "ledger_notice": "data/offline_source_trust.sqlite3 is NOT committed. The two rows above are the published projection of it; they are re-verified against the ledger and the source bytes at run time by benchmarks/source_approval.py.",
   "runs": {
     "ab_ik_smart": {
       "analyzer": "ik_smart",
       "artifact_sha256": {
         "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
-        "latency_metrics.json": "a5f9fe6eb5c3a07738cb707b0344a1f86b1db42ace5c6f2064b6b90207d6fa85",
-        "metadata.json": "741819436e6a94993f2088a92390d8fe61d63e1b9c6ba982aaa692ee6800ea55",
-        "per_query_results.jsonl": "a1400198cab6fdb6aa6fcba815576bc52092ff6aca151108360c50722a2fcc8b",
-        "report.md": "c082fdcb5005bee54b649fc0cc9b7435f2b0e0cdf2ee82371b0293760bea1e8a",
-        "retrieval_metrics.json": "7a3bc8b54aa054af15ed9631398ef3b2418cd4d8b8f51009e2ae314fd0f3324e"
+        "latency_metrics.json": "2ab78c46d4fdf959a34877bb26e1144731199a3bbe8ed51f0a806c080317881c",
+        "metadata.json": "e548638e13807cadbf43fdd4fb21ba027a1b811628595aa5308ec705e7517582",
+        "per_query_results.jsonl": "e7a7e980dd9b989fb9795680fb288fdd5842d470ee0c200d8835a6fdbf60460f",
+        "report.md": "87c3eec44352d6f96b144aa8a368b149da9cd0ce833b55ebd0d88f8e10dd3096",
+        "retrieval_metrics.json": "ca2500ab2641cddb67af55d7b4edec1eebbf62f5a9c09a6aff58551490724243"
       },
       "by_business_type": {
         "ingredient": {
@@ -113,13 +113,13 @@
       "knowledge_version_epoch": "real-v1-20261019",
       "latency_ms": {
         "count": 27,
-        "max": 5575.944676005747,
-        "mean": 217.79336226043395,
-        "min": 8.271107013570145,
-        "p50": 11.926506005693227,
-        "p90": 15.628549404209481,
-        "p95": 17.195106204599142,
-        "p99": 4130.808199325684
+        "max": 5483.649099973263,
+        "mean": 212.48222255531732,
+        "min": 7.597815012559295,
+        "p50": 9.332121990155429,
+        "p90": 12.564765004208311,
+        "p95": 15.56326760910451,
+        "p99": 4062.279731082372
       },
       "metrics": {
         "hit_rate_at_1": 0.2962962962962963,
@@ -135,7 +135,7 @@
         "sample_count": 27,
         "scored_sample_count": 27
       },
-      "run_id": "20261019T184217Z-64a7b09b",
+      "run_id": "20261019T190404Z-71e0863e",
       "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
       "source_approval": {
         "approval_status_counts": {
@@ -156,11 +156,11 @@
       "analyzer": "smartcn",
       "artifact_sha256": {
         "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
-        "latency_metrics.json": "24db5a575a3000c6b360ecd9cd3b57eff8832b1ae89ef7f190c52d29516a03eb",
-        "metadata.json": "7e253a641367af73e4962ee58c70ba366ce65091f33c8b86fde1107178f741ab",
-        "per_query_results.jsonl": "180ea262d17cf8fee00a42fb8731b8f4753443edad0a5cbf2ed8722685940cf6",
-        "report.md": "1fe9b8ce193f5485da547ab148f0f8376e8f1c52880f6fc39033254c0a646161",
-        "retrieval_metrics.json": "2a51a516a017035be16ce5a6ca91eb4939abcf35edf95ea646608eee0ca758b3"
+        "latency_metrics.json": "1f7aaad9563f95984d7520967960f8f7ea1905b888dd41f5affa9818f0c28c2f",
+        "metadata.json": "d13bdd0a8df4912b152df5053d26bf0eecaa00afc6f44f6f8a764644845e72b0",
+        "per_query_results.jsonl": "4742f870fff510aedcf43331497fbd5b417bec173d49d329f49220848fd5515f",
+        "report.md": "8647325b2af20f952b17d23cd3742a8e708af76d69efa91a5af6b11edbfff419",
+        "retrieval_metrics.json": "a9d67e850ddfd8b817eb9fbc81a801b318f2b6444801b928cd2b2dff75771912"
       },
       "by_business_type": {
         "ingredient": {
@@ -253,13 +253,13 @@
       "knowledge_version_epoch": "real-v1-20261019",
       "latency_ms": {
         "count": 27,
-        "max": 5452.513161988463,
-        "mean": 210.0490472965046,
-        "min": 7.371418992988765,
-        "p50": 8.245447999797761,
-        "p90": 9.232569782761857,
-        "p95": 11.229845701018347,
-        "p99": 4037.995259534792
+        "max": 5515.25423800922,
+        "mean": 215.93655203792474,
+        "min": 7.612763991346583,
+        "p50": 11.360339995007962,
+        "p90": 17.62934379512444,
+        "p95": 24.8673983849585,
+        "p99": 4088.506730361251
       },
       "metrics": {
         "hit_rate_at_1": 0.2962962962962963,
@@ -275,7 +275,7 @@
         "sample_count": 27,
         "scored_sample_count": 27
       },
-      "run_id": "20261019T183903Z-9e88322f",
+      "run_id": "20261019T190332Z-c5140f03",
       "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
       "source_approval": {
         "approval_status_counts": {
@@ -296,11 +296,11 @@
       "analyzer": "standard (index default)",
       "artifact_sha256": {
         "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
-        "latency_metrics.json": "50881c8bc4074f374ef6cf6e67255d43b641448c67ff206af9894387d26b4c6d",
-        "metadata.json": "0c030a388d6387075ec98f29fa32ae2f3865b75b82a9b3598bdd035dbbbff873",
-        "per_query_results.jsonl": "cb4c430465a10f192cbd68128313d6a062e6642bbe9e4c3b493791301ca7030d",
-        "report.md": "709638abeaac1791ec88e544523c2c28976da13d8cbe71ffc7307e38f557ad48",
-        "retrieval_metrics.json": "106adc630f83e15b562eef5315078dfaa2a8b7f072505e8d3152a5a89206314f"
+        "latency_metrics.json": "4a96dece96f6e771c21f505c41fd60e56ba978786c63e47453d14d507cc4f88d",
+        "metadata.json": "1bda90feac258bcaedf37ff59ff0860fb6dca3ab717fc2a21455d77f8db25946",
+        "per_query_results.jsonl": "01a2d1e3baddee449d436fe6ceed9db5aecfbe7bcdbd8503269edb4bd3675011",
+        "report.md": "ce2457b4018354d6dd8fe0ba9233861d4a501d3d538ed4a5e4662f664c523c25",
+        "retrieval_metrics.json": "76bf153a1a3a4664dbb698b8aa78b5efebf4e82df51ab918af0752a36bd69462"
       },
       "by_business_type": {
         "ingredient": {
@@ -393,13 +393,13 @@
       "knowledge_version_epoch": "real-v1-20261019",
       "latency_ms": {
         "count": 27,
-        "max": 5542.2289880225435,
-        "mean": 218.93655174278172,
-        "min": 8.557871013181284,
-        "p50": 12.575355009175837,
-        "p90": 23.812259192345678,
-        "p95": 38.92525989504064,
-        "p99": 4112.510904196524
+        "max": 5551.422744989395,
+        "mean": 217.1740449255729,
+        "min": 8.529026003088802,
+        "p50": 11.73352199839428,
+        "p90": 14.333547401474789,
+        "p95": 17.203993711154904,
+        "p99": 4112.843302435931
       },
       "metrics": {
         "hit_rate_at_1": 0.3333333333333333,
@@ -415,7 +415,7 @@
         "sample_count": 27,
         "scored_sample_count": 27
       },
-      "run_id": "20261019T183831Z-17a6cc85",
+      "run_id": "20261019T190300Z-65d7f93c",
       "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
       "source_approval": {
         "approval_status_counts": {
@@ -436,11 +436,11 @@
       "analyzer": "standard (index default)",
       "artifact_sha256": {
         "environment.json": "4007c0b2ce2152531cf96c1b772fc9370ca573a622abf5c35eebdad0bb2f7362",
-        "latency_metrics.json": "6361446f5dfe28f643fd33fc02900723e65bddfffe4bceb489999c4ba6d7ba25",
-        "metadata.json": "965b11d38e4657e8e40e6f32f4134ec8abda9b1fc854cdd9cbb45b093ffc9e8a",
-        "per_query_results.jsonl": "12777a86713755b5fdb20294f59ea64899837bc2d476dbd614a529565613b9f2",
-        "report.md": "c870f8fa976104d7ed677e375df7ee45050f501e90b82c1c324d92c8691e1d8a",
-        "retrieval_metrics.json": "214d8ac42cc4c45598a6656909a957b89dd4eb94f1f9cfcb059200f8461e2749"
+        "latency_metrics.json": "401fa1a2328dbe54c5800bd107c14d9836655baecd1cc698566cf02bfc94e99d",
+        "metadata.json": "c534f3911379af9bd8809aae9c80cbb5391953465724bc79aa51029c5ecc769a",
+        "per_query_results.jsonl": "be7629cdfa7bd6b948039271db9f69f2f3d12c9b958f38692d8c12021d1a87ac",
+        "report.md": "4b402aad544cf409b9b33b5ca13622902137598d6566f92989e89ccadec49920",
+        "retrieval_metrics.json": "f2e07ebba9488578b4dc76dac9e71e67f9caaf174aaca28b9d603ce65edb7824"
       },
       "by_business_type": {
         "ingredient": {
@@ -533,13 +533,13 @@
       "knowledge_version_epoch": "real-v1-20261019",
       "latency_ms": {
         "count": 27,
-        "max": 5536.208017991157,
-        "mean": 216.58247951806212,
-        "min": 5.865705985343084,
-        "p50": 13.810600998112932,
-        "p90": 17.001504387008026,
-        "p95": 18.61030279251281,
-        "p99": 4101.805327753527
+        "max": 5521.606199996313,
+        "mean": 217.58668663312199,
+        "min": 8.73872300144285,
+        "p50": 13.663253979757428,
+        "p90": 17.709373799152672,
+        "p95": 18.338732403935865,
+        "p99": 4090.7609696395143
       },
       "metrics": {
         "hit_rate_at_1": 0.3333333333333333,
@@ -555,7 +555,7 @@
         "sample_count": 27,
         "scored_sample_count": 27
       },
-      "run_id": "20261019T183347Z-70eddc47",
+      "run_id": "20261019T190215Z-b679c73e",
       "sample_ids_hash": "45eebe8cea6a228855ace7ee59b3efdf9c0bccbb29851f4babda27dfe787bb4e",
       "source_approval": {
         "approval_status_counts": {

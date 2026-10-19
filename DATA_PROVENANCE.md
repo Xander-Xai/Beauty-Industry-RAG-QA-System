@@ -74,6 +74,9 @@
 | `docs/finalization/REGULATORY_REVIEW_CHECKLIST.json` | 15 条目 | `GOVERNANCE` | 逐条法规断言的人工复核状态追踪器，机器可读 | **不主张任何法规结论**；15 条全部处于 `SYNTHETIC_ONLY`，无一条 `VERIFIED_WITH_SOURCE` |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/checks.json` | — | `RUNTIME_EVIDENCE` | 单台本地主机上对真实 Qdrant 1.12.0 服务的验证检查项 | 仅含 localhost 端点与版本信息；不含语料内容、日志或凭据 |
 | `artifacts/qdrant/2026-10-09-qdrant-v1.12.0/metadata.json` | — | `RUNTIME_EVIDENCE` | 同一次验证的来源与兼容性记录 | 同上 |
+| `docs/validation/evidence/real-v1-approved-bm25-evidence.json` | 4 次运行 | `RUNTIME_EVIDENCE` | 已发布 BM25 运行的机器可读投影：门禁标志、全部检索指标、延迟、来源审批、索引身份与原始产物的 SHA-256 | 仅为门禁状态与指标；**原始运行产物按既有规则不提交**（`artifacts/benchmarks/README.md`）。`source_approval_verified=true` **只表示语料通过来源审批门禁**，不表示可用于生产或代表现行法规结论 |
+| `docs/validation/evidence/real-v1-approved-bm25-per-sample.jsonl` | 27 | `RUNTIME_EVIDENCE` | 27 条逐样本检索结果（Gold Chunk ID、召回 Chunk ID、首个命中名次、逐臂指标），是 `scripts/validation/verify_benchmark_evidence.py` 重算全部已发布指标的输入 | **只含 chunk ID 与名次，不含任何索引文档正文**——由 `tests/validation/test_benchmark_evidence_package.py` 断言。问题文本是基准自撰；它引用的语料摘录不在此文件内重复发布 |
+| `docs/validation/evidence/chinese-analyzer-tokenisation.json` | 8 组采样 | `RUNTIME_EVIDENCE` | 三种分析器（standard / smartcn / ik_smart）对同一批输入的 Elasticsearch `_analyze` 真实输出 | 输入是基准自撰问题与 5 个通用技术串（INCI 名、法规编号、原料名），**不是索引语料的摘录**，不主张任何法规结论 |
 | `docs/assets/demo-request-evidence-flow.webp` | — | `SYNTHETIC` | 由 `docs/demo/capture_demo.py` 从上述合成语料渲染 | 画面内所有数值均为合成值 |
 
 ### 不在清单内的内容

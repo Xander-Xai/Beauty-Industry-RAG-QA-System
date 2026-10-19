@@ -422,6 +422,26 @@ REQUIRED_AUDIT_AREAS = {
 # PR number, an issue state or a date.
 BENCHMARK_ARTIFACT_GLOB = "artifacts/benchmarks/*/metadata.json"
 
+# A benchmark result can also be evidenced by a *recomputable* evidence package:
+# per-sample ranks plus a script that re-derives the published metrics from them,
+# with no cluster and no weights required. `artifacts/benchmarks/` holds raw runs
+# that stay local by repository rule; this is the published substitute, and it
+# is what makes a metric number in a document checkable rather than asserted.
+#
+# Both are accepted. Neither is accepted on the strength of the other: a raw
+# artifact with no published evidence still cannot be checked by a third party,
+# and a published evidence file whose recomputation fails is caught by
+# tests/validation/test_benchmark_evidence_package.py, not by this guard.
+BENCHMARK_EVIDENCE_GLOBS = (
+    "docs/validation/evidence/*-evidence.json",
+    "docs/validation/evidence/*-per-sample.jsonl",
+)
+
+
+def benchmark_evidence_exists() -> bool:
+    """True when a recomputable, committed benchmark evidence package exists."""
+    return any(any(ROOT.glob(pattern)) for pattern in BENCHMARK_EVIDENCE_GLOBS)
+
 # Docs that must keep the framework/result split visible. A reader who sees only
 # "Recall@10" deserves to know whether a number can exist yet.
 BENCHMARK_CLASSIFICATION_DOCS = [
@@ -590,7 +610,9 @@ def forbidden_evidence_claims(text: str) -> list[str]:
 
 def check_evidence_classification_guards(errors: list[str]) -> None:
     """Framework/result classification and forbidden real-evidence claims."""
-    artifact = benchmark_artifact_exists()
+    # A committed raw artifact or a committed recomputable evidence package both
+    # make a metric number checkable, so both lift the "no evidence" restriction.
+    artifact = benchmark_artifact_exists() or benchmark_evidence_exists()
 
     for name in BENCHMARK_CLASSIFICATION_DOCS:
         path = ROOT / name
