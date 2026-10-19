@@ -162,8 +162,9 @@ enforces is that a transition nobody recorded cannot pass silently.
 - [#16](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/16) — benchmark framework
   implementation scope: closed (`completed`), delivered by PR #17.
 - [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval
-  benchmark execution: open. Two structural blockers keep it open: no real retrieval executor is
-  wired for CLI runs, and no independent corpus covers the golden-set relevance truth.
+  benchmark execution: open. One structural blocker keeps it open: no independent corpus covers the
+  golden-set relevance truth. The real retrieval executor is wired for CLI runs
+  (`--executor real` → `benchmarks/executors.py`, PR #108).
 - [#20](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/20) — enterprise-readiness
   evidence loop: completed, delivered by PR #21.
 - [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) — post-merge truth
@@ -203,8 +204,8 @@ record that any of its results were observed: no performance artifact, no produc
 firing, no traced span. Those stay `PENDING` and keep #8, #12, #18 and #32 open.
 
 Closing #16 records that the framework scope is delivered. It does **not** record a benchmark result:
-no artifact exists, so `benchmark result` stays `PENDING` and both execution blockers (no real
-retrieval executor, no independent corpus) stay open in #18.
+no artifact exists, so `benchmark result` stays `PENDING` and the remaining execution blocker (no
+independent corpus) stays open in #18. The executor blocker was closed by PR #108.
 
 Closing #22 likewise records only that the post-merge truth reconciliation was delivered. It does
 **not** record external validation evidence, so #8, #12, #18 and #32 stay open.
@@ -263,9 +264,9 @@ These are implemented in code but not validated against real external assets/run
   round remains separate lineage; see
   [Qdrant evidence: current coverage and historical execution](#qdrant-evidence-current-coverage-and-historical-execution).
 - Production evaluation / benchmark — no reproducible artifact checked in. The benchmark framework
-  exists and is `REPO_VERIFIED`; two structural blockers keep execution open: **no real retrieval
-  executor is wired for CLI runs**, and **no independent corpus** covers the golden-set relevance
-  truth (building one from `golden_set.contexts` would be label leakage). See
+  exists and is `REPO_VERIFIED`; the real executor is wired for CLI runs (`--executor real`, PR #108),
+  and one structural blocker keeps execution open: **no independent corpus** covers the golden-set
+  relevance truth (building one from `golden_set.contexts` would be label leakage). See
   [benchmark data quality](benchmark-data-quality.md) and
   [artifacts/benchmarks/README.md](../artifacts/benchmarks/README.md).
 - Real RAGAS evaluation with a permitted dependency and evaluator API key — not run: no

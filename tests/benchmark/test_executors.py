@@ -30,7 +30,7 @@ from benchmarks.executors import (
     _items_from_hits,
     build_executor,
 )
-from benchmarks.models import BackendAvailability, BenchmarkQuery
+from benchmarks.models import BackendAvailability, BenchmarkQuery, RelevantItem, RetrievedItem
 
 
 def _available(name: str) -> list[BackendAvailability]:
@@ -252,3 +252,66 @@ def test_cli_default_executor_is_none(tmp_path, monkeypatch):
     assert metadata["executor"] == "none"
     assert metadata["real_executor_configs"] == []
     assert metadata["results_are_benchmark"] is False
+
+
+# ── provenance is the retriever's own marker, not a caller flag ──────────────
+
+
+class _OneHitRetriever:
+    name = "bm25"
+
+    def retrieve(self, query, top_k):
+        return [RetrievedItem(rank=1, key=query.relevant_items[0].key, score=1.0, source="bm25", text="")]
+
+
+class _ProductionRunnableRetriever(_OneHitRetriever):
+    """Stands in for the real executors: it declares its own provenance."""
+
+    is_production = True
+
+
+def _one_query():
+    item = RelevantItem(key="doc-1::chunk-1", text="passage")
+    return [
+        BenchmarkQuery(
+            sample_id="0000",
+            question="q",
+            business_type="general",
+            difficulty="easy",
+            relevant_items=(item,),
+        )
+    ]
+
+
+def test_the_real_executors_declare_production_provenance():
+    """The marker the runner reads must be set by every production adapter."""
+    from benchmarks.executors import BM25Executor, DenseExecutor, HybridRRFExecutor
+
+    assert BM25Executor.is_production is True
+    assert DenseExecutor.is_production is True
+    assert HybridRRFExecutor.is_production is True
+
+
+def test_a_production_retriever_run_is_not_labelled_synthetic():
+    """A genuine ``--executor real`` run must not read as a synthetic fixture."""
+    from benchmarks.runner import run_configuration
+
+    run = run_configuration(
+        "bm25",
+        _one_query(),
+        retriever_factory=lambda name: _ProductionRunnableRetriever(),
+    )
+
+    assert run.executed
+    assert run.synthetic is False
+    assert run.outcome.reason != "synthetic fixture retriever (not a benchmark)"
+
+
+def test_a_fixture_retriever_is_synthetic_even_if_it_looks_production_shaped():
+    """A test double is synthetic by construction; there is no flag to override it."""
+    from benchmarks.runner import run_configuration
+
+    run = run_configuration("bm25", _one_query(), retriever_factory=lambda name: _OneHitRetriever())
+
+    assert run.synthetic is True
+    assert run.outcome.reason == "synthetic fixture retriever (not a benchmark)"

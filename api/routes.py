@@ -128,8 +128,14 @@ def query_handler(
     接收用户查询，经过完整 RAG 管线（Rewrite -> Recall -> Rerank ->
     Evidence Gate -> Generate -> Answer Gate）返回结果。
     """
-    # 用请求体中的 user_id 覆盖（Header 优先级更高，这里仅补充）
-    user_id = req.user_id or identity.user_id
+    # The session owner is the **verified** identity only. `ctx.user_id` becomes the
+    # `SessionState` owner in `core/pipeline.py`, so a body-supplied value must never
+    # reach it: otherwise a caller could present another principal's user_id +
+    # session_id and load their dialog history (docs/security-regression-coverage.md,
+    # control I). `require_identity` guarantees a non-blank principal in non-dev mode;
+    # `QueryRequest.user_id` is kept only for request-model compatibility and is
+    # ignored here.
+    user_id = identity.user_id
 
     ctx = RequestContext(
         user_input=req.query,

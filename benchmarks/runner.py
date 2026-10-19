@@ -8,11 +8,13 @@ retriever that actually returned ranked items.
 
 Synthetic retrievers
 --------------------
-Tests inject a deterministic fixture retriever through ``retriever_factory``.
-Any run that used one is marked ``synthetic_retriever: true`` in the artifacts
-and the report states that the numbers are *not* a retrieval benchmark. The CLI
-never offers such a mode, so a synthetic run cannot reach a published artifact
-by accident.
+A run that used an injected ``retriever_factory`` is marked
+``synthetic_retriever: true`` unless the caller declares the factory real
+(``synthetic_retriever=False``), and the report then states that the numbers are
+*not* a retrieval benchmark. Tests inject deterministic fixtures and keep the
+default; the CLI passes ``False`` only for the production executors it wires with
+``--executor real``, so a fixture ranking cannot reach a published artifact by
+accident and a genuine run is not mislabelled as one.
 """
 
 from __future__ import annotations
@@ -110,7 +112,16 @@ def run_configuration(
     retriever_factory: Callable[[str], Retriever] | None = None,
     force_block_reason: str | None = None,
 ) -> ConfigRun:
-    """Execute or block one configuration, returning its outcome and metrics."""
+    """Execute or block one configuration, returning its outcome and metrics.
+
+    A run is labelled synthetic from the **retriever's own provenance**, never from
+    a caller-supplied flag: the production adapters in ``benchmarks/executors.py``
+    declare ``is_production = True``; any other injected retriever (a test fixture)
+    omits it and is treated as synthetic. A fixture therefore cannot be published as
+    a real benchmark by passing an argument, and a genuine ``--executor real`` run is
+    not mislabelled. Publication still additionally requires ``results_are_benchmark``
+    (a contract-attributable golden set) — see ``benchmarks/retrieval_benchmark.py``.
+    """
     if top_k < MIN_TOP_K:
         raise ValueError(
             f"top_k={top_k} is below the largest reported cutoff ({MIN_TOP_K}); "
@@ -148,6 +159,10 @@ def run_configuration(
         return ConfigRun(outcome)
 
     retriever = retriever_factory(config_name)
+    # Provenance is the retriever's own declaration, never a caller-supplied flag:
+    # the production adapters set ``is_production``; a test fixture does not, so it
+    # is always labelled synthetic and cannot be published as a real benchmark.
+    synthetic = not getattr(retriever, "is_production", False)
     results: list[QueryBenchmarkResult] = []
     failures: list[dict[str, str]] = []
     for query in queries:
@@ -204,13 +219,16 @@ def run_configuration(
             probed,
         )
         return ConfigRun(outcome, [], failures, requested_sample_count=len(queries))
-    outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "synthetic fixture retriever (not a benchmark)", probed)
+    if synthetic:
+        outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "synthetic fixture retriever (not a benchmark)", probed)
+    else:
+        outcome = ConfigOutcome(config_name, STATUS_EXECUTED, "executed with the production retriever", probed)
     return ConfigRun(
         outcome,
         results,
         failures,
         requested_sample_count=len(queries),
-        synthetic=True,
+        synthetic=synthetic,
     )
 
 

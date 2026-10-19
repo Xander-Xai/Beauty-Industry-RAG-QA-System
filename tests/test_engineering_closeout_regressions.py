@@ -197,6 +197,50 @@ def test_F4_session_state_does_not_leak_across_owners():
     assert alice_again.locked_doc_ids == ["rd-confidential-77"]
 
 
+def test_F4_query_handler_scopes_the_session_to_the_verified_identity(monkeypatch):
+    """`/api/query` must not let the request body choose the session owner.
+
+    ``ctx.user_id`` becomes the ``SessionState`` owner in ``core/pipeline.py``.
+    ``/api/query`` took ``req.user_id or identity.user_id``, so a blank verified
+    principal let the body decide the owner, and a caller could present another
+    principal's ``user_id`` + ``session_id`` and have generation load that
+    principal's dialog history (control I in docs/security-regression-coverage.md).
+    The body value is now ignored entirely for identity resolution.
+    """
+    import types
+
+    from api import routes as routes_module
+    from api.models import QueryRequest
+    from common.models import UserIdentity
+
+    captured: dict[str, str] = {}
+
+    class _Pipeline:
+        def process(self, ctx):
+            captured["user_id"] = ctx.user_id
+            ctx.final_response = "ok"
+
+    monkeypatch.setattr(routes_module, "get_pipeline", lambda: _Pipeline())
+    monkeypatch.setattr(
+        routes_module,
+        "get_metrics",
+        lambda: types.SimpleNamespace(record_request=lambda ctx: None),
+    )
+
+    req = QueryRequest(query="q", session_id="shared", user_id="alice")
+
+    # The verified identity wins, even though the body names another principal.
+    routes_module.query_handler(req, UserIdentity(user_id="bob", user_role_mask=1, user_dept_mask=1))
+    assert captured["user_id"] == "bob", "the request body overrode the verified identity"
+
+    # A blank verified principal must NOT fall back to the body either: the owner
+    # stays the (blank) identity. Blank principals are rejected upstream by
+    # require_identity in non-dev mode; this pins that the body is never a fallback.
+    captured.clear()
+    routes_module.query_handler(req, UserIdentity(user_id="", user_role_mask=1, user_dept_mask=1))
+    assert captured["user_id"] == "", "the body supplied the session owner"
+
+
 # ── F5: the P2 overload must be a real 503 ──────────────────────────────────
 
 

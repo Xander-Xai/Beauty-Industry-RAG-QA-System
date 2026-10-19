@@ -139,6 +139,10 @@ class BM25Executor:
     """Benchmark ``Retriever`` over the production ``BM25Retriever``."""
 
     name = "bm25"
+    #: Provenance marker read by ``benchmarks/runner.py``: this retriever calls the
+    #: production code path, so a run that used it is **not** a synthetic fixture.
+    #: A test double simply omits it and is therefore treated as synthetic.
+    is_production = True
 
     def __init__(
         self,
@@ -179,6 +183,8 @@ class DenseExecutor:
     """Benchmark ``Retriever`` over the production ``DenseRetriever`` + RRF path."""
 
     name = "dense"
+    #: Provenance marker read by ``benchmarks/runner.py`` (see ``BM25Executor``).
+    is_production = True
 
     def __init__(
         self,
@@ -238,6 +244,8 @@ class HybridRRFExecutor:
     """
 
     name = "hybrid_rrf"
+    #: Provenance marker read by ``benchmarks/runner.py`` (see ``BM25Executor``).
+    is_production = True
 
     def __init__(
         self,

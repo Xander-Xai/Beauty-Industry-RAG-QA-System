@@ -4,6 +4,25 @@
 
 ### Changed
 
+- **The retrieval benchmark CLI can now execute the production retrievers (issue
+  #18, Blocker A).** `benchmarks/executors.py` supplies the BM25 / dense /
+  hybrid-RRF adapters that `benchmarks/runner.py` had always required but only
+  tests ever provided, so a CLI run previously stopped with `no real retrieval
+  executor is wired for this configuration yet` even when every backend probe
+  passed. `--executor real` wires them for each configuration whose live probes
+  pass; the default stays `--executor none`, so the old blocked-run behaviour is
+  unchanged. The adapters call the production code paths
+  (`retrieval.bm25_retriever`, `retrieval.dense_retriever`,
+  `retrieval_service.rerank.rrf_fusion`) and derive item identity with
+  `benchmarks.relevance.relevance_key`, never raw text. They are fail-closed: an
+  unavailable backend raises per query instead of returning `[]`, so an all-empty
+  ranking cannot be recorded as a false-success `EXECUTED` run. BiEncoder /
+  CrossEncoder rerank configurations stay out of scope until real weights exist,
+  and `build_executor` raises for them rather than falling back. **No metric is
+  produced**: with no independent corpus every configuration still blocks on
+  `corpus_does_not_contain_ground_truth`, so `benchmark result` stays `PENDING`
+  and issue #18 stays open. Tests: `tests/benchmark/test_executors.py`.
+
 - **The CLIP query encoder is warmed up at start-up and its normalisation contract is
   uniform.** The shared query-side encoder (`ParallelRecallManager.clip_embedding_service`)
   loads lazily, so the first multimodal request after every process start paid the
@@ -39,6 +58,68 @@
   engineering change, not the quality measurement.
 
 ### Fixed
+
+- **`POST /api/query` let the request body choose the session owner, and a blank
+  JWT principal slipped past authentication.** The handler used
+  `req.user_id or identity.user_id`, so a blank identity fell back to the
+  body. A JWT whose `sub` / `user_id` was `""` produced `identity.user_id == ""`,
+  and `require_identity` allowed it in non-dev mode because it only compared
+  against the literal `"anonymous"`. `ctx.user_id` is the `SessionState` owner in
+  `core/pipeline.py`, so this chain let a caller send another principal's
+  `user_id` + `session_id` and load that principal's dialog history / locked doc
+  ids into answer generation — the cross-principal leak control I in
+  `docs/security-regression-coverage.md` claims is closed.
+  - `require_identity` now rejects missing, blank, whitespace-only and
+    `"anonymous"` principals in non-dev mode via one
+    `is_authenticated_principal()` predicate.
+  - `/api/query` takes the session owner from `identity.user_id` only; the
+    deprecated `QueryRequest.user_id` field is kept for request compatibility but
+    is never used for identity resolution.
+  - Tests: `tests/test_query_identity_ownership.py` (valid JWT, blank-subject JWT,
+    missing token, whitespace subject, dev headers, cross-user `session_id`
+    isolation — all through the real `require_identity` dependency) and
+    `tests/test_engineering_closeout_regressions.py::test_F4_query_handler_scopes_the_session_to_the_verified_identity`.
+
+- **The async CLIP path reloaded the CLIP weights on every call.** `recall_async_clip`
+  constructed a fresh `EmbeddingService()` per call while the sync path reuses the
+  manager-scoped encoder fixed in #99/#102. Each async preheat therefore cold-loaded
+  the model inside the 0.5s background budget (so it contributed nothing) and held a
+  second copy of the weights in memory. It now reuses the shared, warmable encoder.
+  No new capability or metric is claimed. Test:
+  `tests/test_clip_warmup_and_normalization.py::test_async_clip_reuses_the_shared_warmable_encoder`.
+
+- **A real `--executor real` benchmark run was mislabelled synthetic.** `run_configuration`
+  set `synthetic=True` whenever a `retriever_factory` was supplied, and only tests
+  ever supplied one — until #108 wired the production executors to the CLI. A
+  genuine run would therefore carry `synthetic_retriever: true` and
+  `results_are_benchmark: false` even with a real corpus, making the first real
+  artifact unpublishable by label.
+  - Provenance is now the **retriever's own declaration**: the production
+    adapters in `benchmarks/executors.py` set `is_production = True`, and the
+    runner labels a run real only when that marker is present. A test fixture
+    omits it and is always synthetic. There is no caller-supplied flag to forge.
+  - Publication remains the conjunction of independent facts: a configuration
+    actually executed (backend probes passed), the golden set is contract
+    attributable, and the retriever declared production provenance. No metric is
+    produced here; the result still requires an independent corpus and a
+    contract-valid golden set.
+  - Tests: `tests/benchmark/test_executors.py`
+    (`test_the_real_executors_declare_production_provenance`,
+    `test_a_production_retriever_run_is_not_labelled_synthetic`,
+    `test_a_fixture_retriever_is_synthetic_even_if_it_looks_production_shaped`).
+
+- **Unattributable golden-set samples are excluded instead of silently scored by
+  normalized-text matching (issue #86).** `--drop-unattributable` on
+  `python -m benchmarks.retrieval_benchmark` removes every sample that fails
+  `golden-set-contract/v2` and records the count, the excluded sample ids and
+  their machine-readable reasons under `metadata.json → unattributable_filter`;
+  if the filter leaves no sample the run refuses with exit code 2 and writes no
+  artifact. `--require-integrity` fails on cross-row errors a per-row validator
+  cannot see (a `sample_id` used twice, a passage annotated twice). Both flags
+  are off by default, so the CLI behaves exactly as before; the committed golden
+  set is still 0/301 attributable, so `--drop-unattributable` refuses it (exit 2)
+  rather than scoring it. No relevance label and no metric is created; #86 stays
+  open. Tests: `tests/benchmark/test_unattributable_filter.py`.
 
 - **A RAGAS comparison against a baseline that never ran reported an improvement.**
   `RAGASReporter.compare_reports` differenced with
@@ -137,6 +218,29 @@
     smoke) remains `PENDING` / `NOT EXECUTED` (issue #8).
 
 ### Documentation
+
+- **The microservice Compose gateway is now marked as not safe to expose.** The
+  canonical deployment guide states the boundary that was verified in code:
+  `docker-compose.microservices.yml` publishes `api-gateway` on host port 8000,
+  but only `generation.py` routes authenticate the user; `retrieval.py` /
+  `rewrite.py` have no inbound auth, `/v1/recall` trusts caller-supplied
+  `user_role_mask` / `user_dept_mask`, and those routes do not attach
+  `X-Service-Token` to downstream calls (which the services require). The
+  configuration therefore fails closed when `SERVICE_AUTH_TOKEN` is set and is
+  unauthenticated when it is unset (dev). It must not be presented as a deployable
+  public entrypoint; the canonical runtime remains the monolith. `docs/evidence-map.md`
+  carries the same limitation. No microservice was refactored and no new
+  deployment mode was added.
+
+- **The retrieval-benchmark documents described the executor as unwritten after
+  it had been wired.** `artifacts/benchmarks/README.md` ("Not wired yet"),
+  `docs/deferred-runtime-validation.md` (`VAL-RETRIEVAL-001` prerequisite),
+  `docs/README.md`, `README.md` and `docs/repository-truth-audit.md` still said
+  no real retrieval executor existed for CLI runs. They now record that
+  `--executor real` wires the production BM25 / dense / hybrid-RRF adapters and
+  that the only remaining execution blocker is the missing independent corpus.
+  The six-file artifact contract, the `BLOCKED` semantics, the `REPO_VERIFIED`
+  framework / `PENDING` result split and every evidence level are unchanged.
 
 - **The golden-set format validator reported "all compliant" without disclosing that
   0/301 rows are attributable.** `tests/evaluation/validate_golden_set.py` checks field

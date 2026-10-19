@@ -392,11 +392,13 @@ python3 run_offline.py incremental-build --from-epoch phase_1 --to-epoch phase_2
 # 查看当前环境实际可执行的配置（实时探测，不使用替身 retriever）
 python3 -m benchmarks.retrieval_benchmark --list-configs
 
-# 尝试真实运行
-python3 -m benchmarks.retrieval_benchmark --config bm25 --limit 5
+# 尝试真实运行（默认 --executor none；--executor real 接入生产 BM25 / dense / hybrid-RRF 执行器）
+python3 -m benchmarks.retrieval_benchmark --executor real --config bm25 --limit 5
 ```
 
-框架为 `REPO_VERIFIED`；**结果为 `PENDING`**。缺少真实依赖时配置以 `BLOCKED` 与原因记录，**不会**产出数字。评估口径与数据质量缺口见 [Evaluation](#evaluation) 与 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 契约见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
+框架为 `REPO_VERIFIED`；**结果为 `PENDING`**。真实执行器（`benchmarks/executors.py`）已接入 CLI 的
+`--executor real`，覆盖 `bm25` / `dense` / `hybrid_rrf`；后端探针未通过或缺少独立语料时配置以
+`BLOCKED` 与原因记录，**不会**产出数字。评估口径与数据质量缺口见 [Evaluation](#evaluation) 与 [docs/benchmark-data-quality.md](docs/benchmark-data-quality.md)，artifact 契约见 [artifacts/benchmarks/README.md](artifacts/benchmarks/README.md)。
 
 数据归属契约（`golden-set-contract/v2`，`benchmarks/golden_set_contract.py`）：所有样本都必须带稳定 `sample_id`、真实 `(doc_id, chunk_id)` + `corpus_version`、人工 `visual_required` / `complexity_label` 与标注溯源，否则判 `INVALID`。当前 301 条实测 **0/301 合规**；评测脚本会拒绝在无效数据上输出百分比：
 
@@ -464,8 +466,8 @@ python3 scripts/check_repo_consistency.py
 # 列出当前环境实际可执行的配置（实时探测后端，不用替身 retriever）
 python3 -m benchmarks.retrieval_benchmark --list-configs
 
-# 尝试真实运行；后端不可用时以 BLOCKED + 原因记录，不产出任何数字
-python3 -m benchmarks.retrieval_benchmark --config bm25 --limit 5
+# 尝试真实运行；--executor real 接入生产执行器，后端不可用或缺少独立语料时以 BLOCKED + 原因记录，不产出任何数字
+python3 -m benchmarks.retrieval_benchmark --executor real --config bm25 --limit 5
 ```
 
 框架按五档递进配置对比单路与混合检索的收益：`bm25` · `dense` · `hybrid_rrf` · `hybrid_rrf_biencoder` · `hybrid_rrf_biencoder_crossencoder`；指标为 Recall@K、HitRate@{1,3,5,10}、MRR@10、NDCG@10，可按 `business_type` / `difficulty` 分桶。代码：`benchmarks/`（指标实现确定性，与后端无关的部分有完整单测）。

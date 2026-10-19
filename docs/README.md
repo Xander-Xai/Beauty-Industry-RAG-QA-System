@@ -76,7 +76,9 @@ levels; see [Run outcomes that are not evidence levels](evidence-map.md#run-outc
 - [RAGAS evaluation guide](ragas-evaluation-guide.md): offline quality-evaluation harness,
   golden set, reporter and CI boundary.
 - [Retrieval benchmark artifact contract](../artifacts/benchmarks/README.md): the six-file
-  run contract, what `BLOCKED` means, and why a real run still cannot produce a metric.
+  run contract, the wired `--executor real` production adapters, what `BLOCKED` means, and
+  why a real run on this host still cannot produce a metric (the missing corpus, not the
+  executor).
 - [Benchmark data quality](benchmark-data-quality.md): measured golden-set field coverage and the
   buckets the retrieval benchmark deliberately does not produce.
 
