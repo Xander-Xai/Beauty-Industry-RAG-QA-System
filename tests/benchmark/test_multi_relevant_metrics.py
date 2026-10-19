@@ -288,3 +288,78 @@ def test_per_context_mappings_are_supported(tmp_path):
 def test_ambiguous_identity_is_a_dataset_error():
     """It must surface through the normal exception type the CLI already handles."""
     assert issubclass(AmbiguousRelevanceIdentityError, DatasetError)
+
+
+def test_v2_annotations_only_rows_load_without_contexts(tmp_path) -> None:
+    """A golden-set-contract/v2 record must be scorable.
+
+    The v2 schema sets additionalProperties:false and does not list `contexts`,
+    so a conforming record cannot carry it. The loader nevertheless demanded
+    `contexts` on every row before resolving ground truth, even though it prefers
+    `annotations` whenever they are present. That made the very shape the contract
+    validates impossible to run.
+    """
+    import json as _json
+
+    from benchmarks.dataset import load_queries
+
+    path = tmp_path / "v2.jsonl"
+    path.write_text(
+        _json.dumps(
+            {
+                "sample_id": "REAL-V1-001",
+                "question": "化妆品的法定定义是什么？",
+                "business_type": "regulation",
+                "difficulty": "easy",
+                "visual_required": False,
+                "complexity_label": "simple",
+                "corpus_version": "real-v1-20261019",
+                "corpus_sha256": "a" * 64,
+                "annotations": [{"doc_id": "d" * 64, "chunk_id": "c" * 36, "text": "第三条正文", "relevance": 2}],
+                "annotation": {
+                    "annotator": "llm:x",
+                    "method": "m",
+                    "annotated_at": "2026-10-19",
+                    "source": "human",
+                    "review_status": "REVIEWED",
+                    "reviewed_by": "y",
+                    "reviewed_at": "2026-10-19",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    queries = load_queries(path)
+    assert len(queries) == 1
+    assert [item.key for item in queries[0].relevant_items] == [f"{'d' * 64}::{'c' * 36}"]
+
+
+def test_a_row_with_neither_usable_annotations_nor_contexts_is_still_refused(tmp_path) -> None:
+    """The fix must not make a ground-truth-less row loadable."""
+    import json as _json
+
+    import pytest as _pytest
+
+    from benchmarks.dataset import DatasetError, load_queries
+
+    path = tmp_path / "empty.jsonl"
+    path.write_text(_json.dumps({"question": "q", "annotations": []}, ensure_ascii=False) + "\n", encoding="utf-8")
+    with _pytest.raises(DatasetError):
+        load_queries(path)
+
+
+def test_contexts_still_take_effect_when_annotations_are_absent(tmp_path) -> None:
+    """Existing text-matched datasets must behave exactly as before."""
+    import json as _json
+
+    from benchmarks.dataset import load_queries
+
+    path = tmp_path / "text.jsonl"
+    path.write_text(
+        _json.dumps({"question": "q", "contexts": ["某条文正文"]}, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    queries = load_queries(path)
+    assert len(queries) == 1
+    assert queries[0].relevant_items[0].text == "某条文正文"
