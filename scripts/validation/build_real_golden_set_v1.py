@@ -454,18 +454,38 @@ NO_ANSWER: tuple[tuple, ...] = (
         "regulation",
         "hard",
         (("铅", "限量"), ("铅", "mg/kg")),
+        "refuse",
+        None,
     ),
     (
         "驻留类化妆品中烟酰胺的最高允许浓度是多少？",
         "ingredient",
         "hard",
         (("烟酰胺", "最高允许浓度"), ("烟酰胺", "最大允许浓度"), ("烟酰胺", "限量")),
+        "partial_answer_and_state_gap",
+        (
+            "The corpus can answer part of this. The 2021 catalogue records 烟酰胺 (序号07359) with both the "
+            'rinse and leave-on maximum historical usage as 未提供, so "no figure was recorded" is '
+            "groundable. It cannot answer the rest: a maximum permissible concentration is a 限量 in "
+            "《化妆品安全技术规范》, a document this corpus does not contain, and clause 9 of the catalogue "
+            "notes directs the registrant to supply assessment material or run a risk assessment instead. "
+            "A pure-refusal expectation would fail a system that answers the first part correctly and names "
+            "the gap, which is the behaviour the gate is meant to reward."
+        ),
     ),
     (
         "《化妆品监督管理条例》是否规定了化妆品中甲醇的限量？",
         "regulation",
         "medium",
         (("甲醇", "限量"), ("甲醇", "mg/kg")),
+        "refuse",
+        (
+            "This is a semantic-discrimination sample, not a keyword-miss sample. 甲醇 occurs exactly once "
+            "in the whole corpus, and only as part of 苯甲醇 (BENZYL ALCOHOL, 序号01279); the standalone "
+            "ingredient 甲醇 occurs zero times, as does 限量. A naive substring search on 甲醇 therefore "
+            "returns a false positive on 苯甲醇, and returning that row as evidence of a methanol limit "
+            "would be wrong. 苯甲醇 must not be treated as evidence for 甲醇."
+        ),
     ),
 )
 
@@ -557,7 +577,7 @@ def build_records(grouped: dict[str, list[dict]], corpus_version: str, corpus_sh
 def build_no_answer(grouped: dict[str, list[dict]], corpus_version: str, corpus_sha256: str) -> list[dict]:
     corpus_texts = [chunk["text"] for chunks in grouped.values() for chunk in chunks]
     records = []
-    for index, (question, business_type, difficulty, pairs) in enumerate(NO_ANSWER, start=1):
+    for index, (question, business_type, difficulty, pairs, expected_behavior, note) in enumerate(NO_ANSWER, start=1):
         matches = []
         for left, right in pairs:
             hits = [
@@ -574,14 +594,15 @@ def build_no_answer(grouped: dict[str, list[dict]], corpus_version: str, corpus_
                 "business_type": business_type,
                 "difficulty": difficulty,
                 "answerable": False,
-                "expected_behavior": "refuse",
+                "expected_behavior": expected_behavior,
                 "evaluation_target": "answer_gate",
                 "corpus_version": corpus_version,
                 "corpus_sha256": corpus_sha256,
                 "searched_pairs": [list(pair) for pair in pairs],
                 "matched_chunk_ids": sorted(set(matches)),
                 "corpus_chunk_count": len(corpus_texts),
-                "note": (
+                "note": note
+                or (
                     "No chunk in this corpus contains any searched token pair, so a factual answer cannot be "
                     "grounded. Absence is relative to this corpus only, not a general legal conclusion."
                 ),

@@ -201,10 +201,21 @@ def load_queries(
                 f"{path}: sample {sample_id} question must be a non-empty string, got {type(raw_question).__name__}"
             )
         question = raw_question.strip()
+        # Ground truth is resolved from `annotations` first, because that is the
+        # golden-set-contract/v2 shape and every annotated passage carries its own
+        # doc_id + chunk_id. Requiring `contexts` as well made the v2 shape
+        # unusable with this loader even though `_relevant_items_for_row` prefers
+        # `annotations`, and the v2 schema sets additionalProperties:false so a
+        # conforming record cannot carry `contexts` at all. A row with no usable
+        # annotations still needs `contexts`, so nothing becomes loadable that was
+        # not loadable before.
+        annotated = relevant_items_from_annotations(row.get("annotations"))
         contexts = row.get("contexts")
-        if not isinstance(contexts, list) or not contexts:
-            raise DatasetError(f"{path}: sample {sample_id} has no contexts (ground truth)")
-        relevant = _relevant_items_for_row(row, contexts, sample_id, path)
+        if not annotated and (not isinstance(contexts, list) or not contexts):
+            raise DatasetError(
+                f"{path}: sample {sample_id} has no ground truth: neither usable annotations nor contexts"
+            )
+        relevant = annotated or _relevant_items_for_row(row, contexts, sample_id, path)
         queries.append(
             BenchmarkQuery(
                 sample_id=sample_id,

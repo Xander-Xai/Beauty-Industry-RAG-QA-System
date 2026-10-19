@@ -4,8 +4,12 @@ Current classification, stated before anything else:
 
 - Retrieval benchmark **framework**: `REPO_VERIFIED` (metrics, provenance,
   readiness probing and this artifact contract are implemented and test-covered).
-- Retrieval benchmark **result**: `PENDING`. No run artifact is committed, so no
-  retrieval metric is available here.
+- Retrieval benchmark **result**: `PARTIAL`. A real BM25 run over the 27
+  human-signed real-corpus-V1 records completed on 2026-10-19 and is written up in
+  [`docs/validation/real-v1-bm25-run.md`](../../docs/validation/real-v1-bm25-run.md).
+  It is **not** a fully cleared official benchmark: source approval is 1/2, so the
+  index carries mixed provenance and 13 of the 27 gold passages come from the
+  unapproved catalogue. Per the rule below, no run artifact is committed.
 
 Runtime output of the reproducible retrieval benchmark lives here:
 

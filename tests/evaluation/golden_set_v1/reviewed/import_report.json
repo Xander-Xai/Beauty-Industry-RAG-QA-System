@@ -1,0 +1,26 @@
+{
+  "applied": true,
+  "candidate_count": 27,
+  "candidate_dataset": "tests/evaluation/golden_set_v1/candidates_v1.jsonl",
+  "candidate_dataset_sha256": "7bfd5ac239f269833531a9b80f615ab615ba77cfb4930aa8b889ce608243f81d",
+  "counts": {
+    "ACCEPT": 27,
+    "MODIFY": 0,
+    "REJECT": 0,
+    "UNSIGNED": 0
+  },
+  "decision_ledger": "tests/evaluation/golden_set_v1/review_signoff_v1.jsonl",
+  "decision_ledger_sha256": "755026a7278d0fc851d3d9b5f0239141aee7c6e3c5e1b595e59c222c8292b35e",
+  "draft_rows": 0,
+  "note": "An empty review ledger is not an error: the candidates are drafts and stay DRAFT_UNVERIFIED until a named reviewer signs them.",
+  "refusals": [],
+  "rejected_rows": 0,
+  "reviewed_rows": 27,
+  "schema": "real-corpus-review-import-report/1",
+  "scorable_rows": 27,
+  "v1_dataset_schema": "real-corpus-golden-set-annotations/1",
+  "v1_schema_diff_vs_v2": [
+    "properties.sample_id.description: 'Stable worksheet identifier shared with candidates_v1.jsonl and retrieval_review_workpackage.jsonl, so a reviewed record always maps back to the row a human signed.' != '1-based zero-padded line number in the source golden set. Deterministic, so a record always maps back to its question.'",
+    "properties.sample_id.pattern: '^REAL-V1-[0-9]{3}$' != '^[0-9]{4}$'"
+  ]
+}

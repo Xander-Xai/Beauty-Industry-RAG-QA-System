@@ -21,6 +21,8 @@ from offline.source_trust import file_content_hash
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORPUS_DIR = REPO_ROOT / "corpus" / "real_v1"
+ANSWER_GATE_BEHAVIORS = ("refuse", "partial_answer_and_state_gap")
+
 GOLDEN_DIR = REPO_ROOT / "tests" / "evaluation" / "golden_set_v1"
 
 
@@ -172,8 +174,36 @@ def test_no_answer_candidates_have_no_matching_chunk() -> None:
     assert records, "no-answer file must not be empty"
     for record in records:
         assert record["answerable"] is False
-        assert record["expected_behavior"] == "refuse"
+        assert record["expected_behavior"] in ANSWER_GATE_BEHAVIORS
         assert record["matched_chunk_ids"] == []
+        assert record["note"], "an answer-gate row must say why it expects that behaviour"
+
+
+def test_answer_gate_partial_rows_stay_distinguishable_from_pure_refusals() -> None:
+    """A partial answer and a refusal are different contracts.
+
+    ``partial_answer_and_state_gap`` was introduced when the owner reviewed
+    REAL-V1-NOANSWER-002 and found the corpus can ground part of the answer. A
+    regression that silently collapsed it back to ``refuse`` would fail every
+    system that answers correctly and names the gap.
+    """
+    records = {r["sample_id"]: r for r in _load_jsonl(GOLDEN_DIR / "no_answer_candidates_v1.jsonl")}
+    assert records["REAL-V1-NOANSWER-002"]["expected_behavior"] == "partial_answer_and_state_gap"
+    assert records["REAL-V1-NOANSWER-001"]["expected_behavior"] == "refuse"
+    assert records["REAL-V1-NOANSWER-003"]["expected_behavior"] == "refuse"
+    # The methanol row must warn that 苯甲醇 is a substring false positive.
+    assert "苯甲醇" in records["REAL-V1-NOANSWER-003"]["note"]
+
+
+def test_answer_gate_samples_never_enter_the_retrieval_recall_denominator() -> None:
+    """Answer-gate rows carry no gold passages, by construction."""
+    records = _load_jsonl(GOLDEN_DIR / "no_answer_candidates_v1.jsonl")
+    for record in records:
+        assert "annotations" not in record
+        assert record["evaluation_target"] == "answer_gate"
+    retrieval = _load_jsonl(GOLDEN_DIR / "candidates_v1.jsonl")
+    answer_gate_ids = {r["sample_id"] for r in records}
+    assert not (answer_gate_ids & {r["sample_id"] for r in retrieval})
 
 
 def test_source_files_still_match_the_hashes_the_approval_binds() -> None:
