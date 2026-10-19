@@ -77,15 +77,21 @@ levels; see [Run outcomes that are not evidence levels](evidence-map.md#run-outc
   golden set, reporter and CI boundary.
 - [Retrieval benchmark artifact contract](../artifacts/benchmarks/README.md): the six-file
   run contract, the wired `--executor real` production adapters, what `BLOCKED` means, and
-  why a real run on this host still cannot produce a metric (the missing corpus, not the
-  executor).
+  the published evidence package that replaces a raw artifact on disk.
 - [Benchmark data quality](benchmark-data-quality.md): measured golden-set field coverage and the
   buckets the retrieval benchmark deliberately does not produce.
+- [Real Corpus V1 正式 BM25 运行报告](validation/real-v1-approved-bm25-run.md) ·
+  [中文分词 A/B](validation/chinese-analyzer-ab.md) ·
+  [生产索引与 epoch 治理](validation/production-index-governance.md): the result, the
+  analyzer comparison and the production-index boundary for the Real Corpus V1 scope.
 
 Retrieval benchmark framework: `REPO_VERIFIED` (deterministic metrics, provenance,
 artifact contract, covered by tests).
-Retrieval benchmark result: `PENDING` — no reproducible artifact exists, so no
-retrieval metric is claimed anywhere in the repository.
+Retrieval benchmark result: `LOCAL_REAL_VALIDATION` for the **Real Corpus V1 BM25**
+scope (27 human-signed records, two approved sources, real Elasticsearch 8.11.0,
+`results_are_benchmark=true`, per-sample evidence recomputable offline); `PENDING`
+for Dense / Hybrid, for the legacy 301-row dataset, and for every other benchmark
+family in this repository.
 
 ### Finalization closeout
 
@@ -132,6 +138,21 @@ Performance result, alerting validated in production, and OTLP runtime closed lo
   coverage (0/301 valid), the answer-level harness, and the exact reason Hit@5/NDCG@10
   ablation A–E, answer-quality metrics and QPS are `BLOCKED` here — with the environment
   checklist that would promote them.
+- [Real corpus V1 正式 BM25 运行报告](validation/real-v1-approved-bm25-run.md): the first
+  retrieval result in this repository that cleared **every** publication gate — 27
+  human-signed records, two approved sources, 212/212 documents source-verified,
+  real Elasticsearch 8.11.0, `results_are_benchmark=true`. It also carries the
+  **stage-baseline freeze declaration** for Real Corpus V1.
+- [中文分词 A/B（standard / smartcn / ik_smart）](validation/chinese-analyzer-ab.md): a
+  single-variable comparison on one isolated ES node — same chunk ids, same
+  provenance, same epoch, only the declared analyzer changes. SmartCN Recall@10
+  0.7037 → 0.9259, IK → 0.9630, zero regressions, with the Recall@1 regression and
+  the unfixed sample recorded rather than smoothed over.
+- [生产索引与 epoch 治理](validation/production-index-governance.md): the read-only
+  finding that the production index holds the right content with the wrong
+  provenance, the epoch-binding defect and its fix, the non-destructive blue-green
+  migration plan, and the five conditions kept apart (approved ≠ activatable ≠
+  benchmarkable ≠ production-ready ≠ a current regulatory basis).
 - [Real corpus V1 pre-review report](validation/real-corpus-v1-pre-review.md): the
   index-rebuild safety contract, the corrected source-trust classification, the 27+3
   review worksheets, the exploratory-BM25 boundary (cold vs steady latency) and the

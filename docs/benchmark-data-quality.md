@@ -1,5 +1,15 @@
 # Benchmark data quality
 
+> **Scope.** Every count in this document is the measured field coverage of the
+> **legacy 301-row golden set** (`tests/evaluation/golden_set.jsonl`). It is
+> not a statement about every golden set in the repository. The Real Corpus V1
+> set (27 human-signed records) is a different scope with different coverage —
+> it carries stable `(doc_id, chunk_id)` identity, `visual_required` and
+> `complexity_label`, and measured 27/27 contract-valid — and has produced a
+> formal BM25 result; see
+> [`docs/validation/real-v1-approved-bm25-run.md`](validation/real-v1-approved-bm25-run.md).
+> The gap analysis below still stands in full for the 301-row set.
+
 This document records the data-quality gaps that limit the current retrieval
 benchmark, measured against `tests/evaluation/golden_set.jsonl` at
 `main` @ `b711d99` (re-measured; the coverage below is unchanged from the earlier

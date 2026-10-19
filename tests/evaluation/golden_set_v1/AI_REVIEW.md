@@ -1,5 +1,16 @@
 # AI_REVIEW — 真实语料 V1 的 AI 代理审核记录
 
+> **历史记录，不回填。** 本文件描述 2026-10-19 AI 预审当时的状态，文中
+> "TrustRegistry 审批台账仍为空"、"来源仍为 `UNTRUSTED / PENDING_REVIEW`"
+> 等陈述**在该时点是真实的**，不会被改写成后来通过新门禁的样子。
+>
+> 之后的实际状态：来源审批已于 2026-10-20 补齐为 2/2（`Xander-Xai` 具名审批，
+> 见 [`README.md`](README.md) 的「当前实测状态」），正式 BM25 运行已通过全部
+> 发布门禁（见
+> [`docs/validation/real-v1-approved-bm25-run.md`](../../../docs/validation/real-v1-approved-bm25-run.md)）。
+> 本文件的 AI 预审结论**不因**那些后续事件而改变——它本来就不是人工签署，
+> 也不参与任何已发布指标。
+
 > **本文件是 AI_REVIEW，不是人工审核。**
 > 审核者：`llm:opencode/minimax-m3.1-flash-preview`（AI 代理），审核日期 2026-10-19。
 > 它**不构成**任何真实人员的审批、签署或来源批准记录。

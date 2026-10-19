@@ -11,7 +11,7 @@ The closeout deliverables for the `finalize/engineering-closeout` branch
 | [EVIDENCE_MANIFEST.md](EVIDENCE_MANIFEST.md) | capability → source → test → CI → artifact → level |
 | [GOVERNANCE_REPORT.md](GOVERNANCE_REPORT.md) | final PR integration, issue decisions, branch retention, final `main` state |
 
-Scope: these files document code integration, reproducible validation and known engineering limitations. No external proprietary corpus, deployment context or career material is included. Retrieval metrics remain unreported without an independently verified dataset and model weights.
+Scope: these files document code integration, reproducible validation and known engineering limitations. No external proprietary corpus, deployment context or career material is included. Retrieval metrics remained unreported at the time of this closeout; a first retrieval result (Real Corpus V1 BM25) has since been produced and is documented in [`docs/validation/real-v1-approved-bm25-run.md`](../validation/real-v1-approved-bm25-run.md) — these closeout files still describe the state at `61be8a9` and are not updated by it.
 
 Code commit under test: `61be8a9` (the closeout doc commits follow on top; the
 branch head is PR #92). Local suite at that commit: `2896 passed, 17 skipped`;

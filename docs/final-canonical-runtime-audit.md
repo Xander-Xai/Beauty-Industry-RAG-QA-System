@@ -1,5 +1,12 @@
 # Final canonical-runtime consistency audit
 
+> **Scope note.** This audit describes the tree at `main` = `0c99724` and is left
+> unedited. A first retrieval result (Real Corpus V1 BM25) has since been
+> produced and is documented in
+> [`docs/validation/real-v1-approved-bm25-run.md`](validation/real-v1-approved-bm25-run.md);
+> the "no retrieval benchmark artifact" statement below was true at `0c99724` and
+> describes that tree, not the current one.
+
 Audit of the canonical/current surfaces against the code and configuration on the post-#55/#56
 tree (`main` at `0c99724`). This is a **fact-consistency audit, not a feature change**: no
 architecture, evidence level, benchmark, result, runtime behaviour or release version was altered,

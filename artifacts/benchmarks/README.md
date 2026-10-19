@@ -4,12 +4,23 @@ Current classification, stated before anything else:
 
 - Retrieval benchmark **framework**: `REPO_VERIFIED` (metrics, provenance,
   readiness probing and this artifact contract are implemented and test-covered).
-- Retrieval benchmark **result**: `PARTIAL`. A real BM25 run over the 27
-  human-signed real-corpus-V1 records completed on 2026-10-19 and is written up in
+- Retrieval benchmark **result**: `LOCAL_REAL_VALIDATION` for the **Real Corpus V1
+  BM25** scope, `PENDING` for Dense / Hybrid and for the legacy 301-row dataset.
+  A real BM25 run over the 27 human-signed real-corpus-V1 records cleared every
+  publication gate — including the source-approval gate that requires every one
+  of the 212 indexed documents to carry an attributed reviewer's approval — and
+  is written up in
+  [`docs/validation/real-v1-approved-bm25-run.md`](../../docs/validation/real-v1-approved-bm25-run.md).
+  The Chinese-tokenization A/B is in
+  [`docs/validation/chinese-analyzer-ab.md`](../../docs/validation/chinese-analyzer-ab.md).
+  The earlier run whose source approval was only 1/2 is retained unaltered as a
+  historical record in
   [`docs/validation/real-v1-bm25-run.md`](../../docs/validation/real-v1-bm25-run.md).
-  It is **not** a fully cleared official benchmark: source approval is 1/2, so the
-  index carries mixed provenance and 13 of the 27 gold passages come from the
-  unapproved catalogue. Per the rule below, no run artifact is committed.
+- Per the rule below, no **raw run artifact** is committed. What is committed is
+  a recomputable evidence package under `docs/validation/evidence/`, which lets a
+  third party re-derive every published metric without Elasticsearch, model
+  weights or network access:
+  `python3 scripts/validation/verify_benchmark_evidence.py`.
 
 Runtime output of the reproducible retrieval benchmark lives here:
 
