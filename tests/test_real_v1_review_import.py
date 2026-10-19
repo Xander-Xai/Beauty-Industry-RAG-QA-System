@@ -8,11 +8,11 @@ a human decision ever being fabricated in the repository.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-import jsonschema
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,8 +43,7 @@ def _candidate(sample_id: str) -> dict:
     raise AssertionError(f"no candidate {sample_id}")
 
 
-def _sign(tmp_path: Path, sample_id: str, **overrides) -> dict:
-    """Build a synthetic signed decision for one candidate."""
+def _build_decision(sample_id: str, **overrides) -> dict:
     candidate = _candidate(sample_id)
     decision = {
         "decision_schema": importer.DECISION_SCHEMA,
@@ -65,8 +64,31 @@ def _sign(tmp_path: Path, sample_id: str, **overrides) -> dict:
         "confirmed_question": "",
     }
     decision.update(overrides)
+    return decision
+
+
+def _write_ledger(tmp_path: Path, decisions: list[dict]) -> Path:
     path = tmp_path / "decisions.jsonl"
-    path.write_text(json.dumps(decision, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(
+        "".join(json.dumps(decision, ensure_ascii=False) + "\n" for decision in decisions),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _sign(tmp_path: Path, sample_id: str, **overrides) -> dict:
+    """Write a ledger holding one synthetic signed decision."""
+    decision = _build_decision(sample_id, **overrides)
+    _write_ledger(tmp_path, [decision])
+    return decision
+
+
+def _sign_again(tmp_path: Path, sample_id: str, **overrides) -> dict:
+    """Append a second signed decision to the ledger ``_sign`` already wrote."""
+    ledger = tmp_path / "decisions.jsonl"
+    existing = load_records(ledger) if ledger.exists() else []
+    decision = _build_decision(sample_id, **overrides)
+    _write_ledger(tmp_path, [*existing, decision])
     return decision
 
 
@@ -206,12 +228,38 @@ def test_ai_fields_in_the_decision_ledger_are_refused(tmp_path: Path) -> None:
 
 
 def test_promoted_record_satisfies_the_derived_v1_schema(tmp_path: Path) -> None:
+    """The projection must satisfy the V1 schema without relaxing it.
+
+    The check is written against the schema's own ``properties`` and
+    ``additionalProperties`` rather than a JSON Schema library, because
+    ``jsonschema`` is not a declared dependency of this repository and CI cannot
+    import it. A test that only runs on one machine is not a test. The optional
+    library cross-check below confirms this reasoning still holds where the
+    library exists.
+    """
     ledger = tmp_path / "decisions.jsonl"
     _sign(tmp_path, "REAL-V1-001")
     assert _run(tmp_path, ledger) == 0
     schema = json.loads((tmp_path / "out/annotations_v1.schema.json").read_text(encoding="utf-8"))
     for record in load_records(tmp_path / "out/annotations_v1_reviewed.jsonl"):
-        jsonschema.validate(record, schema)
+        assert set(record) <= set(schema["properties"]), "record carries a key the schema forbids"
+        assert set(schema["required"]) <= set(record), "record is missing a schema-required key"
+        assert re.fullmatch(schema["properties"]["sample_id"]["pattern"], record["sample_id"])
+        assert record["corpus_sha256"] and re.fullmatch(r"[0-9a-f]{64}", record["corpus_sha256"])
+        assert record["business_type"] in schema["properties"]["business_type"]["enum"]
+        assert record["difficulty"] in schema["properties"]["difficulty"]["enum"]
+        assert record["complexity_label"] in schema["properties"]["complexity_label"]["enum"]
+        for annotation in record["annotations"]:
+            assert set(annotation) <= set(schema["properties"]["annotations"]["items"]["properties"])
+            assert {"doc_id", "chunk_id", "text"} <= set(annotation)
+
+
+def test_v1_schema_relaxes_only_the_sample_id_pattern() -> None:
+    v2 = json.loads(V2_SCHEMA.read_text(encoding="utf-8"))
+    v1 = importer.build_v1_schema()
+    differences = importer.schema_diff(v1, v2)
+    assert set(differences) == importer.ALLOWED_SCHEMA_DIFF
+    importer.assert_schema_not_relaxed(v1, v2)
 
 
 def test_promoted_record_also_satisfies_the_untouched_v2_schema_under_the_id_map(
@@ -231,15 +279,25 @@ def test_promoted_record_also_satisfies_the_untouched_v2_schema_under_the_id_map
     assert len(set(mapping.values())) == len(mapping), "the id mapping must be injective to be lossless"
     for record in load_records(tmp_path / "out/annotations_v1_reviewed.jsonl"):
         mapped = {**record, "sample_id": mapping[record["sample_id"]]}
-        jsonschema.validate(mapped, v2)
+        assert set(mapped) <= set(v2["properties"]), "V2 would reject a key V1 allowed"
+        assert re.fullmatch(v2["properties"]["sample_id"]["pattern"], mapped["sample_id"])
+        for annotation in mapped["annotations"]:
+            assert set(annotation) <= set(v2["properties"]["annotations"]["items"]["properties"])
 
 
-def test_v1_schema_relaxes_only_the_sample_id_pattern() -> None:
-    v2 = json.loads(V2_SCHEMA.read_text(encoding="utf-8"))
-    v1 = importer.build_v1_schema()
-    differences = importer.schema_diff(v1, v2)
-    assert set(differences) == importer.ALLOWED_SCHEMA_DIFF
-    importer.assert_schema_not_relaxed(v1, v2)
+def test_full_json_schema_validation_when_the_library_is_available(tmp_path: Path) -> None:
+    """Cross-check the library-free reasoning above against a real validator."""
+    jsonschema = pytest.importorskip("jsonschema", reason="jsonschema is not a declared dependency")
+    ledger = tmp_path / "decisions.jsonl"
+    _sign(tmp_path, "REAL-V1-001")
+    _sign_again(tmp_path, "REAL-V1-011")
+    assert _run(tmp_path, ledger) == 0
+    v1_schema = json.loads((tmp_path / "out/annotations_v1.schema.json").read_text(encoding="utf-8"))
+    v2_schema = json.loads(V2_SCHEMA.read_text(encoding="utf-8"))
+    mapping = {r["v1_sample_id"]: r["v2_sample_id"] for r in load_records(tmp_path / "out/sample_id_map_v2.jsonl")}
+    for record in load_records(tmp_path / "out/annotations_v1_reviewed.jsonl"):
+        jsonschema.validate(record, v1_schema)
+        jsonschema.validate({**record, "sample_id": mapping[record["sample_id"]]}, v2_schema)
 
 
 def test_v1_schema_relaxation_is_detected() -> None:
