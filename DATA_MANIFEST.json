@@ -9,7 +9,9 @@
     "RUNTIME_EVIDENCE": "Recorded observation of a real dependency on a single local host. Contains no corpus content, logs or credentials.",
     "GOVERNANCE": "Review-tracker metadata. Records the state of outstanding human verification work. Asserts no regulatory conclusion of its own; every entry names what still has to be decided.",
     "PUBLIC_OFFICIAL_DOCUMENT": "Text derived from a published official government document. Redistribution basis and provenance are recorded in corpus/real_v1/SOURCES.md. Real regulatory claims are present, so carries_real_regulatory_claims is true.",
-    "CANDIDATE": "AI-proposed, unreviewed annotation candidate. Never ground truth and never scorable; the scoring gate refuses it until a named human promotes it."
+    "CANDIDATE": "AI-proposed, unreviewed annotation candidate. Never ground truth and never scorable; the scoring gate refuses it until a named human promotes it.",
+    "HUMAN_SIGNOFF": "A recorded human decision: who decided, on what date, and which exact bytes were under review. It records that a named person took responsibility. It does not by itself make a record scorable -- promotion to REVIEWED additionally requires passing benchmarks.annotation.validate_annotation, and an llm_candidate additionally requires a distinct promoted_by.",
+    "REVIEWED_GOLDEN_SET": "The formal, human-reviewed golden set produced by promoting signed candidates. These rows are ground truth for scoring and carry review_status=REVIEWED with reviewed_by, reviewed_at and, for promoted LLM candidates, promoted_by. Their regulatory-shaped text is quoted from the sources under corpus/real_v1 and carries the same licence basis."
   },
   "disclosure_vocabulary": {
     "record_marker": "How a single record identifies itself when separated from this manifest. 'inline:<field>' means the named field travels inside every record, and CI verifies the field is present in every one. 'file' means one declaration at the top of the file covers the whole file. 'none' means a record carries no self-description, and record_marker_absent_reason explains why.",
@@ -326,6 +328,96 @@
       "record_marker": "inline:review_type",
       "regulatory_shaped_fields": [],
       "regulatory_shaped_fields_evidence": "Contains no question text from the corpus and no passage text. Rows quote short analytical phrases in the evidence field, but every row declares review_type=AI_REVIEW, is_human_signature=false and promotable_without_human=false."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/review_signoff_v1.jsonl",
+      "class": "HUMAN_SIGNOFF",
+      "purpose": "the real human signing ledger: 27 ACCEPT decisions by Xander-Xai dated 2026-10-19, each bound to the sha256 of the candidate row and of the candidate dataset it signed",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "inline:reviewer",
+      "regulatory_shaped_fields": [
+        "notes",
+        "reviewer"
+      ],
+      "regulatory_shaped_fields_evidence": "Contains only a reviewer name, an ISO decision date, a decision verb, hex digests and the sign-off basis statement; no corpus text and no regulatory assertion."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/reviewed/annotations_v1_reviewed.jsonl",
+      "class": "REVIEWED_GOLDEN_SET",
+      "purpose": "the formal human-reviewed retrieval golden set: 27 REVIEWED records derived deterministically from candidates_v1.jsonl plus review_signoff_v1.jsonl, and the only scorable dataset for real-v1-20261019",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "inline:annotation",
+      "regulatory_shaped_fields": [
+        "question",
+        "annotations[].text"
+      ],
+      "regulatory_shaped_fields_evidence": "Quoted official text already published in corpus/real_v1/sources under the licence basis recorded in corpus/real_v1/SOURCES.md. 13 of the 27 rows cite used_ingredients_2021.jsonl, which remains PENDING_REVIEW because the owner approved only regulation_727.jsonl."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/reviewed/annotations_v1_drafts.jsonl",
+      "class": "EMPTY_BY_DESIGN",
+      "purpose": "committed empty on purpose: all 27 candidates were signed, so none remained DRAFT_UNVERIFIED",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Committed empty on purpose; contains no records."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/reviewed/annotations_v1_rejected.jsonl",
+      "class": "EMPTY_BY_DESIGN",
+      "purpose": "committed empty on purpose: the owner rejected no candidate",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Committed empty on purpose; contains no records."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/reviewed/review_decisions_applied.jsonl",
+      "class": "HUMAN_SIGNOFF",
+      "purpose": "index of applied decisions (sample_id, decision) for the import run",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "none",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Contains only a reviewer name, an ISO decision date, a decision verb, hex digests and the sign-off basis statement; no corpus text and no regulatory assertion.",
+      "record_marker_absent_reason": "Each row is only {sample_id, decision}; there is no provenance block to carry a marker. The identity and date live in review_signoff_v1.jsonl, which is hash-bound to the candidate rows this index was derived from, so this file adds no unattributed claim of its own."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/reviewed/sample_id_map_v2.jsonl",
+      "class": "SCHEMA",
+      "purpose": "lossless REAL-V1-NNN to V2 four-digit identifier mapping used to re-validate records against the untouched V2 schema",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Committed empty on purpose; contains no records."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/reviewed/annotations_v1.schema.json",
+      "class": "SCHEMA",
+      "purpose": "the V1 formal schema, derived from the V2 golden-set schema and changing only the sample_id pattern",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Committed empty on purpose; contains no records."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/reviewed/import_report.json",
+      "class": "RUNTIME_EVIDENCE",
+      "purpose": "import run report: counts, candidate and ledger hashes, schema diff and refusals",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Committed empty on purpose; contains no records."
+    },
+    {
+      "path": "tests/evaluation/golden_set_v1/review_signoff_nonretrieval_v1.jsonl",
+      "class": "HUMAN_SIGNOFF",
+      "purpose": "the owner's sign-off for the 3 answer-gate samples and 6 independent-query proposals; recorded separately because these are never scored and never enter the retrieval recall denominator",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "inline:review_type",
+      "regulatory_shaped_fields": [
+        "rationale"
+      ],
+      "regulatory_shaped_fields_evidence": "Contains only a reviewer name, an ISO decision date, a decision verb, hex digests and the sign-off basis statement; no corpus text and no regulatory assertion."
     }
   ]
 }
