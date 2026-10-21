@@ -4810,6 +4810,107 @@ def check_rerank_evidence_vocabulary(errors: list[str], root: Path | None = None
         )
 
 
+# ── retrieval-result scope claims ──────────────────────────────────────────
+#
+# After the Real Corpus V1 BM25 run, "this repository has no retrieval
+# benchmark result" stopped being true: the BM25 arm is `LOCAL_REAL_VALIDATION`
+# with a committed, recomputable evidence package under
+# `docs/validation/evidence/`. A current document that still denies the result
+# is a stale claim, and a stale claim that survives here is exactly how a
+# reader concludes "there is no real retrieval evaluation in this repository".
+#
+# The check is deliberately narrow, because the opposite error is worse: a
+# guard that flags every honest "Dense / hybrid are still `PENDING`" would be
+# deleted. So it fires only on a *denial of existence* — "no artifact exists",
+# "no committed artifact", "no publishable ... result exists", "the benchmark
+# result is `PENDING`" — and only when the denial is attached to the retrieval
+# subject rather than to some other artifact family (a frontend artifact, an
+# OTLP artifact, a Qdrant lineage artifact).
+#
+# Documents that describe the state at their own commit (the dated finalization
+# closeout records, the changelog, and the historical run reports) are excluded
+# by name. Saying "there was no result yet" in a dated record is a historical
+# statement, not a current-state claim.
+
+#: Documents that state the repository's *current* retrieval-benchmark state.
+RETRIEVAL_RESULT_SCOPE_DOCS = (
+    "README.md",
+    "artifacts/benchmarks/README.md",
+    "docs/architecture-baseline.md",
+    "docs/benchmark-data-quality.md",
+    "docs/deferred-runtime-validation.md",
+    "docs/evidence-map.md",
+    "docs/repository-truth-audit.md",
+    "docs/slo-runbook.md",
+)
+
+#: The subject a denial must be attached to. Bare "retrieval" is not enough:
+#: "no retrieval path survives" describes a readiness gate, not a benchmark.
+_RETRIEVAL_RESULT_SUBJECT = re.compile(
+    r"(?i)\b("
+    r"retrieval metric|retrieval benchmark|retrieval-benchmark|benchmark result|"
+    r"retrieval result|retrieval quality|retrieval evaluation|benchmark harness"
+    r")\b"
+)
+
+#: A denial of existence that the scope claim must not make, paired with the
+#: scope in which its subject must appear: ``"line"`` means the same line,
+#: ``"line+previous"`` also accepts the line above, which is how a sentence
+#: that wraps across two lines reads.
+_RETRIEVAL_RESULT_DENIALS = (
+    # "no artifact exists" — the subject may sit on the line above.
+    (re.compile(r"(?i)\bno artifact exists\b"), "line+previous"),
+    # "no committed artifact" — same line only, so a denial about the frontend
+    # or the OTLP artifact is not caught by it.
+    (re.compile(r"(?i)\bno committed artifact\b"), "line"),
+    # "no publishable ... result exists" — same line only.
+    (re.compile(r"(?i)\bno publishable\b[^.\n|]{0,80}\bresult exists\b"), "line"),
+    # "the benchmark / retrieval result is (stays) `PENDING`" — the benchmark
+    # result as a whole. The gap may not cross a table pipe, because a status
+    # *cell* next to a subject cell is a structured row, not a claim.
+    (
+        re.compile(r"(?i)\b(?:benchmark|retrieval)\b[^.\n|]{0,60}?\bresult`? (?:is|stays|remains) `?PENDING`?"),
+        "self",
+    ),
+)
+
+
+def retrieval_result_scope_errors(display: str, text: str) -> list[str]:
+    """Return errors for a current document that denies the retrieval result."""
+    errors: list[str] = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        for denial, subject_scope in _RETRIEVAL_RESULT_DENIALS:
+            if not denial.search(line):
+                continue
+            if subject_scope == "self":
+                scope = line
+            elif subject_scope == "line+previous":
+                scope = " ".join(lines[max(0, index - 1) : index + 1])
+            else:
+                scope = line
+            if not _RETRIEVAL_RESULT_SUBJECT.search(scope):
+                continue
+            errors.append(
+                f"{display}:{index + 1}: denies the existence of a retrieval benchmark result "
+                f"({denial.pattern!r}). The Real Corpus V1 BM25 arm is `LOCAL_REAL_VALIDATION` "
+                "with a committed evidence package; state the scope that is still `PENDING` "
+                "(Dense / hybrid, and the legacy 301-row dataset) instead of denying the result."
+            )
+            break
+    return errors
+
+
+def check_retrieval_result_scope_claims(errors: list[str], root: Path | None = None) -> None:
+    """No current document may deny that the retrieval benchmark produced a result."""
+    base = ROOT if root is None else root
+    for name in RETRIEVAL_RESULT_SCOPE_DOCS:
+        path = base / name
+        if not path.exists():
+            continue
+        errors.extend(retrieval_result_scope_errors(_display(path), path.read_text(encoding="utf-8")))
+
+
 def check_golden_set_contract_doc_fields(errors: list[str], root: Path | None = None) -> None:
     """Keep the documented contract field list in sync with the validator."""
     base = ROOT if root is None else root
@@ -4969,6 +5070,7 @@ def main() -> int:
     check_k8s_static_check_counts(errors)
     check_golden_set_contract_doc_fields(errors)
     check_rerank_evidence_vocabulary(errors)
+    check_retrieval_result_scope_claims(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):

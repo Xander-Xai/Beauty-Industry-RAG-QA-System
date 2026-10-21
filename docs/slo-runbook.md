@@ -35,8 +35,10 @@ Boundaries that hold everywhere in this document:
 Five objectives. Each states the measurement window, the signal it is computed
 from, and what happens when it is missed. A sixth "objective" is deliberately
 absent: quality. Retrieval and answer quality are measured by the retrieval
-benchmark harness, whose result is `PENDING` — so there is no honest quality SLO
-to set yet.
+benchmark harness. Its BM25 arm has produced a result (`LOCAL_REAL_VALIDATION`,
+n = 27, a local single-node run over a 2021 corpus), but the Dense / Hybrid arms
+are still `PENDING`, and a 27-sample local measurement cannot set a quality SLO
+— so there is no honest quality SLO to set yet.
 
 | # | Objective | SLI | Target | Status |
 |---|---|---|---|---|

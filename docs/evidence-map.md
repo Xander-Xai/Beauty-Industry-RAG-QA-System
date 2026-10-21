@@ -304,8 +304,14 @@ a repository benchmark.
   `rag_cache_hit_rate` and no `rag_rewrite_fallback_rate`; the exporter publishes raw
   counters and the ratios are either a PromQL ratio over them or a computed field on
   `/api/stats`.
-- Quoting any retrieval metric. The framework is `REPO_VERIFIED`; the result is
-  `PENDING` and no artifact exists.
+- Quoting a retrieval metric without its scope. The Real Corpus V1 BM25 result
+  **does** exist — `LOCAL_REAL_VALIDATION`, n = 27, `standard` Recall@10 0.7037 /
+  MRR@10 0.4088 / NDCG@10 0.4698 — and it is recomputable from the committed
+  per-sample evidence under `docs/validation/evidence/`. Dense and hybrid are
+  still `PENDING` (no BGE weights), and the legacy 301-row dataset still has no
+  attributable metric at all. Always name the scope, the sample count and the
+  limits together with the number, and never let a scope-A number stand in for a
+  scope-B claim.
 - Saying "performance is verified" as one phrase. The artifact *framework* is
   `REPO_VERIFIED`; no performance *result* exists.
 - Saying "alerting is in place" as if alerts had fired. The rules exist as

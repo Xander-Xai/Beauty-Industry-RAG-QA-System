@@ -162,9 +162,11 @@ enforces is that a transition nobody recorded cannot pass silently.
 - [#16](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/16) — benchmark framework
   implementation scope: closed (`completed`), delivered by PR #17.
 - [#18](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/18) — **real** retrieval
-  benchmark execution: open. One structural blocker keeps it open: no independent corpus covers the
-  golden-set relevance truth. The real retrieval executor is wired for CLI runs
-  (`--executor real` → `benchmarks/executors.py`, PR #108).
+  benchmark execution: open. The BM25 arm has since produced a result
+  (`LOCAL_REAL_VALIDATION`, Real Corpus V1 — see
+  [the formal BM25 run report](validation/real-v1-approved-bm25-run.md)); the Dense / Hybrid arms
+  and the legacy 301-row dataset are still blocked, so the issue stays open. The real retrieval
+  executor is wired for CLI runs (`--executor real` → `benchmarks/executors.py`, PR #108).
 - [#20](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/20) — enterprise-readiness
   evidence loop: completed, delivered by PR #21.
 - [#22](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/22) — post-merge truth
@@ -203,9 +205,11 @@ Issue #20 being completed records that the *implementation scope* shipped. It do
 record that any of its results were observed: no performance artifact, no production alert
 firing, no traced span. Those stay `PENDING` and keep #8, #12, #18 and #32 open.
 
-Closing #16 records that the framework scope is delivered. It does **not** record a benchmark result:
-no artifact exists, so `benchmark result` stays `PENDING` and the remaining execution blocker (no
-independent corpus) stays open in #18. The executor blocker was closed by PR #108.
+Closing #16 records that the framework scope is delivered. At the time of that closure it did **not**
+record a benchmark result, so `benchmark result` stayed `PENDING` and the execution blocker (no
+independent corpus) stayed open in #18. Both of those blockers have since been resolved for the BM25
+arm; the Dense / Hybrid arms and the legacy 301-row dataset are what keep #18 open. The executor
+blocker was closed by PR #108.
 
 Closing #22 likewise records only that the post-merge truth reconciliation was delivered. It does
 **not** record external validation evidence, so #8, #12, #18 and #32 stay open.
