@@ -24,7 +24,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          # The same interpreter the shipped image runs on. pip-audit resolves
+          # requirements.txt in this environment, so auditing on a different
+          # Python than the one that ships would audit a dependency set the
+          # image never installs — a green check over a vulnerable artifact.
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |

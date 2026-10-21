@@ -6508,3 +6508,86 @@ def test_retrieval_result_scope_guard_ignores_other_artifact_families(tmp_path, 
     errors: list[str] = []
     crc.check_retrieval_result_scope_claims(errors)
     assert errors == []
+
+
+def test_runtime_python_guard_is_clean_on_the_current_tree():
+    """The shipped runtime, the CI matrix and the audit job agree today."""
+    from scripts.check_repo_consistency import check_runtime_python_is_audited
+
+    errors: list[str] = []
+    check_runtime_python_is_audited(errors)
+    assert errors == []
+
+
+def _write_runtime_tree(tmp_path, docker_python, audit_python, matrix):
+    (tmp_path / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "Dockerfile").write_text(f"FROM python:{docker_python}-slim\n", encoding="utf-8")
+    (tmp_path / ".github" / "workflows" / "security.yml").write_text(
+        "jobs:\n"
+        "  dependency-scan:\n"
+        "    name: pip-audit 依赖漏洞扫描\n"
+        "    steps:\n"
+        f'      - python-version: "{audit_python}"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text(
+        f"    strategy:\n      matrix:\n        python-version: [{matrix}]\n",
+        encoding="utf-8",
+    )
+
+
+def test_runtime_python_guard_catches_an_audit_on_a_different_interpreter(tmp_path, monkeypatch):
+    """The false green: auditing on a newer Python than the image ships."""
+    from scripts import check_repo_consistency as crc
+
+    _write_runtime_tree(tmp_path, docker_python="3.10", audit_python="3.11", matrix='"3.10", "3.11"')
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_runtime_python_is_audited(errors)
+    assert len(errors) == 1
+    assert "audited dependency set is not the shipped one" in errors[0]
+
+
+def test_runtime_python_guard_catches_an_untested_shipped_runtime(tmp_path, monkeypatch):
+    """The shipped interpreter must actually be in the test matrix."""
+    from scripts import check_repo_consistency as crc
+
+    _write_runtime_tree(tmp_path, docker_python="3.11", audit_python="3.11", matrix='"3.12"')
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_runtime_python_is_audited(errors)
+    assert len(errors) == 1
+    assert "is never tested" in errors[0]
+
+
+def test_security_dependency_floor_guard_is_clean_on_the_current_tree():
+    """No dependency floor is relaxed below a version that carries a fix."""
+    from scripts.check_repo_consistency import check_security_dependency_floors
+
+    errors: list[str] = []
+    check_security_dependency_floors(errors)
+    assert errors == []
+
+
+def test_security_dependency_floor_guard_catches_a_relaxed_floor(tmp_path, monkeypatch):
+    """Relaxing the floor re-opens the advisory, so it must fail."""
+    from scripts import check_repo_consistency as crc
+
+    (tmp_path / "requirements.txt").write_text("Pillow>=10.4.0\n", encoding="utf-8")
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_security_dependency_floors(errors)
+    assert len(errors) == 1
+    assert "below the floor" in errors[0]
+
+
+def test_security_dependency_floor_guard_catches_a_missing_floor(tmp_path, monkeypatch):
+    """No floor at all means any version stays installable, including a vulnerable one."""
+    from scripts import check_repo_consistency as crc
+
+    (tmp_path / "requirements.txt").write_text("requests>=2.31.0\n", encoding="utf-8")
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_security_dependency_floors(errors)
+    assert len(errors) == 1
+    assert "declares no" in errors[0]

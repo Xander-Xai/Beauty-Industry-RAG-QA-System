@@ -14,7 +14,7 @@
 > **本仓库附带证据治理能力**：每条能力都带 canonical 证据等级，`scripts/check_repo_consistency.py` 在 CI 中拦截该守卫覆盖的口径漂移（证据等级越界、文档链接与路径失效、枚举与 SLO 计数对不上、引用不存在的指标 series）。它只校验可机械判定的契约，**不判断任意自然语言陈述的真实性**。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![Python 3.10 | 3.11](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)
+![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)
 ![React 18](https://img.shields.io/badge/React-18-61dafb.svg)
 ![Qdrant](https://img.shields.io/badge/Qdrant-vector-24474e.svg)
@@ -434,7 +434,7 @@ python3 scripts/check_repo_consistency.py
 
 | 层 | 选型 |
 |---|---|
-| 语言 / 运行时 | Python `3.10` · `3.11`（CI 矩阵）；前端 Node `20` |
+| 语言 / 运行时 | Python `3.11`（CI 矩阵与出货镜像一致）；前端 Node `20` |
 | API | FastAPI `>=0.110` · Uvicorn · Pydantic `>=2.6` |
 | 文本嵌入 | `bge-base-zh-v1.5`，768 维 → Qdrant `rag_text_768` |
 | 图像嵌入 | `clip-vit-base-patch16`，512 维 → Qdrant `rag_image_512` |
@@ -711,7 +711,7 @@ harness（`tests/evaluation/ragas_eval.py` · `ragas_report.py` · `validate_gol
 
 #### 复核方式
 
-精确计数不在此静态写死（会随迭代漂移），按下列命令在当前 commit 现场计算：`git ls-files '*.py' | xargs wc -l`、`python3 -m pytest --collect-only -q`、`python3 scripts/check_repo_consistency.py`。CI 覆盖 Python 3.10 与 3.11。
+精确计数不在此静态写死（会随迭代漂移），按下列命令在当前 commit 现场计算：`git ls-files '*.py' | xargs wc -l`、`python3 -m pytest --collect-only -q`、`python3 scripts/check_repo_consistency.py`。CI 覆盖 Python 3.11，与出货镜像（`Dockerfile`）的运行时一致。
 
 ---
 

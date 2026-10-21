@@ -48,11 +48,18 @@ API="repos/${REPO}"
 # Required status-check contexts, verified against real check-runs on
 # origin/main f9e0aa9 (push event) and on PR heads 336e325 / 79b8ede / 91b3101
 # (pull_request event). Identical on all five SHAs.
+#
+# The `测试套件` matrix covers Python 3.11 only, so it expands into the single
+# check `测试套件 (3.11)`. It used to expand into `测试套件 (3.10)` as well;
+# that lane was removed with the Python 3.10 runtime floor (the image, the
+# matrix and the pip-audit job all moved to 3.11 so that the audited
+# dependency set is the shipped dependency set — see requirements.txt).
+# A context that no longer exists must not stay required: it can never
+# report, so requiring it would block every merge.
 REQUIRED_CONTEXTS=(
   "Dockerfile 构建校验"
   "前端构建校验"
   "企业就绪配置校验"
-  "测试套件 (3.10)"
   "测试套件 (3.11)"
   "评估确定性守卫"
   "Ruff 检查"

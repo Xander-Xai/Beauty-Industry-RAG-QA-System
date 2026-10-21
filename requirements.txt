@@ -32,7 +32,15 @@ PyMuPDF>=1.24.0
 python-docx>=1.1.0
 pandas>=2.2.0
 openpyxl>=3.1.0
-Pillow>=10.4.0
+# Pillow >= 13.0.0 is the floor, not a preference: 12.3.0 carries eight
+# advisories with no 3.10-compatible fix (CVE-2026-112395 / -112397 / -112400 /
+# -112404 / -112895 / -112896 / -112897 / -112899 — OOB reads in the tiled-TIFF
+# and RGBA decode paths, and an EPS load(scale=N) decompression-bomb gap).
+# Pillow 13.0.0 fixes all eight and is the release that dropped Python 3.10
+# upstream, so this floor and the runtime's Python version are one decision:
+# the image, the CI matrix and the pip-audit job all run Python 3.11 so that
+# the audited dependency set is the shipped dependency set.
+Pillow>=13.0.0
 
 # === OCR (optional, not installed by default) ===
 # The OCR adapter is always importable; the PaddleOCR runtime is external.

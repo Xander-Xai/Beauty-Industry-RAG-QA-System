@@ -28,11 +28,15 @@ HEAD_SHA = "d303a37cafe0000000000000000000000000beef"
 
 # The contexts the script declares. `derive` must rediscover exactly these to
 # report no drift.
+#
+# The `测试套件` matrix covers Python 3.11 only, so it expands into the single
+# check `测试套件 (3.11)`. It used to expand into `测试套件 (3.10)` as well; that
+# lane was removed together with the Python 3.10 runtime floor, because the
+# Pillow release that fixes the published advisories requires Python >= 3.11.
 DECLARED_CONTEXTS = [
     "Dockerfile 构建校验",
     "前端构建校验",
     "企业就绪配置校验",
-    "测试套件 (3.10)",
     "测试套件 (3.11)",
     "评估确定性守卫",
     "Ruff 检查",
