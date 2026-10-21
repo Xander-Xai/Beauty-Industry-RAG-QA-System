@@ -29,6 +29,16 @@
 #   scripts/branch_protection.sh apply     # PUT the protection (idempotent)
 #   scripts/branch_protection.sh snapshot  # machine-readable JSON snapshot
 #
+# Environment:
+#   GITHUB_REPOSITORY   owner/name (default: this repository)
+#   PROTECTED_BRANCH    branch to protect (default: main)
+#   DERIVE_FROM_PR      derive contexts from this PR's head instead of the most
+#                       recently merged PR. Needed when a matrix or a job name
+#                       has just changed in an open PR: the last merged PR
+#                       still reports the old context set, so the new one cannot
+#                       be derived from it. The source is still a real PR head
+#                       with real check-runs.
+#
 # `verify` exit codes:
 #   0  live state satisfies every item of the declared contract
 #   1  drift: at least one item differs from the contract
@@ -220,20 +230,34 @@ print(json.dumps({"allow_update_branch": True}, indent=2))
 
 # Recompute the required set from a real pull-request head: every check-run
 # GitHub actually reported as executed (i.e. not `skipped`).
+#
+# The default source is the most recently *merged* PR, because its head is the
+# one whose checks are known to have run on a `pull_request` event. That
+# default is wrong in exactly one situation: the matrix (or a job name) has
+# just changed in an open PR, so the last merged PR still reports the old
+# context set and the new set cannot be derived from it. `DERIVE_FROM_PR`
+# names the pull request to derive from instead. It is still a real PR head
+# with real check-runs, so the rule the script exists to enforce — never
+# invent a context name, prove it exists and actually executed — is unchanged.
 derive_contexts() {
   local pr_number head_sha rc=0
-  pr_number=$(latest_merged_pr_number) || rc=$?
-  case "$rc" in
-    0) ;;
-    3) fail "no merged pull request exists in ${REPO}; nothing to derive from" ;;
-    *) fail "could not query merged pull requests in ${REPO}" ;;
-  esac
+  if [ -n "${DERIVE_FROM_PR:-}" ]; then
+    pr_number="${DERIVE_FROM_PR}"
+    log "# deriving from PR #${pr_number} (DERIVE_FROM_PR override)"
+  else
+    pr_number=$(latest_merged_pr_number) || rc=$?
+    case "$rc" in
+      0) ;;
+      3) fail "no merged pull request exists in ${REPO}; nothing to derive from" ;;
+      *) fail "could not query merged pull requests in ${REPO}" ;;
+    esac
+  fi
 
   head_sha=$(gh api "${API}/pulls/${pr_number}" --jq .head.sha)
   [ -n "$head_sha" ] && [ "$head_sha" != "null" ] \
-    || fail "merged PR #${pr_number} reported no head SHA to derive contexts from"
+    || fail "PR #${pr_number} reported no head SHA to derive contexts from"
 
-  printf '# deriving from merged PR #%s head %s\n' "$pr_number" "$head_sha" >&2
+  printf '# deriving from PR #%s head %s\n' "$pr_number" "$head_sha" >&2
   gh api "${API}/commits/${head_sha}/check-runs?per_page=100" \
     --jq '.check_runs[] | select(.conclusion != "skipped") | .name' | sort -u
 }
