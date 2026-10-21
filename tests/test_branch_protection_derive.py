@@ -178,12 +178,16 @@ def stub_gh(tmp_path: Path):
         env["GITHUB_REPOSITORY"] = REPO
         env["GH_STUB_CONFIG"] = json.dumps(config)
 
-        def run_derive():
+        def run_derive(extra_env: dict | None = None):
+            # `extra_env` lets a caller add an environment variable without
+            # losing the stubbed PATH — a test that runs the script outside the
+            # stub would hit the real `gh`, which is neither hermetic nor
+            # authenticated on a CI runner.
             return subprocess.run(
                 ["bash", str(SCRIPT), "derive"],
                 capture_output=True,
                 text=True,
-                env=env,
+                env={**env, **(extra_env or {})},
                 cwd=tmp_path,
                 check=False,
             )
@@ -348,14 +352,7 @@ def test_derive_from_pr_override_uses_that_pr_instead_of_the_last_merge(stub_gh)
     merged = _pull(26, merged_at="2026-10-03T09:00:00Z", updated_at="2026-10-03T09:00:00Z")
     run, calls = stub_gh([_page([merged])])
 
-    result = subprocess.run(
-        ["bash", str(SCRIPT), "derive"],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "DERIVE_FROM_PR": "119"},
-        cwd=SCRIPT.parent.parent,
-        check=False,
-    )
+    result = run({"DERIVE_FROM_PR": "119"})
 
     # The stub answers /pulls/<n> with the same head SHA for any number, so the
     # observable difference is that the override is announced and that the
@@ -369,14 +366,7 @@ def test_derive_from_pr_override_does_not_leak_into_the_context_list(stub_gh):
     merged = _pull(26, merged_at="2026-10-03T09:00:00Z", updated_at="2026-10-03T09:00:00Z")
     run, _ = stub_gh([_page([merged])])
 
-    result = subprocess.run(
-        ["bash", str(SCRIPT), "derive"],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "DERIVE_FROM_PR": "119"},
-        cwd=SCRIPT.parent.parent,
-        check=False,
-    )
+    result = run({"DERIVE_FROM_PR": "119"})
 
     printed = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("  ")]
     for name in printed:
