@@ -243,7 +243,9 @@ derive_contexts() {
   local pr_number head_sha rc=0
   if [ -n "${DERIVE_FROM_PR:-}" ]; then
     pr_number="${DERIVE_FROM_PR}"
-    log "# deriving from PR #${pr_number} (DERIVE_FROM_PR override)"
+    # stderr, not stdout: stdout carries the derived context list, and a stray
+    # line in it would be read as a context name.
+    log "# deriving from PR #${pr_number} (DERIVE_FROM_PR override)" >&2
   else
     pr_number=$(latest_merged_pr_number) || rc=$?
     case "$rc" in

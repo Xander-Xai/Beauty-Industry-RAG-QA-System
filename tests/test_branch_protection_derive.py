@@ -334,3 +334,50 @@ def test_derive_reports_a_query_failure_as_a_query_failure(tmp_path: Path):
     assert result.returncode != 0
     assert "no merged pull request exists" not in result.stderr
     assert "could not query merged pull requests" in result.stderr
+
+
+def test_derive_from_pr_override_uses_that_pr_instead_of_the_last_merge(stub_gh):
+    """A matrix change in an open PR must be derivable before it is merged.
+
+    The default source is the last merged PR, which still reports the *old*
+    context set while the change is still open. Without the override the new
+    set cannot be derived at all, and a required context that no longer exists
+    blocks every merge. The override still reads real check-runs from a real
+    PR head, so the rule the script enforces is unchanged.
+    """
+    merged = _pull(26, merged_at="2026-10-03T09:00:00Z", updated_at="2026-10-03T09:00:00Z")
+    run, calls = stub_gh([_page([merged])])
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "derive"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DERIVE_FROM_PR": "119"},
+        cwd=SCRIPT.parent.parent,
+        check=False,
+    )
+
+    # The stub answers /pulls/<n> with the same head SHA for any number, so the
+    # observable difference is that the override is announced and that the
+    # merged-PR search is not used at all.
+    assert "DERIVE_FROM_PR override" in result.stderr
+    assert "search/issues" not in calls()
+
+
+def test_derive_from_pr_override_does_not_leak_into_the_context_list(stub_gh):
+    """stdout carries the context list; a stray line there would be read as a context."""
+    merged = _pull(26, merged_at="2026-10-03T09:00:00Z", updated_at="2026-10-03T09:00:00Z")
+    run, _ = stub_gh([_page([merged])])
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "derive"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DERIVE_FROM_PR": "119"},
+        cwd=SCRIPT.parent.parent,
+        check=False,
+    )
+
+    printed = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("  ")]
+    for name in printed:
+        assert name in DECLARED_CONTEXTS, f"non-context line on stdout: {name!r}"
