@@ -6423,3 +6423,171 @@ def test_rerank_vocabulary_guard_catches_a_throughput_claim(tmp_path, monkeypatc
     crc.check_rerank_evidence_vocabulary(errors)
     assert len(errors) == 1
     assert "never measures throughput" in errors[0]
+
+
+def test_retrieval_result_scope_guard_is_clean_on_the_current_tree():
+    """The current documents must not deny the retrieval result that exists."""
+    from scripts.check_repo_consistency import check_retrieval_result_scope_claims
+
+    errors: list[str] = []
+    check_retrieval_result_scope_claims(errors)
+    assert errors == []
+
+
+def test_retrieval_result_scope_guard_catches_the_pre_run_denial(tmp_path, monkeypatch):
+    """Drift must fail: the wording that predates the BM25 run is a stale claim."""
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "evidence-map.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(
+        "- Quoting any retrieval metric. The framework is `REPO_VERIFIED`; the result is\n"
+        "  `PENDING` and no artifact exists.\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_retrieval_result_scope_claims(errors)
+    assert len(errors) == 1
+    assert "denies the existence of a retrieval benchmark result" in errors[0]
+    assert "docs/evidence-map.md:2" in errors[0]
+
+
+def test_retrieval_result_scope_guard_catches_a_denial_in_another_current_doc(tmp_path, monkeypatch):
+    """The guard is not limited to the evidence map."""
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "slo-runbook.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(
+        "quality is measured by the retrieval benchmark harness, whose result is `PENDING`\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_retrieval_result_scope_claims(errors)
+    assert len(errors) == 1
+    assert "docs/slo-runbook.md:1" in errors[0]
+
+
+def test_retrieval_result_scope_guard_allows_a_scoped_pending_claim(tmp_path, monkeypatch):
+    """The opposite error is worse: a guard that bans honest scope statements gets deleted."""
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "evidence-map.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(
+        "- Dense and hybrid remain `PENDING` (no BGE weights).\n"
+        "- The legacy 301-row dataset still has no attributable metric.\n"
+        "| Retrieval benchmark | `REPO_VERIFIED` (framework) / `LOCAL_REAL_VALIDATION` (BM25 result) "
+        "/ `PENDING` (dense, hybrid) | docs/validation/evidence/ |\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_retrieval_result_scope_claims(errors)
+    assert errors == []
+
+
+def test_retrieval_result_scope_guard_ignores_other_artifact_families(tmp_path, monkeypatch):
+    """A denied frontend or OTLP artifact is not a denied retrieval result."""
+    from scripts import check_repo_consistency as crc
+
+    doc = tmp_path / "docs" / "evidence-map.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(
+        "no committed artifact shows a browser-rendered frontend against the real backend\n"
+        "the OTLP closed loop is PENDING; no committed artifact exists for a queried span\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_retrieval_result_scope_claims(errors)
+    assert errors == []
+
+
+def test_runtime_python_guard_is_clean_on_the_current_tree():
+    """The shipped runtime, the CI matrix and the audit job agree today."""
+    from scripts.check_repo_consistency import check_runtime_python_is_audited
+
+    errors: list[str] = []
+    check_runtime_python_is_audited(errors)
+    assert errors == []
+
+
+def _write_runtime_tree(tmp_path, docker_python, audit_python, matrix):
+    (tmp_path / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "Dockerfile").write_text(f"FROM python:{docker_python}-slim\n", encoding="utf-8")
+    (tmp_path / ".github" / "workflows" / "security.yml").write_text(
+        "jobs:\n"
+        "  dependency-scan:\n"
+        "    name: pip-audit 依赖漏洞扫描\n"
+        "    steps:\n"
+        f'      - python-version: "{audit_python}"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text(
+        f"    strategy:\n      matrix:\n        python-version: [{matrix}]\n",
+        encoding="utf-8",
+    )
+
+
+def test_runtime_python_guard_catches_an_audit_on_a_different_interpreter(tmp_path, monkeypatch):
+    """The false green: auditing on a newer Python than the image ships."""
+    from scripts import check_repo_consistency as crc
+
+    _write_runtime_tree(tmp_path, docker_python="3.10", audit_python="3.11", matrix='"3.10", "3.11"')
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_runtime_python_is_audited(errors)
+    assert len(errors) == 1
+    assert "audited dependency set is not the shipped one" in errors[0]
+
+
+def test_runtime_python_guard_catches_an_untested_shipped_runtime(tmp_path, monkeypatch):
+    """The shipped interpreter must actually be in the test matrix."""
+    from scripts import check_repo_consistency as crc
+
+    _write_runtime_tree(tmp_path, docker_python="3.11", audit_python="3.11", matrix='"3.12"')
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_runtime_python_is_audited(errors)
+    assert len(errors) == 1
+    assert "is never tested" in errors[0]
+
+
+def test_security_dependency_floor_guard_is_clean_on_the_current_tree():
+    """No dependency floor is relaxed below a version that carries a fix."""
+    from scripts.check_repo_consistency import check_security_dependency_floors
+
+    errors: list[str] = []
+    check_security_dependency_floors(errors)
+    assert errors == []
+
+
+def test_security_dependency_floor_guard_catches_a_relaxed_floor(tmp_path, monkeypatch):
+    """Relaxing the floor re-opens the advisory, so it must fail."""
+    from scripts import check_repo_consistency as crc
+
+    (tmp_path / "requirements.txt").write_text("Pillow>=10.4.0\n", encoding="utf-8")
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_security_dependency_floors(errors)
+    assert len(errors) == 1
+    assert "below the floor" in errors[0]
+
+
+def test_security_dependency_floor_guard_catches_a_missing_floor(tmp_path, monkeypatch):
+    """No floor at all means any version stays installable, including a vulnerable one."""
+    from scripts import check_repo_consistency as crc
+
+    (tmp_path / "requirements.txt").write_text("requests>=2.31.0\n", encoding="utf-8")
+    monkeypatch.setattr(crc, "ROOT", tmp_path)
+    errors: list[str] = []
+    crc.check_security_dependency_floors(errors)
+    assert len(errors) == 1
+    assert "declares no" in errors[0]

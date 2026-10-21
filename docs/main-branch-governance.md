@@ -85,17 +85,26 @@ diff。契约是声明式的：期望值写死在脚本里，**不会**从 live 
 
 ## required context 的来源
 
-**禁止猜测 required check 名称。** 下列 9 个名称取自真实 check-run API
-（`GET /repos/{owner}/{repo}/commits/{sha}/check-runs`），并在 5 个不同 SHA 上
-逐一比对一致：
+**禁止猜测 required check 名称。** 下列 8 个名称取自真实 check-run API
+（`GET /repos/{owner}/{repo}/commits/{sha}/check-runs`）：
 
-| SHA | 事件 |
-| --- | --- |
-| `f9e0aa9` | `push` → `main`（任务执行时的 `main` HEAD） |
-| `d303a37` | `push` → `main` |
-| `336e325` | `pull_request`（PR #25 head） |
-| `79b8ede` | `pull_request`（PR #23 head） |
-| `91b3101` | `pull_request`（PR #21 head） |
+| SHA | 事件 | 该 SHA 上存在的 context 数 |
+| --- | --- | --- |
+| `f9e0aa9` | `push` → `main`（任务执行时的 `main` HEAD） | 9（含 `测试套件 (3.10)`） |
+| `d303a37` | `push` → `main` | 9（含 `测试套件 (3.10)`） |
+| `336e325` | `pull_request`（PR #25 head） | 9（含 `测试套件 (3.10)`） |
+| `79b8ede` | `pull_request`（PR #23 head） | 9（含 `测试套件 (3.10)`） |
+| `91b3101` | `pull_request`（PR #21 head） | 9（含 `测试套件 (3.10)`） |
+
+> 这 5 个 SHA 是在 **Python 3.10 与 3.11 两条 matrix lane** 都在的时期逐个比对过的，
+> 它们证明的是**当时那 9 个名称**。当前这 8 个名称比它们少一个，少掉的那个
+> `测试套件 (3.10)` 随 Python 3.10 运行时下限一起移除，**因此当前集合不能继续
+> 引用这 5 个 SHA 当证据**——它们上面根本没有这个 context 可比对。
+>
+> 当前集合的唯一可信来源是 `scripts/branch_protection.sh derive`：它从**最近一次
+> 真正合并的 PR 的 head SHA** 上拉真实 check-run，重新推导集合，并且推导结果与
+> 声明不一致时 `apply` 拒绝写入。改 matrix、改 job 名或增删 job 之后必须重跑
+> `derive`，让推导结果而不是记忆来定这个列表。
 
 必需项：
 
@@ -103,7 +112,6 @@ diff。契约是声明式的：期望值写死在脚本里，**不会**从 live 
 Dockerfile 构建校验
 前端构建校验
 企业就绪配置校验
-测试套件 (3.10)
 测试套件 (3.11)
 评估确定性守卫
 Ruff 检查
@@ -111,9 +119,28 @@ pip-audit 依赖漏洞扫描
 敏感信息扫描
 ```
 
-`测试套件` 是 matrix job（`python-version: ["3.10", "3.11"]`），GitHub 会把它
-展开成 `测试套件 (3.10)` 与 `测试套件 (3.11)` 两个独立 check，因此**两项都要
-required**，漏掉任何一个都会让保护看起来生效、实际却在少一道门。
+`测试套件` 是 matrix job（`python-version: ["3.11"]`），GitHub 会把它
+展开成 `测试套件 (3.11)` 这一个 check，因此它要 required。
+
+> **这个 matrix 曾经是 `["3.10", "3.11"]`，展开成两个 check，两项都要 required。**
+> 3.10 那一条 lane 随 **Python 3.10 运行时下限**一起移除了（见
+> [`requirements.txt` 的 Pillow 下限说明](../requirements.txt) 与
+> [`Dockerfile`](../Dockerfile)）：Pillow ≥ 13.0.0 —— 修复
+> CVE-2026-112395 / -112397 / -112400 / -112404 / -112895 / -112896 / -112897 /
+> -112899 的版本 —— 要求 Python ≥ 3.11，而 3.10 能装到的最新版本 12.3.0 八个
+> 都在。保留 3.10 lane 只能让 CI 装上一个带公开漏洞的 Pillow。
+>
+> **移除了一个 lane 之后，必须同步移除对应的 required context。**
+> 一个永远不会再上报的 context 留在 required 列表里，GitHub 会一直等它，
+> 结果是**每一个 PR 都无法合并**——保护看起来还生效，实际却是死锁。
+> `scripts/branch_protection.sh` 的 `derive` 会从真实 check-run 重新推导集合，
+> `apply` 在推导结果与声明不一致时拒绝写入，所以这一步不是手工维护的。
+
+CI 的 `测试套件` matrix、镜像的 Python 版本、`pip-audit` job 的 Python 版本
+三者必须一致：pip-audit 是在**当前解释器环境**里解析 `requirements.txt` 的，
+换一个比出货镜像更新的解释器去审计，审计的就是镜像根本不会安装的依赖集合——
+门是绿的，产物仍然带洞。这条不变量由
+`scripts/check_repo_consistency.py::check_runtime_python_is_audited` 强制。
 
 ### 推导用的 head SHA 是怎么选的
 

@@ -4810,6 +4810,263 @@ def check_rerank_evidence_vocabulary(errors: list[str], root: Path | None = None
         )
 
 
+# ── retrieval-result scope claims ──────────────────────────────────────────
+#
+# After the Real Corpus V1 BM25 run, "this repository has no retrieval
+# benchmark result" stopped being true: the BM25 arm is `LOCAL_REAL_VALIDATION`
+# with a committed, recomputable evidence package under
+# `docs/validation/evidence/`. A current document that still denies the result
+# is a stale claim, and a stale claim that survives here is exactly how a
+# reader concludes "there is no real retrieval evaluation in this repository".
+#
+# The check is deliberately narrow, because the opposite error is worse: a
+# guard that flags every honest "Dense / hybrid are still `PENDING`" would be
+# deleted. So it fires only on a *denial of existence* — "no artifact exists",
+# "no committed artifact", "no publishable ... result exists", "the benchmark
+# result is `PENDING`" — and only when the denial is attached to the retrieval
+# subject rather than to some other artifact family (a frontend artifact, an
+# OTLP artifact, a Qdrant lineage artifact).
+#
+# Documents that describe the state at their own commit (the dated finalization
+# closeout records, the changelog, and the historical run reports) are excluded
+# by name. Saying "there was no result yet" in a dated record is a historical
+# statement, not a current-state claim.
+
+#: Documents that state the repository's *current* retrieval-benchmark state.
+RETRIEVAL_RESULT_SCOPE_DOCS = (
+    "README.md",
+    "artifacts/benchmarks/README.md",
+    "docs/architecture-baseline.md",
+    "docs/benchmark-data-quality.md",
+    "docs/deferred-runtime-validation.md",
+    "docs/evidence-map.md",
+    "docs/repository-truth-audit.md",
+    "docs/slo-runbook.md",
+)
+
+#: The subject a denial must be attached to. Bare "retrieval" is not enough:
+#: "no retrieval path survives" describes a readiness gate, not a benchmark.
+_RETRIEVAL_RESULT_SUBJECT = re.compile(
+    r"(?i)\b("
+    r"retrieval metric|retrieval benchmark|retrieval-benchmark|benchmark result|"
+    r"retrieval result|retrieval quality|retrieval evaluation|benchmark harness"
+    r")\b"
+)
+
+#: A denial of existence that the scope claim must not make, paired with the
+#: scope in which its subject must appear: ``"line"`` means the same line,
+#: ``"line+previous"`` also accepts the line above, which is how a sentence
+#: that wraps across two lines reads.
+_RETRIEVAL_RESULT_DENIALS = (
+    # "no artifact exists" — the subject may sit on the line above.
+    (re.compile(r"(?i)\bno artifact exists\b"), "line+previous"),
+    # "no committed artifact" — same line only, so a denial about the frontend
+    # or the OTLP artifact is not caught by it.
+    (re.compile(r"(?i)\bno committed artifact\b"), "line"),
+    # "no publishable ... result exists" — same line only.
+    (re.compile(r"(?i)\bno publishable\b[^.\n|]{0,80}\bresult exists\b"), "line"),
+    # "the benchmark / retrieval result is (stays) `PENDING`" — the benchmark
+    # result as a whole. The gap may not cross a table pipe, because a status
+    # *cell* next to a subject cell is a structured row, not a claim.
+    (
+        re.compile(r"(?i)\b(?:benchmark|retrieval)\b[^.\n|]{0,60}?\bresult`? (?:is|stays|remains) `?PENDING`?"),
+        "self",
+    ),
+)
+
+
+def retrieval_result_scope_errors(display: str, text: str) -> list[str]:
+    """Return errors for a current document that denies the retrieval result."""
+    errors: list[str] = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        for denial, subject_scope in _RETRIEVAL_RESULT_DENIALS:
+            if not denial.search(line):
+                continue
+            if subject_scope == "self":
+                scope = line
+            elif subject_scope == "line+previous":
+                scope = " ".join(lines[max(0, index - 1) : index + 1])
+            else:
+                scope = line
+            if not _RETRIEVAL_RESULT_SUBJECT.search(scope):
+                continue
+            errors.append(
+                f"{display}:{index + 1}: denies the existence of a retrieval benchmark result "
+                f"({denial.pattern!r}). The Real Corpus V1 BM25 arm is `LOCAL_REAL_VALIDATION` "
+                "with a committed evidence package; state the scope that is still `PENDING` "
+                "(Dense / hybrid, and the legacy 301-row dataset) instead of denying the result."
+            )
+            break
+    return errors
+
+
+def check_retrieval_result_scope_claims(errors: list[str], root: Path | None = None) -> None:
+    """No current document may deny that the retrieval benchmark produced a result."""
+    base = ROOT if root is None else root
+    for name in RETRIEVAL_RESULT_SCOPE_DOCS:
+        path = base / name
+        if not path.exists():
+            continue
+        errors.extend(retrieval_result_scope_errors(_display(path), path.read_text(encoding="utf-8")))
+
+
+# ── the audited interpreter must be the shipped interpreter ─────────────────
+#
+# `pip-audit --requirement requirements.txt` resolves the requirements **in the
+# environment it runs in**. So the interpreter it runs on decides which
+# versions are installable, and therefore which advisories apply. Auditing on
+# a newer interpreter than the one that ships would audit a dependency set the
+# image never installs: the gate goes green while the artifact still carries
+# the vulnerable version.
+#
+# That is not hypothetical. Pillow 12.3.0 is the newest release that installs
+# on Python 3.10 and it carries eight advisories with no 3.10-compatible fix;
+# Pillow 13.0.0 fixes all eight and requires Python >= 3.11. The runtime, the
+# CI matrix and the audit job therefore have to agree, or one of them is
+# describing a system that does not exist.
+#
+# The guard is structural, not advisory: it compares the three declarations
+# that already exist in the tree. It does not consult an advisory database,
+# so it cannot fall out of date when a new CVE is published.
+
+#: The file that declares the shipped runtime's Python version.
+DOCKERFILE = "Dockerfile"
+
+#: The workflow whose `pip-audit` job is the dependency merge gate.
+SECURITY_WORKFLOW = ".github/workflows/security.yml"
+
+#: The workflow whose matrix is the test suite.
+CI_WORKFLOW = ".github/workflows/ci.yml"
+
+_DOCKER_PYTHON_RE = re.compile(r"(?im)^\s*FROM\s+python:(\d+\.\d+)")
+_WORKFLOW_PYTHON_RE = re.compile(r"(?i)python-version:\s*[\"']?(\d+\.\d+)")
+_MATRIX_PYTHON_RE = re.compile(r"(?i)python-version:\s*\[([^\]]*)\]")
+
+#: Dependency floors that a published fix has established. A floor *below* the
+#: listed version still permits installing a release that carries the
+#: advisory, so the floor is part of the fix rather than a preference.
+#:
+#: Pillow 12.3.0 carries CVE-2026-112395 / -112397 / -112400 / -112404 /
+#: -112895 / -112896 / -112897 / -112899, and 13.0.0 is the release that fixes
+#: all eight. The table is explicit so that raising a floor is a deliberate,
+#: reviewable edit rather than a silent drift.
+MINIMUM_SECURITY_FLOORS = {
+    "Pillow": "13.0.0",
+}
+
+_REQUIREMENT_FLOOR_RE = re.compile(r"(?im)^\s*([A-Za-z0-9_.-]+)\s*>=\s*([0-9][0-9A-Za-z.*]*)")
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts = []
+    for chunk in value.split("."):
+        digits = re.match(r"\d+", chunk)
+        if not digits:
+            break
+        parts.append(int(digits.group(0)))
+    return tuple(parts)
+
+
+def _python_version_tuple(value: str) -> tuple[int, int]:
+    major, _, minor = value.partition(".")
+    return int(major), int(minor)
+
+
+def _dockerfile_python_version(text: str) -> str | None:
+    match = _DOCKER_PYTHON_RE.search(text)
+    return match.group(1) if match else None
+
+
+def _security_job_python_version(text: str) -> str | None:
+    """The Python version the pip-audit job installs the audited set with."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if "pip-audit" not in line and "dependency-scan" not in line:
+            continue
+        window = "\n".join(lines[index : index + 25])
+        match = _WORKFLOW_PYTHON_RE.search(window)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _ci_matrix_python_versions(text: str) -> list[str]:
+    match = _MATRIX_PYTHON_RE.search(text)
+    if not match:
+        return []
+    return re.findall(r"(\d+\.\d+)", match.group(1))
+
+
+def check_runtime_python_is_audited(errors: list[str], root: Path | None = None) -> None:
+    """The shipped runtime, the CI matrix and the pip-audit job must agree.
+
+    Three declarations, one fact. If they disagree, the dependency gate
+    certifies a dependency set that is not the one the image installs.
+    """
+    base = ROOT if root is None else root
+    dockerfile = base / DOCKERFILE
+    security = base / SECURITY_WORKFLOW
+    ci = base / CI_WORKFLOW
+    for path in (dockerfile, security, ci):
+        if not path.exists():
+            fail(errors, f"{path.relative_to(base)} is missing")
+            return
+
+    runtime = _dockerfile_python_version(dockerfile.read_text(encoding="utf-8"))
+    if runtime is None:
+        fail(errors, f"{DOCKERFILE}: no `FROM python:<major>.<minor>` base image found")
+        return
+    audited = _security_job_python_version(security.read_text(encoding="utf-8"))
+    if audited is None:
+        fail(errors, f"{SECURITY_WORKFLOW}: the pip-audit job declares no python-version")
+        return
+    matrix = _ci_matrix_python_versions(ci.read_text(encoding="utf-8"))
+    if not matrix:
+        fail(errors, f"{CI_WORKFLOW}: the test matrix declares no python-version")
+        return
+
+    if audited != runtime:
+        errors.append(
+            f"{SECURITY_WORKFLOW}: the pip-audit job runs on Python {audited} but {DOCKERFILE} ships "
+            f"Python {runtime}. pip-audit resolves requirements.txt in its own environment, so the "
+            "audited dependency set is not the shipped one: the gate would certify an artifact the "
+            "image never installs."
+        )
+    if runtime not in matrix:
+        errors.append(
+            f"{CI_WORKFLOW}: the test matrix {matrix} does not cover the shipped runtime Python "
+            f"{runtime} from {DOCKERFILE}, so the interpreter the image runs on is never tested."
+        )
+
+
+def check_security_dependency_floors(errors: list[str], root: Path | None = None) -> None:
+    """A dependency floor may not be relaxed below a version that carries a fix."""
+    base = ROOT if root is None else root
+    requirements = base / "requirements.txt"
+    if not requirements.exists():
+        fail(errors, "requirements.txt is missing")
+        return
+    text = requirements.read_text(encoding="utf-8")
+    declared: dict[str, str] = {}
+    for match in _REQUIREMENT_FLOOR_RE.finditer(text):
+        declared[match.group(1).lower()] = match.group(2)
+    for package, minimum in MINIMUM_SECURITY_FLOORS.items():
+        floor = declared.get(package.lower())
+        if floor is None:
+            errors.append(
+                f"requirements.txt: declares no `{package}>={minimum}` floor. A release that "
+                f"carries the published advisory is installable without one, and the dependency "
+                "merge gate would certify an artifact nobody pinned."
+            )
+            continue
+        if _version_tuple(floor) < _version_tuple(minimum):
+            errors.append(
+                f"requirements.txt: `{package}>={floor}` is below the floor `{minimum}` that a "
+                "published fix established, so a release carrying the advisory stays installable."
+            )
+
+
 def check_golden_set_contract_doc_fields(errors: list[str], root: Path | None = None) -> None:
     """Keep the documented contract field list in sync with the validator."""
     base = ROOT if root is None else root
@@ -4969,6 +5226,9 @@ def main() -> int:
     check_k8s_static_check_counts(errors)
     check_golden_set_contract_doc_fields(errors)
     check_rerank_evidence_vocabulary(errors)
+    check_retrieval_result_scope_claims(errors)
+    check_runtime_python_is_audited(errors)
+    check_security_dependency_floors(errors)
 
     contract_dir = ROOT / "tests/contracts"
     if contract_dir.exists() and any(path.name.startswith("test_") for path in contract_dir.rglob("*.py")):

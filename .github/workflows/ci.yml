@@ -114,7 +114,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -182,7 +182,13 @@ jobs:
 
     strategy:
       matrix:
-        python-version: ["3.10", "3.11"]
+        # Python 3.11 is the supported runtime floor: Pillow >= 13.0.0 (the
+        # release that fixed CVE-2026-112395/-112397/-112400/-112404/-112895/
+        # -112896/-112897/-112899) requires Python >= 3.11, and 12.3.0 — the
+        # newest 3.10-compatible release — carries all eight. A 3.10 lane
+        # could only install a Pillow with open advisories, so the matrix
+        # covers the runtime the image actually ships.
+        python-version: ["3.11"]
 
     steps:
       - uses: actions/checkout@v4

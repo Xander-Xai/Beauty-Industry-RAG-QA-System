@@ -29,6 +29,16 @@
 #   scripts/branch_protection.sh apply     # PUT the protection (idempotent)
 #   scripts/branch_protection.sh snapshot  # machine-readable JSON snapshot
 #
+# Environment:
+#   GITHUB_REPOSITORY   owner/name (default: this repository)
+#   PROTECTED_BRANCH    branch to protect (default: main)
+#   DERIVE_FROM_PR      derive contexts from this PR's head instead of the most
+#                       recently merged PR. Needed when a matrix or a job name
+#                       has just changed in an open PR: the last merged PR
+#                       still reports the old context set, so the new one cannot
+#                       be derived from it. The source is still a real PR head
+#                       with real check-runs.
+#
 # `verify` exit codes:
 #   0  live state satisfies every item of the declared contract
 #   1  drift: at least one item differs from the contract
@@ -48,11 +58,18 @@ API="repos/${REPO}"
 # Required status-check contexts, verified against real check-runs on
 # origin/main f9e0aa9 (push event) and on PR heads 336e325 / 79b8ede / 91b3101
 # (pull_request event). Identical on all five SHAs.
+#
+# The `测试套件` matrix covers Python 3.11 only, so it expands into the single
+# check `测试套件 (3.11)`. It used to expand into `测试套件 (3.10)` as well;
+# that lane was removed with the Python 3.10 runtime floor (the image, the
+# matrix and the pip-audit job all moved to 3.11 so that the audited
+# dependency set is the shipped dependency set — see requirements.txt).
+# A context that no longer exists must not stay required: it can never
+# report, so requiring it would block every merge.
 REQUIRED_CONTEXTS=(
   "Dockerfile 构建校验"
   "前端构建校验"
   "企业就绪配置校验"
-  "测试套件 (3.10)"
   "测试套件 (3.11)"
   "评估确定性守卫"
   "Ruff 检查"
@@ -213,20 +230,36 @@ print(json.dumps({"allow_update_branch": True}, indent=2))
 
 # Recompute the required set from a real pull-request head: every check-run
 # GitHub actually reported as executed (i.e. not `skipped`).
+#
+# The default source is the most recently *merged* PR, because its head is the
+# one whose checks are known to have run on a `pull_request` event. That
+# default is wrong in exactly one situation: the matrix (or a job name) has
+# just changed in an open PR, so the last merged PR still reports the old
+# context set and the new set cannot be derived from it. `DERIVE_FROM_PR`
+# names the pull request to derive from instead. It is still a real PR head
+# with real check-runs, so the rule the script exists to enforce — never
+# invent a context name, prove it exists and actually executed — is unchanged.
 derive_contexts() {
   local pr_number head_sha rc=0
-  pr_number=$(latest_merged_pr_number) || rc=$?
-  case "$rc" in
-    0) ;;
-    3) fail "no merged pull request exists in ${REPO}; nothing to derive from" ;;
-    *) fail "could not query merged pull requests in ${REPO}" ;;
-  esac
+  if [ -n "${DERIVE_FROM_PR:-}" ]; then
+    pr_number="${DERIVE_FROM_PR}"
+    # stderr, not stdout: stdout carries the derived context list, and a stray
+    # line in it would be read as a context name.
+    log "# deriving from PR #${pr_number} (DERIVE_FROM_PR override)" >&2
+  else
+    pr_number=$(latest_merged_pr_number) || rc=$?
+    case "$rc" in
+      0) ;;
+      3) fail "no merged pull request exists in ${REPO}; nothing to derive from" ;;
+      *) fail "could not query merged pull requests in ${REPO}" ;;
+    esac
+  fi
 
   head_sha=$(gh api "${API}/pulls/${pr_number}" --jq .head.sha)
   [ -n "$head_sha" ] && [ "$head_sha" != "null" ] \
-    || fail "merged PR #${pr_number} reported no head SHA to derive contexts from"
+    || fail "PR #${pr_number} reported no head SHA to derive contexts from"
 
-  printf '# deriving from merged PR #%s head %s\n' "$pr_number" "$head_sha" >&2
+  printf '# deriving from PR #%s head %s\n' "$pr_number" "$head_sha" >&2
   gh api "${API}/commits/${head_sha}/check-runs?per_page=100" \
     --jq '.check_runs[] | select(.conclusion != "skipped") | .name' | sort -u
 }

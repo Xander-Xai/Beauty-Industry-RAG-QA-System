@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # The uid/gid are pinned so the container manifests under deploy/ can name them
 # explicitly: they set runAsUser/runAsGroup/fsGroup to 1000 and rely on Secret
