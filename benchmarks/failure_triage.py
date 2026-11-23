@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,25 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         gold = set(relevant)
         ranked = retrieved[:10]
         matched_rank = next((i for i, key in enumerate(ranked, 1) if key in gold), None)
+        full_rank = next((i for i, key in enumerate(retrieved, 1) if key in gold), None)
+        if "first_relevant_rank" in row and row["first_relevant_rank"] != full_rank:
+            raise ValueError("first_relevant_rank contradicts ranked passage identifiers")
+        expected_rr = 1 / full_rank if full_rank is not None and full_rank <= 10 else 0.0
+        if "rr" in row and (
+            isinstance(row["rr"], bool)
+            or not isinstance(row["rr"], (int, float))
+            or not math.isfinite(row["rr"])
+            or not math.isclose(row["rr"], expected_rr, rel_tol=1e-8, abs_tol=1e-12)
+        ):
+            raise ValueError("rr contradicts ranked passage identifiers")
+        expected_recall = len(gold.intersection(ranked)) / len(gold)
+        if "recall_at_10" in row and (
+            isinstance(row["recall_at_10"], bool)
+            or not isinstance(row["recall_at_10"], (int, float))
+            or not math.isfinite(row["recall_at_10"])
+            or not math.isclose(row["recall_at_10"], expected_recall, rel_tol=1e-8, abs_tol=1e-12)
+        ):
+            raise ValueError("recall_at_10 contradicts ranked passage identifiers")
         asserted_hit = row.get("hit_at_10")
         if asserted_hit is not None and (type(asserted_hit) is not bool or asserted_hit != (matched_rank is not None)):
             raise ValueError("hit_at_10 contradicts ranked passage identifiers")
