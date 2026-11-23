@@ -287,11 +287,12 @@ class TestAnswerGate:
         gate._use_nli = False
         return gate
 
-    def test_verify_no_doc_returns_pass(self):
-        """无文档时应直接通过。"""
+    def test_verify_no_doc_returns_refusal(self):
+        """无文档时必须拒答，不能因为未找到证据而放行。"""
         gate = self._make_gate()
         result = gate.verify(answer="测试答案", top_doc=None, is_regulation=False)
-        assert result.passed is True
+        assert result.passed is False
+        assert result.warning is True
         assert result.nli_contradiction_score == 0.0
 
     def test_verify_high_jaccard_fast_pass(self):
