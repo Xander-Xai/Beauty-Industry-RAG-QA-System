@@ -38,7 +38,8 @@
 - 可执行基础检查：
 
 ```bash
-python -m pytest tests/benchmark/test_document_structure_audit.py -q
+python -m pytest tests/benchmark/test_document_structure_audit.py tests/benchmark/test_document_structure_cli.py -q
+python -m scripts.audit_document_structure /path/to/approved.pdf
 python -m pytest tests/ -q
 ruff check .
 python scripts/check_repo_consistency.py
