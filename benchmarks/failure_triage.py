@@ -54,6 +54,20 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         )
         group["rows"] += 1
         if not relevant:
+            # No approved gold means the row is excluded, not a scored miss.
+            # Reject artifacts that simultaneously claim a positive metric or
+            # relevant rank: they cannot be reconciled to any reference ID.
+            claimed_hit = row.get("hit_at_10")
+            if claimed_hit is not None and (type(claimed_hit) is not bool or claimed_hit):
+                raise ValueError("no-gold row claims a scored retrieval hit")
+            if row.get("first_relevant_rank") is not None:
+                raise ValueError("no-gold row claims a relevant rank")
+            for field in ("rr", "recall_at_10"):
+                score = row.get(field)
+                if score is not None and (
+                    type(score) not in (int, float) or not math.isfinite(score) or score != 0
+                ):
+                    raise ValueError(f"no-gold row claims invalid {field}")
             group["excluded_no_gold"] += 1
             continue
         group["scored"] += 1
