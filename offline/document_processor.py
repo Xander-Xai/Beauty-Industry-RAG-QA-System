@@ -112,6 +112,7 @@ class DocumentProcessor:
         pdf_render_dpi: int = 150,
         max_images_per_document: int = 100,
         xlsx_rows_per_block: int = 50,
+        pdf_extract_tables: bool = False,
     ):
         if type(chunk_size) is not int or chunk_size <= 0:
             raise ValueError("chunk_size must be a positive integer")
@@ -140,6 +141,9 @@ class DocumentProcessor:
         self.pdf_render_dpi = pdf_render_dpi
         self.max_images_per_document = max_images_per_document
         self.xlsx_rows_per_block = xlsx_rows_per_block
+        if type(pdf_extract_tables) is not bool:
+            raise ValueError("pdf_extract_tables must be a boolean")
+        self.pdf_extract_tables = pdf_extract_tables
 
     # -- identity ---------------------------------------------------------
 
@@ -235,6 +239,9 @@ class DocumentProcessor:
             raise ValueError(f"cannot open PDF document {path}: {exc}") from exc
         try:
             for page_index, page in enumerate(document):
+                # Opt-in: preserve table row/cell structure as separate blocks.
+                # Default remains byte-for-byte compatible for existing ingests.
+                table_blocks = self._extract_pdf_tables(page, page_index) if self.pdf_extract_tables else []
                 page_text = _normalize_text(page.get_text("text") or "")
                 if len(page_text) >= self.ocr_min_text_chars:
                     blocks.append(
@@ -246,7 +253,9 @@ class DocumentProcessor:
                             metadata={"page_number": page_index + 1, "format": "pdf"},
                         )
                     )
+                    blocks.extend(table_blocks)
                     continue
+                blocks.extend(table_blocks)
                 requires_ocr = True
                 if len(images) >= self.max_images_per_document:
                     continue
@@ -257,6 +266,59 @@ class DocumentProcessor:
             document.close()
         content_hash = hashlib.sha256(raw).hexdigest()
         return blocks, images, content_hash, requires_ocr
+
+    def _extract_pdf_tables(self, page, page_index: int) -> list[DocumentBlock]:
+        """Extract PDF table cells as opt-in, source-bound structural blocks.
+
+        If page table detection is unavailable or fails, refuse the opt-in
+        ingest rather than claiming to have preserved a layout it did not see.
+        The original page-text block stays intact, so downstream evaluation
+        must account for potential duplicate text between page and table.
+        """
+        detector = getattr(page, "find_tables", None)
+        if not callable(detector):
+            raise ValueError("PDF table extraction unavailable in this PyMuPDF version")
+        try:
+            detected = detector()
+            tables = detected.tables
+            if tables is None:
+                raise ValueError("PDF table detection returned no table collection")
+            output: list[DocumentBlock] = []
+            for table_index, table in enumerate(tables):
+                rows = table.extract()
+                if not isinstance(rows, (list, tuple)):
+                    raise ValueError("Invalid PDF table rows")
+                lines: list[str] = []
+                for row in rows:
+                    if not isinstance(row, (list, tuple)):
+                        raise ValueError("Invalid PDF table row")
+                    cells = [
+                        str(cell).strip().replace("\n", " ") if cell is not None else ""
+                        for cell in row
+                    ]
+                    if any(cells):
+                        lines.append(" | ".join(cells))
+                text = _normalize_text("\n".join(lines))
+                if not text:
+                    continue
+                output.append(
+                    DocumentBlock(
+                        block_type="table",
+                        text=text,
+                        order=page_index,
+                        block_identity=f"page:{page_index}:table:{table_index}",
+                        metadata={
+                            "format": "pdf",
+                            "page_number": page_index + 1,
+                            "table_index": table_index,
+                        },
+                    )
+                )
+            return output
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError("PDF table extraction failed") from exc
 
     def _render_pdf_page(self, page, page_index: int, doc_id: str):
         try:
