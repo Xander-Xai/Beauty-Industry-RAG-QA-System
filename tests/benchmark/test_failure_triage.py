@@ -89,3 +89,13 @@ def test_rank_beyond_ten_does_not_inflate_mrr_or_recall_at_ten():
     unique = _row("late", ["gold"], [f"noise-{i}" for i in range(10)] + ["gold"], hit=False)
     unique.update({"first_relevant_rank": 11, "rr": 0.0, "recall_at_10": 0.0})
     assert analyze_failures([unique])["configurations"]["bm25"]["misses_at_10"] == 1
+
+
+def test_duplicate_gold_identity_and_boolean_rank_are_rejected():
+    with pytest.raises(ValueError, match="duplicate gold"):
+        analyze_failures([_row("dup", ["gold", "gold"], ["gold"], hit=True)])
+
+    row = _row("bool", ["gold"], ["gold"], hit=True)
+    row["first_relevant_rank"] = True
+    with pytest.raises(ValueError, match="first_relevant_rank contradicts"):
+        analyze_failures([row])
