@@ -23,7 +23,7 @@ For each retrieval configuration and unique sample ID:
 - First relevant passage in positions 2–10: `late_hits_at_2_to_10`.
 - First relevant passage in position 1: `top1_hits`.
 
-Results are also grouped by business type. Duplicate sample keys or retrieval identifiers, missing identity lists and contradictory `hit_at_10` claims cause a hard failure. No unseen result is fabricated.
+Results are also grouped by business type. Duplicate sample keys, gold/retrieval identifiers, missing identity lists and contradictory `hit_at_10`, `first_relevant_rank`, `rr` or `recall_at_10` claims cause a hard failure. The latter values are recomputed from ranked identifiers, with MRR@10 treating relevant results beyond rank 10 as misses. No unseen result is fabricated.
 
 The output sets `publication_eligibility=NOT_ASSESSED`; a diagnostic can neither promote synthetic fixture numbers nor override the validated publication decision of the benchmark runner.
 
