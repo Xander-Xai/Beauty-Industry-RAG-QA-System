@@ -137,18 +137,17 @@ def test_matching_regulatory_limit_keeps_fast_path(answer_gate):
     assert result.warning is False
 
 
-def test_regulatory_number_can_be_supported_by_other_authorized_evidence(answer_gate):
+def test_regulatory_number_can_be_supported_by_other_authorized_evidence(answer_gate, monkeypatch):
     """Number auditing can consult authorized Top-K, not only the first passage."""
     summary = "法规规定相关产品中该成分需要遵守限量标准并提供完整的备案证明。"
     answer = "法规规定相关产品中该成分需要遵守限量标准并提供完整的备案证明，最高限量为3%。"
     top_doc = RerankResult(doc_id="summary", content=summary, source="bm25_es")
     second = RerankResult(doc_id="limit", content="该成分最高限量为3%。", source="dense_bge")
+    monkeypatch.setattr(answer_gate, "_nli_inference", lambda *_: (0.0, 1.0))
     result = answer_gate.verify(
         answer=answer, top_doc=top_doc, evidence_docs=[top_doc, second], is_regulation=True
     )
-    # May still fail the separate NLI/semantic gate, but numeric evidence alone
-    # must not trigger a synthetic contradiction verdict.
-    assert result.nli_contradiction_score != 0.0 or result.passed is True
+    assert result.passed is True
 
 
 def test_nonregulatory_numeric_change_retains_existing_semantics(answer_gate):
