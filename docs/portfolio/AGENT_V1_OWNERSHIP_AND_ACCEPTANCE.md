@@ -27,7 +27,7 @@
 | RAG-P0-01 | 无证据 Answer Gate 一律拒答 | `top_doc=None` 即 fail-closed；覆盖普通和法规类请求，正控制仍可用 | **PR #121 Open**；未合并 |
 | RAG-P0-02 | 真实检索 Bad Case 复核 | 从排名结果独立重算 MRR/Recall/Hit，拒绝重复 ID、伪造分值与错误来源 | **PR #122 Open**；未合并 |
 | RAG-P0-03 | 同金标 BM25 vs Dense vs Hybrid vs Rerank 消融 | 真实 ES/Qdrant/BGE/CE 权重、固定语料与标注、同一运行条件、逐样本结果和失败分类 | **PARTIAL**；只有 BM25 的局部真实测量 |
-| RAG-P0-04 | 复杂版面与多模态真实解析验收 | 扫描 PDF、表格、图片的版面保真与 OCR 准确性样本；原文映射/检索质量对照 | **REFERENCE_IMPLEMENTED**：`benchmarks/document_structure_audit.py` + `tests/benchmark/test_document_structure_audit.py` 对解析后的页码覆盖、OCR 渲染丢页、身份重复、表格行区间冲突给出 PASS_STRUCTURE/FAIL/INCONCLUSIVE；**未对真实复杂版面 OCR 正确性或生产检索质量作结论** |
+| RAG-P0-04 | 复杂版面与多模态真实解析验收 | 扫描 PDF、表格、图片的版面保真与 OCR 准确性样本；原文映射/检索质量对照 | **REFERENCE_IMPLEMENTED**：`offline/document_processor.py` 可选 `pdf_extract_tables=True` 经真实 PyMuPDF 处理带表格 PDF，并保留页码/表号/块 ID；`benchmarks/document_structure_audit.py` 检查缺页、OCR 渲染丢页、重复身份及表格行区间；测试包含合成 PDF 真解析和失败反例。**尚无真实行业复杂版面人工标注、OCR 正确率或检索收益实验，默认解析行为未改变** |
 | RAG-P1-05 | 越权与 Prompt Injection 对抗样本 | 服务端/存储层过滤及缓存租户隔离，无证据和恶意文档必须可解释地拒答；指定对抗集回归 | **PARTIAL**；现有单位/集成测试不能证明生产攻击免疫 |
 | RAG-P1-06 | GPU/服务端点/运行时压测 | vLLM 真模型、CE 真权重、完整请求链、P95/P99/错误率/Cost per Task 实测 | **PENDING**；配置拓扑不是运行验收 |
 
@@ -38,7 +38,7 @@
 - 可执行基础检查：
 
 ```bash
-python -m pytest tests/benchmark/test_document_structure_audit.py tests/benchmark/test_document_structure_cli.py -q
+python -m pytest tests/offline/test_pdf_table_extraction.py tests/benchmark/test_document_structure_audit.py tests/benchmark/test_document_structure_cli.py -q
 python -m scripts.audit_document_structure /path/to/approved.pdf
 python -m pytest tests/ -q
 ruff check .
