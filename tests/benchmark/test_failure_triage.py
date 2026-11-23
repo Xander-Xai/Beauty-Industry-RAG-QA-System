@@ -17,12 +17,14 @@ def _row(sample, relevant, retrieved, *, config="bm25", business_type="regulatio
 
 
 def test_miss_late_hit_and_no_gold_are_separate_populations():
-    result = analyze_failures([
-        _row("good", ["g"], ["g"], hit=True),
-        _row("late", ["g"], ["x", "g"], hit=True),
-        _row("miss", ["g"], ["x"], hit=False),
-        _row("unknown", [], ["g"]),
-    ])
+    result = analyze_failures(
+        [
+            _row("good", ["g"], ["g"], hit=True),
+            _row("late", ["g"], ["x", "g"], hit=True),
+            _row("miss", ["g"], ["x"], hit=False),
+            _row("unknown", [], ["g"]),
+        ]
+    )
     b = result["configurations"]["bm25"]
     assert (b["rows"], b["scored"], b["excluded_no_gold"]) == (4, 3, 1)
     assert (b["top1_hits"], b["late_hits_at_2_to_10"], b["misses_at_10"]) == (1, 1, 1)
@@ -33,10 +35,12 @@ def test_miss_late_hit_and_no_gold_are_separate_populations():
 
 
 def test_configs_and_business_buckets_are_kept_separate():
-    result = analyze_failures([
-        _row("a", ["r"], [], config="bm25"),
-        _row("a", ["r"], ["r"], config="dense", business_type="ingredient"),
-    ])
+    result = analyze_failures(
+        [
+            _row("a", ["r"], [], config="bm25"),
+            _row("a", ["r"], ["r"], config="dense", business_type="ingredient"),
+        ]
+    )
     assert result["configurations"]["bm25"]["misses_at_10"] == 1
     assert result["configurations"]["dense"]["top1_hits"] == 1
 
