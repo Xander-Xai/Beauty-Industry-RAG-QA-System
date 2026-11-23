@@ -54,3 +54,8 @@ def test_inconsistent_claimed_hit_fails_closed():
 def test_incomplete_or_malformed_rows_are_not_silently_skipped():
     with pytest.raises(ValueError, match="missing relevant_items"):
         analyze_failures([{"sample_id": "x", "config": "bm25", "retrieved_items": []}])
+
+
+def test_duplicate_retrieved_rank_is_rejected_not_promoted():
+    with pytest.raises(ValueError, match="duplicate retrieved"):
+        analyze_failures([_row("x", ["gold"], ["noise", "noise", "gold"], hit=True)])
