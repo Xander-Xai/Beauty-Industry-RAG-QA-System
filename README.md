@@ -847,3 +847,13 @@ config.json               Runtime configuration; system.version is 2.4.0
 ## License
 
 [MIT](LICENSE)
+
+
+## 生态定位与公开工程证据边界（2026-10-30）
+
+这是公开工程参考仓库，不是任何私有经营系统的客户事实或生产应用替代品。
+
+- **唯一工程主责**：cosmetics-specific multimodal retrieval, evidence gating and RBAC application reference。
+- **验证边界**：Repository-verified code and selected BM25 evidence are not full production readiness. Relevant inference weights, other retrieval arms and live enterprise operations remain subject to the repository's explicit gates.
+- **公开交叉索引**：[Customer-Service AI Agent](https://github.com/Xander-Xai/Customer-Service-AI-Agent) is an independently maintained agent/workflow reference, not a deployed component or customer of this RAG project.
+- 代码、测试、指标及发布的唯一技术权威在本仓；任何外部商业研究、PR、演示、内容制作或私人计划均不能替本仓证明生产安全、真实客户验收或收入。
