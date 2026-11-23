@@ -46,7 +46,7 @@ def test_pdf_table_rows_and_provenance_are_preserved():
     assert block.block_type == "table"
     assert block.block_identity == "page:2:table:0"
     assert block.metadata == {"format": "pdf", "page_number": 3, "table_index": 0}
-    assert block.text == "INCI Name | Limit\nNiacinamide | 5%\nRetinol | "
+    assert block.text == "INCI Name | Limit\nNiacinamide | 5%\nRetinol |"
 
 
 def test_detection_unavailable_or_malformed_fails_closed():
