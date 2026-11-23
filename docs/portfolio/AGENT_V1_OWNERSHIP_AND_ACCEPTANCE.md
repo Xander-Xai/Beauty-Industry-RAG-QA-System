@@ -24,7 +24,7 @@
 
 | 编号 | 执行项 | 通过标准 | 当前状态 / 关联变更 |
 | --- | --- | --- | --- |
-| RAG-P0-01 | 无证据 Answer Gate 一律拒答 | `top_doc=None` 即 fail-closed；覆盖普通和法规类请求，正控制仍可用 | **PR #121 Open**；未合并 |
+| RAG-P0-01 | 无证据 Answer Gate 一律拒答 | `top_doc=None` 即 fail-closed；覆盖普通和法规类请求，正控制仍可用 | **MERGED TO MAIN**：PR #121 已于 2026-11-23 合并（merge SHA `5b14f187329f3e64f615408987432f2dcc499d87`），对应 CI/Lint/Security 通过；真实生产外部验收仍 PENDING |
 | RAG-P0-02 | 真实检索 Bad Case 复核 | 从排名结果独立重算 MRR/Recall/Hit，拒绝重复 ID、伪造分值与错误来源 | **PR #122 Open**；未合并 |
 | RAG-P0-03 | 同金标 BM25 vs Dense vs Hybrid vs Rerank 消融 | 真实 ES/Qdrant/BGE/CE 权重、固定语料与标注、同一运行条件、逐样本结果和失败分类 | **PARTIAL**；只有 BM25 的局部真实测量 |
 | RAG-P0-04 | 复杂版面与多模态真实解析验收 | 扫描 PDF、表格、图片的版面保真与 OCR 准确性样本；原文映射/检索质量对照 | **REFERENCE_IMPLEMENTED**：`offline/document_processor.py` 可选 `pdf_extract_tables=True` 经真实 PyMuPDF 处理带表格 PDF，并保留页码/表号/块 ID；`benchmarks/document_structure_audit.py` 检查缺页、OCR 渲染丢页、重复身份及表格行区间；测试包含合成 PDF 真解析和失败反例。**尚无真实行业复杂版面人工标注、OCR 正确率或检索收益实验，默认解析行为未改变** |
