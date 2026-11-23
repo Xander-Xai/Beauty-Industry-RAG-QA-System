@@ -144,9 +144,7 @@ def test_regulatory_number_can_be_supported_by_other_authorized_evidence(answer_
     top_doc = RerankResult(doc_id="summary", content=summary, source="bm25_es")
     second = RerankResult(doc_id="limit", content="该成分最高限量为3%。", source="dense_bge")
     monkeypatch.setattr(answer_gate, "_nli_inference", lambda *_: (0.0, 1.0))
-    result = answer_gate.verify(
-        answer=answer, top_doc=top_doc, evidence_docs=[top_doc, second], is_regulation=True
-    )
+    result = answer_gate.verify(answer=answer, top_doc=top_doc, evidence_docs=[top_doc, second], is_regulation=True)
     assert result.passed is True
 
 
