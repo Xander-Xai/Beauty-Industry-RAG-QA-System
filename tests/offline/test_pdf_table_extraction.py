@@ -109,3 +109,32 @@ def test_pdf_optin_passes_source_page_into_table_blocks(tmp_path, monkeypatch):
 def test_non_boolean_optin_flag_fails_fast():
     with pytest.raises(ValueError, match="boolean"):
         DocumentProcessor(pdf_extract_tables="yes")
+
+
+def test_real_pymupdf_table_grid_preserves_rows_in_optin_pdf(tmp_path):
+    """Local real PyMuPDF table detector: synthetic drawn table, not real corpus."""
+    import pymupdf
+
+    path = tmp_path / "synthetic-grid.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=500, height=250)
+    for x in (40, 230, 420):
+        page.draw_line((x, 40), (x, 180), color=(0, 0, 0), width=1)
+    for y in (40, 110, 180):
+        page.draw_line((40, y), (420, y), color=(0, 0, 0), width=1)
+    for cell, x, y in (
+        ("Name", 55, 80),
+        ("Limit", 245, 80),
+        ("Niacinamide", 55, 150),
+        ("5 percent", 245, 150),
+    ):
+        page.insert_text((x, y), cell, fontsize=12)
+    document.save(path)
+    document.close()
+
+    processed = DocumentProcessor(pdf_extract_tables=True).process(path)
+    tables = [block for block in processed.blocks if block.block_type == "table"]
+    assert len(tables) == 1
+    assert tables[0].text == "Name | Limit\nNiacinamide | 5 percent"
+    assert tables[0].metadata["page_number"] == 1
+    assert tables[0].metadata["table_index"] == 0
