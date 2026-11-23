@@ -86,11 +86,15 @@ class AnswerGate:
         from core.pipeline_context import AnswerGateResult
 
         if top_doc is None:
+            # Defense in depth: the upstream Evidence Gate currently rejects empty
+            # candidates.  Never let a future caller bypass that invariant and
+            # silently accept an answer without a verifiable source.
+            logger.warning("Answer Gate refused an answer without a source document")
             return AnswerGateResult(
                 nli_contradiction_score=0.0,
                 nli_entailment_score=0.0,
-                passed=True,
-                warning=False,
+                passed=False,
+                warning=True,
                 is_regulation=is_regulation,
             )
 
