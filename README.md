@@ -803,6 +803,8 @@ artifact 加证据等级提升规则。
 
 ---
 
+**2026 Agent 求职定位与验收责任：**[早期阶段：企业多模态 RAG、检索效果与证据可信性](docs/portfolio/2026-agent-interview-positioning.md)。未执行的 Dense / Hybrid、真实重排和端到端验证保持 PENDING。
+
 ## Documentation
 
 请从 [docs/README.md](docs/README.md) 查找当前操作指南、设计文档与历史计划（历史计划不代表当前实现状态）。架构 / 真实性口径入口：
