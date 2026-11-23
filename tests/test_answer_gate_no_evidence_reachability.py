@@ -1,28 +1,11 @@
-"""Is `AnswerGate.verify(top_doc=None) → passed=True` reachable online?
+"""Guard the no-evidence Answer Gate contract and its upstream reachability.
 
-`retrieval/answer_gate.py:88-95` returns `passed=True` unconditionally when
-`top_doc is None`, with no check on the answer and no check on `is_regulation`.
-On its face that is "no evidence → allow", which is the wrong direction for a
-gate.
+The main pipeline already rejects empty candidates through Evidence Gate, but
+AnswerGate is a separately callable component. It must fail closed even when
+a future refactor or alternate caller supplies top_doc=None.
 
-This module answers the narrow question honestly: **is that branch reachable on
-the real request path today?** It is, or it is not — and the answer is derived
-by executing the actual gates rather than by reading the call site.
-
-The structural argument, which these tests pin:
-
-* reaching `pipeline.py:545` (the Answer Gate call) requires passing the
-  Evidence Gate decision branch at `pipeline.py:493-505`, which returns early
-  on `reject`;
-* `EvidenceEnsembleGate.evaluate` returns `reject` whenever `rerank_results` is
-  falsy (`retrieval/evidence_gate.py:105-115`);
-* therefore `ctx.rerank_results[0]` at `pipeline.py:547` is always a real
-  document, and the `else None` is dead defensive code.
-
-If a future change made the Evidence Gate permissive about empty candidates,
-these tests fail — which is the point. The behaviour itself is left alone: it is
-not an active leak, and rewriting it would change answers on a path that
-currently cannot be taken.
+The positive control below proves normal evidence-bearing candidates remain
+eligible for generation; this test does not claim real model quality.
 """
 
 from __future__ import annotations
@@ -50,18 +33,15 @@ def answer_gate():
 # ── the branch's own behaviour, stated plainly ──────────────────────────────
 
 
-def test_top_doc_none_passes_regardless_of_content():
-    """The documented behaviour: no evidence means no objection, not no answer.
-
-    This is asserted so nobody has to re-derive it. It is a design decision that
-    is *safe only* because the branch is unreachable — see the reachability tests
-    below, which are the ones that matter.
-    """
+@pytest.mark.parametrize("is_regulation", [False, True])
+def test_top_doc_none_refuses_unverified_answer(is_regulation):
+    """An alternate caller must never convert missing evidence to approval."""
     gate = AnswerGate()
-    result = gate.verify(answer=FABRICATED, top_doc=None, is_regulation=True)
-    assert result.passed is True
+    result = gate.verify(answer=FABRICATED, top_doc=None, is_regulation=is_regulation)
+    assert result.passed is False
     assert result.nli_contradiction_score == 0.0
-    assert result.warning is False
+    assert result.warning is True
+    assert result.is_regulation is is_regulation
 
 
 # ── why it is currently unreachable ─────────────────────────────────────────
