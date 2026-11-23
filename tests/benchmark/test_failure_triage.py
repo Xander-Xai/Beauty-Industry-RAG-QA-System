@@ -34,6 +34,34 @@ def test_miss_late_hit_and_no_gold_are_separate_populations():
     assert result["results_are_benchmark"] is None
 
 
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"hit_at_10": True},
+        {"hit_at_10": "false"},
+        {"first_relevant_rank": 1},
+        {"rr": 0.5},
+        {"recall_at_10": 0.1},
+        {"rr": float("nan")},
+        {"recall_at_10": True},
+    ],
+)
+def test_no_gold_cannot_claim_positive_or_invalid_retrieval_metrics(extra):
+    row = _row("not-reviewed", [], ["irrelevant"])
+    row.update(extra)
+    with pytest.raises(ValueError, match="no-gold"):
+        analyze_failures([row])
+
+
+def test_zero_metric_fields_on_no_gold_remain_excluded_not_misses():
+    row = _row("not-reviewed", [], ["irrelevant"], hit=False)
+    row.update({"first_relevant_rank": None, "rr": 0.0, "recall_at_10": 0.0})
+    result = analyze_failures([row])["configurations"]["bm25"]
+    assert result["scored"] == 0
+    assert result["excluded_no_gold"] == 1
+    assert result["misses_at_10"] == 0
+
+
 def test_configs_and_business_buckets_are_kept_separate():
     result = analyze_failures(
         [
