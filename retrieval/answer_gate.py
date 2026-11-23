@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Numeric evidence check is a conservative, syntactic safety control for
 # regulatory answers, NOT a semantic NLI score or proof of factual correctness.
-_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])[0-9]+(?:\\.[0-9]+)?(?![A-Za-z0-9])")
+_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9])")
 
 
 class AnswerGate:
