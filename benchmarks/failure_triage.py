@@ -58,14 +58,10 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         ranked = retrieved[:10]
         matched_rank = next((i for i, key in enumerate(ranked, 1) if key in gold), None)
         asserted_hit = row.get("hit_at_10")
-        if asserted_hit is not None and (
-            type(asserted_hit) is not bool or asserted_hit != (matched_rank is not None)
-        ):
+        if asserted_hit is not None and (type(asserted_hit) is not bool or asserted_hit != (matched_rank is not None)):
             raise ValueError("hit_at_10 contradicts ranked passage identifiers")
         business_type = str(row.get("business_type") or "unknown")
-        bucket = group["by_business_type"].setdefault(
-            business_type, {"scored": 0, "misses_at_10": 0}
-        )
+        bucket = group["by_business_type"].setdefault(business_type, {"scored": 0, "misses_at_10": 0})
         bucket["scored"] += 1
         if matched_rank is None:
             group["misses_at_10"] += 1
