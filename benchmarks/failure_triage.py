@@ -64,9 +64,7 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 raise ValueError("no-gold row claims a relevant rank")
             for field in ("rr", "recall_at_10"):
                 score = row.get(field)
-                if score is not None and (
-                    type(score) not in (int, float) or not math.isfinite(score) or score != 0
-                ):
+                if score is not None and (type(score) not in (int, float) or not math.isfinite(score) or score != 0):
                     raise ValueError(f"no-gold row claims invalid {field}")
             group["excluded_no_gold"] += 1
             continue
@@ -76,8 +74,7 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         matched_rank = next((i for i, key in enumerate(ranked, 1) if key in gold), None)
         full_rank = next((i for i, key in enumerate(retrieved, 1) if key in gold), None)
         if "first_relevant_rank" in row and (
-            row["first_relevant_rank"] != full_rank
-            or isinstance(row["first_relevant_rank"], bool)
+            row["first_relevant_rank"] != full_rank or isinstance(row["first_relevant_rank"], bool)
         ):
             raise ValueError("first_relevant_rank contradicts ranked passage identifiers")
         expected_rr = 1 / full_rank if full_rank is not None and full_rank <= 10 else 0.0
