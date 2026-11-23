@@ -33,6 +33,8 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             raise ValueError("missing relevant_items or retrieved_items list")
         if not all(isinstance(item, str) for item in relevant + retrieved):
             raise ValueError("passage identities must be strings")
+        if len(set(relevant)) != len(relevant):
+            raise ValueError("duplicate gold passage identity")
         if len(set(retrieved)) != len(retrieved):
             raise ValueError("duplicate retrieved passage identity")
         total += 1
@@ -59,7 +61,10 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         ranked = retrieved[:10]
         matched_rank = next((i for i, key in enumerate(ranked, 1) if key in gold), None)
         full_rank = next((i for i, key in enumerate(retrieved, 1) if key in gold), None)
-        if "first_relevant_rank" in row and row["first_relevant_rank"] != full_rank:
+        if "first_relevant_rank" in row and (
+            row["first_relevant_rank"] != full_rank
+            or isinstance(row["first_relevant_rank"], bool)
+        ):
             raise ValueError("first_relevant_rank contradicts ranked passage identifiers")
         expected_rr = 1 / full_rank if full_rank is not None and full_rank <= 10 else 0.0
         if "rr" in row and (
