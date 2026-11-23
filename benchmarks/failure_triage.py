@@ -31,6 +31,8 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             raise ValueError("missing relevant_items or retrieved_items list")
         if not all(isinstance(item, str) for item in relevant + retrieved):
             raise ValueError("passage identities must be strings")
+        if len(set(retrieved)) != len(retrieved):
+            raise ValueError("duplicate retrieved passage identity")
         total += 1
         group = groups.setdefault(
             config,
@@ -52,10 +54,12 @@ def analyze_failures(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             continue
         group["scored"] += 1
         gold = set(relevant)
-        ranked = list(dict.fromkeys(retrieved))[:10]
+        ranked = retrieved[:10]
         matched_rank = next((i for i, key in enumerate(ranked, 1) if key in gold), None)
         asserted_hit = row.get("hit_at_10")
-        if asserted_hit is not None and (type(asserted_hit) is not bool or asserted_hit != (matched_rank is not None)):
+        if asserted_hit is not None and (
+            type(asserted_hit) is not bool or asserted_hit != (matched_rank is not None)
+        ):
             raise ValueError("hit_at_10 contradicts ranked passage identifiers")
         business_type = str(row.get("business_type") or "unknown")
         bucket = group["by_business_type"].setdefault(
