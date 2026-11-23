@@ -1,5 +1,9 @@
 # Documentation index
 
+For the live default branch, PRs, checks and releases, start with the
+[repository lookup](../README.md#仓库状态怎么查). The evidence map identifies
+the scope of each measurement. Dated audits describe their recorded baseline.
+
 ## Version labelling
 
 Canonical runtime version is `config.json` → `system.version` = `2.4.0`; the newest dated

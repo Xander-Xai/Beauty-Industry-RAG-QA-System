@@ -49,6 +49,14 @@
 
 ---
 
+## 仓库状态怎么查
+
+默认分支为 `main`。实时核对 [`main` 提交](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/commits/main/) · [Pull Requests](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pulls) · [Issues](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues) · [Actions](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions?query=branch%3Amain) · [Releases](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/releases)。
+在同一提交阅读 [架构基线](docs/architecture-baseline.md) 与 [证据表](docs/evidence-map.md)。
+
+- Real Corpus V1 的正式 BM25 结果来自真实 Elasticsearch 和 27 条具名评审金标。逐样本证据与复算方式见 [运行报告](docs/validation/real-v1-approved-bm25-run.md)。Dense/Hybrid、完整问答质量与生产性能各有独立的验证门槛。
+- Answer Gate 缺证据时的加固与检索失败归因分别跟踪于 [PR #121](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/121) 和 [PR #122](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/122)。以合并记录和对应提交的测试判断交付状态。
+
 ## 30 秒读懂
 
 | # | 问题 | 答案 | 工程入口 |
