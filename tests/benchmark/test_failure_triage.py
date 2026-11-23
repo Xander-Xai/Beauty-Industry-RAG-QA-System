@@ -63,3 +63,29 @@ def test_incomplete_or_malformed_rows_are_not_silently_skipped():
 def test_duplicate_retrieved_rank_is_rejected_not_promoted():
     with pytest.raises(ValueError, match="duplicate retrieved"):
         analyze_failures([_row("x", ["gold"], ["noise", "noise", "gold"], hit=True)])
+
+
+def test_rank_reciprocal_rank_and_recall_must_match_identifiers():
+    base = _row("c", ["gold", "second"], ["x", "gold"], hit=True)
+    base.update({"first_relevant_rank": 2, "rr": 0.5, "recall_at_10": 0.5})
+    assert analyze_failures([base])["configurations"]["bm25"]["late_hits_at_2_to_10"] == 1
+
+    for field, invalid in (
+        ("first_relevant_rank", 1),
+        ("rr", 1.0),
+        ("recall_at_10", 1.0),
+        ("rr", float("nan")),
+    ):
+        row = {**base, field: invalid}
+        with pytest.raises(ValueError, match="contradicts"):
+            analyze_failures([row])
+
+
+def test_rank_beyond_ten_does_not_inflate_mrr_or_recall_at_ten():
+    row = _row("late", ["gold"], ["irrelevant"] * 10 + ["gold"], hit=False)
+    # The CLI must refuse duplicate identities before evaluating the ranking.
+    with pytest.raises(ValueError, match="duplicate retrieved"):
+        analyze_failures([row])
+    unique = _row("late", ["gold"], [f"noise-{i}" for i in range(10)] + ["gold"], hit=False)
+    unique.update({"first_relevant_rank": 11, "rr": 0.0, "recall_at_10": 0.0})
+    assert analyze_failures([unique])["configurations"]["bm25"]["misses_at_10"] == 1
