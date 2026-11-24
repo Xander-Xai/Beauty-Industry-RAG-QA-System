@@ -717,9 +717,7 @@ def test_existing_run_directory_blocks_execution_and_preserves_evidence(
         pytest.fail("retrieval must not execute if evidence directory already exists")
 
     monkeypatch.setattr(run_cli, "effective_retrieval_config", unexpected_execution)
-    code = run_cli.main(
-        ["--config", "bm25", "--dataset", str(attributable_dataset), "--output-dir", str(out)]
-    )
+    code = run_cli.main(["--config", "bm25", "--dataset", str(attributable_dataset), "--output-dir", str(out)])
     assert code == 4
     assert sentinel.read_text(encoding="utf-8") == "original evidence"
     assert list(existing.iterdir()) == [sentinel]
