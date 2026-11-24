@@ -28,3 +28,8 @@
 - Treat cold-start CE score mappings as uncalibrated scores, not validated probabilities. A score-direction or calibration change must invalidate affected response cache keys and be revalidated on independent regulatory/refusal labels before production use; do not change Evidence Gate thresholds to make tests pass.
 
 - Image-bearing requests, requests with active A/B overrides, and degraded responses must bypass shared response-cache reuse and writes. Explicit CE fallback must not populate the cache. Test the actual read/write boundary; text keys do not identify image content or experiment membership.
+
+## Industrial release governance
+- Do not promote a synthetic or historical corpus as current regulation. Industrial evidence must match an independently reviewed manifest, exact epoch, content digest, access masks, and applicability date.
+- Industrial profile is fail-closed. Do not re-enable legacy identity fallback, local session fallback, answer caches, unreviewed BLIP injection, or live A/B experiments merely to improve availability. See `docs/industrial-release-contract.md`.
+- Any new production claim requires exact-head CI plus real deployment, model, data, and acceptance evidence. Unmerged branches and historical audits are not current main.
