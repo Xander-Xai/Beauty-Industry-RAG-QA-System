@@ -397,8 +397,9 @@ class RerankExecutor(HybridRRFExecutor):
             # Isolated single-model challenger, not the online calibrated gate.
             # Its tokenizer owns pair truncation; raw logits only rank candidates.
             if self._crossencoder is None:
-                from common.config import get_config_dict
                 from sentence_transformers import CrossEncoder
+
+                from common.config import get_config_dict
 
                 paths = backends.rerank_model_paths(self.name)
                 max_len = get_config_dict()["retrieval"]["cross_encoder"]["max_seq_length"]

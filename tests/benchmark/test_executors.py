@@ -409,6 +409,7 @@ def test_architecture_single_ce_does_not_run_biencoder():
 
 
 def test_architecture_alternatives_are_registered():
+    from benchmarks import backends
     from benchmarks.strict_retrieval_suite import ARCHITECTURE_ARMS
 
     for arm in ARCHITECTURE_ARMS:
