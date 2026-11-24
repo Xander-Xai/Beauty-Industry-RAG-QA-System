@@ -258,7 +258,7 @@ class OnlineRAGPipeline:
                 # ③+④ 并行执行 Query Rewrite + 复杂度评估（两者无数据依赖）
                 t_rewrite = time.time()
                 session_state = SessionState.for_identity(
-                    ctx.session_id or "default",
+                    ctx.session_id,
                     ctx.user_id,
                     ctx.user_role_mask,
                     ctx.user_dept_mask,
@@ -385,7 +385,7 @@ class OnlineRAGPipeline:
                 if clip_use:
                     try:
                         session_state_for_clip = SessionState.for_identity(
-                            ctx.session_id or "default",
+                            ctx.session_id,
                             ctx.user_id,
                             ctx.user_role_mask,
                             ctx.user_dept_mask,
@@ -577,7 +577,7 @@ class OnlineRAGPipeline:
 
                 # ⑱ 更新会话
                 session = SessionState.for_identity(
-                    ctx.session_id or "default",
+                    ctx.session_id,
                     ctx.user_id,
                     ctx.user_role_mask,
                     ctx.user_dept_mask,
@@ -1107,7 +1107,7 @@ class OnlineRAGPipeline:
 
         try:
             session_state = SessionState.for_identity(
-                ctx.session_id or "default",
+                ctx.session_id,
                 ctx.user_id,
                 ctx.user_role_mask,
                 ctx.user_dept_mask,
