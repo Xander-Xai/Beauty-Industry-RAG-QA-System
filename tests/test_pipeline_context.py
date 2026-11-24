@@ -563,3 +563,25 @@ def test_scope_changes_are_isolated_in_memory_without_redis(monkeypatch):
     first.add_round("q", "restricted")
     assert SessionState.for_identity("fallback-scope-test", "owner", 3, 7, "epoch") is first
     assert SessionState.for_identity("fallback-scope-test", "owner", 1, 7, "epoch").dialog_rounds == []
+
+
+@pytest.mark.parametrize("session_id,owner_id", [(None, "owner"), ("", "owner"), ("shared", "")])
+def test_missing_session_or_principal_never_persists_history(fake_redis, session_id, owner_id):
+    before = dict(fake_redis.store)
+    first = SessionState.for_identity(session_id, owner_id, 1, 2, "epoch")
+    first.add_round("private question", "private answer")
+    first.lock_evidence(["private-doc"])
+    assert fake_redis.store == before
+    next_turn = SessionState.for_identity(session_id, owner_id, 1, 2, "epoch")
+    assert next_turn.dialog_rounds == []
+    assert next_turn.locked_doc_ids == []
+
+
+@pytest.mark.parametrize("field", ["owner_id", "session_id", "access_scope"])
+def test_missing_redis_provenance_is_rejected(fake_redis, field):
+    first = SessionState.for_identity("scoped", "owner", 1, 2, "epoch")
+    first.add_round("private question", "private answer")
+    payload = json.loads(fake_redis.store[first._redis_key()])
+    del payload[field]
+    fake_redis.store[first._redis_key()] = json.dumps(payload)
+    assert SessionState._try_get_redis(first.session_id, first.owner_id, first.access_scope) is None
