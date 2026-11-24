@@ -81,6 +81,7 @@ def test_strict_cli_refuses_reference_mode_and_duplicate_metrics():
             ]
         )
 
+
 def _gold(sample_id):
     return {
         "sample_id": sample_id,
