@@ -549,6 +549,7 @@ class OnlineRAGPipeline:
                         answer=ctx.generation_result.answer,
                         top_doc=ctx.rerank_results[0] if ctx.rerank_results else None,
                         is_regulation=(business_type == "regulation"),
+                        evidence_docs=ctx.rerank_results[:3],
                     )
                 ctx.record_timing("answer_gate", (time.time() - t_ag) * 1000)
 
@@ -558,7 +559,7 @@ class OnlineRAGPipeline:
                         request_id=ctx.request_id,
                         user_id=ctx.user_id,
                         user_role_mask=ctx.user_role_mask,
-                        reject_reason=f"answer_gate_nli_contradiction={ctx.answer_gate_result.nli_contradiction_score:.3f}",
+                        reject_reason=f"answer_gate_rejected;nli_contradiction_score={ctx.answer_gate_result.nli_contradiction_score:.3f}",
                         query=ctx.user_input,
                         business_type=ctx.rewrite_result.business_type if ctx.rewrite_result else "",
                     )
