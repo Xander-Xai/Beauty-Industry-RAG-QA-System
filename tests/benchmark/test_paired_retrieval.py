@@ -1,4 +1,5 @@
 """Matched-arm retrieval diagnostics cannot hide losses or population drift."""
+
 import pytest
 
 from benchmarks.paired_retrieval import compare_arms

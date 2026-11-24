@@ -3,6 +3,7 @@
 Offline diagnostic only. The publication gate still requires actual executor,
 source approval and matching corpus provenance.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -16,10 +17,7 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
         raise ValueError("two distinct configuration names are required")
     records = list(rows)
     analyze_failures(records)
-    arms = {
-        name: {row["sample_id"]: row for row in records if row["config"] == name}
-        for name in (baseline, candidate)
-    }
+    arms = {name: {row["sample_id"]: row for row in records if row["config"] == name} for name in (baseline, candidate)}
     left, right = arms[baseline], arms[candidate]
     if not left or left.keys() != right.keys():
         raise ValueError("sample populations differ or are empty")
@@ -37,10 +35,7 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
             continue
         ranks = [row["retrieved_items"][:10] for row in (a, b)]
         recall = [len(gold.intersection(rank)) / len(gold) for rank in ranks]
-        rr = [
-            next((1 / i for i, item in enumerate(rank, 1) if item in gold), 0.0)
-            for rank in ranks
-        ]
+        rr = [next((1 / i for i, item in enumerate(rank, 1) if item in gold), 0.0) for rank in ranks]
         delta = recall[1] - recall[0]
         recall_deltas.append(delta)
         rr_deltas.append(rr[1] - rr[0])
