@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -198,6 +199,7 @@ class SessionState:
     #: document-level RBAC filters never see session state, so this is the only
     #: control that closes that path.
     owner_id: str = ""
+    access_scope: str = ""
     dialog_rounds: list[dict] = field(default_factory=list)  # [{user_input, response, rewrite}]
     max_rounds: int = 6  # readme 4.4: 最近6轮
     locked_doc_ids: list[str] = field(default_factory=list)  # 证据锁定
@@ -287,6 +289,7 @@ class SessionState:
             "schema_version": self._SESSION_SCHEMA_VERSION,
             "session_id": self.session_id,
             "owner_id": self.owner_id,
+            "access_scope": self.access_scope,
             "max_rounds": self.max_rounds,
             "created_at": self.created_at,
             "locked_doc_ids": list(self.locked_doc_ids),
@@ -308,6 +311,7 @@ class SessionState:
         session = cls(
             session_id=data["session_id"],
             owner_id=str(data.get("owner_id", "")),
+            access_scope=str(data.get("access_scope", "")),
             max_rounds=data.get("max_rounds", 6),
             locked_doc_ids=list(data.get("locked_doc_ids", [])),
             created_at=data.get("created_at", time.time()),
@@ -346,6 +350,8 @@ class SessionState:
 
     def _persist_to_redis(self):
         """将当前会话状态写入 Redis（异步静默失败）。"""
+        if self.access_scope and not self.owner_id:
+            return  # Anonymous requests must not persist shared dialogue.
         try:
             client = _get_redis_client()
             if client is None:
@@ -357,16 +363,38 @@ class SessionState:
             logger.debug("会话 Redis 持久化失败（降级内存）: %s", exc)
             self._publish_redis_degraded(True)
 
+    @staticmethod
+    def _key_for(session_id: str, owner_id: str, access_scope: str) -> str:
+        # The v2 namespace is reserved; legacy unowned internal callers retain
+        # their old keys except when those keys would enter that namespace.
+        if not owner_id and not access_scope and not session_id.startswith("v2:"):
+            return session_id
+        raw = json.dumps([owner_id, session_id, access_scope], ensure_ascii=False, separators=(",", ":"))
+        return "v2:" + hashlib.sha256(raw.encode()).hexdigest()
+
     def _storage_key(self) -> str:
-        """Owner-scoped composite key. Both principals sharing a ``session_id``
-        therefore get physically separate sessions, in Redis and in memory."""
-        return f"{self.owner_id}:{self.session_id}" if self.owner_id else self.session_id
+        return self._key_for(self.session_id, self.owner_id, self.access_scope)
+
+    @staticmethod
+    def scope_fingerprint(role_mask: int, dept_mask: int, epoch: str) -> str:
+        raw = json.dumps([role_mask, dept_mask, epoch], separators=(",", ":"))
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @classmethod
+    def for_identity(
+        cls, session_id: str, owner_id: str, role_mask: int, dept_mask: int, epoch: str
+    ) -> SessionState:
+        """Only reuse history within the current principal/permission/epoch scope."""
+        scope = cls.scope_fingerprint(role_mask, dept_mask, epoch)
+        if not owner_id:
+            return cls(session_id=session_id, access_scope=scope)
+        return cls.get_or_create(session_id, owner_id=owner_id, access_scope=scope)
 
     def _redis_key(self) -> str:
         return f"session:{self._storage_key()}"
 
     @classmethod
-    def get_or_create(cls, session_id: str, owner_id: str = "") -> SessionState:
+    def get_or_create(cls, session_id: str, owner_id: str = "", *, access_scope: str = "") -> SessionState:
         """获取或创建会话状态（优先 Redis，兜底内存）。
 
         ``owner_id`` scopes the lookup to the calling principal. Presenting a
@@ -375,30 +403,30 @@ class SessionState:
         error, so the API contract is unchanged and the leak is closed by
         construction rather than by rejecting the request.
         """
-        key = f"{owner_id}:{session_id}" if owner_id else session_id
+        key = cls._key_for(session_id, owner_id, access_scope)
         # 尝试从 Redis 读取
-        redis_session = cls._try_get_redis(key)
+        redis_session = cls._try_get_redis(session_id, owner_id, access_scope)
         if redis_session is not None:
             return redis_session
 
         # Redis 不可用或未找到，使用内存存储
         with cls._sessions_lock:
             if key not in cls._sessions:
-                new_session = cls(session_id=session_id, owner_id=owner_id)
+                new_session = cls(session_id=session_id, owner_id=owner_id, access_scope=access_scope)
                 cls._sessions[key] = new_session
                 # 新创建的会话写入 Redis 预热
                 new_session._persist_to_redis()
             return cls._sessions[key]
 
     @classmethod
-    def _try_get_redis(cls, key: str) -> SessionState | None:
+    def _try_get_redis(cls, session_id: str, owner_id: str = "", access_scope: str = "") -> SessionState | None:
         """尝试从 Redis 获取会话。Redis 不可用或未找到时返回 None。"""
         try:
             client = _get_redis_client()
             if client is None:
                 cls._publish_redis_degraded(True)
                 return None
-            redis_key = f"session:{key}"
+            redis_key = f"session:{cls._key_for(session_id, owner_id, access_scope)}"
             raw = client.get(redis_key)
             if raw is None:
                 # A cache miss is not a degradation: Redis answered.
@@ -409,10 +437,9 @@ class SessionState:
                 logger.debug("Redis 会话 schema 不兼容，忽略并降级: %s", redis_key)
                 return None
             session = cls._from_dict(data)
-            # A payload written before owner scoping (or by a different owner)
-            # must not be handed to the caller. Treat it as absent.
-            if session.owner_id and session.owner_id != key.split(":", 1)[0]:
-                logger.debug("Redis 会话 owner 不匹配，忽略: %s", redis_key)
+            # Check the full identity, not a delimiter-separated key prefix.
+            if (session.owner_id, session.session_id, session.access_scope) != (owner_id, session_id, access_scope):
+                logger.debug("Redis session identity/scope mismatch; ignoring payload")
                 return None
             # 刷新 TTL
             client.expire(redis_key, cls._SESSION_REDIS_TTL)
