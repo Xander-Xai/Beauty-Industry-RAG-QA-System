@@ -11,6 +11,8 @@ GPU 批处理，延迟 ≤25ms
 from __future__ import annotations
 
 import logging
+import re
+from decimal import Decimal
 
 from common.config import get_config_dict
 from common.models import AnswerGateResult
@@ -18,6 +20,10 @@ from common.models import AnswerGateResult
 config = get_config_dict()
 
 logger = logging.getLogger(__name__)
+
+# Numeric evidence check is a conservative, syntactic safety control for
+# regulatory answers, NOT a semantic NLI score or proof of factual correctness.
+_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9])")
 
 
 class AnswerGate:
@@ -71,6 +77,7 @@ class AnswerGate:
         answer: str,
         top_doc=None,
         is_regulation: bool = False,
+        evidence_docs=None,
     ) -> AnswerGateResult:
         """
         验证答案与证据的一致性
@@ -79,6 +86,7 @@ class AnswerGate:
             answer: LLM 生成的回答
             top_doc: 排名第一的检索文档（RerankResult）
             is_regulation: 是否为法规类查询
+            evidence_docs: 已授权且通过 Evidence Gate 的证据集合；默认为 top_doc
 
         Returns:
             AnswerGateResult
@@ -86,13 +94,40 @@ class AnswerGate:
         from core.pipeline_context import AnswerGateResult
 
         if top_doc is None:
+            # Defense in depth: the upstream Evidence Gate currently rejects empty
+            # candidates.  Never let a future caller bypass that invariant and
+            # silently accept an answer without a verifiable source.
+            logger.warning("Answer Gate refused an answer without a source document")
             return AnswerGateResult(
                 nli_contradiction_score=0.0,
                 nli_entailment_score=0.0,
-                passed=True,
-                warning=False,
+                passed=False,
+                warning=True,
                 is_regulation=is_regulation,
             )
+
+        # Critical numerical assertions must be traceable to authorized sources.
+        # High character overlap can still hide a changed legal limit (3% -> 30%).
+        # This conservative rule can reject legitimate computed numbers; for
+        # regulatory questions that is preferable to silently asserting them.
+        if is_regulation:
+            documents = [top_doc, *(evidence_docs or [])]
+            answer_numbers = {Decimal(value) for value in _NUMBER_RE.findall(answer)}
+            source_numbers = {
+                Decimal(value)
+                for doc in documents
+                if doc is not None
+                for value in _NUMBER_RE.findall(getattr(doc, "content", ""))
+            }
+            if not answer_numbers.issubset(source_numbers):
+                logger.warning("Answer Gate rejected unsupported regulatory numeric claim")
+                return AnswerGateResult(
+                    nli_contradiction_score=0.0,
+                    nli_entailment_score=0.0,
+                    passed=False,
+                    warning=True,
+                    is_regulation=True,
+                )
 
         # 快速路径：Jaccard 字符相似度预筛选（<1ms vs LLM NLI ~6s）
         jaccard_score = self._jaccard_similarity(top_doc.content, answer)

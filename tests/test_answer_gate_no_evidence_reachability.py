@@ -1,28 +1,11 @@
-"""Is `AnswerGate.verify(top_doc=None) → passed=True` reachable online?
+"""Guard the no-evidence Answer Gate contract and its upstream reachability.
 
-`retrieval/answer_gate.py:88-95` returns `passed=True` unconditionally when
-`top_doc is None`, with no check on the answer and no check on `is_regulation`.
-On its face that is "no evidence → allow", which is the wrong direction for a
-gate.
+The main pipeline already rejects empty candidates through Evidence Gate, but
+AnswerGate is a separately callable component. It must fail closed even when
+a future refactor or alternate caller supplies top_doc=None.
 
-This module answers the narrow question honestly: **is that branch reachable on
-the real request path today?** It is, or it is not — and the answer is derived
-by executing the actual gates rather than by reading the call site.
-
-The structural argument, which these tests pin:
-
-* reaching `pipeline.py:545` (the Answer Gate call) requires passing the
-  Evidence Gate decision branch at `pipeline.py:493-505`, which returns early
-  on `reject`;
-* `EvidenceEnsembleGate.evaluate` returns `reject` whenever `rerank_results` is
-  falsy (`retrieval/evidence_gate.py:105-115`);
-* therefore `ctx.rerank_results[0]` at `pipeline.py:547` is always a real
-  document, and the `else None` is dead defensive code.
-
-If a future change made the Evidence Gate permissive about empty candidates,
-these tests fail — which is the point. The behaviour itself is left alone: it is
-not an active leak, and rewriting it would change answers on a path that
-currently cannot be taken.
+The positive control below proves normal evidence-bearing candidates remain
+eligible for generation; this test does not claim real model quality.
 """
 
 from __future__ import annotations
@@ -50,18 +33,15 @@ def answer_gate():
 # ── the branch's own behaviour, stated plainly ──────────────────────────────
 
 
-def test_top_doc_none_passes_regardless_of_content():
-    """The documented behaviour: no evidence means no objection, not no answer.
-
-    This is asserted so nobody has to re-derive it. It is a design decision that
-    is *safe only* because the branch is unreachable — see the reachability tests
-    below, which are the ones that matter.
-    """
+@pytest.mark.parametrize("is_regulation", [False, True])
+def test_top_doc_none_refuses_unverified_answer(is_regulation):
+    """An alternate caller must never convert missing evidence to approval."""
     gate = AnswerGate()
-    result = gate.verify(answer=FABRICATED, top_doc=None, is_regulation=True)
-    assert result.passed is True
+    result = gate.verify(answer=FABRICATED, top_doc=None, is_regulation=is_regulation)
+    assert result.passed is False
     assert result.nli_contradiction_score == 0.0
-    assert result.warning is False
+    assert result.warning is True
+    assert result.is_regulation is is_regulation
 
 
 # ── why it is currently unreachable ─────────────────────────────────────────
@@ -131,3 +111,47 @@ def test_a_real_document_with_no_overlap_is_refused_for_regulation(answer_gate):
     top_doc = RerankResult(doc_id="doc-0", content="备案材料包括配方表与检验报告。", source="bm25_es")
     result = answer_gate.verify(answer=FABRICATED, top_doc=top_doc, is_regulation=True)
     assert result.passed is False
+
+
+# ── regulatory numerical hallucination regressions ────────────────────────────
+
+
+def test_regulatory_numeric_change_is_rejected_even_with_high_text_similarity(answer_gate):
+    """A single changed limit must not pass the Jaccard fast path."""
+    source = "法规规定该成分在相关产品中的最大允许浓度为3%，超过限量的产品不得备案。"
+    fabricated = "法规规定该成分在相关产品中的最大允许浓度为30%，超过限量的产品不得备案。"
+    assert answer_gate._jaccard_similarity(source, fabricated) > 0.6
+    top_doc = RerankResult(doc_id="limit", content=source, source="bm25_es")
+    result = answer_gate.verify(answer=fabricated, top_doc=top_doc, is_regulation=True)
+    assert result.passed is False
+    assert result.warning is True
+    # The numeric gate did not invoke NLI; never fabricate an NLI score.
+    assert result.nli_contradiction_score == 0.0
+
+
+def test_matching_regulatory_limit_keeps_fast_path(answer_gate):
+    source = "法规规定该成分在相关产品中的最大允许浓度为3%，超过限量的产品不得备案。"
+    doc = RerankResult(doc_id="limit", content=source, source="bm25_es")
+    result = answer_gate.verify(answer=source, top_doc=doc, is_regulation=True)
+    assert result.passed is True
+    assert result.warning is False
+
+
+def test_regulatory_number_can_be_supported_by_other_authorized_evidence(answer_gate, monkeypatch):
+    """Number auditing can consult authorized Top-K, not only the first passage."""
+    summary = "法规规定相关产品中该成分需要遵守限量标准并提供完整的备案证明。"
+    answer = "法规规定相关产品中该成分需要遵守限量标准并提供完整的备案证明，最高限量为3%。"
+    top_doc = RerankResult(doc_id="summary", content=summary, source="bm25_es")
+    second = RerankResult(doc_id="limit", content="该成分最高限量为3%。", source="dense_bge")
+    monkeypatch.setattr(answer_gate, "_nli_inference", lambda *_: (0.0, 1.0))
+    result = answer_gate.verify(answer=answer, top_doc=top_doc, evidence_docs=[top_doc, second], is_regulation=True)
+    assert result.passed is True
+
+
+def test_nonregulatory_numeric_change_retains_existing_semantics(answer_gate):
+    source = "产品的规格为30毫升，建议参考产品说明并遵循完整的护理步骤。"
+    answer = "产品的规格为300毫升，建议参考产品说明并遵循完整的护理步骤。"
+    assert answer_gate._jaccard_similarity(source, answer) > 0.6
+    doc = RerankResult(doc_id="product", content=source, source="bm25_es")
+    result = answer_gate.verify(answer=answer, top_doc=doc, is_regulation=False)
+    assert result.passed is True

@@ -445,13 +445,14 @@ class TestAnswerGate:
 
         return RerankResult(doc_id=doc_id, content=content)
 
-    def test_no_top_doc_always_passes(self):
-        """无 top_doc 时应直接通过。"""
+    def test_no_top_doc_fails_closed(self):
+        """无可信证据时必须拒答，不能因为不是法规类就静默放行。"""
         from retrieval.answer_gate import AnswerGate
 
         gate = AnswerGate()
         result = gate.verify(answer="测试回答", top_doc=None, is_regulation=False)
-        assert result.passed is True
+        assert result.passed is False
+        assert result.warning is True
 
     def test_consistent_answer_passes(self):
         """与证据一致的回答应通过。"""

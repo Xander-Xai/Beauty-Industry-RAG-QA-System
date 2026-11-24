@@ -1,5 +1,7 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
+> **Memory 专项定位（2026-11-24）**：本项目只承担 RAG 的短期会话、权限/版本化证据与上下文缓存隔离，不引入跨任务用户画像。工程补强与历史任职时间严格区分。见 [Memory 工程定位](docs/memory-engineering-positioning-20261124.md) 与 [安全回归](docs/validation/context-memory-cache-isolation-20261124.md)。
+
 > **一句话（EN）**: Enterprise multimodal RAG QA for cosmetics regulation — hybrid
 > retrieval, two-stage reranking, evidence gating that refuses unsupported answers,
 > uint32 RBAC, and evidence levels that separate implemented from production-validated.
@@ -7,6 +9,8 @@
 > **一句话（中）**：企业内部多模态 RAG 问答系统——把散落在 PDF、图片、表格里的化妆品法规 / 成分 / 产品知识变成可检索资产，在线返回**带引用、带出处、证据不足就拒答**的答案，并按角色与部门做权限隔离。
 >
 **项目边界**：这是面向化妆品知识问答场景的公开、独立维护的参考实现。示例与测试数据应为合成数据或允许公开使用的材料；本仓库不提供任何组织的私有源码、内部业务数据、凭据或生产部署记录。项目不代表任何机构的官方产品，也不证明生产可用性。详见 [数据来源与非关联声明](DATA_PROVENANCE.md)。
+
+**Agent V1 工程范围与证据**：[RAG 结构解析与检索验收](docs/agent-v1-acceptance.md)。本公开参考实现专注文档解析、混合检索、证据门控与权限隔离；未通过具体环境验证的能力不得写成生产结果。
 
 >
 > **不是普通向量检索 Demo 的地方**：在线链路是**动态 2–4 路召回 → 两级重排 → Evidence/Answer 双 Gate 拦截幻觉 → RBAC 纵深防御 → 4B/14B 模型路由**；离线侧是**多模态解析 + 知识版本封存 / 人工激活**的分发布纪律。
@@ -277,7 +281,7 @@ score(doc) = Σ_path  weight(path) / (k + rank_path(doc))
 
 1. **权限过滤先于融合**（过滤，不是打分）：越权内容不进候选集，也不进 L2 缓存。这一步没有「通过/拒绝」，只有「在集合内/不在集合内」。
 2. **Evidence Gate（生成前）**：综合 CrossEncoder Top 1、Top 3 均分、多路召回一致性、Top 3 文档间一致性，四项加权得到证据分；低于 `low_confidence` 直接拒答，中等区间走「增强证据后生成」。**这一道是真正 fail closed 的**：权重缺失时两项恒为 0，可得最高分 0.40 低于阈值 0.55，因此当前仓库状态下全部查询都会被拒答（见 [Production Readiness](#production-readiness)）。
-3. **Answer Gate（生成后）**：校验答案是否忠于核心证据，但**不是所有失败都拒答**。`retrieval/answer_gate.py` 有两条快速路径：高相似度（`jaccard > 0.6`）直接通过；低相似度（`jaccard < 0.15`）时 `passed = not is_regulation`——**法规类拒答，非法规类带 warning 通过**。只有法规类矛盾与 NLI 判定为矛盾时才拒答。所以「生成后校验」在法规场景是硬闸门，在一般场景是告警。
+3. **Answer Gate（生成后）**：校验答案是否忠于核心证据，但**不是所有失败都拒答**。`retrieval/answer_gate.py` 有两条快速路径：高相似度（`jaccard > 0.6`）可走快速通过，但**法规类回答中的数字必须能在已授权的 Top-K 证据中找到对应数值**，否则先拒答（语法层防线，不等于 NLI 或事实证明）；低相似度（`jaccard < 0.15`）时 `passed = not is_regulation`——**法规类拒答，非法规类带 warning 通过**。证据缺失也直接拒答；法规类矛盾与 NLI 判定为矛盾时拒答。所以「生成后校验」在法规场景是硬闸门，在一般场景是告警。
 4. **Prompt 信任边界**：检索证据限定在 `<retrieved_context>` 数据区块、当前请求限定在 `<user_query>` 区块，保留标记集中定义并在所有不可信通道转义。这是标记转义的结构约束，**不是** 通过/失败判定，更**不是** prompt injection 免疫证明。
 
 把这四点读成「证据不足时系统会拒答」是对的；读成「任何一道不过都拒答」是不对的。
