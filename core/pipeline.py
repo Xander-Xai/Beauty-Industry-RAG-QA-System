@@ -462,7 +462,10 @@ class OnlineRAGPipeline:
                     # PRD §4.4: Rewrite 降级时 Evidence Gate 进入保守模式（阈值 ≥0.8）
                     ctx.evidence_result = self.evidence_gate.evaluate(
                         query=ctx.rewrite_result.rewritten_query,
-                        rerank_results=ctx.rerank_results,
+                        # Explicit failed inference cannot be used as generation evidence.
+                        rerank_results=(
+                            [] if ctx.ce_stage_provenance == "deterministic_fallback" else ctx.rerank_results
+                        ),
                         retrieval_agreement_score=ctx.retrieval_agreement_score,
                         weights_override=evidence_weights,
                         thresholds_override=evidence_thresholds,
@@ -631,6 +634,9 @@ class OnlineRAGPipeline:
         rewrite = ctx.rewrite_result
         if rewrite is None or rewrite.fallback:
             return False
+        if ctx.image_path or ctx.ab_experiment or ctx.degraded:
+            ctx.cache_hit_level = "DISABLED_REQUEST_POLICY"
+            return False
         if rewrite.business_type == "regulation":
             ctx.cache_hit_level = "DISABLED_REGULATION"
             return False
@@ -681,6 +687,9 @@ class OnlineRAGPipeline:
             "ev": config["embedding"]["text"]["model_path"],  # embedding_version
             "ke": config.get("knowledge_version_epoch", "default"),
             "pv": config["generation"]["prompt_version"],
+            # Separate cached answers across ranking/calibration and gate policy changes.
+            "ranking_policy": "ce-monotone-v1",
+            "ranking_config": config.get("retrieval", {}),
             "sf": schema_fingerprint,  # PRD §10.2: schema fingerprint
             "rm": ctx.user_role_mask,
             "dm": ctx.user_dept_mask,
@@ -1189,8 +1198,19 @@ class OnlineRAGPipeline:
     def _write_cache(self, ctx):
         """写入 L1/L2 缓存 — PRD §10.6 / §4.4"""
         try:
-            # PRD §4.4: Rewrite 降级时禁止缓存写入
-            if ctx.rewrite_result and (ctx.rewrite_result.fallback or ctx.rewrite_result.business_type == "regulation"):
+            # Image-dependent, experimental and degraded answers are not shared text-cache entries.
+            if (
+                ctx.image_path
+                or ctx.ab_experiment
+                or ctx.degraded
+                or ctx.ce_stage_provenance == "deterministic_fallback"
+            ):
+                return
+            if (
+                ctx.rewrite_result is None
+                or ctx.rewrite_result.fallback
+                or ctx.rewrite_result.business_type == "regulation"
+            ):
                 return
             cache_key = self._build_cache_key(ctx)
             requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False

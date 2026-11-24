@@ -55,6 +55,11 @@ EXECUTABLE_CONFIGS = (
     "hybrid_rrf",
     "hybrid_rrf_biencoder",
     "hybrid_rrf_biencoder_crossencoder",
+    "hybrid_rrf_crossencoder_a",
+    "hybrid_rrf_crossencoder_b",
+    "hybrid_rrf_crossencoder_dual",
+    "hybrid_rrf_biencoder_crossencoder_a",
+    "hybrid_rrf_biencoder_crossencoder_b",
 )
 HYBRID_RECALL_DEPTH = 100
 BIENCODER_KEEP = 150
@@ -354,15 +359,62 @@ class HybridRRFExecutor:
         return items
 
 
+class SingleCrossEncoderReranker:
+    """Strict offline challenger: one model, bounded synchronous batches, no background worker."""
+
+    def __init__(self, config_name: str, *, model=None):
+        from common.config import get_config_dict
+
+        self.model_key = "cross_encoder_" + config_name[-1]
+        config = get_config_dict()
+        max_len = int(config["retrieval"]["cross_encoder"]["max_seq_length"])
+        self.batch_size = int(config["gpu1"]["rerank_batch_aggregator"]["max_batch_size"])
+        if self.batch_size < 1:
+            raise ValueError("invalid CrossEncoder batch size")
+        if model is None:
+            from sentence_transformers import CrossEncoder
+
+            path = backends.rerank_model_paths(config_name)[self.model_key]
+            model = CrossEncoder(path, max_length=max_len)
+        self.model = model
+
+    def rerank(self, query, candidates, top_k, *, ctx, strict):
+        if not strict or not candidates:
+            raise BenchmarkUnavailable("single CE requires strict nonempty candidates")
+        pairs = [(query, row.content) for row in candidates]
+        scores = []
+        for offset in range(0, len(pairs), self.batch_size):
+            batch = pairs[offset : offset + self.batch_size]
+            raw = self.model.predict(batch, batch_size=len(batch))
+            values = raw.tolist() if hasattr(raw, "tolist") else list(raw)
+            if len(values) != len(batch):
+                raise BenchmarkUnavailable("invalid single CrossEncoder scores")
+            try:
+                values = [float(value) for value in values]
+            except (TypeError, ValueError) as exc:
+                raise BenchmarkUnavailable("invalid single CrossEncoder scores") from exc
+            if not all(math.isfinite(value) for value in values):
+                raise BenchmarkUnavailable("invalid single CrossEncoder scores")
+            scores.extend(values)
+        score_field = "ce_score_a" if self.model_key.endswith("_a") else "ce_score_b"
+        for row, score in zip(candidates, scores, strict=True):
+            setattr(row, score_field, score)
+        ctx.ce_stage_provenance = self.model_key
+        return sorted(candidates, key=lambda row: getattr(row, score_field), reverse=True)[:top_k]
+
+
 class RerankExecutor(HybridRRFExecutor):
     """Use the production rerankers; a model error is a failed query, never a ranking."""
 
-    def __init__(self, *, cross: bool = False, biencoder=None, crossencoder=None, **kwargs):
+    def __init__(self, *, cross: bool = False, biencoder=None, crossencoder=None, config_name=None, **kwargs):
         super().__init__(**kwargs)
-        self.name = "hybrid_rrf_biencoder_crossencoder" if cross else "hybrid_rrf_biencoder"
-        self._cross = cross
+        self.name = config_name or ("hybrid_rrf_biencoder_crossencoder" if cross else "hybrid_rrf_biencoder")
+        self._cross = "_crossencoder" in self.name
+        self._use_bi = "_biencoder" in self.name
+        self._single = self.name[-1] if self.name.endswith(("_a", "_b")) else None
         self._biencoder = biencoder
         self._crossencoder = crossencoder
+        self._single_reranker = None
         # Dependency-injected fixture models are not real-model evidence.
         self.is_production = biencoder is None and crossencoder is None and self._bm25 is None and self._dense is None
 
@@ -370,16 +422,33 @@ class RerankExecutor(HybridRRFExecutor):
         fused = self._fused(query, top_k)
         if not fused:
             raise BenchmarkUnavailable("no candidates to verify rerank execution")
-        if self._biencoder is None:
-            from retrieval.bi_encoder import BiEncoderReranker
-
-            self._biencoder = BiEncoderReranker()
         retained = max(top_k, BIENCODER_KEEP) if self._cross else top_k
-        ranked = self._biencoder.rerank(query.question, fused, top_k=retained, strict=True)
-        if len(ranked) != min(retained, len(fused)):
-            raise BenchmarkUnavailable("incomplete BiEncoder output")
+        if self._use_bi:
+            if self._biencoder is None:
+                from retrieval.bi_encoder import BiEncoderReranker
+
+                self._biencoder = BiEncoderReranker()
+            ranked = self._biencoder.rerank(query.question, fused, top_k=retained, strict=True)
+            if len(ranked) != min(retained, len(fused)):
+                raise BenchmarkUnavailable("incomplete BiEncoder output")
+        else:
+            from retrieval.bi_encoder import _to_rerank_result
+
+            ranked = [_to_rerank_result(row, bi_score=0.0) for row in fused[:retained]]
         score_field = "bi_score"
-        if self._cross:
+        if self._single:
+            if self._single_reranker is None:
+                self._single_reranker = SingleCrossEncoderReranker(self.name, model=self._crossencoder)
+            ctx = SimpleNamespace()
+            expected_count = min(top_k, len(ranked))
+            ranked = self._single_reranker.rerank(query.question, ranked, top_k, ctx=ctx, strict=True)
+            if (
+                getattr(ctx, "ce_stage_provenance", None) != "cross_encoder_" + self._single
+                or len(ranked) != expected_count
+            ):
+                raise BenchmarkUnavailable("single CrossEncoder execution not verified")
+            score_field = "ce_score_" + self._single
+        elif self._cross:
             if self._crossencoder is None:
                 from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
 
@@ -426,8 +495,8 @@ def build_executor(config_name: str, golden_passages: Sequence[str] | None = Non
         return DenseExecutor(golden_passages=golden_passages)
     if config_name == "hybrid_rrf":
         return HybridRRFExecutor(golden_passages=golden_passages)
-    if config_name in ("hybrid_rrf_biencoder", "hybrid_rrf_biencoder_crossencoder"):
-        return RerankExecutor(cross=config_name.endswith("_crossencoder"), golden_passages=golden_passages)
+    if config_name in EXECUTABLE_CONFIGS:
+        return RerankExecutor(config_name=config_name, golden_passages=golden_passages)
     raise BenchmarkUnavailable(
         f"no real retrieval executor is implemented for configuration {config_name!r}; "
         f"executable configurations are {', '.join(EXECUTABLE_CONFIGS)}"
