@@ -29,6 +29,7 @@ Metrics:
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -65,6 +66,13 @@ def _sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def _require_bool(payload: Mapping[str, Any], key: str, where: str) -> bool:
+    value = payload.get(key)
+    if type(value) is not bool:
+        raise AnswerEvalError(f"{where}: {key!r} must be a JSON boolean")
+    return value
+
+
 def _require_str(payload: Mapping[str, Any], key: str, where: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -97,8 +105,8 @@ class AnswerEvalSample:
             category=category,
             question=_require_str(payload, "question", where),
             business_type=_require_str(payload, "business_type", where),
-            must_refuse=bool(payload.get("must_refuse")),
-            high_risk=bool(payload.get("high_risk")),
+            must_refuse=_require_bool(payload, "must_refuse", where),
+            high_risk=_require_bool(payload, "high_risk", where),
             reviewer=_require_str(payload, "reviewer", where),
             reviewed_at=_require_str(payload, "reviewed_at", where),
             expected_behavior=str(payload.get("expected_behavior") or ""),
@@ -121,6 +129,7 @@ class ObservedAnswer:
     reviewed_at: str
     notes: str = ""
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    final_disposition: str | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any], where: str = "observation") -> ObservedAnswer:
@@ -132,9 +141,22 @@ class ObservedAnswer:
             raise AnswerEvalError(
                 f"{where}: evidence_support must be one of {EVIDENCE_SUPPORT_LEVELS}, got {support!r}"
             )
-        citations = payload.get("citations") or []
-        if not isinstance(citations, list):
-            raise AnswerEvalError(f"{where}: citations must be a list")
+        reviewer = _require_str(payload, "reviewer", where)
+        citations = payload.get("citations", [])
+        if not isinstance(citations, list) or not all(isinstance(item, str) and item.strip() for item in citations):
+            raise AnswerEvalError(f"{where}: citations must be a list of nonempty strings")
+        final = payload.get("final_disposition")
+        if final is not None and final not in ("answered", "refused"):
+            raise AnswerEvalError(f"{where}: invalid final_disposition")
+        if final is not None:
+            if (final == "refused") != (support == "not_applicable"):
+                raise AnswerEvalError(f"{where}: final disposition and evidence support disagree")
+            if final == "answered" and not isinstance(payload.get("answer_text"), str):
+                raise AnswerEvalError(f"{where}: observed answer text is required")
+            if final == "answered" and not payload["answer_text"].strip():
+                raise AnswerEvalError(f"{where}: observed answer text is empty")
+            if final == "answered" and support in ("supported", "partially_supported") and not citations:
+                raise AnswerEvalError(f"{where}: supported answer requires citations")
         return cls(
             sample_id=_require_str(payload, "sample_id", where),
             answer_text=str(payload.get("answer_text") or ""),
@@ -142,15 +164,20 @@ class ObservedAnswer:
             gate_decision=decision,
             answer_gate_passed=payload.get("answer_gate_passed"),
             evidence_support=support,
-            rbac_leak=bool(payload.get("rbac_leak")),
-            reviewer=_require_str(payload, "reviewer", where),
+            rbac_leak=_require_bool(payload, "rbac_leak", where),
+            reviewer=reviewer,
             reviewed_at=_require_str(payload, "reviewed_at", where),
             notes=str(payload.get("notes") or ""),
             raw=dict(payload.get("raw") or {}),
+            final_disposition=final,
         )
 
     @property
     def answered(self) -> bool:
+        # Legacy fixture/API callers retain the gate proxy. Strict CLI input
+        # requires the actual delivered disposition, including Answer Gate refusal.
+        if self.final_disposition is not None:
+            return self.final_disposition == "answered"
         return self.gate_decision != GATE_REJECT
 
 
@@ -220,6 +247,8 @@ def score(
 ) -> AnswerEvalReport:
     """Score observations against labeled samples using human judgments only."""
     by_id = {sample.sample_id: sample for sample in samples}
+    if not by_id or len(by_id) != len(samples):
+        raise AnswerEvalError("empty or duplicate sample population")
     observed: dict[str, ObservedAnswer] = {}
     for observation in observations:
         if observation.sample_id not in by_id:
@@ -255,3 +284,50 @@ def score_files(
                 continue
             observations.append(ObservedAnswer.from_dict(json.loads(line), where=f"{observations_path}:{line_number}"))
     return score(samples, observations, dataset_sha256=_sha256(dataset_path))
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Score explicitly reviewed final observations; never publish as real-model proof."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", required=True, type=Path)
+    parser.add_argument("--observations", required=True, type=Path)
+    parser.add_argument("--out", required=True, type=Path)
+    args = parser.parse_args(argv)
+    if args.out.resolve() in {args.dataset.resolve(), args.observations.resolve()}:
+        parser.error("output must not overwrite input evidence")
+    try:
+        samples = load_samples(args.dataset)
+        raw = args.observations.read_bytes()
+        observations = []
+        for line_number, line in enumerate(raw.splitlines(), start=1):
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            where = f"observation line {line_number}"
+            if not isinstance(payload, dict):
+                raise AnswerEvalError(f"{where}: expected object")
+            if payload.get("final_disposition") not in ("answered", "refused"):
+                raise AnswerEvalError(f"{where}: explicit final_disposition required")
+            if payload.get("review_status") != "HUMAN_REVIEWED":
+                raise AnswerEvalError(f"{where}: explicit HUMAN_REVIEWED attestation required")
+            observations.append(ObservedAnswer.from_dict(payload, where=where))
+        report = score(samples, observations, dataset_sha256=_sha256(args.dataset))
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError, AnswerEvalError) as exc:
+        parser.error(f"invalid answer evaluation input ({type(exc).__name__})")
+    complete = not report.missing_observations
+    output = {
+        **report.as_dict(),
+        "kind": "REVIEWED_ANSWER_DIAGNOSTIC_ONLY",
+        "observations_sha256": hashlib.sha256(raw).hexdigest(),
+        "coverage": len(observations) / len(samples),
+        "status": "COMPLETE_DIAGNOSTIC" if complete else "INCOMPLETE_DIAGNOSTIC",
+        "publication_eligibility": "NOT_ASSESSED",
+        "note": "Review attestation is caller supplied; no independent reviewer, model or corpus verification.",
+    }
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return 0 if complete else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
