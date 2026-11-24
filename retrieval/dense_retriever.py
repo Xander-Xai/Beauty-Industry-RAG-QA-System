@@ -22,7 +22,8 @@ class DenseRetriever:
     基于 BGE-base-zh-v1.5 (768d) 向量 + Qdrant Cosine 索引
     """
 
-    def __init__(self):
+    def __init__(self, *, strict: bool = False):
+        self._strict = strict
         self._embedding_service = None
         logger.info("DenseRetriever 初始化完成")
 
@@ -54,6 +55,8 @@ class DenseRetriever:
             )
             return hits
         except Exception as e:
+            if getattr(self, "_strict", False):
+                raise RuntimeError("Dense search failed") from None
             logger.error(f"Dense 检索失败: {e}")
             return []
 

@@ -40,7 +40,8 @@ class BM25Retriever:
     个 index、期望哪个 epoch、实际有哪些 epoch，而不是安静地返回空。
     """
 
-    def __init__(self):
+    def __init__(self, *, strict: bool = False):
+        self._strict = strict
         self._es_client = None
         self._epoch_binding = None
         self.enabled = config.get("elasticsearch", {}).get("enabled", True)
@@ -203,10 +204,17 @@ class BM25Retriever:
         Returns:
             [{"doc_id": str, "content": str, "score": float, "metadata": dict}]
         """
-        if not self.enabled or self.es_client is None:
+        strict = getattr(self, "_strict", False)
+        if not self.enabled or self.es_client is None or not self.enabled:
+            if strict:
+                raise RuntimeError("BM25 backend unavailable")
             return []
         if not self._ensure_epoch_bound():
+            if strict:
+                raise RuntimeError("BM25 epoch binding failed")
             return []
+        if strict and not self.probe_epoch_binding().get("document_count"):
+            raise RuntimeError("BM25 epoch binding not independently verified")
 
         try:
             query_body = self._build_es_query(query, user_role_mask, user_dept_mask, top_k)
@@ -215,6 +223,10 @@ class BM25Retriever:
                 body=query_body,
             )
 
+            if strict:
+                shards = response.get("_shards", {})
+                if response.get("timed_out") is not False or shards.get("failed") != 0:
+                    raise RuntimeError("BM25 response incomplete")
             hits = []
             for hit in response["hits"]["hits"]:
                 source = hit.get("_source", {})
@@ -238,6 +250,8 @@ class BM25Retriever:
             return hits
 
         except Exception as e:
+            if strict:
+                raise RuntimeError("BM25 search failed or returned incomplete results") from None
             logger.error(f"BM25 ES 检索失败: {e}")
             return []
 

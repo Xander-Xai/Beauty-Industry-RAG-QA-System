@@ -631,9 +631,7 @@ def _parse_args(argv: list[str] | None = None):
             or any(metric not in _ALL_METRIC_NAMES for metric in args.metrics)
         ):
             parser.error("Strict pipeline mode requires distinct supported metrics")
-        if args.sample_ids is not None and (
-            not args.sample_ids or len(set(args.sample_ids)) != len(args.sample_ids)
-        ):
+        if args.sample_ids is not None and (not args.sample_ids or len(set(args.sample_ids)) != len(args.sample_ids)):
             parser.error("Strict pipeline mode requires distinct sample IDs")
         if args.limit is not None and (args.limit <= 0 or args.sample_ids is not None):
             parser.error("Strict pipeline mode requires one valid sample selection")
