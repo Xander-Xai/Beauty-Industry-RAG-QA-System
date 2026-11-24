@@ -21,3 +21,6 @@
 3. Check Actions for the exact SHA, and state what ran, passed, failed, was skipped or is pending. Report release/tag and deployment evidence separately. When a source is unavailable, say which claim could not be verified.
 4. State the environment and dataset behind each finding. Distinguish implemented code, test evidence, measured results and production validation. Keep public-repository evidence separate from personal or employment history.
 5. When changing a feature or interface, update its current documentation and existing generated contracts in the same PR. Keep dated audits labelled with the snapshot date.
+
+## Architecture change gate
+- Follow [architecture decision freeze](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25). Keep the modular monolith canonical; do not add Agent frameworks or duplicate service paths. Reranker simplification requires matched-corpus single-CE/dual-CE and BiEncoder ablation, safety-gate regression and measured latency; no evidence downgrade or untested deletion. Cache lookup follows Rewrite and owner/permission/epoch checks.

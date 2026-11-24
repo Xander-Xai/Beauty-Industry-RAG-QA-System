@@ -1,5 +1,8 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
+> **架构治理（2026-11-25）**：在线唯一主线为模块化 FastAPI 单体 RAG，缓存读取在 Rewrite 后；BiEncoder/双 CE 为当前实现，是否裁剪需同语料质量与延迟消融，微服务及双 GPU 不作已上线声明。见 [架构裁决与裁剪门禁](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25)。
+
+
 > **Memory 专项定位（2026-11-24）**：本项目只承担 RAG 的短期会话、权限/版本化证据与上下文缓存隔离，不引入跨任务用户画像。工程补强与历史任职时间严格区分。见 [Memory 工程定位](docs/memory-engineering-positioning-20261124.md) 与 [安全回归](docs/validation/context-memory-cache-isolation-20261124.md)。
 
 > **一句话（EN）**: Enterprise multimodal RAG QA for cosmetics regulation — hybrid
