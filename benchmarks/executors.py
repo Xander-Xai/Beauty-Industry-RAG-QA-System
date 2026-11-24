@@ -359,9 +359,10 @@ class SingleCrossEncoderReranker:
     """Benchmark-only ranking with exactly one real CE; never used by online gates."""
 
     def __init__(self, config_name: str):
+        from sentence_transformers import CrossEncoder
+
         from common.config import get_config_dict
         from retrieval.rerank_batch_aggregator import RerankBatchAggregator
-        from sentence_transformers import CrossEncoder
 
         self.model_key = backends.SINGLE_CE_CONFIGS[config_name]
         model_path = backends.rerank_model_paths(config_name)[self.model_key]
