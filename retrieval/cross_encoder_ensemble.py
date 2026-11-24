@@ -158,6 +158,8 @@ class CrossEncoderEnsemble:
         candidates: list,
         top_k: int = 10,
         ctx: object | None = None,
+        *,
+        strict: bool = False,
     ) -> list:
         """
         CrossEncoder Ensemble 重排
@@ -195,8 +197,18 @@ class CrossEncoderEnsemble:
                 pairs.append((q_trunc, d_trunc))
 
             # 通过 Rerank Batch Aggregator 批处理执行
-            scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs)
-            scores_b = self.batch_aggregator.batch_predict(self.ce_b, pairs)
+            if strict:
+                scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs, strict=True)
+                scores_b = self.batch_aggregator.batch_predict(self.ce_b, pairs, strict=True)
+                if (
+                    len(scores_a) != len(pairs)
+                    or len(scores_b) != len(pairs)
+                    or not all(math.isfinite(float(score)) for score in [*scores_a, *scores_b])
+                ):
+                    raise ValueError("invalid CrossEncoder scores")
+            else:
+                scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs)
+                scores_b = self.batch_aggregator.batch_predict(self.ce_b, pairs)
 
             # 计算 Ensemble 分数 + Platt Scaling 校准（PRD §7.3）
             raw_ensembles = []
@@ -236,4 +248,6 @@ class CrossEncoderEnsemble:
             # 降级：保留 BiEncoder 排序。这是一次真实的运行时降级，必须记录为
             # deterministic_fallback，否则磁盘上存在权重时报告会误判为已精排。
             _record("deterministic_fallback", f"{type(e).__name__}: {e}")
+            if strict:
+                raise
             return candidates[:top_k]

@@ -279,7 +279,7 @@ class RerankBatchAggregator:
 
         return future.result(timeout=timeout_s)
 
-    def batch_predict(self, model, pairs: list[tuple[str, str]]) -> list[float]:
+    def batch_predict(self, model, pairs: list[tuple[str, str]], *, strict: bool = False) -> list[float]:
         """
         请求内同步批量预测。
 
@@ -328,7 +328,7 @@ class RerankBatchAggregator:
             with self._lock:
                 self._stats.record_batch(len(pairs), 0.0, inference_ms)
             # Re-raise GPU-related errors so batch_predict_with_fallback can handle them
-            if isinstance(e, RuntimeError):
+            if strict or isinstance(e, RuntimeError):
                 raise
             logger.error(f"Batch predict 失败: {e}")
             return [0.0] * len(pairs)

@@ -97,6 +97,8 @@ class BiEncoderReranker:
         query: str,
         candidates: list,
         top_k: int = 150,
+        *,
+        strict: bool = False,
     ) -> list:
         """
         BiEncoder 宽保留重排
@@ -115,8 +117,16 @@ class BiEncoderReranker:
         # 如果有专用 BiEncoder 模型，优先使用
         if self.dedicated_model_available and self._bi_encoder_model_path:
             try:
-                return self._rerank_with_dedicated_model(query, candidates, top_k)
+                results = self._rerank_with_dedicated_model(query, candidates, top_k)
+                if strict and (
+                    len(results) != min(top_k, len(candidates))
+                    or not all(np.isfinite(row.bi_score) for row in results)
+                ):
+                    raise ValueError("invalid dedicated BiEncoder scores")
+                return results
             except Exception as e:
+                if strict:
+                    raise
                 logger.warning(f"Dedicated BiEncoder failed, falling back to EmbeddingService: {e}")
 
         try:
@@ -130,6 +140,9 @@ class BiEncoderReranker:
                 np.linalg.norm(doc_embeddings, axis=1) * np.linalg.norm(query_embedding) + 1e-8
             )
 
+            if strict and (not np.all(np.isfinite(similarities)) or len(similarities) != len(candidates)):
+                raise ValueError("invalid BiEncoder scores")
+
             # 按相似度降序排序，保留 Top-K
             top_indices = np.argsort(similarities)[::-1][:top_k]
 
@@ -139,6 +152,8 @@ class BiEncoderReranker:
             return results
 
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"BiEncoder 重排失败: {e}")
             # 降级：返回原始候选的前 top_k 条（同样保留溯源字段）
             return [_to_rerank_result(c, bi_score=0.0) for c in candidates[:top_k]]

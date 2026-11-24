@@ -27,6 +27,7 @@ from benchmarks.executors import (
     BM25Executor,
     DenseExecutor,
     HybridRRFExecutor,
+    RerankExecutor,
     _items_from_hits,
     build_executor,
 )
@@ -181,7 +182,7 @@ def test_hybrid_fuses_both_paths_with_production_rrf():
 
 def test_build_executor_rejects_unimplemented_config():
     with pytest.raises(BenchmarkUnavailable, match="no real retrieval executor"):
-        build_executor("hybrid_rrf_biencoder_crossencoder")
+        build_executor("not_implemented")
 
 
 # ── CLI wiring: a real executor is only wired when the stack answered ────────
@@ -315,3 +316,73 @@ def test_a_fixture_retriever_is_synthetic_even_if_it_looks_production_shaped():
 
     assert run.synthetic is True
     assert run.outcome.reason == "synthetic fixture retriever (not a benchmark)"
+
+
+def test_real_rerank_arms_are_wired():
+    assert isinstance(build_executor("hybrid_rrf_biencoder"), RerankExecutor)
+    assert isinstance(build_executor("hybrid_rrf_biencoder_crossencoder"), RerankExecutor)
+
+
+def test_rerank_adapter_preserves_candidate_identity_and_requires_strict_models():
+    from common.models import RerankResult
+
+    class Bi:
+        def rerank(self, query, candidates, top_k, *, strict):
+            assert strict
+            return [
+                RerankResult(doc_id=row.doc_id, content=row.content, metadata=row.metadata, bi_score=0.8)
+                for row in reversed(candidates[:top_k])
+            ]
+
+    class CE:
+        def rerank(self, query, candidates, top_k, *, ctx, strict):
+            assert strict
+            ctx.ce_stage_provenance = "cross_encoder"
+            for row in candidates:
+                row.ce_score_ensemble = 0.9
+            return candidates[:top_k]
+
+    bm25 = FakeBM25([_hit("doc-1", "c1", "a")])
+    dense = FakeDense([_hit("doc-2", "c2", "b")])
+    adapter = RerankExecutor(
+        cross=True,
+        bm25=bm25,
+        dense=dense,
+        biencoder=Bi(),
+        crossencoder=CE(),
+        availability=_available("hybrid_rrf_biencoder_crossencoder"),
+        k=60,
+    )
+    items = adapter.retrieve(_query(), 2)
+    assert adapter.is_production is False
+    assert {item.key for item in items} == {"doc-1::c1", "doc-2::c2"}
+    assert bm25.calls[0][-1] == dense.search_calls[0][-1] == 100
+
+
+def test_rerank_adapter_refuses_fallback_or_failed_model():
+    from common.models import RerankResult
+
+    class Bi:
+        def rerank(self, query, candidates, top_k, *, strict):
+            assert strict
+            return [
+                RerankResult(doc_id=row.doc_id, content=row.content, metadata=row.metadata)
+                for row in candidates[:top_k]
+            ]
+
+    class FailedCE:
+        def rerank(self, query, candidates, top_k, *, ctx, strict):
+            ctx.ce_stage_provenance = "deterministic_fallback"
+            return candidates[:top_k]
+
+    adapter = RerankExecutor(
+        cross=True,
+        bm25=FakeBM25([_hit("doc-1", "c1", "a")]),
+        dense=FakeDense([_hit("doc-2", "c2", "b")]),
+        biencoder=Bi(),
+        crossencoder=FailedCE(),
+        availability=_available("hybrid_rrf_biencoder_crossencoder"),
+        k=60,
+    )
+    with pytest.raises(BenchmarkUnavailable, match="not verified"):
+        adapter.retrieve(_query(), 2)
