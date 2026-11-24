@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any
 
 from benchmarks.source_approval import _index_content_fingerprint
@@ -75,7 +76,11 @@ def _read_es(client: Any, index: str) -> list[dict]:
     return rows
 
 
-def _read_vectors(client: Any, collection: str) -> list[dict]:
+def _read_vectors(
+    client: Any, collection: str, *, dimension: int | None = None, hashes: dict | None = None
+) -> list[dict]:
+    if hashes is not None and (type(dimension) is not int or dimension <= 0 or hashes):
+        raise ValueError("invalid_vector_audit_configuration")
     count = client.count(collection_name=collection, exact=True).count
     if type(count) is not int or not 0 < count <= MAX_DOCUMENTS:
         raise ValueError("vector_count_out_of_bounds")
@@ -83,9 +88,28 @@ def _read_vectors(client: Any, collection: str) -> list[dict]:
     offset = None
     while True:
         records, cursor = client.scroll(
-            collection_name=collection, limit=256, offset=offset, with_payload=True, with_vectors=False
+            collection_name=collection, limit=256, offset=offset, with_payload=True, with_vectors=hashes is not None
         )
-        rows.extend(record.payload or {} for record in records)
+        for record in records:
+            payload = record.payload or {}
+            if hashes is not None:
+                identity = (payload.get("doc_id"), payload.get("chunk_id"))
+                if any(not isinstance(value, str) or not value for value in identity) or identity in hashes:
+                    raise ValueError("invalid_or_duplicate_vector_identity")
+                vector = record.vector
+                if (
+                    not isinstance(vector, list)
+                    or len(vector) != dimension
+                    or any(type(value) not in (int, float) or not math.isfinite(value) for value in vector)
+                ):
+                    raise ValueError("invalid_persisted_vector")
+                norm = math.hypot(*vector)
+                if not math.isfinite(norm) or norm == 0:
+                    raise ValueError("invalid_persisted_vector_norm")
+                hashes[identity] = hashlib.sha256(
+                    json.dumps([str(record.id), vector], separators=(",", ":"), allow_nan=False).encode("utf-8")
+                ).hexdigest()
+            rows.append(payload)
         if len(rows) > count or (cursor is not None and (not records or cursor == offset)):
             raise ValueError("invalid_vector_scan")
         if cursor is None:
@@ -94,6 +118,17 @@ def _read_vectors(client: Any, collection: str) -> list[dict]:
     if len(rows) != count or client.count(collection_name=collection, exact=True).count != count:
         raise ValueError("vector_count_changed")
     return rows
+
+
+def read_vector_snapshot(client: Any, collection: str, dimension: int) -> tuple[list[dict], str]:
+    """Fingerprint actual unnamed dense vectors, bound to chunk and point IDs."""
+    hashes: dict = {}
+    rows = _read_vectors(client, collection, dimension=dimension, hashes=hashes)
+    digest = hashlib.sha256()
+    for identity in sorted(hashes):
+        digest.update(json.dumps([*identity, hashes[identity]], ensure_ascii=False).encode("utf-8"))
+        digest.update(b"\n")
+    return rows, digest.hexdigest()
 
 
 def gather_dense_parity(approval: dict) -> dict:
@@ -115,8 +150,10 @@ def gather_dense_parity(approval: dict) -> dict:
             raise ValueError("es_unavailable")
         vectors = EmbeddingService().qdrant_client
         try:
-            result = compare_payloads(_read_es(es.es_client, index), _read_vectors(vectors, collection), approval)
-            return {**result, "index": index, "collection": collection}
+            dimension = config["embedding"]["text"]["dimension"]
+            rows, vector_sha = read_vector_snapshot(vectors, collection, dimension)
+            result = compare_payloads(_read_es(es.es_client, index), rows, approval)
+            return {**result, "index": index, "collection": collection, "vector_sha256": vector_sha}
         finally:
             vectors.close()
     except Exception as exc:

@@ -1,11 +1,13 @@
 """Synthetic payload controls, not evidence of real vector retrieval."""
 
 from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
 from benchmarks.source_approval import _index_content_fingerprint
-from benchmarks.vector_corpus_parity import compare_payloads, dense_parity_blockers
+from benchmarks.vector_corpus_parity import compare_payloads, dense_parity_blockers, read_vector_snapshot
 
 
 def _rows():
@@ -56,3 +58,38 @@ def test_publication_blockers_require_both_matching_receipts():
     good = {"verified": True, "payload_sha256": "a"}
     assert dense_parity_blockers(good, {"verified": False}) == ["dense_corpus_parity_not_verified"]
     assert dense_parity_blockers(good, {**good, "payload_sha256": "b"}) == ["dense_corpus_changed_during_run"]
+
+
+def _vector_client(vectors):
+    client = MagicMock()
+    records = [
+        SimpleNamespace(id=i, payload={**_rows()[0], "chunk_id": str(i)}, vector=vector)
+        for i, vector in enumerate(vectors)
+    ]
+    client.count.return_value = SimpleNamespace(count=len(records))
+    client.scroll.return_value = (records, None)
+    return client
+
+
+def test_persisted_vector_fingerprint_detects_vector_only_change():
+    first = _vector_client([[1.0, 0.0]])
+    second = _vector_client([[0.0, 1.0]])
+    rows, before = read_vector_snapshot(first, "experiment", 2)
+    same_rows, after = read_vector_snapshot(second, "experiment", 2)
+    assert rows == same_rows
+    assert before != after
+    assert read_vector_snapshot(first, "experiment", 2)[1] == before
+    assert first.scroll.call_args.kwargs["with_vectors"] is True
+    receipt = {"verified": True, "payload_sha256": "same", "vector_sha256": before}
+    assert dense_parity_blockers(receipt, {**receipt, "vector_sha256": after}) == [
+        "dense_corpus_changed_during_run"
+    ]
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [None, [], [0.0, 0.0], [1.0], [True, 1.0], [float("nan"), 1.0], {"named": [1.0, 0.0]}],
+)
+def test_persisted_vector_audit_rejects_invalid_values(vector):
+    with pytest.raises(ValueError, match="invalid_persisted_vector"):
+        read_vector_snapshot(_vector_client([vector]), "experiment", 2)
