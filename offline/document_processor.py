@@ -292,10 +292,7 @@ class DocumentProcessor:
                 for row in rows:
                     if not isinstance(row, (list, tuple)):
                         raise ValueError("Invalid PDF table row")
-                    cells = [
-                        str(cell).strip().replace("\n", " ") if cell is not None else ""
-                        for cell in row
-                    ]
+                    cells = [str(cell).strip().replace("\n", " ") if cell is not None else "" for cell in row]
                     if any(cells):
                         lines.append(" | ".join(cells))
                 text = _normalize_text("\n".join(lines))
