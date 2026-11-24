@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.pipeline import OnlineRAGPipeline
-from core.pipeline_context import GenerationResult, RequestContext
+from core.pipeline_context import GenerationResult, RequestContext, SessionState
 from tests.test_pipeline_ordering import _make_rewrite, _setup_pipeline_mocks
 
 
@@ -87,7 +87,9 @@ def test_rewrite_happens_before_cache_lookup_and_owner_cannot_reuse_foreign_answ
     stable = _ctx("alice")
     stable.rewrite_result = rewrite
     stable_key = pipeline._scope_cache_key_to_session(
-        pipeline._build_cache_key(stable), stable.session_id, stable.user_id,
+        pipeline._build_cache_key(stable),
+        stable.session_id,
+        stable.user_id,
         access_scope=pipeline._session_access_scope(stable),
     )
     records[stable_key] = {"answer": "Same-context retry"}
@@ -124,3 +126,49 @@ def test_rewrite_failure_disables_all_cache_reuse(_audit):
     assert ctx.cache_hit_level == "DISABLED"
     pipeline._cache.get.assert_not_called()
     pipeline._cache.set.assert_not_called()
+
+
+@patch("core.pipeline.log_audit_event")
+def test_pipeline_rewrite_does_not_receive_prior_privileged_turn(_audit, monkeypatch):
+    from core.pipeline import config
+
+    monkeypatch.setattr("core.pipeline_context._get_redis_client", lambda: None)
+    pipeline = OnlineRAGPipeline()
+    _setup_pipeline_mocks(pipeline, rewrite=_make_rewrite(requires_context=True))
+    pipeline._complexity_evaluator = MagicMock()
+    pipeline._complexity_evaluator.evaluate.return_value = False
+    ctx = _ctx("scope-regression-owner", session_id="scope-regression-session")
+    epoch = config.get("knowledge_version_epoch", "default")
+    privileged = SessionState.for_identity(ctx.session_id, ctx.user_id, 3, ctx.user_dept_mask, epoch)
+    privileged.add_round("restricted prior product", "restricted prior answer")
+    privileged.lock_evidence(["private-document"])
+
+    assert pipeline.process(ctx)
+    assert pipeline._query_rewriter.rewrite.call_args.kwargs["recent_dialogs"] == []
+
+
+@pytest.mark.parametrize("change", ["role", "department", "epoch"])
+def test_context_cache_key_changes_with_authorization_or_epoch(monkeypatch, change):
+    from core.pipeline import config
+
+    monkeypatch.setattr("core.pipeline_context._get_redis_client", lambda: None)
+    pipeline = OnlineRAGPipeline()
+    ctx = _ctx("scope-cache-owner")
+    ctx.rewrite_result = _make_rewrite(requires_context=True)
+
+    def key():
+        return pipeline._scope_cache_key_to_session(
+            pipeline._build_cache_key(ctx),
+            ctx.session_id,
+            ctx.user_id,
+            access_scope=pipeline._session_access_scope(ctx),
+        )
+
+    original = key()
+    if change == "role":
+        ctx.user_role_mask = 0
+    elif change == "department":
+        ctx.user_dept_mask = 0
+    else:
+        monkeypatch.setitem(config, "knowledge_version_epoch", "new-test-epoch")
+    assert key() != original
