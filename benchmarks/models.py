@@ -161,6 +161,8 @@ class QueryBenchmarkResult:
     reciprocal_rank: float | None
     ndcg_at_10: float | None
     latency_ms: dict[str, float | None]
+    # None is legacy/unknown, not an implicit binary relevance label.
+    relevant_grades: dict[str, int] | None = None
 
     def to_json_dict(self, data_provenance: dict[str, Any]) -> dict[str, Any]:
         """Render one scored row.
@@ -178,6 +180,7 @@ class QueryBenchmarkResult:
             "difficulty": self.difficulty,
             "config": self.config,
             "relevant_items": list(self.relevant_keys),
+            **({"relevant_grades": dict(self.relevant_grades)} if self.relevant_grades is not None else {}),
             "retrieved_items": list(self.retrieved_keys),
             "first_relevant_rank": self.first_relevant_rank,
             "hit_at_1": self.hit_at.get(1),

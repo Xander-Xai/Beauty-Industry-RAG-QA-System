@@ -60,7 +60,7 @@
 - Real Corpus V1 的正式 BM25 结果来自真实 Elasticsearch 和 27 条具名评审金标。逐样本证据与复算方式见 [运行报告](docs/validation/real-v1-approved-bm25-run.md)。Dense/Hybrid、完整问答质量与生产性能各有独立的验证门槛。
 - Answer Gate 缺证据时的加固与检索失败归因分别跟踪于 [PR #121](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/121) 和 [PR #122](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/122)。以合并记录和对应提交的测试判断交付状态。
 
-- #130 已交付按主体/会话/权限/知识版本隔离的历史上下文；旧 #129 已关闭。#131–#133 已加固消融样本完整性、冻结证据复算及正式发布门禁。`--require-publishable` 拒绝未通过发布契约的运行；真实 Dense/Hybrid/Rerank 结果仍需执行。分级 NDCG 证据改进见 [PR #134](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/134)，以实时合并状态为准。
+- #130 已交付按主体/会话/权限/知识版本隔离的历史上下文；旧 #129 已关闭。#131–#133 已加固消融样本完整性、冻结证据复算及正式发布门禁。`--require-publishable` 拒绝未通过发布契约的运行；真实 Dense/Hybrid/Rerank 结果仍需执行。分级 NDCG 证据改进已随 [PR #134](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/134) 合入；答案人工评审 CLI 见 [PR #136](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/136)，以实时合并状态为准。
 
 ## 30 秒读懂
 
