@@ -61,7 +61,7 @@ from benchmarks.provenance import (
     write_gitignore_entry,
 )
 from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
-from benchmarks.source_approval import gather_source_approval_evidence
+from benchmarks.source_approval import gather_source_approval_evidence, source_snapshot_blockers
 from benchmarks.vector_corpus_parity import dense_parity_blockers, gather_dense_parity
 
 DEFAULT_OUTPUT_DIR = "artifacts/benchmarks"
@@ -521,8 +521,17 @@ def main(argv: list[str] | None = None) -> int:
         source_approval=source_approval,
     )
     blockers.extend(suite["blockers"])
+    source_after = source_approval
+    if summary.get("any_results") and source_approval_verified:
+        source_after = gather_source_approval_evidence(gold_rows=[query.raw for query in queries])
+        snapshot_blockers = source_snapshot_blockers(source_approval, source_after)
+        metadata["source_approval_snapshot"] = {"before": source_approval, "after": source_after}
+        blockers.extend(snapshot_blockers)
+        source_approval_verified = not snapshot_blockers
+        metadata["source_approval_verified"] = source_approval_verified
+        metadata["provenance_verified"] = metadata["provenance_verified"] and source_approval_verified
     if needs_dense_parity:
-        parity_after = gather_dense_parity(source_approval)
+        parity_after = gather_dense_parity(source_after)
         metadata["dense_corpus_parity"] = {"before": parity_before, "after": parity_after}
         blockers.extend(dense_parity_blockers(parity_before, parity_after))
     if rerank_paths:
