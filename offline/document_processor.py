@@ -291,9 +291,15 @@ class DocumentProcessor:
             tables = detected.tables
             if tables is None:
                 raise ValueError("PDF table detection returned no table collection")
+            row_sets = [table.extract() for table in tables]
+            if not row_sets:
+                from offline.pdf_ruled_grid import extract_ruled_grid
+
+                fallback_rows = extract_ruled_grid(page)
+                if fallback_rows is not None:
+                    row_sets.append(fallback_rows)
             output: list[DocumentBlock] = []
-            for table_index, table in enumerate(tables):
-                rows = table.extract()
+            for table_index, rows in enumerate(row_sets):
                 if not isinstance(rows, (list, tuple)):
                     raise ValueError("Invalid PDF table rows")
                 lines: list[str] = []
