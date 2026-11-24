@@ -159,7 +159,7 @@ class TestLLMClientGenerate:
 
         ctx = self._make_ctx()
         # 模拟会话历史
-        from common.config import config
+        from models.llm_client import config
 
         session = SessionState.for_identity(
             "test_session_hist", "test_user", 0, 0, config.get("knowledge_version_epoch", "default")
@@ -818,8 +818,8 @@ class TestHistoryInstructionPrecedence:
         return ctx
 
     def _seed_history(self, session_id):
-        from common.config import config
         from core.pipeline_context import SessionState
+        from models.llm_client import config
 
         state = SessionState.for_identity(session_id, "u", 0, 0, config.get("knowledge_version_epoch", "default"))
         state.dialog_rounds.clear()
@@ -956,8 +956,8 @@ class TestHistoryMarkerEncoding:
         return ctx
 
     def _seed(self, session_id, user_text, assistant_text):
-        from common.config import config
         from core.pipeline_context import SessionState
+        from models.llm_client import config
 
         state = SessionState.for_identity(session_id, "u", 0, 0, config.get("knowledge_version_epoch", "default"))
         state.dialog_rounds.clear()
