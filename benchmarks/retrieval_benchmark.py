@@ -62,6 +62,7 @@ from benchmarks.provenance import (
 )
 from benchmarks.runner import DEFAULT_TOP_K, MIN_TOP_K, run_configuration, summarize_run, write_per_query_jsonl
 from benchmarks.source_approval import gather_source_approval_evidence
+from benchmarks.vector_corpus_parity import dense_parity_blockers, gather_dense_parity
 
 DEFAULT_OUTPUT_DIR = "artifacts/benchmarks"
 
@@ -390,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
     # for every configuration, because the question is about the corpus, not
     # about which retriever happened to execute.
     source_approval = gather_source_approval_evidence(gold_rows=[query.raw for query in queries])
+    needs_dense_parity = any(name != "bm25" for name in configs)
+    parity_before = gather_dense_parity(source_approval) if needs_dense_parity else {}
     config_payload = {
         "configs": configs,
         "top_k": args.top_k,
@@ -499,6 +502,10 @@ def main(argv: list[str] | None = None) -> int:
         source_approval=source_approval,
     )
     blockers.extend(suite["blockers"])
+    if needs_dense_parity:
+        parity_after = gather_dense_parity(source_approval)
+        metadata["dense_corpus_parity"] = {"before": parity_before, "after": parity_after}
+        blockers.extend(dense_parity_blockers(parity_before, parity_after))
     if git_dirty is not False or not git_sha:
         blockers.append("git_provenance_not_clean")
     if integrity_errors:
