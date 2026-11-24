@@ -15,11 +15,22 @@ ARMS = (
 )
 
 
+ARCHITECTURE_ARMS = (
+    "hybrid_rrf_crossencoder_a",
+    "hybrid_rrf_crossencoder_b",
+    "hybrid_rrf_crossencoder_dual",
+    "hybrid_rrf_biencoder_crossencoder_a",
+    "hybrid_rrf_biencoder_crossencoder_b",
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, help="Reviewed, attributable golden set JSONL")
     parser.add_argument("--output-dir", required=True, help="New experiment artifact root")
+    parser.add_argument("--architecture-ablation", action="store_true", help="Include five isolated ranking challengers")
     args = parser.parse_args(argv)
+    arms = ARMS + ARCHITECTURE_ARMS if args.architecture_ablation else ARMS
     return retrieval_benchmark.main(
         [
             "--dataset",
@@ -27,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             "--output-dir",
             args.output_dir,
             "--configs",
-            ",".join(ARMS),
+            ",".join(arms),
             "--executor",
             "real",
             "--top-k",

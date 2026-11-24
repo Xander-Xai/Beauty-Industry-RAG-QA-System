@@ -386,3 +386,37 @@ def test_rerank_adapter_refuses_fallback_or_failed_model():
     )
     with pytest.raises(BenchmarkUnavailable, match="not verified"):
         adapter.retrieve(_query(), 2)
+
+
+def test_architecture_single_ce_does_not_run_biencoder():
+    class Single:
+        def predict(self, pairs, **kwargs):
+            return [float(index) for index, _ in enumerate(pairs)]
+
+    adapter = RerankExecutor(
+        config_name="hybrid_rrf_crossencoder_b",
+        bm25=FakeBM25([_hit("doc-1", "c1", "a")]),
+        dense=FakeDense([_hit("doc-2", "c2", "b")]),
+        crossencoder=Single(),
+        availability=_available("hybrid_rrf_crossencoder_b"),
+        k=60,
+    )
+    items = adapter.retrieve(_query(), 2)
+    assert adapter._biencoder is None
+    assert not adapter.is_production
+    assert {item.key for item in items} == {"doc-1::c1", "doc-2::c2"}
+    assert items[0].score > items[1].score
+
+
+def test_architecture_alternatives_are_registered():
+    from benchmarks.strict_retrieval_suite import ARCHITECTURE_ARMS
+
+    for arm in ARCHITECTURE_ARMS:
+        adapter = build_executor(arm)
+        assert adapter.name == arm
+        assert arm in backends.REQUIRED_BACKENDS
+        paths = backends.rerank_model_paths(arm)
+        assert ("biencoder" in paths) == ("_biencoder" in arm)
+        assert len([key for key in paths if key.startswith("cross_encoder_")]) == (
+            2 if arm.endswith("_dual") else 1
+        )

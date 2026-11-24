@@ -447,12 +447,17 @@ def rerank_model_paths(config_name: str) -> dict[str, str]:
 
     config = get_config_dict()
     models = config.get("gpu1", {}).get("models", {})
-    if config_name not in {"hybrid_rrf_biencoder", "hybrid_rrf_biencoder_crossencoder"}:
+    if config_name not in CONFIG_DESCRIPTIONS:
         return {}
-    shared = config.get("embedding", {}).get("text", {}).get("model_path", "")
-    paths = {"biencoder": str(models.get("bi_encoder", {}).get("model_path") or shared)}
-    if config_name.endswith("_crossencoder"):
-        for key in ("cross_encoder_a", "cross_encoder_b"):
+    paths = {}
+    if "_biencoder" in config_name:
+        shared = config.get("embedding", {}).get("text", {}).get("model_path", "")
+        paths["biencoder"] = str(models.get("bi_encoder", {}).get("model_path") or shared)
+    if "_crossencoder" in config_name:
+        keys = ("cross_encoder_a", "cross_encoder_b")
+        if config_name.endswith(("_a", "_b")):
+            keys = ("cross_encoder_" + config_name[-1],)
+        for key in keys:
             paths[key] = str(models.get(key, {}).get("model_path") or "")
     return paths
 
@@ -471,6 +476,14 @@ def probe_biencoder() -> BackendAvailability:
 def probe_crossencoder() -> BackendAvailability:
     paths = rerank_model_paths("hybrid_rrf_biencoder_crossencoder")
     return _probe_rerank_assets("crossencoder", {key: value for key, value in paths.items() if key != "biencoder"})
+
+
+def probe_single_crossencoder_a() -> BackendAvailability:
+    return _probe_rerank_assets("crossencoder_a", rerank_model_paths("hybrid_rrf_crossencoder_a"))
+
+
+def probe_single_crossencoder_b() -> BackendAvailability:
+    return _probe_rerank_assets("crossencoder_b", rerank_model_paths("hybrid_rrf_crossencoder_b"))
 
 
 def probe_corpus(
@@ -576,6 +589,18 @@ PROBES = {
     "biencoder": probe_biencoder,
     "crossencoder": probe_crossencoder,
 }
+
+
+# Architecture-only alternatives; the default strict five-arm suite is unchanged.
+for _name in ("hybrid_rrf_crossencoder_a", "hybrid_rrf_crossencoder_b", "hybrid_rrf_crossencoder_dual", "hybrid_rrf_biencoder_crossencoder_a", "hybrid_rrf_biencoder_crossencoder_b"):
+    _has_bi = "_biencoder" in _name
+    _ce = "crossencoder" if _name.endswith("_dual") else "crossencoder_" + _name[-1]
+    STAGE_BY_CONFIG[_name] = ("bm25_ms", "dense_ms", "rrf_ms") + (
+        ("biencoder_ms",) if _has_bi else ()
+    ) + ("crossencoder_ms",)
+    REQUIRED_BACKENDS[_name] = ("bm25", "dense") + (("biencoder",) if _has_bi else ()) + (_ce, "corpus")
+    CONFIG_DESCRIPTIONS[_name] = "Architecture ablation: " + _name
+PROBES.update(crossencoder_a=probe_single_crossencoder_a, crossencoder_b=probe_single_crossencoder_b)
 
 
 @dataclass(frozen=True)
