@@ -7,7 +7,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from benchmarks.source_approval import _index_content_fingerprint
-from benchmarks.vector_corpus_parity import compare_payloads, dense_parity_blockers, read_vector_snapshot
+from benchmarks.vector_corpus_parity import (
+    compare_payloads,
+    dense_parity_blockers,
+    read_vector_snapshot,
+    validate_embedding_version,
+)
 
 
 def _rows():
@@ -138,3 +143,14 @@ def test_nonunit_persisted_values_are_not_silently_normalized():
     assert read_vector_snapshot(unit, "experiment", 2)[1]
     with pytest.raises(ValueError, match="invalid_persisted_vector_norm"):
         read_vector_snapshot(_vector_client([[3.0, 4.0]]), "experiment", 2)
+
+
+@pytest.mark.parametrize("versions", [[None], ["wrong"], ["expected", "wrong"], []])
+def test_embedding_version_binding_rejects_unbound_or_mixed_points(versions):
+    rows = [{"embedding_version": version} for version in versions]
+    with pytest.raises(ValueError, match="persisted_embedding_asset_version_mismatch"):
+        validate_embedding_version(rows, "expected")
+
+
+def test_embedding_version_binding_accepts_only_same_version():
+    validate_embedding_version([{"embedding_version": "expected"}] * 2, "expected")
