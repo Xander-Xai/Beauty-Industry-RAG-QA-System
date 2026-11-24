@@ -24,7 +24,10 @@ for an operator-reviewed experiment. No dense/hybrid metrics are claimed.
 The actual dense experiment builder and pre/post benchmark audit now request
 unnamed stored vectors from Qdrant, validate the configured dimension and
 finite nonzero cosine norm, and emit a stable SHA256 over point IDs, chunk
-identities and returned vector values. Any change in that fingerprint between
+identities and returned vector values rounded to six decimal places (versioned
+`vector-snapshot/decimal6/v1` digest). Local cosine storage may re-normalize
+float32 values on reopen. Sub-precision changes are not guaranteed detectable;
+rounding boundaries may still conservatively block a run. Any change in that fingerprint between
 pre/post checks blocks publication. This is read-only and bounded by the
 existing 10,000-point limit. It does not prove the original embedding model
 or prevent transient changes between observations; independently reviewed
