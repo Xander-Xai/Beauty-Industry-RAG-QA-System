@@ -2,8 +2,8 @@
 
 Read-only, bounded, fail closed. The existing ES source approval is necessary,
 not sufficient: the actual vector collection must carry the same chunk
-identities, contents, access fields and provenance. This is a payload audit,
-not proof of vector/model identity or a transactional snapshot.
+identities, contents, access fields and provenance. This audits payloads and stored vector fingerprints,
+not proof of embedding-model identity or a transactional snapshot.
 """
 
 from __future__ import annotations
@@ -163,6 +163,8 @@ def gather_dense_parity(approval: dict) -> dict:
 def dense_parity_blockers(before: dict, after: dict) -> list[str]:
     if before.get("verified") is not True or after.get("verified") is not True:
         return ["dense_corpus_parity_not_verified"]
+    if not before.get("vector_sha256") or not after.get("vector_sha256"):
+        return ["dense_vector_fingerprint_not_verified"]
     if before != after or not before.get("payload_sha256"):
         return ["dense_corpus_changed_during_run"]
     return []

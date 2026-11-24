@@ -29,3 +29,11 @@ pre/post checks blocks publication. This is read-only and bounded by the
 existing 10,000-point limit. It does not prove the original embedding model
 or prevent transient changes between observations; independently reviewed
 model provenance and a quiescent experiment are still required.
+
+
+The publication gate rejects legacy payload-only receipts even if both
+match. A disk-backed Qdrant local-engine roundtrip regression creates a
+synthetic cosine collection, closes/reopens it, and updates only the vector.
+Payload equality remains unchanged but the publication gate must reject
+the changed vector fingerprint. This is actual local storage API exercise,
+not a live Qdrant server or a BGE retrieval-quality experiment.

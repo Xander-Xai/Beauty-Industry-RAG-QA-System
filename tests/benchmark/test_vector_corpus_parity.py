@@ -33,7 +33,7 @@ def test_exact_parity_and_stable_receipt():
     rows = _rows()
     result = compare_payloads(rows, deepcopy(rows), _approval(rows))
     assert result["verified"]
-    assert dense_parity_blockers(result, result) == []
+    assert dense_parity_blockers(result, result) == ["dense_vector_fingerprint_not_verified"]
 
 
 @pytest.mark.parametrize("field", ["content", "role_mask", "status", "provenance", "doc_version_epoch"])
@@ -55,7 +55,7 @@ def test_missing_extra_duplicate_and_unapproved_are_rejected():
 
 
 def test_publication_blockers_require_both_matching_receipts():
-    good = {"verified": True, "payload_sha256": "a"}
+    good = {"verified": True, "payload_sha256": "a", "vector_sha256": "b"}
     assert dense_parity_blockers(good, {"verified": False}) == ["dense_corpus_parity_not_verified"]
     assert dense_parity_blockers(good, {**good, "payload_sha256": "b"}) == ["dense_corpus_changed_during_run"]
 
@@ -91,3 +91,35 @@ def test_persisted_vector_fingerprint_detects_vector_only_change():
 def test_persisted_vector_audit_rejects_invalid_values(vector):
     with pytest.raises(ValueError, match="invalid_persisted_vector"):
         read_vector_snapshot(_vector_client([vector]), "experiment", 2)
+
+
+def test_disk_backed_qdrant_roundtrip_detects_vector_only_update(tmp_path):
+    """Real local Qdrant engine, no BGE or remote database required."""
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, PointStruct, PointVectors, VectorParams
+
+    location = str(tmp_path / "qdrant")
+    collection = "rag_text_exp_roundtrip"
+    payload = _rows()[0]
+    client = QdrantClient(path=location)
+    try:
+        client.create_collection(collection, vectors_config=VectorParams(size=2, distance=Distance.COSINE))
+        client.upsert(collection, [PointStruct(id=1, vector=[3.0, 4.0], payload=payload)], wait=True)
+        rows, original = read_vector_snapshot(client, collection, 2)
+        assert rows == [payload]
+    finally:
+        client.close()
+
+    client = QdrantClient(path=location)
+    try:
+        assert read_vector_snapshot(client, collection, 2) == (rows, original)
+        client.update_vectors(collection, [PointVectors(id=1, vector=[4.0, 3.0])], wait=True)
+        changed_rows, changed = read_vector_snapshot(client, collection, 2)
+        assert changed_rows == rows
+        assert changed != original
+        parity = compare_payloads(rows, changed_rows, _approval(rows))
+        assert dense_parity_blockers(
+            {**parity, "vector_sha256": original}, {**parity, "vector_sha256": changed}
+        ) == ["dense_corpus_changed_during_run"]
+    finally:
+        client.close()
