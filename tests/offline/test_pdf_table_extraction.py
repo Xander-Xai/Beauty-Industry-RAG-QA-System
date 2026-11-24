@@ -159,3 +159,48 @@ def test_legacy_pymupdf_table_detector_signature_remains_supported():
     result = DocumentProcessor(pdf_extract_tables=True)._extract_pdf_tables(page, 0)
     assert len(result) == 1
     assert result[0].metadata["page_number"] == 1
+
+
+@pytest.mark.parametrize(
+    ("missing_middle_line", "crossing_word", "expected"),
+    [
+        (False, False, "Name | Limit\nNiacinamide | 5 percent"),
+        (True, False, None),
+        (False, True, None),
+    ],
+)
+def test_strict_ruled_grid_fallback_when_native_detector_is_empty(
+    tmp_path, monkeypatch, missing_middle_line, crossing_word, expected
+):
+    import pymupdf
+
+    path = tmp_path / "fallback-grid.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page(width=500, height=250)
+        for x in (40, 230, 420):
+            if missing_middle_line and x == 230:
+                continue
+            page.draw_line((x, 40), (x, 180), color=(0, 0, 0), width=1)
+        for y in (40, 110, 180):
+            page.draw_line((40, y), (420, y), color=(0, 0, 0), width=1)
+        for cell, x, y in (
+            ("Name", 55, 80),
+            ("Limit", 245, 80),
+            ("Niacinamide", 55, 150),
+            ("5 percent", 245, 150),
+        ):
+            page.insert_text((x, y), cell, fontsize=12)
+        if crossing_word:
+            page.insert_text((220, 95), "crossing", fontsize=12)
+        document.save(path)
+
+    monkeypatch.setattr(pymupdf.Page, "find_tables", lambda _page: SimpleNamespace(tables=[]))
+    processed = DocumentProcessor(pdf_extract_tables=True).process(path)
+    tables = [block for block in processed.blocks if block.block_type == "table"]
+    if expected is None:
+        assert tables == []
+    else:
+        assert len(tables) == 1
+        assert tables[0].text == expected
+        assert tables[0].block_identity == "page:0:table:0"
+        assert tables[0].metadata["page_number"] == 1
