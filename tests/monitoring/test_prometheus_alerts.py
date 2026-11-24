@@ -305,7 +305,7 @@ def test_successful_redis_read_clears_the_metric(monkeypatch):
 
     class HealthyRedis:
         def get(self, key):
-            return json.dumps(pipeline_context.SessionState("probe-session")._to_dict())
+            return json.dumps(pipeline_context.SessionState("healthy-probe")._to_dict())
 
         def expire(self, key, ttl):
             return True

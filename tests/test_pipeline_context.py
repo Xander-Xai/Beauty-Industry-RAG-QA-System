@@ -517,3 +517,71 @@ class TestSessionRedisPersistence:
             {"schema_version": 0, "session_id": "old", "created_at": time.time()}
         )
         assert SessionState._try_get_redis("old") is None
+
+
+@pytest.mark.parametrize("changed", ["role", "department", "epoch"])
+def test_authorized_session_scope_does_not_replay_old_evidence(fake_redis, changed):
+    old = SessionState.for_identity("scope-test", "owner", 3, 7, "epoch-1")
+    old.add_round("old question", "restricted old answer")
+    old.lock_evidence(["restricted-doc"])
+    old.store_async_clip_result(
+        [RecallResult(doc_id="restricted-image", content="old", score=0.8, source="clip_visual")]
+    )
+    assert SessionState.for_identity("scope-test", "owner", 3, 7, "epoch-1").locked_doc_ids == ["restricted-doc"]
+
+    role = 1 if changed == "role" else 3
+    dept = 1 if changed == "department" else 7
+    epoch = "epoch-2" if changed == "epoch" else "epoch-1"
+    new = SessionState.for_identity("scope-test", "owner", role, dept, epoch)
+    assert new.dialog_rounds == []
+    assert new.locked_doc_ids == []
+    assert new.async_clip_results == []
+    assert new.last_rewrite_result is None
+    assert new._redis_key() != old._redis_key()
+
+
+def test_scoped_session_identity_is_unambiguous_and_payload_checked(fake_redis):
+    first = SessionState.for_identity("c", "a:b", 1, 1, "epoch")
+    first.add_round("q", "private")
+    second = SessionState.for_identity("b:c", "a", 1, 1, "epoch")
+    assert second._redis_key() != first._redis_key()
+    assert second.dialog_rounds == []
+    fake_redis.store[second._redis_key()] = fake_redis.store[first._redis_key()]
+    assert SessionState._try_get_redis(second.session_id, second.owner_id, second.access_scope) is None
+
+
+def test_anonymous_scoped_session_is_not_persisted(fake_redis):
+    first = SessionState.for_identity("shared", "", 0, 0, "epoch")
+    first.add_round("private question", "private answer")
+    assert first._redis_key() not in fake_redis.store
+    assert SessionState.for_identity("shared", "", 0, 0, "epoch").dialog_rounds == []
+
+
+def test_scope_changes_are_isolated_in_memory_without_redis(monkeypatch):
+    monkeypatch.setattr("core.pipeline_context._get_redis_client", lambda: None)
+    first = SessionState.for_identity("fallback-scope-test", "owner", 3, 7, "epoch")
+    first.add_round("q", "restricted")
+    assert SessionState.for_identity("fallback-scope-test", "owner", 3, 7, "epoch") is first
+    assert SessionState.for_identity("fallback-scope-test", "owner", 1, 7, "epoch").dialog_rounds == []
+
+
+@pytest.mark.parametrize("session_id,owner_id", [(None, "owner"), ("", "owner"), ("shared", "")])
+def test_missing_session_or_principal_never_persists_history(fake_redis, session_id, owner_id):
+    before = dict(fake_redis.store)
+    first = SessionState.for_identity(session_id, owner_id, 1, 2, "epoch")
+    first.add_round("private question", "private answer")
+    first.lock_evidence(["private-doc"])
+    assert fake_redis.store == before
+    next_turn = SessionState.for_identity(session_id, owner_id, 1, 2, "epoch")
+    assert next_turn.dialog_rounds == []
+    assert next_turn.locked_doc_ids == []
+
+
+@pytest.mark.parametrize("field", ["owner_id", "session_id", "access_scope"])
+def test_missing_redis_provenance_is_rejected(fake_redis, field):
+    first = SessionState.for_identity("scoped", "owner", 1, 2, "epoch")
+    first.add_round("private question", "private answer")
+    payload = json.loads(fake_redis.store[first._redis_key()])
+    del payload[field]
+    fake_redis.store[first._redis_key()] = json.dumps(payload)
+    assert SessionState._try_get_redis(first.session_id, first.owner_id, first.access_scope) is None

@@ -252,7 +252,15 @@ class TestLegacyAndStubSurface:
         block = source.split("def continuation_handler")[1].split("# ─── GET /api/dialog_history")[0]
 
         assert "Depends(require_identity)" in block
-        assert "SessionState.get_or_create" in block
+        assert "SessionState.for_identity" in block
+        for scope in (
+            "identity.user_id",
+            "identity.user_role_mask",
+            "identity.user_dept_mask",
+            "knowledge_version_epoch",
+        ):
+            assert scope in block
+        assert block.index("SessionState.for_identity") < block.index("raise HTTPException")
 
     def test_the_rewriter_applies_the_configured_token_budget(self):
         """``max_tokens=192`` was hardcoded while ``config.json`` also said 192, so the
