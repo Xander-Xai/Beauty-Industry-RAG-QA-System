@@ -589,6 +589,7 @@ def test_attributability_requires_a_non_empty_dataset():
     with pytest.raises(DatasetContractError, match="empty"):
         require_attributable(report, min_valid_fraction=0.0)
 
+
 @pytest.mark.parametrize(
     ("mode", "complete", "blocker"),
     [
