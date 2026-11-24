@@ -359,6 +359,50 @@ class HybridRRFExecutor:
         return items
 
 
+class SingleCrossEncoderReranker:
+    """Strict offline challenger: one model, bounded synchronous batches, no background worker."""
+
+    def __init__(self, config_name: str, *, model=None):
+        from common.config import get_config_dict
+
+        self.model_key = "cross_encoder_" + config_name[-1]
+        config = get_config_dict()
+        max_len = int(config["retrieval"]["cross_encoder"]["max_seq_length"])
+        self.batch_size = int(config["gpu1"]["rerank_batch_aggregator"]["max_batch_size"])
+        if self.batch_size < 1:
+            raise ValueError("invalid CrossEncoder batch size")
+        if model is None:
+            from sentence_transformers import CrossEncoder
+
+            path = backends.rerank_model_paths(config_name)[self.model_key]
+            model = CrossEncoder(path, max_length=max_len)
+        self.model = model
+
+    def rerank(self, query, candidates, top_k, *, ctx, strict):
+        if not strict or not candidates:
+            raise BenchmarkUnavailable("single CE requires strict nonempty candidates")
+        pairs = [(query, row.content) for row in candidates]
+        scores = []
+        for offset in range(0, len(pairs), self.batch_size):
+            batch = pairs[offset : offset + self.batch_size]
+            raw = self.model.predict(batch, batch_size=len(batch))
+            values = raw.tolist() if hasattr(raw, "tolist") else list(raw)
+            if len(values) != len(batch):
+                raise BenchmarkUnavailable("invalid single CrossEncoder scores")
+            try:
+                values = [float(value) for value in values]
+            except (TypeError, ValueError) as exc:
+                raise BenchmarkUnavailable("invalid single CrossEncoder scores") from exc
+            if not all(math.isfinite(value) for value in values):
+                raise BenchmarkUnavailable("invalid single CrossEncoder scores")
+            scores.extend(values)
+        score_field = "ce_score_a" if self.model_key.endswith("_a") else "ce_score_b"
+        for row, score in zip(candidates, scores, strict=True):
+            setattr(row, score_field, score)
+        ctx.ce_stage_provenance = self.model_key
+        return sorted(candidates, key=lambda row: getattr(row, score_field), reverse=True)[:top_k]
+
+
 class RerankExecutor(HybridRRFExecutor):
     """Use the production rerankers; a model error is a failed query, never a ranking."""
 
@@ -372,6 +416,7 @@ class RerankExecutor(HybridRRFExecutor):
         self._single = self.name[-1] if self.name.endswith(("_a", "_b")) else None
         self._biencoder = biencoder
         self._crossencoder = crossencoder
+        self._single_reranker = None
         # Dependency-injected fixture models are not real-model evidence.
         self.is_production = biencoder is None and crossencoder is None and self._bm25 is None and self._dense is None
 
@@ -394,28 +439,17 @@ class RerankExecutor(HybridRRFExecutor):
             ranked = [_to_rerank_result(row, bi_score=0.0) for row in fused[:retained]]
         score_field = "bi_score"
         if self._single:
-            # Isolated single-model challenger, not the online calibrated gate.
-            # Its tokenizer owns pair truncation; raw logits only rank candidates.
-            if self._crossencoder is None:
-                from sentence_transformers import CrossEncoder
-
-                from common.config import get_config_dict
-
-                paths = backends.rerank_model_paths(self.name)
-                max_len = get_config_dict()["retrieval"]["cross_encoder"]["max_seq_length"]
-                self._crossencoder = CrossEncoder(paths["cross_encoder_" + self._single], max_length=max_len)
-            from retrieval.rerank_batch_aggregator import RerankBatchAggregator
-
-            scores = RerankBatchAggregator().batch_predict(
-                self._crossencoder, [(query.question, row.content) for row in ranked], strict=True
-            )
-            if len(scores) != len(ranked) or not all(math.isfinite(float(score)) for score in scores):
-                raise BenchmarkUnavailable("invalid single CrossEncoder scores")
-            for row, score in zip(ranked, scores, strict=True):
-                row.ce_score_ensemble = float(score)
-            ranked.sort(key=lambda row: row.ce_score_ensemble, reverse=True)
-            ranked = ranked[:top_k]
-            score_field = "ce_score_ensemble"
+            if self._single_reranker is None:
+                self._single_reranker = SingleCrossEncoderReranker(self.name, model=self._crossencoder)
+            ctx = SimpleNamespace()
+            expected_count = min(top_k, len(ranked))
+            ranked = self._single_reranker.rerank(query.question, ranked, top_k, ctx=ctx, strict=True)
+            if (
+                getattr(ctx, "ce_stage_provenance", None) != "cross_encoder_" + self._single
+                or len(ranked) != expected_count
+            ):
+                raise BenchmarkUnavailable("single CrossEncoder execution not verified")
+            score_field = "ce_score_" + self._single
         elif self._cross:
             if self._crossencoder is None:
                 from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble

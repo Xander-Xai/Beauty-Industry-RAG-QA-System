@@ -294,6 +294,6 @@ python3 -m tests.evaluation.validate_golden_set \
 
 ### 排序架构消融（离线专用）
 
-在已有严格五臂基础上，`python -m benchmarks.strict_retrieval_suite --dataset <reviewed.jsonl> --output-dir <new-dir> --architecture-ablation` 增加五个候选：Hybrid+单 CE-A / 单 CE-B / 双 CE（无 BiEncoder），以及 Hybrid+BiEncoder+单 CE-A / 单 CE-B。每条混合路径召回深度一致，CE 候选上限 150。单 CE 使用自身 tokenizer 的 pair 截断与原始分排序；与现有双 CE 的 CE-A 预截断和集成校准不同，因此比较的是完整候选链路，不是严格只改变模型个数的因果实验。不得把原始分直接接入线上 Evidence Gate。
+在已有严格五臂基础上，`python -m benchmarks.strict_retrieval_suite --dataset <reviewed.jsonl> --output-dir <new-dir> --architecture-ablation` 增加五个候选：Hybrid+单 CE-A / 单 CE-B / 双 CE（无 BiEncoder），以及 Hybrid+BiEncoder+单 CE-A / 单 CE-B。每条混合路径召回深度一致，CE 候选上限 150。单 CE 使用自身 tokenizer 的 pair 截断、配置内的同步分批推理与独立原始排序分（ce_score_a/b），复用同一模型实例，不创建每查询后台聚合线程；与现有双 CE 的 CE-A 预截断和集成校准不同，因此比较的是完整候选链路，不是严格只改变模型个数的因果实验。不得把原始分直接接入线上 Evidence Gate。
 
 默认线上排序、阈值、旧五臂 CLI 不变。严格模式要求真实模型资产、数据来源批准、完整样本和可发布证据；本次仅增加实验入口，真实模型消融仍待执行。没有真实对照证据前不得裁剪现有阶段。延迟仅使用实际记录的总检索时间，未测分阶段耗时不得填造。

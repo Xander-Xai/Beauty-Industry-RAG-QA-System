@@ -7,3 +7,6 @@ python -m benchmarks.strict_retrieval_suite --dataset /path/to/reviewed.jsonl --
 ```
 
 The entrypoint invokes the existing real benchmark with BM25, Dense, Hybrid RRF, Hybrid + BiEncoder and Hybrid + BiEncoder + CrossEncoder. It requests complete suite and publishable evidence, not just one successful arm. Missing assets or inconsistent sources remain BLOCKED/nonzero. Use `benchmarks.paired_retrieval` on the emitted per-query data to compare arms. No results are claimed until the actual stack runs. Full-answer RAGAS remains a separate validation.
+
+
+架构治理扩展（待合并验收）：以十臂 `--architecture-ablation` 为唯一扩展入口，覆盖单/双 CE 与有/无 BiEncoder。默认五臂及全部严格发布门槛保留。单 CE 使用同步有界批次、独立分数与模型专属 provenance；真实模型运行结果仍未获得。原七臂候选不独立合并，避免重复实现。

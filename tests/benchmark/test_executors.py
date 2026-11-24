@@ -421,3 +421,42 @@ def test_architecture_alternatives_are_registered():
         assert len([key for key in paths if key.startswith("cross_encoder_")]) == (
             2 if arm.endswith("_dual") else 1
         )
+
+
+@pytest.mark.parametrize("model_key", ["a", "b"])
+@pytest.mark.parametrize("bad_scores", [[0.9], [float("nan"), 0.9], [[0.1], [0.9]]])
+def test_single_ce_rejects_incomplete_nonfinite_or_nonscalar_scores(model_key, bad_scores):
+    from types import SimpleNamespace
+
+    from benchmarks.executors import SingleCrossEncoderReranker
+
+    class Model:
+        def predict(self, pairs, **kwargs):
+            return bad_scores
+
+    reranker = SingleCrossEncoderReranker("hybrid_rrf_crossencoder_" + model_key, model=Model())
+    candidates = [SimpleNamespace(content="a"), SimpleNamespace(content="b")]
+    ctx = SimpleNamespace()
+    with pytest.raises(BenchmarkUnavailable, match="invalid single CrossEncoder scores"):
+        reranker.rerank("q", candidates, 1, ctx=ctx, strict=True)
+    assert not hasattr(ctx, "ce_stage_provenance")
+
+
+def test_single_ce_reuses_bounded_synchronous_model_and_separate_scores():
+    from types import SimpleNamespace
+
+    from benchmarks.executors import SingleCrossEncoderReranker
+
+    class Model:
+        def predict(self, pairs, **kwargs):
+            assert kwargs["batch_size"] == len(pairs)
+            return [0.1, 0.9]
+
+    reranker = SingleCrossEncoderReranker("hybrid_rrf_crossencoder_b", model=Model())
+    candidates = [SimpleNamespace(content="a", ce_score_ensemble=0.0),
+                  SimpleNamespace(content="b", ce_score_ensemble=0.0)]
+    ctx = SimpleNamespace()
+    assert reranker.rerank("q", candidates, 1, ctx=ctx, strict=True) == [candidates[1]]
+    assert ctx.ce_stage_provenance == "cross_encoder_b"
+    assert candidates[1].ce_score_b == 0.9
+    assert candidates[1].ce_score_ensemble == 0.0
