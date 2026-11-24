@@ -22,11 +22,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     return retrieval_benchmark.main(
         [
-            "--dataset", args.dataset,
-            "--output-dir", args.output_dir,
-            "--configs", ",".join(ARMS),
-            "--executor", "real",
-            "--top-k", "10",
+            "--dataset",
+            args.dataset,
+            "--output-dir",
+            args.output_dir,
+            "--configs",
+            ",".join(ARMS),
+            "--executor",
+            "real",
+            "--top-k",
+            "10",
             "--require-contract",
             "--require-integrity",
             "--require-results",
