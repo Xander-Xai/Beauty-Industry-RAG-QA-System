@@ -257,8 +257,14 @@ class OnlineRAGPipeline:
                 # and cross-user answer reuse.
                 # ③+④ 并行执行 Query Rewrite + 复杂度评估（两者无数据依赖）
                 t_rewrite = time.time()
-                session_state = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
-                recent_dialogs = session_state.get_recent_queries()
+                # A missing principal or session ID must never map requests
+                # to a shared persistent "default" conversation.
+                has_session_identity = bool(ctx.user_id and ctx.session_id)
+                recent_dialogs = (
+                    SessionState.get_or_create(ctx.session_id, owner_id=ctx.user_id).get_recent_queries()
+                    if has_session_identity
+                    else []
+                )
 
                 # M-5: 使用共享线程池，避免每请求创建 ThreadPoolExecutor
                 pool = self._rewrite_pool
@@ -376,11 +382,9 @@ class OnlineRAGPipeline:
 
                 # GAP-19: CLIP 异步补充召回（PRD §4.5）— 主链路返回后后台执行
                 # 结果存入 session.async_clip_results，供下一轮多轮对话预热复用
-                if clip_use:
+                if clip_use and has_session_identity:
                     try:
-                        session_state_for_clip = SessionState.get_or_create(
-                            ctx.session_id or "default", owner_id=ctx.user_id
-                        )
+                        session_state_for_clip = SessionState.get_or_create(ctx.session_id, owner_id=ctx.user_id)
                         clip_qdrant_filter = self._build_clip_filter(ctx)
                         # M-5: 使用共享线程池
                         clip_pool = self._clip_pool
@@ -566,9 +570,10 @@ class OnlineRAGPipeline:
                 self._write_cache(ctx)
 
                 # ⑱ 更新会话
-                session = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
-                session.add_round(ctx.user_input, ctx.final_response, ctx.rewrite_result)
-                session.lock_evidence(ctx.evidence_locked_doc_ids)
+                if has_session_identity:
+                    session = SessionState.get_or_create(ctx.session_id, owner_id=ctx.user_id)
+                    session.add_round(ctx.user_input, ctx.final_response, ctx.rewrite_result)
+                    session.lock_evidence(ctx.evidence_locked_doc_ids)
 
                 return ctx.final_response
 
@@ -1077,7 +1082,11 @@ class OnlineRAGPipeline:
         from core.pipeline_context import GenerationResult, SessionState
 
         try:
-            session_state = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
+            session_state = (
+                SessionState.get_or_create(ctx.session_id, owner_id=ctx.user_id)
+                if ctx.user_id and ctx.session_id
+                else SessionState(session_id=ctx.request_id, owner_id=ctx.user_id)
+            )
 
             # PRD §4.6: 法规类强制启用 Answer Plan — 首次截断后生成大纲
             business_type = ctx.rewrite_result.business_type if ctx.rewrite_result else "general"

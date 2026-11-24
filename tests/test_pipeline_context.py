@@ -517,3 +517,46 @@ class TestSessionRedisPersistence:
             {"schema_version": 0, "session_id": "old", "created_at": time.time()}
         )
         assert SessionState._try_get_redis("old") is None
+
+    def test_owned_and_unowned_namespaces_and_delimiter_collisions(self, fake_redis):
+        first = SessionState.get_or_create("b:c", owner_id="a")
+        second = SessionState.get_or_create("c", owner_id="a:b")
+        unowned = SessionState.get_or_create("a:b:c")
+        first.add_round("first", "private one")
+        second.add_round("second", "private two")
+        unowned.add_round("unowned", "public")
+        assert len({first._redis_key(), second._redis_key(), unowned._redis_key()}) == 3
+        for state in (first, second, unowned):
+            loaded = SessionState._try_get_redis(state.session_id, state.owner_id)
+            assert loaded is not None
+            assert loaded.dialog_rounds == state.dialog_rounds
+
+    @pytest.mark.parametrize("bad_axis", ["owner_id", "session_id", "missing_owner"])
+    def test_redis_identity_mismatch_is_never_rehydrated(self, fake_redis, bad_axis):
+        state = SessionState.get_or_create("s", owner_id="alice")
+        state.add_round("private", "private")
+        key = state._redis_key()
+        payload = json.loads(fake_redis.store[key])
+        if bad_axis == "missing_owner":
+            del payload["owner_id"]
+        else:
+            payload[bad_axis] = "foreign"
+        fake_redis.store[key] = json.dumps(payload)
+        SessionState._sessions.clear()
+        assert SessionState._try_get_redis("s", "alice") is None
+        assert SessionState.get_or_create("s", "alice").dialog_rounds == []
+
+    def test_memory_namespace_isolation_without_redis(self, monkeypatch):
+        monkeypatch.setattr("core.pipeline_context._get_redis_client", lambda: None)
+        a = SessionState.get_or_create("b:c", owner_id="a")
+        a.add_round("private", "private")
+        assert SessionState.get_or_create("c", owner_id="a:b").dialog_rounds == []
+        assert SessionState.get_or_create("a:b:c").dialog_rounds == []
+        assert SessionState.get_or_create("b:c", owner_id="a") is a
+
+    def test_old_owned_key_is_not_reused_by_anonymous_caller(self, fake_redis):
+        state = SessionState(session_id="s", owner_id="alice")
+        state.dialog_rounds = [{"user_input": "private", "response": "private", "rewrite": None}]
+        fake_redis.store["session:alice:s"] = json.dumps(state._to_dict())
+        assert SessionState.get_or_create("alice:s").dialog_rounds == []
+        assert SessionState.get_or_create("s", owner_id="alice").dialog_rounds == []

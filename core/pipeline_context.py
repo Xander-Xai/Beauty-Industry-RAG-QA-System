@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -206,7 +207,7 @@ class SessionState:
     created_at: float = field(default_factory=time.time)
 
     # 会话级缓存（全局管理）
-    _sessions: ClassVar[dict[str, SessionState]] = {}
+    _sessions: ClassVar[dict[str | tuple[str, str], SessionState]] = {}
     _sessions_lock: ClassVar[threading.Lock] = threading.Lock()
 
     _SESSION_REDIS_TTL = 7200  # Redis 中会话过期时间（2 小时）
@@ -357,13 +358,26 @@ class SessionState:
             logger.debug("会话 Redis 持久化失败（降级内存）: %s", exc)
             self._publish_redis_degraded(True)
 
-    def _storage_key(self) -> str:
-        """Owner-scoped composite key. Both principals sharing a ``session_id``
-        therefore get physically separate sessions, in Redis and in memory."""
-        return f"{self.owner_id}:{self.session_id}" if self.owner_id else self.session_id
+    @staticmethod
+    def _storage_key_for(session_id: str, owner_id: str) -> str | tuple[str, str]:
+        # The tuple namespace is disjoint from unowned string keys, even when
+        # the caller supplies ':' or a string resembling an owned key.
+        return (owner_id, session_id) if owner_id else session_id
+
+    def _storage_key(self) -> str | tuple[str, str]:
+        return self._storage_key_for(self.session_id, self.owner_id)
+
+    @staticmethod
+    def _redis_key_for(session_id: str, owner_id: str) -> str:
+        if not owner_id:
+            return f"session:{session_id}"
+        identity = json.dumps([owner_id, session_id], ensure_ascii=True, separators=(",", ":"))
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        # A separate namespace also prevents collision with unowned legacy IDs.
+        return f"owned-session:v2:{digest}"
 
     def _redis_key(self) -> str:
-        return f"session:{self._storage_key()}"
+        return self._redis_key_for(self.session_id, self.owner_id)
 
     @classmethod
     def get_or_create(cls, session_id: str, owner_id: str = "") -> SessionState:
@@ -375,15 +389,16 @@ class SessionState:
         error, so the API contract is unchanged and the leak is closed by
         construction rather than by rejecting the request.
         """
-        key = f"{owner_id}:{session_id}" if owner_id else session_id
+        key = cls._storage_key_for(session_id, owner_id)
         # 尝试从 Redis 读取
-        redis_session = cls._try_get_redis(key)
+        redis_session = cls._try_get_redis(session_id, owner_id)
         if redis_session is not None:
             return redis_session
 
         # Redis 不可用或未找到，使用内存存储
         with cls._sessions_lock:
-            if key not in cls._sessions:
+            existing = cls._sessions.get(key)
+            if existing is None or existing.owner_id != owner_id or existing.session_id != session_id:
                 new_session = cls(session_id=session_id, owner_id=owner_id)
                 cls._sessions[key] = new_session
                 # 新创建的会话写入 Redis 预热
@@ -391,14 +406,14 @@ class SessionState:
             return cls._sessions[key]
 
     @classmethod
-    def _try_get_redis(cls, key: str) -> SessionState | None:
+    def _try_get_redis(cls, session_id: str, owner_id: str = "") -> SessionState | None:
         """尝试从 Redis 获取会话。Redis 不可用或未找到时返回 None。"""
         try:
             client = _get_redis_client()
             if client is None:
                 cls._publish_redis_degraded(True)
                 return None
-            redis_key = f"session:{key}"
+            redis_key = cls._redis_key_for(session_id, owner_id)
             raw = client.get(redis_key)
             if raw is None:
                 # A cache miss is not a degradation: Redis answered.
@@ -408,12 +423,12 @@ class SessionState:
             if data.get("schema_version") != cls._SESSION_SCHEMA_VERSION:
                 logger.debug("Redis 会话 schema 不兼容，忽略并降级: %s", redis_key)
                 return None
-            session = cls._from_dict(data)
-            # A payload written before owner scoping (or by a different owner)
-            # must not be handed to the caller. Treat it as absent.
-            if session.owner_id and session.owner_id != key.split(":", 1)[0]:
-                logger.debug("Redis 会话 owner 不匹配，忽略: %s", redis_key)
+            # Verify both axes against the authenticated request, not a
+            # delimiter-parsed key. Missing owner provenance is not trusted.
+            if data.get("owner_id") != owner_id or data.get("session_id") != session_id:
+                logger.debug("Redis 会话身份不匹配，忽略")
                 return None
+            session = cls._from_dict(data)
             # 刷新 TTL
             client.expire(redis_key, cls._SESSION_REDIS_TTL)
             cls._publish_redis_degraded(False)
@@ -433,20 +448,21 @@ class SessionState:
             client = _get_redis_client()
             if client is not None:
                 # Redis 会话已有 TTL，但此处可以尝试清理半过期的 key
-                cursor = 0
-                while True:
-                    cursor, keys = client.scan(cursor=cursor, match="session:*", count=100)
-                    for key in keys:
-                        raw = client.get(key)
-                        if raw:
-                            try:
-                                data = json.loads(raw)
-                                if now - data.get("created_at", 0) > max_age_seconds:
+                for pattern in ("session:*", "owned-session:v2:*"):
+                    cursor = 0
+                    while True:
+                        cursor, keys = client.scan(cursor=cursor, match=pattern, count=100)
+                        for key in keys:
+                            raw = client.get(key)
+                            if raw:
+                                try:
+                                    data = json.loads(raw)
+                                    if now - data.get("created_at", 0) > max_age_seconds:
+                                        client.delete(key)
+                                except Exception:
                                     client.delete(key)
-                            except Exception:
-                                client.delete(key)
-                    if cursor == 0:
-                        break
+                        if cursor == 0:
+                            break
         except Exception as exc:
             logger.debug("Redis 过期会话清理跳过: %s", exc)
 

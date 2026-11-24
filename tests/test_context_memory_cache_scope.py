@@ -123,3 +123,19 @@ def test_rewrite_failure_disables_all_cache_reuse(_audit):
     assert ctx.cache_hit_level == "DISABLED"
     pipeline._cache.get.assert_not_called()
     pipeline._cache.set.assert_not_called()
+
+
+@patch("core.pipeline.log_audit_event")
+@pytest.mark.parametrize(("owner", "session_id"), [("", "shared"), ("alice", None), ("", None)])
+def test_unscoped_requests_do_not_load_or_persist_session_history(_audit, owner, session_id):
+    pipeline = OnlineRAGPipeline()
+    _setup_pipeline_mocks(pipeline, rewrite=_make_rewrite(requires_context=True))
+    pipeline._complexity_evaluator = MagicMock()
+    pipeline._complexity_evaluator.evaluate.return_value = False
+    ctx = RequestContext(user_input="它是什么？", user_id=owner, session_id=session_id)
+    with patch("core.pipeline_context.SessionState.get_or_create") as load:
+        assert pipeline.process(ctx)
+        load.assert_not_called()
+    assert pipeline._query_rewriter.rewrite.call_args.kwargs["recent_dialogs"] == []
+    pipeline._cache.get.assert_not_called()
+    pipeline._cache.set.assert_not_called()
