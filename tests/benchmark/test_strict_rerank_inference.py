@@ -1,4 +1,5 @@
 """Exercise the actual production strict paths, without model weights."""
+
 from unittest.mock import MagicMock
 
 import numpy as np

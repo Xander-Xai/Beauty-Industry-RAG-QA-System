@@ -123,8 +123,7 @@ class BiEncoderReranker:
                     else self._rerank_with_dedicated_model(query, candidates, top_k)
                 )
                 if strict and (
-                    len(results) != min(top_k, len(candidates))
-                    or not all(np.isfinite(row.bi_score) for row in results)
+                    len(results) != min(top_k, len(candidates)) or not all(np.isfinite(row.bi_score) for row in results)
                 ):
                     raise ValueError("invalid dedicated BiEncoder scores")
                 return results
