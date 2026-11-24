@@ -816,9 +816,8 @@ class TestHistoryInstructionPrecedence:
         return ctx
 
     def _seed_history(self, session_id):
-        from core.pipeline_context import SessionState
-
         from common.config import config
+        from core.pipeline_context import SessionState
 
         state = SessionState.for_identity(session_id, "u", 0, 0, config.get("knowledge_version_epoch", "default"))
         state.dialog_rounds.clear()
@@ -955,9 +954,8 @@ class TestHistoryMarkerEncoding:
         return ctx
 
     def _seed(self, session_id, user_text, assistant_text):
-        from core.pipeline_context import SessionState
-
         from common.config import config
+        from core.pipeline_context import SessionState
 
         state = SessionState.for_identity(session_id, "u", 0, 0, config.get("knowledge_version_epoch", "default"))
         state.dialog_rounds.clear()
