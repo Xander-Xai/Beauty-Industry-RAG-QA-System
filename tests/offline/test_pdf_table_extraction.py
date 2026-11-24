@@ -64,9 +64,7 @@ def test_pdf_default_does_not_run_table_detector(tmp_path, monkeypatch):
 
     pdf = tmp_path / "document.pdf"
     source = pymupdf.open()
-    source.new_page().insert_text(
-        (70, 70), "Cosmetics product labelling and ingredient compliance policy."
-    )
+    source.new_page().insert_text((70, 70), "Cosmetics product labelling and ingredient compliance policy.")
     source.save(pdf)
     source.close()
 
@@ -83,9 +81,7 @@ def test_pdf_optin_passes_source_page_into_table_blocks(tmp_path, monkeypatch):
 
     pdf = tmp_path / "document.pdf"
     source = pymupdf.open()
-    source.new_page().insert_text(
-        (70, 70), "Cosmetics regulatory text with an additional controlled table."
-    )
+    source.new_page().insert_text((70, 70), "Cosmetics regulatory text with an additional controlled table.")
     source.save(pdf)
     source.close()
 
