@@ -201,6 +201,22 @@ def test_graded_relevance_survives_the_runner(tmp_path):
     assert strong_first > strong_last
     assert strong_first == pytest.approx(1.0)
 
+    from benchmarks.models import RetrievedItem
+    from benchmarks.runner import run_configuration
+
+    class FixtureRetriever:
+        def retrieve(self, query, top_k):
+            return [RetrievedItem(rank=1, key="d1::c1", score=1.0, source="fixture")]
+
+    run = run_configuration("bm25", [query], retriever_factory=lambda _: FixtureRetriever())
+    assert run.synthetic is True
+    assert len(run.results) == 1
+    evidence = run.results[0].to_json_dict({})
+    assert evidence["relevant_grades"] == {"d1::c0": 2, "d1::c1": 1}
+    assert evidence["ndcg_at_10"] == pytest.approx(
+        ndcg_graded(evidence["relevant_grades"], evidence["retrieved_items"])
+    )
+
 
 # ── the multi-context defect itself ─────────────────────────────────────────
 

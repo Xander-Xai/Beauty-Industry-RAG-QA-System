@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.failure_triage import analyze_failures
+from benchmarks.metrics import ndcg_graded
+from benchmarks.models import GRADE_THRESHOLD_RELEVANT, RELEVANCE_GRADES
 
 
 def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) -> dict[str, Any]:
@@ -27,19 +29,39 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
         raise ValueError("sample populations differ or are empty")
     improvements, regressions = [], []
     hit_gains, hit_losses = [], []
-    recall_deltas, rr_deltas = [], []
+    recall_deltas, rr_deltas, ndcg_deltas = [], [], []
     excluded = 0
     for sample in sorted(left):
         a, b = left[sample], right[sample]
         gold = set(a["relevant_items"])
         if gold != set(b["relevant_items"]) or a.get("business_type") != b.get("business_type"):
             raise ValueError("gold or business type differs across arms")
+        if any(a.get(field) != b.get(field) for field in ("question", "difficulty")):
+            raise ValueError("question or difficulty differs across arms")
+        grades = a.get("relevant_grades")
+        if grades != b.get("relevant_grades"):
+            raise ValueError("relevance grades differ across arms")
+        if grades is not None and (
+            not isinstance(grades, dict)
+            or set(grades) != gold
+            or any(
+                type(grade) is not int or grade not in RELEVANCE_GRADES or grade < GRADE_THRESHOLD_RELEVANT
+                for grade in grades.values()
+            )
+        ):
+            raise ValueError("invalid relevance grades")
         if not gold:
             excluded += 1
             continue
         ranks = [row["retrieved_items"][:10] for row in (a, b)]
         recall = [len(gold.intersection(rank)) / len(gold) for rank in ranks]
         rr = [next((1 / i for i, item in enumerate(rank, 1) if item in gold), 0.0) for rank in ranks]
+        if grades is not None:
+            ndcg = [ndcg_graded(grades, rank) for rank in ranks]
+            # Nonempty validated gold has a defined NDCG in both arms.
+            if ndcg[0] is None or ndcg[1] is None:
+                raise ValueError("undefined NDCG for nonempty gold")
+            ndcg_deltas.append(ndcg[1] - ndcg[0])
         delta = recall[1] - recall[0]
         recall_deltas.append(delta)
         rr_deltas.append(rr[1] - rr[0])
@@ -60,6 +82,8 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
         "excluded_no_gold": excluded,
         "delta_recall_at_10": sum(recall_deltas) / n if n else None,
         "delta_mrr_at_10": sum(rr_deltas) / n if n else None,
+        "ndcg_grade_verified_samples": len(ndcg_deltas),
+        "delta_ndcg_at_10": sum(ndcg_deltas) / n if n and len(ndcg_deltas) == n else None,
         "recall_improved_ids": improvements,
         "recall_regressed_ids": regressions,
         "hit_gained_ids": hit_gains,

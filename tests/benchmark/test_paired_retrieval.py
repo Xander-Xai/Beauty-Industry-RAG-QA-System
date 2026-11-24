@@ -64,3 +64,41 @@ def test_cli_hashes_exact_input_and_preserves_source(tmp_path):
     with pytest.raises(SystemExit):
         main(args + [str(source)])
     assert source.read_bytes() == original
+
+
+def test_graded_pair_recomputes_ndcg_without_flattening_relevance():
+    a = row("bm25", "x", ["partial", "full"], ["partial", "full"])
+    b = row("hybrid", "x", ["partial", "full"], ["full", "partial"])
+    a["relevant_grades"] = b["relevant_grades"] = {"partial": 1, "full": 2}
+    result = compare_arms([a, b], "bm25", "hybrid")
+    assert result["delta_recall_at_10"] == 0
+    assert result["delta_mrr_at_10"] == 0
+    assert result["delta_ndcg_at_10"] > 0
+    assert result["ndcg_grade_verified_samples"] == 1
+
+
+@pytest.mark.parametrize("field", ["question", "difficulty", "relevant_grades"])
+def test_pair_rejects_changed_query_or_grade_identity(field):
+    a = row("bm25", "x", ["a"], ["a"])
+    b = row("hybrid", "x", ["a"], ["a"])
+    a[field] = {"a": 1} if field == "relevant_grades" else "old"
+    b[field] = {"a": 2} if field == "relevant_grades" else "new"
+    with pytest.raises(ValueError, match="differs|differ"):
+        compare_arms([a, b], "bm25", "hybrid")
+
+
+def test_legacy_rows_keep_ndcg_unknown_instead_of_assuming_binary_labels():
+    a = row("bm25", "x", ["a"], ["a"])
+    b = row("hybrid", "x", ["a"], ["a"])
+    result = compare_arms([a, b], "bm25", "hybrid")
+    assert result["delta_ndcg_at_10"] is None
+    assert result["ndcg_grade_verified_samples"] == 0
+
+
+@pytest.mark.parametrize("grades", [{"a": True}, {"a": 0}, {"a": 3}, {"other": 2}])
+def test_pair_rejects_invalid_grade_contract(grades):
+    a = row("bm25", "x", ["a"], ["a"])
+    b = row("hybrid", "x", ["a"], ["a"])
+    a["relevant_grades"] = b["relevant_grades"] = grades
+    with pytest.raises(ValueError, match="invalid relevance grades"):
+        compare_arms([a, b], "bm25", "hybrid")
