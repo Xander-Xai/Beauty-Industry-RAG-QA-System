@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import sys
 from collections.abc import Callable
@@ -227,6 +228,13 @@ class RAGASEvaluator:
             return self._dataset[:limit]
         return list(self._dataset)
 
+    def _entry_sample_id(self, entry: dict, fallback_index: int) -> str:
+        # select_entries returns original dataset objects; preserve their source index.
+        for source_index, source_entry in enumerate(self._dataset):
+            if source_entry is entry:
+                return sample_id_for(entry, source_index)
+        return sample_id_for(entry, fallback_index)
+
     @staticmethod
     def _selected_metric_names(metrics: list[str] | None) -> list[str]:
         if metrics is not None:
@@ -300,7 +308,7 @@ class RAGASEvaluator:
                 missing.append(metric)
                 continue
             numeric = float(value)
-            if numeric != numeric:  # NaN: present but unmeasurable
+            if not math.isfinite(numeric):  # NaN or infinity is not a measured score
                 missing.append(metric)
                 continue
             scores[metric] = numeric
@@ -355,7 +363,7 @@ class RAGASEvaluator:
         effective_contexts = contexts if contexts is not None else [item["contexts"] for item in active]
         self._last_answers = list(effective_answers)
         self._last_contexts = [list(c) for c in effective_contexts]
-        self._last_sample_ids = [sample_id_for(entry, i) for i, entry in enumerate(active)]
+        self._last_sample_ids = [self._entry_sample_id(entry, i) for i, entry in enumerate(active)]
         self._last_samples = [
             PipelineSample(
                 sample_id=self._last_sample_ids[i],
@@ -452,7 +460,7 @@ class RAGASEvaluator:
         ground_truths: list[str] = []
 
         for index, entry in enumerate(entries):
-            sid = sample_id_for(entry, index)
+            sid = self._entry_sample_id(entry, index)
             try:
                 ctx = RequestContext(
                     user_input=entry["question"],
@@ -555,6 +563,43 @@ class RAGASEvaluator:
         return self._evaluate_calls
 
 
+def complete_pipeline_report_errors(report: Any, metrics: list[str] | None) -> list[str]:
+    """Reject incomplete pipeline evidence rather than treating survivor means as acceptance."""
+    expected = list(_ALL_METRIC_NAMES) if metrics is None else metrics
+    errors = []
+    if report.mode != "pipeline" or report.evaluator_status != "available":
+        errors.append("not_available_pipeline")
+    requested = report.requested_samples
+    if (
+        requested <= 0
+        or report.successful_samples != requested
+        or report.failed_samples
+        or report.skipped_samples
+        or report.failures
+    ):
+        errors.append("incomplete_pipeline_samples")
+    if (
+        len(report.sample_ids) != requested
+        or len(set(report.sample_ids)) != requested
+        or len(report.per_sample_scores) != requested
+        or [row.get("sample_id") for row in report.per_sample_scores] != report.sample_ids
+    ):
+        errors.append("incomplete_sample_identity")
+
+    def measured(value: Any) -> bool:
+        return type(value) in (int, float) and math.isfinite(value)
+
+    if not expected or len(set(expected)) != len(expected) or any(m not in _ALL_METRIC_NAMES for m in expected):
+        errors.append("invalid_metric_selection")
+    elif any(
+        not measured(report.overall_scores.get(metric))
+        or any(not measured(row.get(metric)) for row in report.per_sample_scores)
+        for metric in expected
+    ):
+        errors.append("incomplete_metric_observations")
+    return errors
+
+
 def _parse_args(argv: list[str] | None = None):
     import argparse
 
@@ -571,7 +616,26 @@ def _parse_args(argv: list[str] | None = None):
         action="store_true",
         help="要求真实 RAGAS 依赖与 evaluator 凭据；缺失时以非 0 退出且不生成报告",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--require-complete-pipeline",
+        action="store_true",
+        help="拒绝不完整管线样本或指标报告；必须与 --pipeline 和 --require-ragas 一起使用",
+    )
+    args = parser.parse_args(argv)
+    if args.require_complete_pipeline:
+        if not (args.pipeline and args.require_ragas):
+            parser.error("--require-complete-pipeline requires --pipeline and --require-ragas")
+        if args.metrics is not None and (
+            not args.metrics
+            or len(set(args.metrics)) != len(args.metrics)
+            or any(metric not in _ALL_METRIC_NAMES for metric in args.metrics)
+        ):
+            parser.error("Strict pipeline mode requires distinct supported metrics")
+        if args.sample_ids is not None and (not args.sample_ids or len(set(args.sample_ids)) != len(args.sample_ids)):
+            parser.error("Strict pipeline mode requires distinct sample IDs")
+        if args.limit is not None and (args.limit <= 0 or args.sample_ids is not None):
+            parser.error("Strict pipeline mode requires one valid sample selection")
+    return args
 
 
 def main() -> int:
@@ -638,6 +702,12 @@ def main() -> int:
 
     reporter = RAGASReporter(evaluator)
     report = reporter.build_report(tag=args.tag, metrics=args.metrics, pipeline_mode=args.pipeline)
+
+    if args.require_complete_pipeline:
+        errors = complete_pipeline_report_errors(report, args.metrics)
+        if errors:
+            print(json.dumps({"status": "BLOCKED", "reasons": errors}), file=sys.stderr)
+            return 6
 
     report_dir = args.report_dir or "./data/eval/reports"
     report_path = reporter.save_report(report, report_dir)
