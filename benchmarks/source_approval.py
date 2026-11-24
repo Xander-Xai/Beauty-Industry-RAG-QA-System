@@ -38,6 +38,7 @@ evidence, and :mod:`offline.source_trust` says so in its own contract.
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +64,10 @@ SOURCE_FIELDS = [
     "chunk_id",
     "doc_id",
     "doc_version_epoch",
+    "content",
+    "role_mask",
+    "dept_mask",
+    "status",
     "provenance.source_id",
     "provenance.source_trust",
     "provenance.approval_status",
@@ -153,6 +158,7 @@ class SourceApprovalReport:
     staging_unapproved: bool = False
     content_sha256: str = ""
     corpus_sha256: str = ""
+    indexed_payload_sha256: str = ""
     gold_chunk_total: int = 0
     gold_chunk_resolved: int = 0
     gold_chunk_unresolved: tuple[str, ...] = ()
@@ -176,6 +182,7 @@ class SourceApprovalReport:
             "staging_unapproved": self.staging_unapproved,
             "content_sha256": self.content_sha256,
             "corpus_sha256": self.corpus_sha256,
+            "indexed_payload_sha256": self.indexed_payload_sha256,
             "gold_chunk_total": self.gold_chunk_total,
             "gold_chunk_resolved": self.gold_chunk_resolved,
             "gold_chunk_unresolved": list(self.gold_chunk_unresolved),
@@ -279,13 +286,20 @@ def _load_all_documents(client: Any, index_name: str, log: _IssueLog) -> tuple[l
             break
         for hit in page:
             documents.append(hit.get("_source") or {})
-        after = page[-1].get("sort")
-        if not after:
+        cursor = page[-1].get("sort")
+        if not cursor or cursor == after:
+            log.add("index_cursor_invalid", "index pagination did not advance")
             break
+        after = cursor
         if len(documents) >= declared and declared >= 0:
             # Every declared document has been read; one more page would only
             # confirm the end of the index.
             break
+    try:
+        if int(client.count(index=index_name).get("count", -1)) != declared:
+            log.add("index_count_changed", "index count changed during approval scan")
+    except Exception:  # noqa: BLE001 - inability to verify is a blocker
+        log.add("index_count_recheck_failed", "index count could not be rechecked")
     return documents, declared
 
 
@@ -676,11 +690,22 @@ def verify_index_source_approval(
     documents_by_source: dict[str, int] = {}
     chunk_id_to_source: dict[str, str] = {}
     usable_documents = 0
+    seen_chunks: set[str] = set()
 
     for document in documents:
+        chunk = document.get("chunk_id")
+        doc = document.get("doc_id")
+        if not isinstance(chunk, str) or not chunk.strip() or not isinstance(doc, str) or not doc.strip():
+            log.add("invalid_document_identity", "document or chunk identifier is missing", document_count=1)
+        elif chunk in seen_chunks:
+            log.add("duplicate_chunk_identity", "index contains a repeated chunk identifier", document_count=1)
+        else:
+            seen_chunks.add(chunk)
         epoch = str(document.get("doc_version_epoch") or "")
         if epoch:
             epochs.add(epoch)
+        else:
+            log.add("document_epoch_missing", "document has no epoch", document_count=1)
         # Register the source from the raw payload before validating the
         # document, so a wholly quarantined source still gets a per-source
         # verdict. Registering only activatable documents would make the report
@@ -692,6 +717,16 @@ def verify_index_source_approval(
                 documents_by_source[raw_source_id] = documents_by_source.get(raw_source_id, 0) + 1
                 if raw_source_id not in provenance_by_source:
                     provenance_by_source[raw_source_id] = raw_provenance
+                elif any(
+                    raw_provenance.get(field) != provenance_by_source[raw_source_id].get(field)
+                    for field in PROVENANCE_FIELDS
+                ):
+                    log.add(
+                        "source_provenance_conflict",
+                        "chunks from one source disagree on recorded provenance",
+                        source_id=raw_source_id,
+                        document_count=1,
+                    )
                 chunk_id = str(document.get("chunk_id") or "")
                 if chunk_id:
                     chunk_id_to_source[chunk_id] = raw_source_id
@@ -782,6 +817,7 @@ def verify_index_source_approval(
         staging_unapproved=bool(staging_unapproved),
         content_sha256=content_sha256,
         corpus_sha256=corpus_sha256,
+        indexed_payload_sha256=_indexed_payload_fingerprint(documents) if documents else "",
         gold_chunk_total=len(gold_chunks),
         gold_chunk_resolved=len(gold_chunks) - len(unresolved_gold),
         gold_chunk_unresolved=tuple(unresolved_gold),
@@ -818,6 +854,35 @@ def _index_content_fingerprint(documents: list[dict]) -> str:
         )
         digest.update(b"\x1e")
     return digest.hexdigest()
+
+
+def _indexed_payload_fingerprint(documents: list[dict]) -> str:
+    """Bind observed indexed text, access fields and provenance, not just identities.
+
+    Retain the historic identity-only content_sha256 field for compatibility.
+    This digest is an observation of the index, not proof of faithful ingestion.
+    """
+    fields = ("doc_id", "chunk_id", "doc_version_epoch", "content", "role_mask", "dept_mask", "status", "provenance")
+    records = sorted(
+        json.dumps({key: row.get(key) for key in fields}, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        for row in documents
+    )
+    digest = hashlib.sha256(b"indexed-payload/v1\n")
+    for record in records:
+        digest.update(record.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def source_snapshot_blockers(before: dict, after: dict) -> list[str]:
+    """Reject drift or lost approvals across a benchmark, including BM25-only runs."""
+    if before.get("verified") is not True or after.get("verified") is not True:
+        return ["source_approval_snapshot_not_verified"]
+    if not before.get("indexed_payload_sha256") or not after.get("indexed_payload_sha256"):
+        return ["source_payload_fingerprint_not_verified"]
+    if before != after:
+        return ["source_approval_or_payload_changed_during_run"]
+    return []
 
 
 def gold_chunk_ids_from_rows(rows: list[dict[str, Any]]) -> frozenset[str]:
