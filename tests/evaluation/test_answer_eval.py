@@ -287,3 +287,52 @@ def test_cli_never_overwrites_existing_output_or_input_alias(tmp_path, existing)
     assert exc.value.code == 2
     assert source.read_bytes() == original
     assert out.read_bytes() == previous
+
+
+def test_strict_task_success_requires_expected_disposition_and_no_leak():
+    samples = [
+        _sample("good"),
+        _sample("correct-refusal", must_refuse=True),
+        _sample("leak"),
+        _sample("partial"),
+        _sample("wrong-refusal"),
+        _sample("unsafe-answer", must_refuse=True),
+        _sample("missing-citation"),
+    ]
+    observations = [
+        _obs("good"),
+        _obs("correct-refusal", gate="reject", support="not_applicable", answer="", citations=()),
+        _obs("leak", rbac_leak=True),
+        _obs("partial", support="partially_supported"),
+        _obs("wrong-refusal", gate="reject", support="not_applicable", answer="", citations=()),
+        _obs("unsafe-answer"),
+        _obs("missing-citation", citations=()),
+    ]
+    report = score(samples, observations)
+    assert report.metrics["strict_task_success_count"] == 2
+    assert report.metrics["strict_task_success_rate"] == pytest.approx(2 / 7)
+
+
+def test_cli_partial_review_reports_bounds_without_counting_missing_as_success(tmp_path):
+    args, out = _cli_inputs(tmp_path, [_sample("s1"), _sample("s2")], [_reviewed_row()])
+    assert main(args) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["metrics"]["strict_task_success_rate"] == 1
+    assert report["strict_task_success_lower_bound"] == 0.5
+    assert report["strict_task_success_upper_bound"] == 1
+
+
+def test_cli_answer_gate_contradiction_is_not_success(tmp_path):
+    args, out = _cli_inputs(tmp_path, [_sample()], [_reviewed_row(answer_gate_passed=False)])
+    assert main(args) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["strict_task_success_lower_bound"] == 0
+    assert report["strict_task_success_upper_bound"] == 0
+
+
+def test_cli_rejects_nonboolean_answer_gate_result(tmp_path):
+    args, out = _cli_inputs(tmp_path, [_sample()], [_reviewed_row(answer_gate_passed="false")])
+    with pytest.raises(SystemExit) as exc:
+        main(args)
+    assert exc.value.code == 2
+    assert not out.exists()
