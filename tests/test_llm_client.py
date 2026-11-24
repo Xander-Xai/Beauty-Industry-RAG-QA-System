@@ -167,11 +167,21 @@ class TestLLMClientGenerate:
         session.dialog_rounds.append({"user_input": "用户问题1", "response": "回答1"})
         session.dialog_rounds.append({"user_input": "用户问题2", "response": "回答2"})
 
+        # Same owner/session, different permission scope must not reach the model.
+        foreign = SessionState.for_identity(
+            "test_session_hist", "test_user", 1, 0, config.get("knowledge_version_epoch", "default")
+        )
+        foreign.add_round("FOREIGN_SCOPE_USER", "FOREIGN_SCOPE_ANSWER")
         ctx.session_id = "test_session_hist"
-        client.generate(ctx, target_model="qwen3-4b", max_tokens=512)
-
-        # 清理
-        SessionState._sessions.pop(session._storage_key(), None)
+        try:
+            client.generate(ctx, target_model="qwen3-4b", max_tokens=512)
+            messages = client.router.route_chat.call_args.kwargs["messages"]
+            assert any(m["role"] == "user" and "用户问题1" in m["content"] for m in messages)
+            assert any(m["role"] == "assistant" and "回答2" in m["content"] for m in messages)
+            assert all("FOREIGN_SCOPE_" not in m["content"] for m in messages)
+        finally:
+            SessionState._sessions.pop(session._storage_key(), None)
+            SessionState._sessions.pop(foreign._storage_key(), None)
 
 
 class TestLLMClientTruncation:
