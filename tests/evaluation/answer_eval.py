@@ -145,6 +145,9 @@ class ObservedAnswer:
         citations = payload.get("citations", [])
         if not isinstance(citations, list) or not all(isinstance(item, str) and item.strip() for item in citations):
             raise AnswerEvalError(f"{where}: citations must be a list of nonempty strings")
+        gate_passed = payload.get("answer_gate_passed")
+        if gate_passed is not None and type(gate_passed) is not bool:
+            raise AnswerEvalError(f"{where}: answer_gate_passed must be a JSON boolean or null")
         final = payload.get("final_disposition")
         if final is not None and final not in ("answered", "refused"):
             raise AnswerEvalError(f"{where}: invalid final_disposition")
@@ -162,7 +165,7 @@ class ObservedAnswer:
             answer_text=str(payload.get("answer_text") or ""),
             citations=tuple(str(item) for item in citations),
             gate_decision=decision,
-            answer_gate_passed=payload.get("answer_gate_passed"),
+            answer_gate_passed=gate_passed,
             evidence_support=support,
             rbac_leak=_require_bool(payload, "rbac_leak", where),
             reviewer=reviewer,
@@ -220,6 +223,21 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
+def _strict_task_success(sample: AnswerEvalSample, observation: ObservedAnswer) -> bool:
+    """Require the expected outcome, evidence support and no observed RBAC leak."""
+    if observation.rbac_leak:
+        return False
+    if sample.must_refuse:
+        return not observation.answered and observation.evidence_support == "not_applicable"
+    return (
+        observation.answered
+        and observation.evidence_support == "supported"
+        and bool(observation.citations)
+        and observation.gate_decision != GATE_REJECT
+        and observation.answer_gate_passed is not False
+    )
+
+
 def _block(records: Sequence[tuple[AnswerEvalSample, ObservedAnswer]]) -> dict[str, Any]:
     answered = [(s, o) for s, o in records if o.answered]
     strict_supported = sum(1 for _, o in answered if o.evidence_support == "supported")
@@ -230,8 +248,11 @@ def _block(records: Sequence[tuple[AnswerEvalSample, ObservedAnswer]]) -> dict[s
     refused = [(s, o) for s, o in records if not o.answered]
     high_risk_answered = [(s, o) for s, o in answered if s.high_risk]
     high_risk_unsupported = sum(1 for _, o in high_risk_answered if o.evidence_support == "unsupported")
+    strict_successes = sum(_strict_task_success(s, o) for s, o in records)
     return {
         "sample_count": len(records),
+        "strict_task_success_count": strict_successes,
+        "strict_task_success_rate": _rate(strict_successes, len(records)),
         "answered_count": len(answered),
         "refused_count": len(refused),
         "answer_evidence_support_rate": _rate(strict_supported, len(answered)),
@@ -322,11 +343,14 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, AnswerEvalError) as exc:
         parser.error(f"invalid answer evaluation input ({type(exc).__name__})")
     complete = not report.missing_observations
+    strict_successes = report.metrics["strict_task_success_count"]
     output = {
         **report.as_dict(),
         "kind": "REVIEWED_ANSWER_DIAGNOSTIC_ONLY",
         "observations_sha256": hashlib.sha256(raw).hexdigest(),
         "coverage": len(observations) / len(samples),
+        "strict_task_success_lower_bound": strict_successes / len(samples),
+        "strict_task_success_upper_bound": (strict_successes + len(report.missing_observations)) / len(samples),
         "status": "COMPLETE_DIAGNOSTIC" if complete else "INCOMPLETE_DIAGNOSTIC",
         "publication_eligibility": "NOT_ASSESSED",
         "note": "Review attestation is caller supplied; no independent reviewer, model or corpus verification.",
