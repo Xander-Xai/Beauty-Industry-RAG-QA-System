@@ -1199,9 +1199,18 @@ class OnlineRAGPipeline:
         """写入 L1/L2 缓存 — PRD §10.6 / §4.4"""
         try:
             # Image-dependent, experimental and degraded answers are not shared text-cache entries.
-            if ctx.image_path or ctx.ab_experiment or ctx.degraded or ctx.ce_stage_provenance == "deterministic_fallback":
+            if (
+                ctx.image_path
+                or ctx.ab_experiment
+                or ctx.degraded
+                or ctx.ce_stage_provenance == "deterministic_fallback"
+            ):
                 return
-            if ctx.rewrite_result is None or ctx.rewrite_result.fallback or ctx.rewrite_result.business_type == "regulation":
+            if (
+                ctx.rewrite_result is None
+                or ctx.rewrite_result.fallback
+                or ctx.rewrite_result.business_type == "regulation"
+            ):
                 return
             cache_key = self._build_cache_key(ctx)
             requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False
