@@ -46,6 +46,10 @@ with evidence it does not have. The monolith path therefore stays
 `REPO_VERIFIED` / `PENDING`; closing it requires #60
 (`VAL-E2E-001`) plus `VAL-STORE-001` and `VAL-GPU-001`.
 
+## Evidence update (2026-11-24)
+
+The merged #130 scopes conversation history by principal, session, permission masks and knowledge epoch. #131–#133 enforce complete ablation populations, paired ranking diagnostics and strict publication gates. These are repository mechanisms, not new real-environment measurements. The approved V1 BM25 run remains the measured baseline; see [run report](validation/real-v1-approved-bm25-run.md). Actual Dense/Hybrid/Rerank, RAGAS and end-to-end model deployment remain pending.
+
 ## Verified in code (no external dependency required)
 
 These are implemented on the canonical online path and covered by deterministic
@@ -58,7 +62,7 @@ whole story.
 | RS256 authentication, uint32 permission-mask contract, malformed-claim fail-closed | `REPO_VERIFIED` | `PENDING` for the full request path; the two mechanisms below are individually `LOCAL_REAL_VALIDATION` | HS256 `JWT_SECRET` remains an opt-in legacy fallback. Individually validated: nginx `TRUSTED_PROXIES` resolution, Redis-backed cross-process login rate limit |
 | Layered RBAC: store-side pushdown + pre-fusion document filtering + L2 cache physical partitioning | `REPO_VERIFIED` | `PENDING` (no artifact against real Qdrant/ES with a real multi-role corpus) | Defence in depth, not a single control. Cross-role / cross-department / cross-cache-partition regression is in-process only (`tests/test_rbac_cross_identity.py`) and constructs no store client — see [Security regression coverage](security-regression-coverage.md) |
 | Elasticsearch 8 BM25 sparse retrieval with Painless bitmask filtering | `REPO_VERIFIED` | `LOCAL_REAL_VALIDATION` (authenticated ES 8.11: writer mapping, `search_after`, online BM25) | |
-| Dynamic 2–4 path recall selection driven by complexity and visual relevance | `REPO_VERIFIED` | `PENDING` | Selection logic is deterministic and tested; its measurable *benefit* is unmeasurable while `complexity` / `visual_required` are absent from the golden set (#86) |
+| Dynamic 2–4 path recall selection driven by complexity and visual relevance | `REPO_VERIFIED` | `PENDING` | Selection logic is deterministic and tested. Legacy 301-row labels remain incomplete (#86); V1 has reviewed complexity/visual labels, but matched real Dense/Hybrid/visual ablations are not yet measured (#18/#125). |
 | Two-stage rerank call chain (BiEncoder → Top 150 → CrossEncoder ensemble → Top 10) | `REPO_VERIFIED` (call chain + deterministic fallback) | `PENDING` (weights absent, so only the fallback path has ever run) | The second stage has never been exercised with real weights (#85 `VAL-RERANK-001`). A gated real-model entry point now exists — see [Rerank validation entry point](#rerank-validation-entry-point) |
 | Evidence Gate and Answer Gate decisions, including regulation-conflict rejection | `REPO_VERIFIED` | `PENDING` | See [Fail-closed degradation](#fail-closed-degradation-under-absent-rerank-weights). Degradation scenarios are pinned by `tests/test_gate_degradation_scenarios.py` |
 | Per-request run audit: stage executed / skipped / not-reached / degraded, rerank provenance, gate mode, outcome | `REPO_VERIFIED` | `PENDING` (no run against a real stack) | `core/run_report.py`, surfaced on `/api/query` behind `RAG_AUDIT_REPORT=1`. One real recorded request with a real reranker |
