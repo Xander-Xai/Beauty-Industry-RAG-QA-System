@@ -19,6 +19,7 @@ Evidence Score =
 from __future__ import annotations
 
 import logging
+from threading import local
 from typing import TYPE_CHECKING
 
 from common.config import get_config_dict
@@ -48,7 +49,7 @@ class EvidenceEnsembleGate:
         # Set per-evaluate() when the inter-document consistency check could not run.
         # Tracked so the degraded state is observable in ``gate_mode`` rather than
         # silently folded into a plausible-looking score.
-        self._doc_consistency_degraded = False
+        self._evaluation_local = local()
         # Config precheck: report (do not silently mask) the missing-weights
         # state. The decision path is unchanged and stays fail-closed.
         self.rerank_status = rerank_weights_status()
@@ -68,6 +69,16 @@ class EvidenceEnsembleGate:
         refusing queries without loading a model.
         """
         return self.rerank_status
+
+    @property
+    def _doc_consistency_degraded(self) -> bool:
+        # evaluate() is synchronous; FastAPI may run concurrent requests in
+        # different threads against the shared pipeline/gate instance.
+        return getattr(self._evaluation_local, "degraded", False)
+
+    @_doc_consistency_degraded.setter
+    def _doc_consistency_degraded(self, value: bool) -> None:
+        self._evaluation_local.degraded = value
 
     def _gate_mode(self) -> str:
         if self.rerank_status.get("status") == "BLOCKED":

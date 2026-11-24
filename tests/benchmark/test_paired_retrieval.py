@@ -132,3 +132,45 @@ def test_cli_rejects_existing_output_and_hardlink(tmp_path):
             main(args + [str(target)])
     assert out.read_text(encoding="utf-8") == "previous evidence"
     assert source.read_bytes() == original
+
+
+def test_regulation_high_grade_loss_not_hidden_by_unchanged_hit():
+    a = row("a", "reg", ["primary", "secondary"], ["primary", "secondary"])
+    b = row("b", "reg", ["primary", "secondary"], ["secondary"])
+    a["business_type"] = b["business_type"] = "regulation"
+    a["relevant_grades"] = b["relevant_grades"] = {"primary": 2, "secondary": 1}
+    result = compare_arms([a, b], "a", "b")
+    assert result["hit_lost_ids"] == []
+    assert result["regulation"]["scored_samples"] == 1
+    assert result["regulation"]["grade_verified_samples"] == 1
+    assert result["regulation"]["high_grade_passage_lost_ids"] == ["reg"]
+    assert result["regulation"]["high_grade_passage_missing_candidate_ids"] == ["reg"]
+    assert result["regulation"]["criticality_independently_reviewed"] is False
+
+
+def test_pair_latency_requires_full_population():
+    a = row("a", "x", ["a"], ["a"])
+    b = row("b", "x", ["a"], ["a"])
+    c = row("a", "y", ["b"], ["b"])
+    d = row("b", "y", ["b"], ["b"])
+    for item, value in [(a, 10), (b, 20), (c, 30)]:
+        item["latency_ms"] = {"total_retrieval_ms": value}
+    incomplete = compare_arms([a, b, c, d], "a", "b")["paired_latency"]
+    assert incomplete["matched_samples"] == 1
+    assert incomplete["complete"] is False
+    assert incomplete["delta_p95_ms"] is None
+    d["latency_ms"] = {"total_retrieval_ms": 40}
+    complete = compare_arms([a, b, c, d], "a", "b")["paired_latency"]
+    assert complete["complete"] is True
+    assert complete["baseline_p95_ms"] == pytest.approx(29)
+    assert complete["candidate_p95_ms"] == pytest.approx(39)
+    assert complete["delta_p95_ms"] == pytest.approx(10)
+
+
+@pytest.mark.parametrize("value", [True, -1, float("nan"), "12"])
+def test_pair_rejects_invalid_latency(value):
+    a = row("a", "x", ["a"], ["a"])
+    b = row("b", "x", ["a"], ["a"])
+    a["latency_ms"] = {"total_retrieval_ms": value}
+    with pytest.raises(ValueError, match="invalid total retrieval latency"):
+        compare_arms([a, b], "a", "b")

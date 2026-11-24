@@ -414,6 +414,21 @@ class TestCrossEncoderEnsemble:
         # 验证排序：最高分在前
         assert results[0].ce_score_ensemble >= results[1].ce_score_ensemble
 
+    def test_online_invalid_scores_are_fallback_not_calibrated_evidence(self):
+        for invalid in ([0.9], [float("nan"), 0.9]):
+            ce = self._make_ensemble()
+            ce._batch_aggregator.batch_predict.side_effect = [invalid, [0.8, 0.7]]
+            candidates = [
+                _make_rerank_result("d1", "c1", "dense", ensemble=0.99),
+                _make_rerank_result("d2", "c2", "dense", ensemble=0.99),
+            ]
+            ctx = types.SimpleNamespace()
+            result = ce.rerank("test", candidates, top_k=2, ctx=ctx)
+            assert ctx.ce_stage_provenance == "deterministic_fallback"
+            assert [row.doc_id for row in result] == ["d1", "d2"]
+            assert all(row.ce_score_ensemble == 0.0 for row in result)
+            assert all(call.kwargs["strict"] for call in ce._batch_aggregator.batch_predict.call_args_list)
+
     def test_rerank_empty_candidates(self):
         """空候选列表应返回空列表。"""
         ce = self._make_ensemble()

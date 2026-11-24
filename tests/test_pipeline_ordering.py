@@ -155,3 +155,25 @@ class TestPipelineVariableOrdering:
         assert ctx.degraded is True
         assert "complexity_eval_fallback" in ctx.fallback_reason
         assert "BERT model load failed" in ctx.fallback_reason
+
+    @patch("core.pipeline.log_audit_event")
+    def test_explicit_ce_fallback_cannot_be_used_as_generation_evidence(self, _mock_audit):
+        from retrieval.evidence_gate import EvidenceEnsembleGate
+
+        pipeline = OnlineRAGPipeline()
+        _setup_pipeline_mocks(pipeline)
+        pipeline._complexity_evaluator = MagicMock()
+        pipeline._complexity_evaluator.evaluate.return_value = False
+        ctx = _make_ctx()
+
+        def degraded_rerank(**kwargs):
+            kwargs["ctx"].ce_stage_provenance = "deterministic_fallback"
+            return [MagicMock(ce_score_ensemble=0.99)]
+
+        pipeline._cross_encoder_ensemble.rerank.side_effect = degraded_rerank
+        gate = EvidenceEnsembleGate()
+        pipeline._evidence_gate.evaluate.side_effect = gate.evaluate
+        pipeline.process(ctx)
+        assert pipeline._evidence_gate.evaluate.call_args.kwargs["rerank_results"] == []
+        assert ctx.evidence_result.decision == "reject"
+        pipeline._llm_client.generate.assert_not_called()

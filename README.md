@@ -1,6 +1,6 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
-> **架构治理（2026-11-25）**：在线唯一主线为模块化 FastAPI 单体 RAG，缓存读取在 Rewrite 后；BiEncoder/双 CE 为当前实现，在线同模型 BGE 服务复用，排序阶段是否裁剪需同语料质量与延迟消融，微服务及双 GPU 不作已上线声明。见 [架构裁决与裁剪门禁](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25)。
+> **架构治理（2026-11-25）**：在线唯一主线为模块化 FastAPI 单体 RAG，缓存读取在 Rewrite 后；BiEncoder/双 CE 为当前实现，在线同模型 BGE 服务复用，排序阶段是否裁剪需同语料质量与延迟消融；#155 实验候选含 CE 冷启动分数方向修复，真实校准及门控验收未完成，微服务及双 GPU 不作已上线声明。见 [架构裁决与裁剪门禁](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25)。
 
 
 > **Memory 专项定位（2026-11-24）**：本项目只承担 RAG 的短期会话、权限/版本化证据与上下文缓存隔离，不引入跨任务用户画像。工程补强与历史任职时间严格区分。见 [Memory 工程定位](docs/memory-engineering-positioning-20261124.md) 与 [安全回归](docs/validation/context-memory-cache-isolation-20261124.md)。
@@ -128,7 +128,7 @@
 | 知识 | 离线多格式解析 → 内容哈希增量 → 快照校验 → epoch 封存与人工激活 | 微调把知识焊进权重：法规一改就要重训，答案无法指回条款，也无法按角色隔离可见性 |
 | 召回 | 动态 2–4 路：`dense_bge`（BGE + Qdrant）· `bm25_es`（BM25 + ES）· `rewrite_variants`（复杂问题）· `clip_visual`（视觉相关） | 纯向量在 INCI 名 / 限量数值 / CAS 号这类精确串上召回不稳；纯 BM25 又拿不到同义改写与图像语义 |
 | 融合 | **单入口**加权 RRF，权重按查询感知（法规类 BM25→`1.5`，视觉类 CLIP→`2.0`） | 多套加权逻辑并存会静默丢权重：路径名拼写不一致时 `rrf_fusion` 对未知路径名退化为等权 |
-| 重排 | 两级：BiEncoder → 150 → 双 CrossEncoder ensemble → 10 | 单级 CrossEncoder 或直接用向量分数排序，宽召回与精排不能兼得 |
+| 重排 | 两级：BiEncoder → 150 → 双 CrossEncoder ensemble → 10 | 是否需要 BiEncoder/双 CE 由同语料消融裁决，不能先验断言单 CE 不足 |
 | 证据 | Evidence Gate（生成前）+ Answer Gate（生成后）双门控；证据不足、或法规类存在矛盾即拒答 | 法规场景下错误答案的代价远高于不回答 |
 | 权限 | RS256 + uint32 位掩码 RBAC：存储侧下推 + 融合前文档级二次过滤 + L2 缓存物理分区 | 只在生成时约束模型，等于越权内容已经进了 prompt |
 | 生成 | 4B / 14B 双端点按查询复杂度路由；非 production 部署在**发请求前**把 14B 映射到 `simple` 端点，端点失败则对同一端点有界重试后上抛，**不跨 tier 降级** | 简单问题不必付大模型成本；固定走大模型则每条 query 都付满价 |
@@ -274,7 +274,7 @@ score(doc) = Σ_path  weight(path) / (k + rank_path(doc))
 | 知识进模型还是进索引 | **检索增强**（RAG） | 每次请求要付检索延迟；召回不到就答不了 | 微调把知识焊进权重：法规一改就要重训，答案无法指回条款，且无法按角色隔离可见性 |
 | 单路 dense 还是 Hybrid | **Hybrid**（dense + BM25） | 两套存储与两套调参；融合需要权重 | 纯向量在「INCI 名称」「限量数值」「CAS 号」这类精确串上召回不稳；纯 BM25 又拿不到同义改写与图像语义 |
 | 融合算法 | **加权 RRF** | 只用排名，丢掉各路分数的绝对量纲 | 分数归一化加权（min-max / z-score）对分数分布敏感，且各路分数尺度不可比 |
-| 排序层数 | **两级**（BiEncoder → 150 → 双 CrossEncoder → 10） | 两次排序的延迟；权重缺失时整链退化为「保召回不排序」 | 单级 CrossEncoder：宽召回与精排不能兼得；直接用向量分数排序则无法重排跨模态命中 |
+| 排序层数 | **两级**（BiEncoder → 150 → 双 CrossEncoder → 10） | 两次排序的延迟；权重缺失时整链退化为「保召回不排序」 | 单 CE、无 BiEncoder 及直接排序是待测候选；跨模态及法规召回须独立验证 |
 | 召回路数 | **动态 2–4 路**而非固定四路 | 复杂度判别成为额外失败点 | 固定四路：简单问题也付视觉编码与额外查询 |
 | 证据不足时 | **拒答** | 召回率差的领域会「什么都不回答」 | 强行生成：法规场景下错误答案的代价远高于不回答 |
 | 权限过滤位置 | 存储侧下推 + 融合前二次校验 + 缓存物理分区 | Qdrant 无法做位运算，RBAC 收窄时会召回随后被丢弃的候选 | 只在生成时约束模型：检索层已把越权内容送进 prompt |
