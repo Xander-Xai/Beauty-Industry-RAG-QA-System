@@ -156,7 +156,6 @@ class TestPipelineVariableOrdering:
         assert "complexity_eval_fallback" in ctx.fallback_reason
         assert "BERT model load failed" in ctx.fallback_reason
 
-
     @patch("core.pipeline.log_audit_event")
     def test_explicit_ce_fallback_cannot_be_used_as_generation_evidence(self, _mock_audit):
         from retrieval.evidence_gate import EvidenceEnsembleGate

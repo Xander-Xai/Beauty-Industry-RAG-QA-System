@@ -418,9 +418,7 @@ def test_architecture_alternatives_are_registered():
         assert arm in backends.REQUIRED_BACKENDS
         paths = backends.rerank_model_paths(arm)
         assert ("biencoder" in paths) == ("_biencoder" in arm)
-        assert len([key for key in paths if key.startswith("cross_encoder_")]) == (
-            2 if arm.endswith("_dual") else 1
-        )
+        assert len([key for key in paths if key.startswith("cross_encoder_")]) == (2 if arm.endswith("_dual") else 1)
 
 
 @pytest.mark.parametrize("model_key", ["a", "b"])
@@ -453,8 +451,10 @@ def test_single_ce_reuses_bounded_synchronous_model_and_separate_scores():
             return [0.1, 0.9]
 
     reranker = SingleCrossEncoderReranker("hybrid_rrf_crossencoder_b", model=Model())
-    candidates = [SimpleNamespace(content="a", ce_score_ensemble=0.0),
-                  SimpleNamespace(content="b", ce_score_ensemble=0.0)]
+    candidates = [
+        SimpleNamespace(content="a", ce_score_ensemble=0.0),
+        SimpleNamespace(content="b", ce_score_ensemble=0.0),
+    ]
     ctx = SimpleNamespace()
     assert reranker.rerank("q", candidates, 1, ctx=ctx, strict=True) == [candidates[1]]
     assert ctx.ce_stage_provenance == "cross_encoder_b"

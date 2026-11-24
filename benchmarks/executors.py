@@ -406,9 +406,7 @@ class SingleCrossEncoderReranker:
 class RerankExecutor(HybridRRFExecutor):
     """Use the production rerankers; a model error is a failed query, never a ranking."""
 
-    def __init__(
-        self, *, cross: bool = False, biencoder=None, crossencoder=None, config_name=None, **kwargs
-    ):
+    def __init__(self, *, cross: bool = False, biencoder=None, crossencoder=None, config_name=None, **kwargs):
         super().__init__(**kwargs)
         self.name = config_name or ("hybrid_rrf_biencoder_crossencoder" if cross else "hybrid_rrf_biencoder")
         self._cross = "_crossencoder" in self.name

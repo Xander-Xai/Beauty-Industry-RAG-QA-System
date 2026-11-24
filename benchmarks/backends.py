@@ -592,12 +592,18 @@ PROBES = {
 
 
 # Architecture-only alternatives; the default strict five-arm suite is unchanged.
-for _name in ("hybrid_rrf_crossencoder_a", "hybrid_rrf_crossencoder_b", "hybrid_rrf_crossencoder_dual", "hybrid_rrf_biencoder_crossencoder_a", "hybrid_rrf_biencoder_crossencoder_b"):
+for _name in (
+    "hybrid_rrf_crossencoder_a",
+    "hybrid_rrf_crossencoder_b",
+    "hybrid_rrf_crossencoder_dual",
+    "hybrid_rrf_biencoder_crossencoder_a",
+    "hybrid_rrf_biencoder_crossencoder_b",
+):
     _has_bi = "_biencoder" in _name
     _ce = "crossencoder" if _name.endswith("_dual") else "crossencoder_" + _name[-1]
-    STAGE_BY_CONFIG[_name] = ("bm25_ms", "dense_ms", "rrf_ms") + (
-        ("biencoder_ms",) if _has_bi else ()
-    ) + ("crossencoder_ms",)
+    STAGE_BY_CONFIG[_name] = (
+        ("bm25_ms", "dense_ms", "rrf_ms") + (("biencoder_ms",) if _has_bi else ()) + ("crossencoder_ms",)
+    )
     REQUIRED_BACKENDS[_name] = ("bm25", "dense") + (("biencoder",) if _has_bi else ()) + (_ce, "corpus")
     CONFIG_DESCRIPTIONS[_name] = "Architecture ablation: " + _name
 PROBES.update(crossencoder_a=probe_single_crossencoder_a, crossencoder_b=probe_single_crossencoder_b)
