@@ -107,7 +107,11 @@ def _read_vectors(
                 if not math.isfinite(norm) or norm == 0:
                     raise ValueError("invalid_persisted_vector_norm")
                 hashes[identity] = hashlib.sha256(
-                    json.dumps([str(record.id), vector], separators=(",", ":"), allow_nan=False).encode("utf-8")
+                    json.dumps(
+                        [str(record.id), [round(value, 6) or 0.0 for value in vector]],
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
                 ).hexdigest()
             rows.append(payload)
         if len(rows) > count or (cursor is not None and (not records or cursor == offset)):
@@ -121,10 +125,14 @@ def _read_vectors(
 
 
 def read_vector_snapshot(client: Any, collection: str, dimension: int) -> tuple[list[dict], str]:
-    """Fingerprint actual unnamed dense vectors, bound to chunk and point IDs."""
+    """Fingerprint returned dense vectors at 1e-6 absolute precision.
+
+    Local cosine storage can re-normalize float32 vectors on reopen. Quantize
+    only after validation; this detects material drift, not bitwise changes.
+    """
     hashes: dict = {}
     rows = _read_vectors(client, collection, dimension=dimension, hashes=hashes)
-    digest = hashlib.sha256()
+    digest = hashlib.sha256(b"vector-snapshot/decimal6/v1\n")
     for identity in sorted(hashes):
         digest.update(json.dumps([*identity, hashes[identity]], ensure_ascii=False).encode("utf-8"))
         digest.update(b"\n")
