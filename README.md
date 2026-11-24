@@ -1,5 +1,7 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
+> **Memory 专项定位（2026-11-24）**：本项目只承担 RAG 的短期会话、权限/版本化证据与上下文缓存隔离，不引入跨任务用户画像。工程补强与历史任职时间严格区分。见 [Memory 工程定位](docs/memory-engineering-positioning-20261124.md) 与 [安全回归](docs/validation/context-memory-cache-isolation-20261124.md)。
+
 > **一句话（EN）**: Enterprise multimodal RAG QA for cosmetics regulation — hybrid
 > retrieval, two-stage reranking, evidence gating that refuses unsupported answers,
 > uint32 RBAC, and evidence levels that separate implemented from production-validated.
