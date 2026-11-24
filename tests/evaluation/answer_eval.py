@@ -290,9 +290,7 @@ def _block(records: Sequence[tuple[AnswerEvalSample, ObservedAnswer]]) -> dict[s
         "verified_refusal_count": verified_refusals,
         "verified_refusal_precision": _rate(verified_refusals, len(refused)),
         "verified_refusal_recall": _rate(verified_refusals, len(must_refuse)),
-        "unclassified_refusal_count": sum(
-            1 for _, o in refused if o.refusal_reason_review in (None, "unclassified")
-        ),
+        "unclassified_refusal_count": sum(1 for _, o in refused if o.refusal_reason_review in (None, "unclassified")),
         "infrastructure_refusal_count": sum(
             1 for _, o in refused if o.refusal_reason_review == "infrastructure_failure"
         ),

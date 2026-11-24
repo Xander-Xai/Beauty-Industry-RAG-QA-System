@@ -368,7 +368,8 @@ def test_verified_refusal_metrics_do_not_reward_infrastructure_or_unclassified_r
             refusal_evidence_ref="fixture-review" if reason else None,
         )
         for sample, reason in zip(
-            samples, ("business_reason_verified", "infrastructure_failure", None, "wrong_business_reason"),
+            samples,
+            ("business_reason_verified", "infrastructure_failure", None, "wrong_business_reason"),
             strict=True,
         )
     ]
