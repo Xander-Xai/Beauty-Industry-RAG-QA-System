@@ -381,7 +381,9 @@ class SessionState:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     @classmethod
-    def for_identity(cls, session_id: str | None, owner_id: str, role_mask: int, dept_mask: int, epoch: str) -> SessionState:
+    def for_identity(
+        cls, session_id: str | None, owner_id: str, role_mask: int, dept_mask: int, epoch: str
+    ) -> SessionState:
         """Only reuse history within the current principal/permission/epoch scope."""
         scope = cls.scope_fingerprint(role_mask, dept_mask, epoch)
         if not owner_id or not session_id:
@@ -411,7 +413,9 @@ class SessionState:
         with cls._sessions_lock:
             existing = cls._sessions.get(key)
             if existing is None or (existing.owner_id, existing.session_id, existing.access_scope) != (
-                owner_id, session_id, access_scope
+                owner_id,
+                session_id,
+                access_scope,
             ):
                 new_session = cls(session_id=session_id, owner_id=owner_id, access_scope=access_scope)
                 cls._sessions[key] = new_session
@@ -439,7 +443,9 @@ class SessionState:
                 return None
             # Reject absent provenance instead of reconstructing it from defaults.
             if (data.get("owner_id"), data.get("session_id"), data.get("access_scope")) != (
-                owner_id, session_id, access_scope
+                owner_id,
+                session_id,
+                access_scope,
             ):
                 logger.debug("Redis session identity/scope mismatch; ignoring payload")
                 return None
