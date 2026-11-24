@@ -663,11 +663,15 @@ class TestPipelineLogicalCacheKey:
         scope = self._pipeline()._scope_cache_key_to_session
         base_role1 = self._pipeline()._build_cache_key(self._ctx(role_mask=1, dept_mask=2))
         base_role4 = self._pipeline()._build_cache_key(self._ctx(role_mask=4, dept_mask=2))
-        scoped_role1 = scope(base_role1, "session-1")
-        scoped_role4 = scope(base_role4, "session-1")
+        scoped_role1 = scope(base_role1, "session-1", "owner-1")
+        scoped_role4 = scope(base_role4, "session-1", "owner-1")
         assert scoped_role1 != scoped_role4
+        assert scoped_role1 != scope(base_role1, "session-1", "owner-2")
 
-    def test_session_scope_is_a_no_op_without_a_session_id(self):
+    def test_session_scope_rejects_missing_session_or_owner(self):
         scope = self._pipeline()._scope_cache_key_to_session
         base = self._pipeline()._build_cache_key(self._ctx())
-        assert scope(base, None) == base
+        with pytest.raises(ValueError, match="requires both"):
+            scope(base, None, "owner-1")
+        with pytest.raises(ValueError, match="requires both"):
+            scope(base, "session-1", None)
