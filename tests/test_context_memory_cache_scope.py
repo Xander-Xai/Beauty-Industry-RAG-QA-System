@@ -87,7 +87,8 @@ def test_rewrite_happens_before_cache_lookup_and_owner_cannot_reuse_foreign_answ
     stable = _ctx("alice")
     stable.rewrite_result = rewrite
     stable_key = pipeline._scope_cache_key_to_session(
-        pipeline._build_cache_key(stable), stable.session_id, stable.user_id
+        pipeline._build_cache_key(stable), stable.session_id, stable.user_id,
+        access_scope=pipeline._session_access_scope(stable),
     )
     records[stable_key] = {"answer": "Same-context retry"}
     stable.rewrite_result = None
