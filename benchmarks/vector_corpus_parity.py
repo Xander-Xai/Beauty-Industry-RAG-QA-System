@@ -13,6 +13,7 @@ import json
 import math
 from typing import Any
 
+from benchmarks.provenance import embedding_asset_version
 from benchmarks.source_approval import _index_content_fingerprint
 
 MAX_DOCUMENTS = 10_000
@@ -140,6 +141,11 @@ def read_vector_snapshot(client: Any, collection: str, dimension: int) -> tuple[
     return rows, digest.hexdigest()
 
 
+def validate_embedding_version(rows: list[dict], expected: str) -> None:
+    if not rows or any(row.get("embedding_version") != expected for row in rows):
+        raise ValueError("persisted_embedding_asset_version_mismatch")
+
+
 def gather_dense_parity(approval: dict) -> dict:
     """Inspect the same configured clients as production retrieval; never publish on error."""
     if approval.get("verified") is not True:
@@ -160,9 +166,17 @@ def gather_dense_parity(approval: dict) -> dict:
         vectors = EmbeddingService().qdrant_client
         try:
             dimension = config["embedding"]["text"]["dimension"]
+            version = embedding_asset_version(config["embedding"]["text"]["model_path"])
             rows, vector_sha = read_vector_snapshot(vectors, collection, dimension)
+            validate_embedding_version(rows, version)
             result = compare_payloads(_read_es(es.es_client, index), rows, approval)
-            return {**result, "index": index, "collection": collection, "vector_sha256": vector_sha}
+            return {
+                **result,
+                "index": index,
+                "collection": collection,
+                "vector_sha256": vector_sha,
+                "embedding_asset_version": version,
+            }
         finally:
             vectors.close()
     except Exception as exc:

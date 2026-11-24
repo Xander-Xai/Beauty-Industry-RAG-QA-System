@@ -9,6 +9,8 @@ from benchmarks.provenance import (
     CREDENTIAL_ENV_NAMES,
     collect_environment,
     credential_env_state,
+    embedding_asset_version,
+    model_identity,
     render_environment,
     sha256_json,
 )
@@ -136,3 +138,18 @@ def test_build_report_has_all_required_sections(tmp_path):
     ):
         assert heading in text
     assert "not historical production metrics" in text
+
+
+def test_same_size_weight_replacement_changes_asset_digest_even_with_revision_marker(tmp_path):
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "tokenizer.json").write_text("{}")
+    (tmp_path / "REVISION").write_text("declared-revision")
+    weight = tmp_path / "model.safetensors"
+    weight.write_bytes(b"aaaa")
+    first = model_identity(tmp_path)
+    version = embedding_asset_version(tmp_path)
+    weight.write_bytes(b"bbbb")
+    second = model_identity(tmp_path)
+    assert first["revision"] == second["revision"] == "declared-revision"
+    assert first["asset_sha256"] != second["asset_sha256"]
+    assert version != embedding_asset_version(tmp_path)

@@ -38,3 +38,15 @@ Before creating the fresh collection, validate the full returned embedding
 population, dimensions and finite nonzero cosine norms. Degenerate all-zero
 vectors cannot produce a BUILT receipt through this builder. This check does
 not attest model identity or independently verify persisted vector values.
+
+## Local model asset binding
+
+The builder hashes the actual model directory bytes (including tokenizer and
+configuration files), records the content digest in every vector's embedding
+version, and checks that identity again after embedding. Dense parity requires
+all vector payloads to match the current local model directory identity before
+and after the retrieval run. Old unbound experiment collections must be rebuilt
+under a fresh name. This is a reproducibility check, not a signature or proof of
+what a process loaded: use quiescent, reviewed local assets; a change-and-restore
+race is not excluded. Hashing large weight files adds setup/audit time, not query
+latency. No actual model retrieval has been run by this change.

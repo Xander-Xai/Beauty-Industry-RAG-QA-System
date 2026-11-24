@@ -272,26 +272,58 @@ def model_identity(path: str | Path | None) -> dict[str, Any]:
     if not resolved.exists():
         return {"present": False, "path": str(resolved), "revision": None}
 
-    # Prefer an explicit revision pinned by the asset itself.
-    for marker in ("revision.txt", "REVISION", ".revision"):
-        candidate = resolved / marker
-        if candidate.is_file():
-            value = candidate.read_text(encoding="utf-8").strip()
-            if value:
-                return {"present": True, "path": str(resolved), "revision": value}
-
-    # Otherwise fingerprint the files that determine what the model computes.
-    digest = hashlib.sha256()
+    # A declared revision is descriptive, not a substitute for reading bytes.
+    declared_revision = None
     try:
-        for child in sorted(p for p in resolved.rglob("*") if p.is_file()):
-            stat = child.stat()
-            digest.update(str(child.relative_to(resolved)).encode("utf-8"))
-            digest.update(b"\x1f")
-            digest.update(str(stat.st_size).encode("utf-8"))
-            digest.update(b"\x1e")
-    except OSError:
-        return {"present": True, "path": str(resolved), "revision": None}
-    return {"present": True, "path": str(resolved), "revision": f"sha256:{digest.hexdigest()}"}
+        for marker in ("revision.txt", "REVISION", ".revision"):
+            candidate = resolved / marker
+            if candidate.is_file():
+                value = candidate.read_text(encoding="utf-8").strip()
+                if value:
+                    declared_revision = value
+                    break
+        files = sorted(p for p in resolved.rglob("*") if p.is_file() and ".git" not in p.relative_to(resolved).parts)
+        if not files:
+            raise ValueError("empty model directory")
+        digest = hashlib.sha256(b"model-assets/bytes/v1\n")
+        for child in files:
+            before = child.stat()
+            file_digest = hashlib.sha256()
+            with child.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    file_digest.update(block)
+            after = child.stat()
+            if (before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise ValueError("model asset changed while reading")
+            entry = [child.relative_to(resolved).as_posix(), file_digest.hexdigest()]
+            digest.update(json.dumps(entry, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            digest.update(b"\n")
+        asset_sha256 = digest.hexdigest()
+    except (OSError, ValueError):
+        return {"present": True, "path": str(resolved), "revision": None, "asset_sha256": None}
+    return {
+        "present": True,
+        "path": str(resolved),
+        "revision": declared_revision or f"sha256:{asset_sha256}",
+        "asset_sha256": asset_sha256,
+        "identity_scheme": "model-assets/bytes/v1",
+    }
+
+
+def embedding_asset_version(path: str | Path) -> str:
+    """Bind experiment vectors to local model-directory bytes, not a revision claim."""
+    from benchmarks.backends import _looks_like_model_dir
+
+    ready, _ = _looks_like_model_dir(Path(path))
+    identity = model_identity(path) if ready else {}
+    digest = identity.get("asset_sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ValueError("model_asset_identity_unavailable")
+    return f"sha256:{digest}:attention-mask-mean-pooling-v1"
 
 
 def _model_identities() -> dict[str, Any]:
