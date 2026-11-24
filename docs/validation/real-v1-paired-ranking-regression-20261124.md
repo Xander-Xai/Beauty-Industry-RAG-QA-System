@@ -42,13 +42,14 @@ from pathlib import Path
 
 rows = [
     json.loads(line)
-    for line in Path(
-        "docs/validation/evidence/real-v1-approved-bm25-per-sample.jsonl"
-    ).read_text(encoding="utf-8").splitlines()
+    for line in Path("docs/validation/evidence/real-v1-approved-bm25-per-sample.jsonl")
+    .read_text(encoding="utf-8")
+    .splitlines()
     if line.strip()
 ]
 assert len(rows) == 27
 assert len({row["sample_id"] for row in rows}) == 27
+
 
 def score(row, arm):
     gold = set(row["gold_chunk_ids"])
@@ -63,6 +64,7 @@ def score(row, arm):
         dcg / ideal,
         int(first == 1),
     )
+
 
 for arm in ("ab_smartcn", "ab_ik_smart"):
     for group in ("all", "regulation", "ingredient"):
