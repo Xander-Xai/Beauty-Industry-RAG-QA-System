@@ -68,9 +68,7 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
             if record is not None and not isinstance(record, dict):
                 raise ValueError("invalid latency record")
             value = (record or {}).get("total_retrieval_ms")
-            if value is not None and (
-                type(value) not in (int, float) or not math.isfinite(value) or value < 0
-            ):
+            if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value < 0):
                 raise ValueError("invalid total retrieval latency")
             timings.append(value)
         if all(value is not None for value in timings):
@@ -126,8 +124,7 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
     # A P95 comparison on a cherry-picked subset is not a full-population comparison.
     full_latency = matched_latency == len(left)
     p95 = [
-        summarize_latency(records)["total_retrieval_ms"]["p95"] if full_latency else None
-        for records in latency_pairs
+        summarize_latency(records)["total_retrieval_ms"]["p95"] if full_latency else None for records in latency_pairs
     ]
     return {
         "kind": "PAIRED_RETRIEVAL_DIAGNOSTIC_ONLY",
