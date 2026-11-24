@@ -10,12 +10,12 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
 
 from core.exceptions import InfrastructureError
 
@@ -163,3 +163,38 @@ def release_scope(epoch: str) -> str:
     if not industrial_enabled():
         return epoch
     return f"{epoch}:{current_manifest(epoch).digest}:{china_today().isoformat()}"
+
+
+def validate_industrial_startup(config: dict) -> None:
+    """Refuse unsafe industrial deployments before accepting traffic."""
+    if not industrial_enabled():
+        return
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    if config.get("deployment_mode") != "production" or config.get("auth", {}).get("dev_mode"):
+        raise RuntimeError("industrial profile requires production mode and verified identity")
+    if os.environ.get("JWT_ALGORITHM") != "RS256":
+        raise RuntimeError("industrial profile requires RS256")
+    origins = os.environ.get("CORS_ORIGINS", "").split(",")
+    if not all(origin.strip().startswith("https://") and "*" not in origin for origin in origins):
+        raise RuntimeError("industrial profile requires explicit HTTPS origins")
+    required = (
+        "JWT_PRIVATE_KEY_PATH", "JWT_PUBLIC_KEY_PATH", "DATABASE_URL", "REDIS_PASSWORD",
+        "QDRANT_API_KEY", "ELASTICSEARCH_USERNAME", "ELASTICSEARCH_PASSWORD",
+        "VLLM_4B_URL", "VLLM_GEN_14B_URL",
+    )
+    if any(not os.environ.get(k, "").strip() for k in required):
+        raise RuntimeError("industrial profile is missing provisioned credentials or endpoints")
+    private = serialization.load_pem_private_key(Path(os.environ["JWT_PRIVATE_KEY_PATH"]).read_bytes(), password=None)
+    public = serialization.load_pem_public_key(Path(os.environ["JWT_PUBLIC_KEY_PATH"]).read_bytes())
+    if not isinstance(private, rsa.RSAPrivateKey) or not isinstance(public, rsa.RSAPublicKey):
+        raise RuntimeError("industrial profile requires an RSA key pair")
+    if private.key_size < 2048 or private.public_key().public_numbers() != public.public_numbers():
+        raise RuntimeError("industrial JWT keys are weak or mismatched")
+    db_url = os.environ["DATABASE_URL"]
+    if not db_url.startswith("sqlite:////") or not Path(db_url.removeprefix("sqlite:///")).is_file():
+        raise RuntimeError("industrial single-host identity database must be provisioned")
+    if not config.get("elasticsearch", {}).get("host", "").startswith("https://"):
+        raise RuntimeError("industrial Elasticsearch requires HTTPS")
+    current_manifest(config.get("knowledge_version_epoch", ""))

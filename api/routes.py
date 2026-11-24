@@ -39,6 +39,7 @@ from common.audit import audit_media_denied
 from common.auth import is_document_authorized, require_identity, validate_doc_id
 from common.config import get_config_dict
 from common.models import UserIdentity
+from common.release_contract import industrial_enabled
 from core.exceptions import InfrastructureError
 from core.pipeline import OnlineRAGPipeline
 from core.pipeline_context import RequestContext, SessionState
@@ -152,6 +153,8 @@ def query_handler(
     # control I). `require_identity` guarantees a non-blank principal in non-dev mode;
     # `QueryRequest.user_id` is kept only for request-model compatibility and is
     # ignored here.
+    if industrial_enabled() and req.image_path:
+        raise HTTPException(status_code=400, detail="Raw image paths are not supported in industrial mode")
     user_id = identity.user_id
 
     ctx = RequestContext(
@@ -525,6 +528,8 @@ def media_handler(
     3. 通过 common/minio_client 生成 60s 有效 presigned URL
     4. 返回 {doc_id, url, expires_in_seconds}
     """
+    if industrial_enabled():
+        raise HTTPException(status_code=503, detail="Version-bound media delivery is not released")
     try:
         doc_id = validate_doc_id(doc_id)
     except ValueError as exc:
