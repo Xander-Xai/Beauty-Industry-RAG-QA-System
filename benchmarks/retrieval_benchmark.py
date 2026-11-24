@@ -114,6 +114,39 @@ def _publication_blockers(
     return blockers
 
 
+def _suite_completion(runs: list[Any], configs: list[str], sample_ids: list[str]) -> dict[str, Any]:
+    """Check the requested population, not merely the intersection that happened to execute."""
+    expected = set(sample_ids)
+    blockers: list[str] = []
+    if not expected or len(expected) != len(sample_ids):
+        blockers.append("empty_or_duplicate_requested_samples")
+    if not configs or len(set(configs)) != len(configs):
+        blockers.append("empty_or_duplicate_requested_configs")
+    names = [run.outcome.config_name for run in runs]
+    if sorted(names) != sorted(configs):
+        blockers.append("configuration_population_mismatch")
+    for run in runs:
+        name = run.outcome.config_name
+        if not run.executed:
+            blockers.append(f"configuration_not_executed:{name}")
+            continue
+        ids = [row.sample_id for row in run.results]
+        if (
+            run.failures
+            or run.requested_sample_count != len(sample_ids)
+            or len(ids) != len(sample_ids)
+            or set(ids) != expected
+            or any(row.config != name for row in run.results)
+        ):
+            blockers.append(f"incomplete_sample_population:{name}")
+    return {
+        "complete": not blockers,
+        "requested_sample_count": len(sample_ids),
+        "requested_config_count": len(configs),
+        "blockers": blockers,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m benchmarks.retrieval_benchmark",
@@ -187,6 +220,11 @@ def build_parser() -> argparse.ArgumentParser:
             "(benchmarks.source_approval). Implied by --require-results only for publication; "
             "this flag makes the check a hard process exit as well as an artifact field"
         ),
+    )
+    parser.add_argument(
+        "--require-complete-suite",
+        action="store_true",
+        help="exit non-zero unless every requested configuration completes the exact requested sample population",
     )
     parser.add_argument("--list-configs", action="store_true", help="print configuration availability and exit")
     return parser
@@ -433,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
     # production adapters declare ``is_production``; a fixture (tests) does not.
     used_synthetic = bool(summary.get("any_synthetic"))
     metadata["synthetic_retriever"] = used_synthetic
+    suite = _suite_completion(runs, configs, [query.sample_id for query in queries])
+    metadata["suite_completion"] = suite
     # Publication is the conjunction of five independent facts, none of which may
     # be asserted by the caller:
     #   * ``any_results``          — a configuration actually executed (backend probes passed),
@@ -440,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     #   * ``not synthetic``        — the retriever declared production provenance (``is_production``),
     #   * ``source_approval_verified`` — every document in the queried Elasticsearch index
     #     resolves to a source a named reviewer approved for the exact bytes reviewed,
-    #   * the per-run BLOCKED/all-failed paths already produced no result above.
+    #   * suite completeness — every requested arm ran the exact requested sample population.
     # A synthetic fixture cannot be published by passing a flag; the flag no longer exists.
     # The fourth operand is the one this gate used to omit: retrieval could succeed
     # out of an index whose documents were `UNTRUSTED`, or mixed approved/unapproved,
@@ -448,7 +488,11 @@ def main(argv: list[str] | None = None) -> int:
     # the corpus it came from was not reviewable. Both facts now have to hold.
     source_approval_verified = bool(source_approval.get("verified"))
     results_are_benchmark = (
-        bool(summary.get("any_results")) and attributable and not used_synthetic and source_approval_verified
+        bool(summary.get("any_results"))
+        and attributable
+        and not used_synthetic
+        and source_approval_verified
+        and suite["complete"]
     )
     metadata["results_are_benchmark"] = results_are_benchmark
     # `publishable` is the reader-facing column: everything a downstream artifact
@@ -460,6 +504,8 @@ def main(argv: list[str] | None = None) -> int:
         used_synthetic=used_synthetic,
         source_approval=source_approval,
     )
+
+    metadata["publication_blockers"].extend(suite["blockers"])
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id
@@ -515,6 +561,10 @@ def main(argv: list[str] | None = None) -> int:
         if len(issues) > 10:
             print(f"  ... and {(source_approval.get('issues') or {}).get('issue_count', 0) - 10} more", file=sys.stderr)
         return 6
+
+    if args.require_complete_suite and not suite["complete"]:
+        print("\nIncomplete retrieval suite: " + ", ".join(suite["blockers"]), file=sys.stderr)
+        return 7
 
     if not metadata["publishable"]:
         print(

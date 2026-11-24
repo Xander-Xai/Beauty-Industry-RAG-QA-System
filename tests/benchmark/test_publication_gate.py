@@ -588,3 +588,77 @@ def test_attributability_requires_a_non_empty_dataset():
     assert report.valid_count == 0
     with pytest.raises(DatasetContractError, match="empty"):
         require_attributable(report, min_valid_fraction=0.0)
+
+@pytest.mark.parametrize(
+    ("mode", "complete", "blocker"),
+    [
+        ("full", True, None),
+        ("blocked", False, "configuration_not_executed:dense"),
+        ("partial", False, "incomplete_sample_population:dense"),
+        ("duplicate", False, "incomplete_sample_population:dense"),
+        ("different", False, "incomplete_sample_population:dense"),
+        ("wrong_config", False, "incomplete_sample_population:dense"),
+    ],
+)
+def test_complete_suite_checks_exact_requested_population(mode, complete, blocker):
+    from types import SimpleNamespace
+
+    from benchmarks.retrieval_benchmark import _suite_completion
+
+    def arm(name, ids):
+        return SimpleNamespace(
+            outcome=SimpleNamespace(config_name=name),
+            executed=True,
+            results=[SimpleNamespace(sample_id=sample, config=name) for sample in ids],
+            failures=[],
+            requested_sample_count=2,
+        )
+
+    left = arm("bm25", ["s0", "s1"])
+    right = arm("dense", ["s0", "s1"])
+    if mode == "blocked":
+        right.executed = False
+        right.results = []
+    elif mode == "partial":
+        right.results.pop()
+        right.failures.append({"sample_id": "s1"})
+    elif mode == "duplicate":
+        right.results[1].sample_id = "s0"
+    elif mode == "different":
+        right.results[1].sample_id = "s2"
+    elif mode == "wrong_config":
+        right.results[1].config = "bm25"
+    result = _suite_completion([left, right], ["bm25", "dense"], ["s0", "s1"])
+    assert result["complete"] is complete
+    assert result["blockers"] == ([] if complete else [blocker])
+
+
+def test_partial_suite_retains_artifacts_but_fails_strict_cli(tmp_path, run_cli, attributable_dataset):
+    from benchmarks import runner
+
+    original = run_cli.run_configuration
+
+    def execute(name, queries, top_k=10, **kwargs):
+        if name == "dense":
+            return runner.run_configuration(name, queries, top_k=top_k, force_block_reason="missing weights")
+        return original(name, queries, top_k=top_k, **kwargs)
+
+    run_cli.run_configuration = execute
+    out = tmp_path / "out"
+    code = run_cli.main(
+        [
+            "--configs",
+            "bm25,dense",
+            "--dataset",
+            str(attributable_dataset),
+            "--output-dir",
+            str(out),
+            "--require-complete-suite",
+        ]
+    )
+    assert code == 7
+    metadata = _metadata(out)
+    assert metadata["suite_completion"]["complete"] is False
+    assert "configuration_not_executed:dense" in metadata["publication_blockers"]
+    assert metadata["publishable"] is False
+    assert (_run_dir(out) / "per_query_results.jsonl").is_file()
