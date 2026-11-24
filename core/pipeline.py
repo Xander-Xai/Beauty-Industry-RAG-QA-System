@@ -462,7 +462,10 @@ class OnlineRAGPipeline:
                     # PRD §4.4: Rewrite 降级时 Evidence Gate 进入保守模式（阈值 ≥0.8）
                     ctx.evidence_result = self.evidence_gate.evaluate(
                         query=ctx.rewrite_result.rewritten_query,
-                        rerank_results=ctx.rerank_results,
+                        # Explicit failed inference cannot be used as generation evidence.
+                        rerank_results=(
+                            [] if ctx.ce_stage_provenance == "deterministic_fallback" else ctx.rerank_results
+                        ),
                         retrieval_agreement_score=ctx.retrieval_agreement_score,
                         weights_override=evidence_weights,
                         thresholds_override=evidence_thresholds,

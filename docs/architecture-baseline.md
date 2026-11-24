@@ -297,3 +297,6 @@ python3 -m tests.evaluation.validate_golden_set \
 在已有严格五臂基础上，`python -m benchmarks.strict_retrieval_suite --dataset <reviewed.jsonl> --output-dir <new-dir> --architecture-ablation` 增加五个候选：Hybrid+单 CE-A / 单 CE-B / 双 CE（无 BiEncoder），以及 Hybrid+BiEncoder+单 CE-A / 单 CE-B。每条混合路径召回深度一致，CE 候选上限 150。单 CE 使用自身 tokenizer 的 pair 截断、配置内的同步分批推理与独立原始排序分（ce_score_a/b），复用同一模型实例，不创建每查询后台聚合线程；与现有双 CE 的 CE-A 预截断和集成校准不同，因此比较的是完整候选链路，不是严格只改变模型个数的因果实验。不得把原始分直接接入线上 Evidence Gate。
 
 默认线上排序、阈值、旧五臂 CLI 不变。严格模式要求真实模型资产、数据来源批准、完整样本和可发布证据；本次仅增加实验入口，真实模型消融仍待执行。没有真实对照证据前不得裁剪现有阶段。延迟仅使用实际记录的总检索时间，未测分阶段耗时不得填造。
+
+
+线上 CE 失败边界（待 CI）：两路模型输出均使用严格推理校验；长度、有限性及校准分范围全部通过后才发布分数。推理异常、缺分或非法分进入显式 deterministic_fallback，保留诊断候选但 Evidence Gate 接收空证据并拒答，不把失败填零后校准为正常置信度。此变更不调整已配置校准参数，也不证明其校准质量。

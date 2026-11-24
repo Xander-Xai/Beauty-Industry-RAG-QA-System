@@ -196,37 +196,28 @@ class CrossEncoderEnsemble:
                 d_trunc = self._truncate_to_tokens(c.content, max_seq_len)
                 pairs.append((q_trunc, d_trunc))
 
-            # 通过 Rerank Batch Aggregator 批处理执行
-            if strict:
-                scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs, strict=True)
-                scores_b = self.batch_aggregator.batch_predict(self.ce_b, pairs, strict=True)
-                if (
-                    len(scores_a) != len(pairs)
-                    or len(scores_b) != len(pairs)
-                    or not all(math.isfinite(float(score)) for score in [*scores_a, *scores_b])
-                ):
-                    raise ValueError("invalid CrossEncoder scores")
-            else:
-                scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs)
-                scores_b = self.batch_aggregator.batch_predict(self.ce_b, pairs)
-
-            # 计算 Ensemble 分数 + Platt Scaling 校准（PRD §7.3）
-            raw_ensembles = []
-            for i, candidate in enumerate(candidates):
-                candidate.ce_score_a = float(scores_a[i]) if i < len(scores_a) else 0.0
-                candidate.ce_score_b = float(scores_b[i]) if i < len(scores_b) else 0.0
-                raw_avg = (candidate.ce_score_a + candidate.ce_score_b) / 2.0
-                raw_ensembles.append(raw_avg)
-
-            # Platt Scaling 校准：将原始分映射为 [0, 1] 概率
+            # Online and benchmark paths both require genuine model scores.
+            scores_a = self.batch_aggregator.batch_predict(self.ce_a, pairs, strict=True)
+            scores_b = self.batch_aggregator.batch_predict(self.ce_b, pairs, strict=True)
+            if len(scores_a) != len(pairs) or len(scores_b) != len(pairs):
+                raise ValueError("invalid CrossEncoder scores")
+            scores_a = [float(score) for score in scores_a]
+            scores_b = [float(score) for score in scores_b]
+            if not all(math.isfinite(score) for score in [*scores_a, *scores_b]):
+                raise ValueError("invalid CrossEncoder scores")
+            raw_ensembles = [a / 2.0 + b / 2.0 for a, b in zip(scores_a, scores_b, strict=True)]
             calibrated_scores = self._platt_scaler.calibrate_batch(raw_ensembles, "ensemble")
+            if len(calibrated_scores) != len(pairs) or not all(
+                math.isfinite(score) and 0 <= score <= 1 for score in calibrated_scores
+            ):
+                raise ValueError("invalid calibrated CrossEncoder scores")
             for i, candidate in enumerate(candidates):
+                candidate.ce_score_a = scores_a[i]
+                candidate.ce_score_b = scores_b[i]
                 candidate.ce_score_ensemble = calibrated_scores[i]
 
             # 按校准后分数降序排序
-            candidates.sort(key=lambda x: x.ce_score_ensemble, reverse=True)
-
-            results = candidates[:top_k]
+            results = sorted(candidates, key=lambda x: x.ce_score_ensemble, reverse=True)[:top_k]
 
             # PRD §12.2 / GAP-20: 记录 CLIP 来源文档在 Rerank Top-K 中的贡献度
             clip_in_top = sum(1 for r in results if r.source and "clip" in r.source)
@@ -250,4 +241,8 @@ class CrossEncoderEnsemble:
             _record("deterministic_fallback", f"{type(e).__name__}: {e}")
             if strict:
                 raise
+            for candidate in candidates:
+                candidate.ce_score_a = 0.0
+                candidate.ce_score_b = 0.0
+                candidate.ce_score_ensemble = 0.0
             return candidates[:top_k]
