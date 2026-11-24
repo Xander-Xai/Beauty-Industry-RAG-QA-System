@@ -700,9 +700,7 @@ def test_strict_publication_requires_clean_git_and_integrity(
     assert metadata["publishable"] is (expected is None)
     assert metadata["results_are_benchmark"] is metadata["publishable"]
     assert metadata["publication_blockers"] == ([] if expected is None else [expected])
-    assert code == (0 if expected is None else 8)
-
-def test_existing_run_directory_blocks_execution_and_preserves_evidence(
+    assert code == (0 if expected is None else 8)\n\n\ndef test_existing_run_directory_blocks_execution_and_preserves_evidence(
     tmp_path, run_cli, attributable_dataset, monkeypatch
 ):
     out = tmp_path / "out"
