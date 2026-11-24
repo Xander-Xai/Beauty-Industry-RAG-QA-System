@@ -52,7 +52,11 @@ def test_rewrite_happens_before_cache_lookup_and_owner_cannot_reuse_foreign_answ
     _setup_pipeline_mocks(pipeline, rewrite=rewrite)
     pipeline._complexity_evaluator = MagicMock()
     pipeline._complexity_evaluator.evaluate.return_value = False
-    pipeline._llm_client.generate.side_effect = [_result("Alice answer"), _result("Bob answer")]
+    pipeline._llm_client.generate.side_effect = [
+        _result("Alice answer"),
+        _result("Bob answer"),
+        _result("Alice after another turn"),
+    ]
 
     records = {}
     alice = _ctx("alice")
@@ -70,12 +74,27 @@ def test_rewrite_happens_before_cache_lookup_and_owner_cannot_reuse_foreign_answ
     assert alice.cache_hit_level == "MISS"
     assert pipeline.process(_ctx("bob")) == "Bob answer"
 
+    # Same owner/session but the conversation has advanced: old answers are
+    # invalidated, rather than replayed into the new conversational state.
     alice_revisit = _ctx("alice")
-    assert pipeline.process(alice_revisit) == "Alice answer"
-    assert alice_revisit.cache_hit_level == "L2_SESSION"
-    assert pipeline._llm_client.generate.call_count == 2
-    assert pipeline._query_rewriter.rewrite.call_count == 3
-    assert len(records) == 3
+    assert pipeline.process(alice_revisit) == "Alice after another turn"
+    assert alice_revisit.cache_hit_level == "MISS"
+    assert pipeline._llm_client.generate.call_count == 3
+    assert len(records) == 4
+
+    # A retry against the same *unchanged* historical state may reuse a
+    # verified owner/session/history key, without another generation.
+    stable = _ctx("alice")
+    stable.rewrite_result = rewrite
+    stable_key = pipeline._scope_cache_key_to_session(
+        pipeline._build_cache_key(stable), stable.session_id, stable.user_id
+    )
+    records[stable_key] = {"answer": "Same-context retry"}
+    stable.rewrite_result = None
+    assert pipeline.process(stable) == "Same-context retry"
+    assert stable.cache_hit_level == "L2_SESSION"
+    assert pipeline._llm_client.generate.call_count == 3
+    assert pipeline._query_rewriter.rewrite.call_count == 4
 
 
 @patch("core.pipeline.log_audit_event")
