@@ -79,9 +79,7 @@ def _read_observations(raw: bytes) -> tuple[list[ObservedAnswer], dict[str, floa
         if item.sample_id in timings:
             raise AnswerEvalError("Duplicate observation identity")
         elapsed = row.get("end_to_end_ms")
-        if elapsed is not None and (
-            type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0
-        ):
+        if elapsed is not None and (type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0):
             raise AnswerEvalError("Invalid end-to-end timing")
         timings[item.sample_id] = elapsed
         observations.append(item)
@@ -164,14 +162,15 @@ def compare(
         "arms": arm_results,
         "strict_success_delta": (
             reports[1].metrics["strict_task_success_count"] - reports[0].metrics["strict_task_success_count"]
-        ) / n if complete else None,
+        )
+        / n
+        if complete
+        else None,
         "improved_ids": gains,
         "regressed_ids": losses,
         "high_risk_regressed_ids": high_risk_losses,
         "candidate_has_no_observed_strict_regression": not losses if complete else None,
-        "candidate_has_no_observed_rbac_leak": (
-            reports[1].metrics["rbac_leak_count"] == 0 if complete else None
-        ),
+        "candidate_has_no_observed_rbac_leak": (reports[1].metrics["rbac_leak_count"] == 0 if complete else None),
         "cases": rows,
         "publication_eligibility": "NOT_ASSESSED",
         "runtime_provenance_independently_verified": False,
