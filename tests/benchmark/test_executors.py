@@ -386,3 +386,77 @@ def test_rerank_adapter_refuses_fallback_or_failed_model():
     )
     with pytest.raises(BenchmarkUnavailable, match="not verified"):
         adapter.retrieve(_query(), 2)
+
+
+def test_architecture_single_ce_does_not_run_biencoder():
+    class Single:
+        def predict(self, pairs, **kwargs):
+            return [float(index) for index, _ in enumerate(pairs)]
+
+    adapter = RerankExecutor(
+        config_name="hybrid_rrf_crossencoder_b",
+        bm25=FakeBM25([_hit("doc-1", "c1", "a")]),
+        dense=FakeDense([_hit("doc-2", "c2", "b")]),
+        crossencoder=Single(),
+        availability=_available("hybrid_rrf_crossencoder_b"),
+        k=60,
+    )
+    items = adapter.retrieve(_query(), 2)
+    assert adapter._biencoder is None
+    assert not adapter.is_production
+    assert {item.key for item in items} == {"doc-1::c1", "doc-2::c2"}
+    assert items[0].score > items[1].score
+
+
+def test_architecture_alternatives_are_registered():
+    from benchmarks import backends
+    from benchmarks.strict_retrieval_suite import ARCHITECTURE_ARMS
+
+    for arm in ARCHITECTURE_ARMS:
+        adapter = build_executor(arm)
+        assert adapter.name == arm
+        assert arm in backends.REQUIRED_BACKENDS
+        paths = backends.rerank_model_paths(arm)
+        assert ("biencoder" in paths) == ("_biencoder" in arm)
+        assert len([key for key in paths if key.startswith("cross_encoder_")]) == (2 if arm.endswith("_dual") else 1)
+
+
+@pytest.mark.parametrize("model_key", ["a", "b"])
+@pytest.mark.parametrize("bad_scores", [[0.9], [float("nan"), 0.9], [[0.1], [0.9]]])
+def test_single_ce_rejects_incomplete_nonfinite_or_nonscalar_scores(model_key, bad_scores):
+    from types import SimpleNamespace
+
+    from benchmarks.executors import SingleCrossEncoderReranker
+
+    class Model:
+        def predict(self, pairs, **kwargs):
+            return bad_scores
+
+    reranker = SingleCrossEncoderReranker("hybrid_rrf_crossencoder_" + model_key, model=Model())
+    candidates = [SimpleNamespace(content="a"), SimpleNamespace(content="b")]
+    ctx = SimpleNamespace()
+    with pytest.raises(BenchmarkUnavailable, match="invalid single CrossEncoder scores"):
+        reranker.rerank("q", candidates, 1, ctx=ctx, strict=True)
+    assert not hasattr(ctx, "ce_stage_provenance")
+
+
+def test_single_ce_reuses_bounded_synchronous_model_and_separate_scores():
+    from types import SimpleNamespace
+
+    from benchmarks.executors import SingleCrossEncoderReranker
+
+    class Model:
+        def predict(self, pairs, **kwargs):
+            assert kwargs["batch_size"] == len(pairs)
+            return [0.1, 0.9]
+
+    reranker = SingleCrossEncoderReranker("hybrid_rrf_crossencoder_b", model=Model())
+    candidates = [
+        SimpleNamespace(content="a", ce_score_ensemble=0.0),
+        SimpleNamespace(content="b", ce_score_ensemble=0.0),
+    ]
+    ctx = SimpleNamespace()
+    assert reranker.rerank("q", candidates, 1, ctx=ctx, strict=True) == [candidates[1]]
+    assert ctx.ce_stage_provenance == "cross_encoder_b"
+    assert candidates[1].ce_score_b == 0.9
+    assert candidates[1].ce_score_ensemble == 0.0

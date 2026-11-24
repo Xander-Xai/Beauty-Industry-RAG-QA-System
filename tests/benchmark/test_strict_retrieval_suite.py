@@ -18,3 +18,12 @@ def test_strict_suite_cannot_silently_publish_partial_results(monkeypatch):
     assert "--require-source-approval" in captured
     assert "--allow-dirty" not in captured
     assert "--limit" not in captured
+
+
+def test_architecture_ablation_preserves_strict_gates(monkeypatch):
+    captured = []
+    monkeypatch.setattr(suite.retrieval_benchmark, "main", lambda args: captured.extend(args) or 2)
+    assert suite.main(["--dataset", "reviewed.jsonl", "--output-dir", "new-run", "--architecture-ablation"]) == 2
+    assert captured[captured.index("--configs") + 1].split(",") == list(suite.ARMS + suite.ARCHITECTURE_ARMS)
+    assert "--require-publishable" in captured
+    assert "--require-complete-suite" in captured

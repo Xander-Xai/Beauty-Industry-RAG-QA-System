@@ -203,3 +203,32 @@ def test_regulation_bypasses_cache_and_requires_fresh_answer_gate():
     pipeline._write_cache(ctx)
     pipeline._cache.get.assert_not_called()
     pipeline._cache.set.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "field,value", [("image_path", "image.png"), ("ab_experiment", "experiment"), ("degraded", True)]
+)
+def test_request_policy_bypasses_text_cache_reads_and_writes(field, value):
+    pipeline = OnlineRAGPipeline()
+    pipeline._cache = MagicMock()
+    pipeline._cache.get.return_value = {"answer": "unrelated cached answer"}
+    ctx = _ctx("cache-policy-owner")
+    ctx.rewrite_result = _make_rewrite()
+    ctx.final_response = "new response"
+    setattr(ctx, field, value)
+    assert not pipeline._read_cache_after_rewrite(ctx)
+    assert ctx.cache_hit_level == "DISABLED_REQUEST_POLICY"
+    pipeline._write_cache(ctx)
+    pipeline._cache.get.assert_not_called()
+    pipeline._cache.set.assert_not_called()
+
+
+def test_failed_rerank_is_not_written_to_response_cache():
+    pipeline = OnlineRAGPipeline()
+    pipeline._cache = MagicMock()
+    ctx = _ctx("cache-policy-owner")
+    ctx.rewrite_result = _make_rewrite()
+    ctx.final_response = "unverified response"
+    ctx.ce_stage_provenance = "deterministic_fallback"
+    pipeline._write_cache(ctx)
+    pipeline._cache.set.assert_not_called()

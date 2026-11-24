@@ -9,13 +9,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from benchmarks.failure_triage import analyze_failures
+from benchmarks.latency import summarize_latency
 from benchmarks.metrics import ndcg_graded
-from benchmarks.models import GRADE_THRESHOLD_RELEVANT, RELEVANCE_GRADES
+from benchmarks.models import GRADE_THRESHOLD_RELEVANT, RELEVANCE_GRADES, RELEVANCE_HIGHLY_RELEVANT
 
 
 def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) -> dict[str, Any]:
@@ -34,6 +36,12 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
     hit1_deltas = []
     recall_deltas, rr_deltas, ndcg_deltas = [], [], []
     excluded = 0
+    regulation_scored = 0
+    regulation_graded = 0
+    regulation_hit_losses = []
+    regulation_high_grade_losses = []
+    regulation_high_grade_misses = []
+    latency_pairs = [[], []]
     for sample in sorted(left):
         a, b = left[sample], right[sample]
         gold = set(a["relevant_items"])
@@ -53,10 +61,34 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
             )
         ):
             raise ValueError("invalid relevance grades")
+        # Latency must be matched across both arms, not filled with zero.
+        timings = []
+        for row in (a, b):
+            record = row.get("latency_ms")
+            if record is not None and not isinstance(record, dict):
+                raise ValueError("invalid latency record")
+            value = (record or {}).get("total_retrieval_ms")
+            if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value < 0):
+                raise ValueError("invalid total retrieval latency")
+            timings.append(value)
+        if all(value is not None for value in timings):
+            for index, value in enumerate(timings):
+                latency_pairs[index].append({"total_retrieval_ms": value})
         if not gold:
             excluded += 1
             continue
         ranks = [row["retrieved_items"][:10] for row in (a, b)]
+        if a.get("business_type") == "regulation":
+            regulation_scored += 1
+            if gold.intersection(ranks[0]) and not gold.intersection(ranks[1]):
+                regulation_hit_losses.append(sample)
+            if grades is not None:
+                regulation_graded += 1
+                highly_relevant = {key for key, grade in grades.items() if grade == RELEVANCE_HIGHLY_RELEVANT}
+                if highly_relevant.intersection(ranks[0]).difference(ranks[1]):
+                    regulation_high_grade_losses.append(sample)
+                if highly_relevant.difference(ranks[1]):
+                    regulation_high_grade_misses.append(sample)
         recall = [len(gold.intersection(rank)) / len(gold) for rank in ranks]
         rr = [next((1 / i for i, item in enumerate(rank, 1) if item in gold), 0.0) for rank in ranks]
         if grades is not None:
@@ -88,6 +120,12 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
         elif rr[0] and not rr[1]:
             hit_losses.append(sample)
     n = len(recall_deltas)
+    matched_latency = len(latency_pairs[0])
+    # A P95 comparison on a cherry-picked subset is not a full-population comparison.
+    full_latency = matched_latency == len(left)
+    p95 = [
+        summarize_latency(records)["total_retrieval_ms"]["p95"] if full_latency else None for records in latency_pairs
+    ]
     return {
         "kind": "PAIRED_RETRIEVAL_DIAGNOSTIC_ONLY",
         "baseline": baseline,
@@ -107,6 +145,22 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
         "recall_regressed_ids": regressions,
         "hit_gained_ids": hit_gains,
         "hit_lost_ids": hit_losses,
+        "regulation": {
+            "scored_samples": regulation_scored,
+            "grade_verified_samples": regulation_graded,
+            "hit_lost_ids": regulation_hit_losses,
+            "high_grade_passage_lost_ids": regulation_high_grade_losses,
+            "high_grade_passage_missing_candidate_ids": regulation_high_grade_misses,
+            "criticality_independently_reviewed": False,
+        },
+        "paired_latency": {
+            "matched_samples": matched_latency,
+            "expected_samples": len(left),
+            "complete": full_latency,
+            "baseline_p95_ms": p95[0],
+            "candidate_p95_ms": p95[1],
+            "delta_p95_ms": p95[1] - p95[0] if full_latency else None,
+        },
         "publication_eligibility": "NOT_ASSESSED",
     }
 

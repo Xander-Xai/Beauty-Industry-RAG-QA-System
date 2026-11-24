@@ -350,3 +350,37 @@ class TestThresholdBoundaries:
         # ce_top3_mean = (1.0 + 0.75)/2 = 0.875
         # score = 0.4*1.0 + 0.2*0.875 + 0.2*0.5 + 0.2*0.5 = 0.4 + 0.175 + 0.1 + 0.1 = 0.775
         assert result.decision == "pass"
+
+
+def test_concurrent_evaluations_do_not_share_degradation_marker():
+    """A healthy concurrent evaluation must not clear a failed request's marker."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    gate = EvidenceEnsembleGate()
+    gate.rerank_status = {"status": "AVAILABLE"}
+    failed = Event()
+    healthy_finished = Event()
+    candidates = [make_rerank_result("d1", 0.9), make_rerank_result("d2", 0.9)]
+
+    def consistency(query, _docs):
+        if query == "failed":
+            gate._doc_consistency_degraded = True
+            failed.set()
+            assert healthy_finished.wait(5), "healthy evaluation did not finish"
+            return 0.0
+        return 1.0
+
+    with patch.object(gate, "_compute_doc_consistency", side_effect=consistency):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future = pool.submit(gate.evaluate, "failed", candidates, 0.9)
+            try:
+                assert failed.wait(5), "failed evaluation did not reach the barrier"
+                normal = pool.submit(gate.evaluate, "healthy", candidates, 0.9).result(timeout=5)
+                assert normal.gate_mode == "normal"
+            finally:
+                healthy_finished.set()
+            degraded = future.result(timeout=5)
+
+    assert degraded.gate_mode == "fail_closed_doc_consistency_unavailable"
+    assert degraded.doc_consistency_score == 0.0
