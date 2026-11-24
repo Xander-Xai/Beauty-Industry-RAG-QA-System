@@ -258,12 +258,12 @@ class OnlineRAGPipeline:
                 # ③+④ 并行执行 Query Rewrite + 复杂度评估（两者无数据依赖）
                 t_rewrite = time.time()
                 session_state = SessionState.for_identity(
-                ctx.session_id or "default",
-                ctx.user_id,
-                ctx.user_role_mask,
-                ctx.user_dept_mask,
-                config.get("knowledge_version_epoch", "default"),
-            )
+                    ctx.session_id or "default",
+                    ctx.user_id,
+                    ctx.user_role_mask,
+                    ctx.user_dept_mask,
+                    config.get("knowledge_version_epoch", "default"),
+                )
                 recent_dialogs = session_state.get_recent_queries()
 
                 # M-5: 使用共享线程池，避免每请求创建 ThreadPoolExecutor
@@ -577,7 +577,10 @@ class OnlineRAGPipeline:
 
                 # ⑱ 更新会话
                 session = SessionState.for_identity(
-                    ctx.session_id or "default", ctx.user_id, ctx.user_role_mask, ctx.user_dept_mask,
+                    ctx.session_id or "default",
+                    ctx.user_id,
+                    ctx.user_role_mask,
+                    ctx.user_dept_mask,
                     config.get("knowledge_version_epoch", "default"),
                 )
                 session.add_round(ctx.user_input, ctx.final_response, ctx.rewrite_result)
@@ -1104,9 +1107,12 @@ class OnlineRAGPipeline:
 
         try:
             session_state = SessionState.for_identity(
-                    ctx.session_id or "default", ctx.user_id, ctx.user_role_mask, ctx.user_dept_mask,
-                    config.get("knowledge_version_epoch", "default"),
-                )
+                ctx.session_id or "default",
+                ctx.user_id,
+                ctx.user_role_mask,
+                ctx.user_dept_mask,
+                config.get("knowledge_version_epoch", "default"),
+            )
 
             # PRD §4.6: 法规类强制启用 Answer Plan — 首次截断后生成大纲
             business_type = ctx.rewrite_result.business_type if ctx.rewrite_result else "general"
@@ -1190,8 +1196,8 @@ class OnlineRAGPipeline:
                 if not ctx.session_id or not ctx.user_id:
                     return
                 cache_key = self._scope_cache_key_to_session(
-                cache_key, ctx.session_id, ctx.user_id, access_scope=self._session_access_scope(ctx)
-            )
+                    cache_key, ctx.session_id, ctx.user_id, access_scope=self._session_access_scope(ctx)
+                )
             cache_value = {
                 "answer": ctx.final_response,
                 "doc_ids": ctx.evidence_locked_doc_ids,
