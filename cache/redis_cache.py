@@ -79,7 +79,7 @@ class RedisCache:
 
             rc = config["redis"]["cache"]
             # 支持密码认证：优先从环境变量读取，其次从配置读取
-            redis_password = os.environ.get("REDIS_CACHE_PASSWORD") or rc.get("password")
+            redis_password = os.environ.get("REDIS_CACHE_PASSWORD") or os.environ.get("REDIS_PASSWORD") or rc.get("password")
             connect_kwargs = {
                 "host": rc["host"],
                 "port": rc["port"],

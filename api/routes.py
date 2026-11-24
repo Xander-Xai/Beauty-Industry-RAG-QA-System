@@ -39,6 +39,7 @@ from common.audit import audit_media_denied
 from common.auth import is_document_authorized, require_identity, validate_doc_id
 from common.config import get_config_dict
 from common.models import UserIdentity
+from core.exceptions import InfrastructureError
 from core.pipeline import OnlineRAGPipeline
 from core.pipeline_context import RequestContext, SessionState
 
@@ -85,6 +86,22 @@ def _decrement_active():
     global _active_requests
     with _active_requests_lock:
         _active_requests -= 1
+
+
+def _execute_pipeline(ctx) -> None:
+    pipeline = get_pipeline()
+    metrics = get_metrics()
+    _increment_active()
+    try:
+        try:
+            pipeline.process(ctx)
+        except InfrastructureError:
+            ctx.degraded = True
+            ctx.evidence_locked_doc_ids = []
+            ctx.http_status_override = (503, {"error": "dependency_unavailable", "detail": "服务暂时不可用"})
+        metrics.record_request(ctx)
+    finally:
+        _decrement_active()
 
 
 # ─── POST /api/query ────────────────────────────────────────
@@ -146,15 +163,7 @@ def query_handler(
         user_dept_mask=identity.user_dept_mask,
     )
 
-    pipeline = get_pipeline()
-    metrics = get_metrics()
-
-    _increment_active()
-    try:
-        pipeline.process(ctx)
-        metrics.record_request(ctx)
-    finally:
-        _decrement_active()
+    _execute_pipeline(ctx)
 
     cache_hit = ctx.cache_hit_level in ("L1", "L2", "L2_SESSION")
 
@@ -196,14 +205,6 @@ def chat_handler(
 
     维护会话状态（最近 6 轮对话历史），支持证据锁定续写。
     """
-    session_state = SessionState.for_identity(
-        req.session_id,
-        identity.user_id,
-        identity.user_role_mask,
-        identity.user_dept_mask,
-        _config.get("knowledge_version_epoch", "default"),
-    )
-
     ctx = RequestContext(
         user_input=req.message,
         session_id=req.session_id,
@@ -212,17 +213,19 @@ def chat_handler(
         user_dept_mask=identity.user_dept_mask,
     )
 
-    pipeline = get_pipeline()
-    metrics = get_metrics()
+    _execute_pipeline(ctx)
+    if ctx.http_status_override is not None:
+        status_code, content = ctx.http_status_override
+        return JSONResponse(status_code=status_code, content=content)
 
-    _increment_active()
-    try:
-        pipeline.process(ctx)
-        metrics.record_request(ctx)
-    finally:
-        _decrement_active()
-
-    # 构建完整对话历史
+    # Read after the pipeline publishes the turn, including cross-process Redis state.
+    session_state = SessionState.for_identity(
+        req.session_id,
+        identity.user_id,
+        identity.user_role_mask,
+        identity.user_dept_mask,
+        _config.get("knowledge_version_epoch", "default"),
+    )
     history: list[ChatMessage] = []
     for round_data in session_state.dialog_rounds:
         history.append(ChatMessage(role="user", content=round_data["user_input"]))

@@ -8,12 +8,19 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ./models:/models
+      # Keep Python modules under /app/models; assets are mounted separately.
+      - ./models:/assets/models:ro
     environment:
       - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN:?SERVICE_AUTH_TOKEN must be set}
       - QDRANT_HOST=qdrant
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - REDIS_CACHE_HOST=redis
+      - REDIS_STATE_HOST=redis
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set}
       - ELASTICSEARCH_USERNAME=elastic
       - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:?ELASTICSEARCH_PASSWORD must be set}
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set}

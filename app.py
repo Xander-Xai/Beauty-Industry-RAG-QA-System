@@ -149,6 +149,7 @@ def create_app() -> FastAPI:
         # H-9: 生产模式下禁用 Swagger/ReDoc，避免暴露 API schema
         docs_url="/docs" if _get_sys_config().deployment_mode != "production" else None,
         redoc_url="/redoc" if _get_sys_config().deployment_mode != "production" else None,
+        openapi_url="/openapi.json" if _get_sys_config().deployment_mode != "production" else None,
     )
 
     # ── 中间件（CORS + 请求日志）──────────────────────────

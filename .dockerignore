@@ -13,6 +13,8 @@
 # Secrets and local configuration: must never enter an image layer
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
 config_local.json
 keys
@@ -27,7 +29,8 @@ deploy/prometheus-token
 
 # Model caches and weights: supplied by config.json model_path at runtime,
 # never vendored into the image
-models
+models/*
+!models/*.py
 blip-image-captioning-large
 chatglm3-6b
 roberta-base

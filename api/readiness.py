@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -423,6 +424,7 @@ def evaluate_readiness(
     executor = ThreadPoolExecutor(max_workers=max(len(DEPENDENCY_KEYS), 1))
     try:
         futures = {key: executor.submit(active[key], context) for key in DEPENDENCY_KEYS if key in active}
+        deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS + _PROBE_GRACE_SECONDS
         dependencies: dict[str, bool] = {}
         for key in DEPENDENCY_KEYS:
             if key not in futures:
@@ -430,7 +432,7 @@ def evaluate_readiness(
                 dependencies[key] = False
                 continue
             try:
-                dependencies[key] = bool(futures[key].result(timeout=PROBE_TIMEOUT_SECONDS + _PROBE_GRACE_SECONDS))
+                dependencies[key] = bool(futures[key].result(timeout=max(0.0, deadline - time.monotonic())))
             except TimeoutError:
                 # Treat an overrunning probe as unavailable rather than waiting
                 # for it: the answer we need is "can it serve right now", and a

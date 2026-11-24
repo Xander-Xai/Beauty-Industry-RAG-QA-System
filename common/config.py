@@ -99,6 +99,19 @@ def _apply_env_overrides(raw: dict) -> dict:
         if env_value:
             qdrant_data[config_name] = int(env_value)
 
+    es_data = raw.setdefault("elasticsearch", {})
+    for env_name, key in (("ELASTICSEARCH_HOST", "host"), ("ELASTICSEARCH_INDEX", "index")):
+        if os.environ.get(env_name):
+            es_data[key] = os.environ[env_name]
+    for namespace in ("cache", "state"):
+        redis_data = raw.setdefault("redis", {}).setdefault(namespace, {})
+        for key in ("host", "port", "db"):
+            value = os.environ.get(f"REDIS_{namespace.upper()}_{key.upper()}")
+            if value:
+                redis_data[key] = int(value) if key in {"port", "db"} else value
+    if os.environ.get("KNOWLEDGE_VERSION_EPOCH"):
+        raw["knowledge_version_epoch"] = os.environ["KNOWLEDGE_VERSION_EPOCH"]
+
     return raw
 
 
