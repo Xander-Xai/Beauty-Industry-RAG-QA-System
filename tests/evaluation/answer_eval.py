@@ -52,6 +52,7 @@ GATE_REJECT = "reject"
 GATE_DECISIONS = (GATE_PASS, GATE_ENHANCED, GATE_REJECT)
 
 EVIDENCE_SUPPORT_LEVELS = ("supported", "partially_supported", "unsupported", "not_applicable")
+REFUSAL_REASON_REVIEWS = ("business_reason_verified", "wrong_business_reason", "infrastructure_failure", "unclassified")
 
 
 class AnswerEvalError(RuntimeError):
@@ -130,6 +131,8 @@ class ObservedAnswer:
     notes: str = ""
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
     final_disposition: str | None = None
+    refusal_reason_review: str | None = None
+    refusal_evidence_ref: str | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any], where: str = "observation") -> ObservedAnswer:
@@ -160,6 +163,16 @@ class ObservedAnswer:
                 raise AnswerEvalError(f"{where}: observed answer text is empty")
             if final == "answered" and support in ("supported", "partially_supported") and not citations:
                 raise AnswerEvalError(f"{where}: supported answer requires citations")
+        reason = payload.get("refusal_reason_review")
+        reason_ref = payload.get("refusal_evidence_ref")
+        if reason is not None:
+            if final != "refused" or reason not in REFUSAL_REASON_REVIEWS:
+                raise AnswerEvalError(f"{where}: invalid refusal reason review")
+            reason_ref = _require_str(payload, "refusal_evidence_ref", where)
+            if reason == "business_reason_verified":
+                _require_str(payload, "answer_text", where)
+        elif reason_ref is not None:
+            raise AnswerEvalError(f"{where}: refusal evidence requires a reason review")
         return cls(
             sample_id=_require_str(payload, "sample_id", where),
             answer_text=str(payload.get("answer_text") or ""),
@@ -173,6 +186,8 @@ class ObservedAnswer:
             notes=str(payload.get("notes") or ""),
             raw=dict(payload.get("raw") or {}),
             final_disposition=final,
+            refusal_reason_review=reason,
+            refusal_evidence_ref=reason_ref,
         )
 
     @property
@@ -223,12 +238,24 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
+def _verified_refusal(sample: AnswerEvalSample, observation: ObservedAnswer) -> bool:
+    return (
+        sample.must_refuse
+        and observation.final_disposition == "refused"
+        and observation.evidence_support == "not_applicable"
+        and observation.refusal_reason_review == "business_reason_verified"
+        and bool(observation.refusal_evidence_ref and observation.refusal_evidence_ref.strip())
+        and bool(observation.answer_text.strip())
+        and not observation.rbac_leak
+    )
+
+
 def _strict_task_success(sample: AnswerEvalSample, observation: ObservedAnswer) -> bool:
     """Require the expected outcome, evidence support and no observed RBAC leak."""
     if observation.rbac_leak:
         return False
     if sample.must_refuse:
-        return not observation.answered and observation.evidence_support == "not_applicable"
+        return _verified_refusal(sample, observation)
     return (
         observation.answered
         and observation.evidence_support == "supported"
@@ -249,6 +276,7 @@ def _block(records: Sequence[tuple[AnswerEvalSample, ObservedAnswer]]) -> dict[s
     high_risk_answered = [(s, o) for s, o in answered if s.high_risk]
     high_risk_unsupported = sum(1 for _, o in high_risk_answered if o.evidence_support == "unsupported")
     strict_successes = sum(_strict_task_success(s, o) for s, o in records)
+    verified_refusals = sum(_verified_refusal(s, o) for s, o in records)
     return {
         "sample_count": len(records),
         "strict_task_success_count": strict_successes,
@@ -259,6 +287,13 @@ def _block(records: Sequence[tuple[AnswerEvalSample, ObservedAnswer]]) -> dict[s
         "answer_evidence_support_rate_inclusive": _rate(strict_supported + partial, len(answered)),
         "unsupported_answer_rate": _rate(unsupported, len(answered)),
         "refusal_recall": _rate(sum(1 for _, o in must_refuse if not o.answered), len(must_refuse)),
+        "verified_refusal_count": verified_refusals,
+        "verified_refusal_precision": _rate(verified_refusals, len(refused)),
+        "verified_refusal_recall": _rate(verified_refusals, len(must_refuse)),
+        "unclassified_refusal_count": sum(1 for _, o in refused if o.refusal_reason_review in (None, "unclassified")),
+        "infrastructure_refusal_count": sum(
+            1 for _, o in refused if o.refusal_reason_review == "infrastructure_failure"
+        ),
         "false_refusal_rate": _rate(sum(1 for _, o in should_answer if not o.answered), len(should_answer)),
         "rbac_leak_count": sum(1 for _, o in records if o.rbac_leak),
         "high_risk_sample_count": len([s for s, _ in answered if s.high_risk]),
@@ -347,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     output = {
         **report.as_dict(),
         "kind": "REVIEWED_ANSWER_DIAGNOSTIC_ONLY",
+        "scoring_revision": "reviewed-refusal-reason-v2",
         "observations_sha256": hashlib.sha256(raw).hexdigest(),
         "coverage": len(observations) / len(samples),
         "strict_task_success_lower_bound": strict_successes / len(samples),
