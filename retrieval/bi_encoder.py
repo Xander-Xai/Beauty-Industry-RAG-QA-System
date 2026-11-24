@@ -64,10 +64,12 @@ class BiEncoderReranker:
     两条路径都按余弦相似度排序并保留 top_k；任一步骤抛错都降级为原始候选顺序。
     """
 
-    def __init__(self):
+    def __init__(self, *, embedding_service=None):
         self._bi_encoder_model = None
         self._bi_encoder_tokenizer = None
-        self._embedding_service = None
+        # The canonical online pipeline owns the shared BGE encoder.
+        # Standalone/offline callers retain their own lazy service.
+        self._embedding_service = embedding_service
         self._bi_encoder_model_path = (
             config.get("gpu1", {}).get("models", {}).get("bi_encoder", {}).get("model_path", None)
         )
