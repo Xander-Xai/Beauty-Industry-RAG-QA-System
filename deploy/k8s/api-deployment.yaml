@@ -65,18 +65,15 @@ spec:
   #
   # Raising this count requires a shared user store first. That is real work
   # this minimal contract does not do, and it is NOT a production-readiness
-  # claim. maxUnavailable: 0 below also keeps the rollout from dropping the
-  # single replica's traffic.
+  # claim. Recreate deliberately avoids an overlapping rollout with two
+  # independent user stores; it permits downtime and does not preserve data.
   replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: beauty-industry-rag-qa
       app.kubernetes.io/component: api
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   template:
     metadata:
       labels:

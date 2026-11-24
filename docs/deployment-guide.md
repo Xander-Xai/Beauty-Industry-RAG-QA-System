@@ -6,7 +6,7 @@
 
 ## 1. 当前推荐部署路径
 
-当前仓库推荐先走 `app.py` 单体部署，再逐步补微服务。原因：
+当前仓库只推荐 `app.py` 模块化单体作为在线主线；微服务不属于默认演进路线。原因：
 
 - React 前端默认联调的是单体 `/api/*` 接口
 - `Dockerfile`、`docker-compose.yml`、`/api/health` 已对齐
@@ -15,14 +15,14 @@
 canonical 部署形态是 Docker Compose + FastAPI 单体。Kubernetes、Kafka、GraphRAG 与 Multi-Agent **不是**上线前置条件；如需引入，属于独立的架构变更，不能由本手册的上线检查默认视为已具备。
 
 > **微服务 Compose 不是可上线形态，不要对外暴露其 Gateway。**
-> `docker-compose.microservices.yml` 会把 `api-gateway` 发布到宿主机 `8000`，但该组件的
+> `docker-compose.microservices.yml` 现将所有实验组件放入 `experimental-microservices` profile，且不发布任何实验组件的宿主机端口。仅在隔离的开发环境显式启用，使用容器内部网络检查；不要接入真实数据、反向代理或外部流量。该组件的
 > 鉴权边界并不完整：只有 `generation.py` 的路由校验用户身份；`retrieval.py` /
 > `rewrite.py` 没有入站鉴权，且 `POST /v1/recall` 直接信任调用方传入的
 > `user_role_mask` / `user_dept_mask`。这些路由向服务转发时也没有附带
 > `X-Service-Token`，而下游 `retrieval-service` / `rewrite-service` 要求它：设置
 > `SERVICE_AUTH_TOKEN` 时调用 fail-closed（不可用），未设置时（开发模式）则既不鉴权
 > 也不校验服务令牌。因此该形态**未经鉴权边界验证，不应作为可上线的公开入口**；
-> 上线请只使用上方的单体形态。这里只记录部署限制，不扩展为微服务重构。
+> 上线请只使用上方的单体形态。此处仅收紧部署边界，不扩展为微服务重构。显式实验仍须满足 overlay 中的环境变量插值要求，未启用 profile 不等于 Compose 不解析其配置。
 
 仓库另有一套最小 Kubernetes manifest（`deploy/k8s/`，单个 workload = FastAPI 单体 `app.py`），见 [Kubernetes 部署契约](deployment-guide-k8s.md)。它的证据等级只到 `REPO_VERIFIED`（静态检查），真实集群部署为 `PENDING`，不改变本手册的 canonical 推荐。
 
