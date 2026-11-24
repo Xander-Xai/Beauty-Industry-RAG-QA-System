@@ -33,7 +33,7 @@
 
 ## 可复查的已有证据
 
-- 真实 ES 8.11.0、212 文档、27 条签署金标，BM25 `Recall@10=0.7037`、`MRR@10=0.4088`，仅代表**该索引与该单臂实验**：`docs/validation/real-v1-approved-bm25-run.md`。
+- 真实 ES 8.11.0、212 文档、27 条签署金标，BM25 `Recall@10=0.7037`、`MRR@10=0.4088`，仅代表**该索引与该单臂实验**：`docs/validation/real-v1-approved-bm25-run.md`；可复核数据：`docs/validation/evidence/real-v1-approved-bm25-evidence.json`。
 - 工程现状与所有待验收项：`docs/production-readiness.md`、`docs/architecture-baseline.md`、`docs/evidence-map.md`。
 - 可执行基础检查：
 
