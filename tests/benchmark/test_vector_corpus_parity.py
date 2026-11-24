@@ -81,9 +81,7 @@ def test_persisted_vector_fingerprint_detects_vector_only_change():
     assert read_vector_snapshot(first, "experiment", 2)[1] == before
     assert first.scroll.call_args.kwargs["with_vectors"] is True
     receipt = {"verified": True, "payload_sha256": "same", "vector_sha256": before}
-    assert dense_parity_blockers(receipt, {**receipt, "vector_sha256": after}) == [
-        "dense_corpus_changed_during_run"
-    ]
+    assert dense_parity_blockers(receipt, {**receipt, "vector_sha256": after}) == ["dense_corpus_changed_during_run"]
 
 
 @pytest.mark.parametrize(
