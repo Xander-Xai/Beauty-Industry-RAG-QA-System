@@ -157,6 +157,7 @@ def test_nonregulatory_numeric_change_retains_existing_semantics(answer_gate):
     result = answer_gate.verify(answer=answer, top_doc=doc, is_regulation=False)
     assert result.passed is True
 
+
 @pytest.mark.parametrize("use_nli,scores", [(False, (0.0, 1.0)), (True, (0.95, 0.02)), (True, (0.05, 0.1))])
 def test_regulatory_negation_cannot_bypass_semantic_gate(answer_gate, monkeypatch, use_nli, scores):
     source = "本法规明确规定该成分可用于特定类别产品，企业必须按照规定完成安全评估以及备案流程。"

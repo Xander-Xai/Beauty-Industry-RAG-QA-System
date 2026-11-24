@@ -191,6 +191,7 @@ def test_dialog_history_api_does_not_return_previous_role_data(monkeypatch):
     assert response["rounds"] == []
     assert response["locked_doc_ids"] == []
 
+
 def test_regulation_bypasses_cache_and_requires_fresh_answer_gate():
     pipeline = OnlineRAGPipeline()
     ctx = _ctx("regulatory-owner")
