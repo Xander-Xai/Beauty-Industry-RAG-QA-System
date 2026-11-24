@@ -282,9 +282,7 @@ def model_identity(path: str | Path | None) -> dict[str, Any]:
                 if value:
                     declared_revision = value
                     break
-        files = sorted(
-            p for p in resolved.rglob("*") if p.is_file() and ".git" not in p.relative_to(resolved).parts
-        )
+        files = sorted(p for p in resolved.rglob("*") if p.is_file() and ".git" not in p.relative_to(resolved).parts)
         if not files:
             raise ValueError("empty model directory")
         digest = hashlib.sha256(b"model-assets/bytes/v1\n")
