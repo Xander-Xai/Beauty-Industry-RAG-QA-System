@@ -172,3 +172,21 @@ def test_context_cache_key_changes_with_authorization_or_epoch(monkeypatch, chan
     else:
         monkeypatch.setitem(config, "knowledge_version_epoch", "new-test-epoch")
     assert key() != original
+
+
+def test_dialog_history_api_does_not_return_previous_role_data(monkeypatch):
+    from types import SimpleNamespace
+
+    from api.routes import _config, dialog_history_handler
+
+    monkeypatch.setattr("core.pipeline_context._get_redis_client", lambda: None)
+    session_id = "api-scope-regression-session"
+    owner = "api-scope-regression-owner"
+    epoch = _config.get("knowledge_version_epoch", "default")
+    previous = SessionState.for_identity(session_id, owner, 3, 2, epoch)
+    previous.add_round("restricted question", "restricted answer")
+    previous.lock_evidence(["restricted-doc"])
+    identity = SimpleNamespace(user_id=owner, user_role_mask=1, user_dept_mask=2)
+    response = dialog_history_handler(session_id=session_id, identity=identity)
+    assert response["rounds"] == []
+    assert response["locked_doc_ids"] == []
