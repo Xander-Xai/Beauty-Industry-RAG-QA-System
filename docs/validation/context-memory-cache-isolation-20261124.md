@@ -17,8 +17,10 @@ protect this separate cache key.
 
 1. Rewrite/complexity complete before any answer-cache read.
 2. Cache lookup uses the rewritten query and final `requires_context`.
-3. Context-dependent answers are scoped to **owner ID + session ID + existing
-   role/dept mask, knowledge epoch and prompt/schema version**.
+3. Context-dependent answers are scoped to **owner ID + session ID +
+   SHA-256 of the current recent dialogue content**, plus existing role/dept
+   mask, knowledge epoch and prompt/schema version. Adding a new dialogue turn
+   changes the cache key, so an older referent's answer is not replayed.
 4. No authenticated owner or session: skip contextual cache **read and write**,
    rather than falling back to a globally shared key.
 5. Rewrite fallback: preserve the existing no-cache policy.
@@ -34,7 +36,8 @@ pytest -q tests/test_pipeline_ordering.py tests/test_pipeline_context.py
 
 The new tests use fake LLM, fake cache and the existing pipeline mocks:
 - same session, query and role/dept, different owner → distinct answer;
-- same owner and session → cached answer can be reused;
+- same owner and session with **changed conversation** → cached answer invalidated;
+- a retry with unchanged conversation state → cache reuse is allowed;
 - old globally cached raw-query answer cannot short-circuit Rewrite;
 - anonymous contextual request cannot hit/write shared cache;
 - rewrite failure skips cache read and write.
