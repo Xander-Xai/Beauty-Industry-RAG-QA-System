@@ -36,6 +36,38 @@ _ALL_METRIC_NAMES = [
 ]
 
 
+def aggregate_ragas_scores(raw: Any, metrics: list[str], expected_rows: int) -> dict[str, float]:
+    """Compute means from actual score observations, never missing-as-zero."""
+    rows = getattr(raw, "scores", None)
+    if not isinstance(rows, list):
+        to_pandas = getattr(raw, "to_pandas", None)
+        if callable(to_pandas):
+            try:
+                rows = to_pandas().to_dict(orient="records")
+            except Exception:
+                return {}
+
+    def valid(value: Any) -> bool:
+        return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+    result: dict[str, float] = {}
+    if isinstance(rows, list):
+        if expected_rows <= 0 or len(rows) != expected_rows or any(not isinstance(row, dict) for row in rows):
+            return {}
+        for metric in metrics:
+            values = [float(row[metric]) for row in rows if valid(row.get(metric))]
+            if values:
+                result[metric] = math.fsum(values) / len(values)
+        return result
+
+    # Legacy integrations/test doubles may provide scalar aggregate attributes.
+    for metric in metrics:
+        value = getattr(raw, metric, None)
+        if valid(value):
+            result[metric] = float(value)
+    return result
+
+
 class EvaluatorUnavailableError(RuntimeError):
     """Raised when the RAGAS dependency itself cannot be imported."""
 
@@ -330,25 +362,9 @@ class RAGASEvaluator:
         raw = ragas_evaluate(dataset=dataset, metrics=selected_metrics)
         self._last_raw_result = raw
 
-        # A metric RAGAS did not return is a metric that was not measured, not a
-        # metric that scored zero. `getattr(raw, metric, 0.0)` reported an absent
-        # or non-numeric value as 0.0 while `evaluator_status` still said
-        # `available`, so an unmeasured metric was indistinguishable from a
-        # measured failure. Missing metrics are omitted from the mapping instead;
-        # the report renders an absent metric as `—`, and a run that measured
-        # nothing at all is reported unavailable rather than as a zero-scored one.
-        scores: dict[str, float] = {}
-        missing: list[str] = []
-        for metric in selected_metric_names:
-            value = getattr(raw, metric, None)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                missing.append(metric)
-                continue
-            numeric = float(value)
-            if not math.isfinite(numeric):  # NaN or infinity is not a measured score
-                missing.append(metric)
-                continue
-            scores[metric] = numeric
+        # Prefer the real EvaluationResult row API over legacy scalar doubles.
+        scores = aggregate_ragas_scores(raw, selected_metric_names, len(questions))
+        missing = [metric for metric in selected_metric_names if metric not in scores]
 
         if missing:
             msg = "RAGAS 未返回可用的指标: " + ", ".join(missing)
