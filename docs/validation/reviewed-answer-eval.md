@@ -41,3 +41,7 @@ caller-supplied, not independently authenticated by this CLI. Keep original
 run provenance and human review evidence separately.
 
 No real observations or performance claims are supplied by this change.
+
+The CLI hashes the exact dataset bytes it scores, and requires a new output path.
+Existing reports, symlinks and hard-link aliases are never overwritten; use a fresh
+run-specific output file for each execution.

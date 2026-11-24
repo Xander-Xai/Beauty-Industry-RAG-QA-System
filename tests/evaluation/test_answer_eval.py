@@ -7,6 +7,7 @@ answer here comes from a model.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -247,3 +248,42 @@ def test_cli_rejects_string_boolean_in_gold(tmp_path):
         main(args)
     assert exc.value.code == 2
     assert not out.exists()
+
+
+def test_cli_dataset_hash_is_bound_to_scored_bytes(tmp_path, monkeypatch):
+    args, out = _cli_inputs(tmp_path, [_sample()], [_reviewed_row()])
+    dataset = Path(args[1])
+    original = dataset.read_bytes()
+    read = Path.read_bytes
+
+    def changed_after_read(path):
+        raw = read(path)
+        if path == dataset:
+            path.write_text("changed after reading", encoding="utf-8")
+        return raw
+
+    monkeypatch.setattr(Path, "read_bytes", changed_after_read)
+    assert main(args) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["dataset_sha256"] == hashlib.sha256(original).hexdigest()
+    assert report["sample_count"] == 1
+
+
+@pytest.mark.parametrize("existing", ["regular", "hardlink"])
+def test_cli_never_overwrites_existing_output_or_input_alias(tmp_path, existing):
+    args, out = _cli_inputs(tmp_path, [_sample()], [_reviewed_row()])
+    source = Path(args[1])
+    original = source.read_bytes()
+    if existing == "hardlink":
+        try:
+            out.hardlink_to(source)
+        except (OSError, NotImplementedError):
+            pytest.skip("Hard links unavailable")
+    else:
+        out.write_text("previous report", encoding="utf-8")
+    previous = out.read_bytes()
+    with pytest.raises(SystemExit) as exc:
+        main(args)
+    assert exc.value.code == 2
+    assert source.read_bytes() == original
+    assert out.read_bytes() == previous
