@@ -274,10 +274,16 @@ def probe_qdrant(ctx: ProbeContext) -> bool:
             from common.config import get_config_dict
 
             epoch = get_config_dict()["knowledge_version_epoch"]
-            count = client.count(collection, count_filter=Filter(must=[
-                FieldCondition(key="doc_version_epoch", match=MatchValue(value=epoch)),
-                FieldCondition(key="status", match=MatchValue(value="active")),
-            ]), exact=True)
+            count = client.count(
+                collection,
+                count_filter=Filter(
+                    must=[
+                        FieldCondition(key="doc_version_epoch", match=MatchValue(value=epoch)),
+                        FieldCondition(key="status", match=MatchValue(value="active")),
+                    ]
+                ),
+                exact=True,
+            )
             return count.count > 0
         return True
     except Exception:
@@ -337,9 +343,17 @@ def probe_elasticsearch(ctx: ProbeContext) -> bool:
             from common.config import get_config_dict
 
             epoch = get_config_dict()["knowledge_version_epoch"]
-            result = client.count(index=es_cfg["index"], query={"bool": {"filter": [
-                {"term": {"doc_version_epoch": epoch}}, {"term": {"status": "active"}},
-            ]}})
+            result = client.count(
+                index=es_cfg["index"],
+                query={
+                    "bool": {
+                        "filter": [
+                            {"term": {"doc_version_epoch": epoch}},
+                            {"term": {"status": "active"}},
+                        ]
+                    }
+                },
+            )
             return result["count"] > 0 and result.get("_shards", {}).get("failed", 0) == 0
         return bool(client.ping())
     except Exception:

@@ -406,7 +406,8 @@ def revalidate_current_identity(identity: UserIdentity) -> None:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Identity store unavailable") from exc
     if (
-        current is None or not current.is_active
+        current is None
+        or not current.is_active
         or current.role_mask != identity.user_role_mask
         or current.dept_mask != identity.user_dept_mask
     ):

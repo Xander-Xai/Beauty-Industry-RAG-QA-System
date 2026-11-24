@@ -83,9 +83,10 @@ def _check_redis_rate_limit(ip: str) -> bool:
     try:
         if industrial_enabled():
             count = rl.eval(
-                "local n=redis.call('INCR',KEYS[1]); "
-                "if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end; return n",
-                1, key, int(_LOGIN_RATE_WINDOW),
+                "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end; return n",
+                1,
+                key,
+                int(_LOGIN_RATE_WINDOW),
             )
             if int(count) > _LOGIN_RATE_LIMIT:
                 raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后重试")

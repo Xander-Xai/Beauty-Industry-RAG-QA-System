@@ -25,14 +25,16 @@ def test_manifest_rejects_tampered_expired_or_mis_scoped_evidence(tmp_path):
         "source_ref": "synthetic-source",
         "review_ref": "synthetic-review",
     }
-    raw = json.dumps({
-        "schema": "rag-release/v1",
-        "epoch": "reviewed-v1",
-        "approval_ref": "synthetic-approval",
-        "valid_from": "2026-01-01",
-        "valid_until": "2026-12-31",
-        "records": [record],
-    }).encode()
+    raw = json.dumps(
+        {
+            "schema": "rag-release/v1",
+            "epoch": "reviewed-v1",
+            "approval_ref": "synthetic-approval",
+            "valid_from": "2026-01-01",
+            "valid_until": "2026-12-31",
+            "records": [record],
+        }
+    ).encode()
     path = tmp_path / "manifest.json"
     path.write_bytes(raw)
     manifest = load_manifest(str(path), hashlib.sha256(raw).hexdigest())

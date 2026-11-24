@@ -180,9 +180,15 @@ def validate_industrial_startup(config: dict) -> None:
     if not all(origin.strip().startswith("https://") and "*" not in origin for origin in origins):
         raise RuntimeError("industrial profile requires explicit HTTPS origins")
     required = (
-        "JWT_PRIVATE_KEY_PATH", "JWT_PUBLIC_KEY_PATH", "DATABASE_URL", "REDIS_PASSWORD",
-        "QDRANT_API_KEY", "ELASTICSEARCH_USERNAME", "ELASTICSEARCH_PASSWORD",
-        "VLLM_4B_URL", "VLLM_GEN_14B_URL",
+        "JWT_PRIVATE_KEY_PATH",
+        "JWT_PUBLIC_KEY_PATH",
+        "DATABASE_URL",
+        "REDIS_PASSWORD",
+        "QDRANT_API_KEY",
+        "ELASTICSEARCH_USERNAME",
+        "ELASTICSEARCH_PASSWORD",
+        "VLLM_4B_URL",
+        "VLLM_GEN_14B_URL",
     )
     if any(not os.environ.get(k, "").strip() for k in required):
         raise RuntimeError("industrial profile is missing provisioned credentials or endpoints")

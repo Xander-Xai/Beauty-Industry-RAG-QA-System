@@ -114,6 +114,7 @@ def _apply_env_overrides(raw: dict) -> dict:
 
     asset_root = os.environ.get("MODEL_ASSET_ROOT")
     if asset_root:
+
         def remap(node):
             if isinstance(node, dict):
                 for key, value in node.items():
@@ -127,6 +128,7 @@ def _apply_env_overrides(raw: dict) -> dict:
             elif isinstance(node, list):
                 for value in node:
                     remap(value)
+
         remap(raw)
 
     return raw
