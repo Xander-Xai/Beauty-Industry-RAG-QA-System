@@ -28,7 +28,7 @@ from typing import Any, Protocol
 from benchmarks import backends
 from benchmarks.corpus import distinct_passages
 from benchmarks.latency import new_latency_record, stage_availability, summarize_latency, timed_stage
-from benchmarks.metrics import aggregate_results, score_ranking
+from benchmarks.metrics import aggregate_results, grades_from_relevant, score_ranking
 from benchmarks.models import (
     HIT_KS,
     MRR_K,
@@ -185,6 +185,7 @@ def run_configuration(
         deduped = dedupe_preserving_rank(items)[:top_k]
         # The RelevantItem objects are passed whole, not reduced to keys: that
         # is what carries the annotator's relevance grade into graded NDCG.
+        relevant_grades = grades_from_relevant(query.relevant_items)
         scored = score_ranking(
             list(query.relevant_items),
             [item.key for item in deduped],
@@ -199,7 +200,7 @@ def run_configuration(
                 business_type=query.business_type,
                 difficulty=query.difficulty,
                 config=config_name,
-                relevant_keys=tuple(item.key for item in query.relevant_items),
+                relevant_keys=tuple(relevant_grades),
                 retrieved_keys=tuple(item.key for item in deduped),
                 first_relevant_rank=scored["first_relevant_rank"],
                 recall_at=scored["recall_at"],
@@ -207,6 +208,7 @@ def run_configuration(
                 reciprocal_rank=scored["reciprocal_rank"],
                 ndcg_at_10=scored["ndcg_at_10"],
                 latency_ms=latency,
+                relevant_grades=relevant_grades,
             )
         )
     if failures and not results:
