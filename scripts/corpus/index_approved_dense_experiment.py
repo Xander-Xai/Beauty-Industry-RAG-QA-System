@@ -16,8 +16,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from benchmarks.backends import _looks_like_model_dir
+from benchmarks.provenance import embedding_asset_version
 from benchmarks.source_approval import gather_source_approval_evidence
-from benchmarks.vector_corpus_parity import _read_es, compare_payloads, read_vector_snapshot
+from benchmarks.vector_corpus_parity import (
+    _read_es,
+    compare_payloads,
+    read_vector_snapshot,
+    validate_embedding_version,
+)
 from offline.text_ingestion import BGETextEmbedder, QdrantTextWriter, TextChunk
 from scripts.corpus.index_real_corpus_v1_es import load_chunks
 
@@ -134,9 +140,12 @@ def run(config: dict, args: argparse.Namespace) -> dict:
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
         dimension = int(text_config["dimension"])
-        embedder = BGETextEmbedder(str(model_path), dimension, model_revision=text_config.get("model_revision"))
+        version = embedding_asset_version(model_path)
+        embedder = BGETextEmbedder(str(model_path), dimension, model_revision=version.split(":attention-mask")[0])
         embeddings = embedder.embed_texts([chunk.text for chunk in chunks])
         validate_cosine_vectors(embeddings, len(chunks), dimension)
+        if embedding_asset_version(model_path) != version or embedder.embedding_version != version:
+            raise ValueError("model_asset_identity_changed")
         # Persist unit inputs explicitly: local cosine storage may retain raw inputs on disk.
         embeddings = normalize_cosine_vectors(embeddings)
         from qdrant_client.http.models import Distance, VectorParams
@@ -150,10 +159,16 @@ def run(config: dict, args: argparse.Namespace) -> dict:
         writer = QdrantTextWriter(vectors, collection, dimension, embedding_version=embedder.embedding_version)
         writer.upsert(chunks, embeddings)
         stored_rows, vector_sha = read_vector_snapshot(vectors, collection, dimension)
+        validate_embedding_version(stored_rows, version)
         receipt = compare_payloads(_read_es(es.es_client, index), stored_rows, approval)
         if receipt != compare_payloads(rows, rows, approval):
             raise ValueError("ES payload changed during build")
-        return {**result, "status": "BUILT", "written": True, "parity": {**receipt, "vector_sha256": vector_sha}}
+        return {
+            **result,
+            "status": "BUILT",
+            "written": True,
+            "parity": {**receipt, "vector_sha256": vector_sha, "embedding_asset_version": version},
+        }
     finally:
         vectors.close()
 
