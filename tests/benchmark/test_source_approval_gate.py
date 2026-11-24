@@ -969,9 +969,7 @@ def test_index_count_change_blocks_approval(corpus_root, ledger):
     assert codes(report)["index_count_changed"] == 1
 
 
-def test_bm25_cli_refuses_same_identity_payload_drift(
-    tmp_path, corpus_root, ledger, monkeypatch, cli_with_retriever
-):
+def test_bm25_cli_refuses_same_identity_payload_drift(tmp_path, corpus_root, ledger, monkeypatch, cli_with_retriever):
     rows = two_approved_documents()
     before = verify(FakeES(rows), corpus_root, ledger).as_dict()
     after = verify(FakeES([{**rows[0], "content": "changed passage"}, rows[1]]), corpus_root, ledger).as_dict()
