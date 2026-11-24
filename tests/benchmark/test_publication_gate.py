@@ -663,3 +663,41 @@ def test_partial_suite_retains_artifacts_but_fails_strict_cli(tmp_path, run_cli,
     assert "configuration_not_executed:dense" in metadata["publication_blockers"]
     assert metadata["publishable"] is False
     assert (_run_dir(out) / "per_query_results.jsonl").is_file()
+
+
+@pytest.mark.parametrize(
+    ("git_sha", "dirty", "integrity", "expected"),
+    [
+        ("deadbeef", False, [], None),
+        ("deadbeef", True, [], "git_provenance_not_clean"),
+        (None, None, [], "git_provenance_not_clean"),
+        ("deadbeef", False, ["cross-row conflict"], "dataset_integrity_failed"),
+    ],
+)
+def test_strict_publication_requires_clean_git_and_integrity(
+    tmp_path, run_cli, attributable_dataset, monkeypatch, git_sha, dirty, integrity, expected
+):
+    # Isolate the publication decision; these rankings are fixtures, not model evidence.
+    monkeypatch.setattr(ContractFixtureRetriever, "is_production", True, raising=False)
+    monkeypatch.setattr(run_cli, "git_provenance", lambda root: (git_sha, dirty))
+    monkeypatch.setattr(run_cli, "dataset_integrity_errors", lambda rows: integrity)
+    monkeypatch.setattr(run_cli, "gather_source_approval_evidence", lambda **kwargs: {"verified": True})
+    out = tmp_path / "out"
+    code = run_cli.main(
+        [
+            "--config",
+            "bm25",
+            "--dataset",
+            str(attributable_dataset),
+            "--output-dir",
+            str(out),
+            "--allow-dirty",
+            "--require-publishable",
+        ]
+    )
+    metadata = _metadata(out)
+    assert metadata["suite_completion"]["complete"] is True
+    assert metadata["publishable"] is (expected is None)
+    assert metadata["results_are_benchmark"] is metadata["publishable"]
+    assert metadata["publication_blockers"] == ([] if expected is None else [expected])
+    assert code == (0 if expected is None else 8)

@@ -226,6 +226,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit non-zero unless every requested configuration completes the exact requested sample population",
     )
+    parser.add_argument(
+        "--require-publishable",
+        action="store_true",
+        help="exit non-zero unless the complete run meets all publication gates",
+    )
     parser.add_argument("--list-configs", action="store_true", help="print configuration availability and exit")
     return parser
 
@@ -487,25 +492,22 @@ def main(argv: list[str] | None = None) -> int:
     # and the artifact still said `results_are_benchmark: true`. The number was real;
     # the corpus it came from was not reviewable. Both facts now have to hold.
     source_approval_verified = bool(source_approval.get("verified"))
-    results_are_benchmark = (
-        bool(summary.get("any_results"))
-        and attributable
-        and not used_synthetic
-        and source_approval_verified
-        and suite["complete"]
-    )
-    metadata["results_are_benchmark"] = results_are_benchmark
-    # `publishable` is the reader-facing column: everything a downstream artifact
-    # would need in order to quote a number as this project's retrieval benchmark.
-    metadata["publishable"] = results_are_benchmark
-    metadata["publication_blockers"] = _publication_blockers(
+    blockers = _publication_blockers(
         any_results=bool(summary.get("any_results")),
         attributable=attributable,
         used_synthetic=used_synthetic,
         source_approval=source_approval,
     )
-
-    metadata["publication_blockers"].extend(suite["blockers"])
+    blockers.extend(suite["blockers"])
+    if git_dirty is not False or not git_sha:
+        blockers.append("git_provenance_not_clean")
+    if integrity_errors:
+        blockers.append("dataset_integrity_failed")
+    # The publication boolean and diagnostic reasons share a single truth source.
+    # --allow-dirty permits investigation only, never formal publication.
+    metadata["publication_blockers"] = blockers
+    metadata["results_are_benchmark"] = not blockers
+    metadata["publishable"] = not blockers
 
     output_root = Path(args.output_dir)
     run_dir = output_root / run_id
@@ -572,6 +574,8 @@ def main(argv: list[str] | None = None) -> int:
             + "".join(f"  - {blocker}\n" for blocker in metadata["publication_blockers"]),
             file=sys.stderr,
         )
+        if args.require_publishable:
+            return 8
     return 0
 
 
