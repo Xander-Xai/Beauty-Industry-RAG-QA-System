@@ -301,7 +301,20 @@ def test_strict_task_success_requires_expected_disposition_and_no_leak():
     ]
     observations = [
         _obs("good"),
-        _obs("correct-refusal", gate="reject", support="not_applicable", answer="", citations=()),
+        ObservedAnswer(
+            sample_id="correct-refusal",
+            answer_text="insufficient evidence",
+            citations=(),
+            gate_decision="reject",
+            answer_gate_passed=None,
+            evidence_support="not_applicable",
+            rbac_leak=False,
+            reviewer="fixture",
+            reviewed_at="2026-11-25",
+            final_disposition="refused",
+            refusal_reason_review="business_reason_verified",
+            refusal_evidence_ref="fixture-source-review",
+        ),
         _obs("leak", rbac_leak=True),
         _obs("partial", support="partially_supported"),
         _obs("wrong-refusal", gate="reject", support="not_applicable", answer="", citations=()),
@@ -332,6 +345,66 @@ def test_cli_answer_gate_contradiction_is_not_success(tmp_path):
 
 def test_cli_rejects_nonboolean_answer_gate_result(tmp_path):
     args, out = _cli_inputs(tmp_path, [_sample()], [_reviewed_row(answer_gate_passed="false")])
+    with pytest.raises(SystemExit) as exc:
+        main(args)
+    assert exc.value.code == 2
+    assert not out.exists()
+
+
+def test_verified_refusal_metrics_do_not_reward_infrastructure_or_unclassified_refusals(tmp_path):
+    samples = [
+        _sample("correct", must_refuse=True),
+        _sample("outage", must_refuse=True),
+        _sample("unknown", must_refuse=True),
+        _sample("unnecessary"),
+    ]
+    rows = [
+        _reviewed_row(
+            sample_id=sample.sample_id,
+            final_disposition="refused",
+            evidence_support="not_applicable",
+            citations=[],
+            refusal_reason_review=reason,
+            refusal_evidence_ref="fixture-review" if reason else None,
+        )
+        for sample, reason in zip(
+            samples, ("business_reason_verified", "infrastructure_failure", None, "wrong_business_reason"),
+            strict=True,
+        )
+    ]
+    args, out = _cli_inputs(tmp_path, samples, rows)
+    assert main(args) == 0
+    metrics = json.loads(out.read_text(encoding="utf-8"))["metrics"]
+    assert metrics["refusal_recall"] == 1  # legacy disposition-only diagnostic
+    assert metrics["verified_refusal_count"] == 1
+    assert metrics["verified_refusal_precision"] == 0.25
+    assert metrics["verified_refusal_recall"] == pytest.approx(1 / 3)
+    assert metrics["strict_task_success_count"] == 1
+    assert metrics["unclassified_refusal_count"] == 1
+    assert metrics["infrastructure_refusal_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"refusal_evidence_ref": None},
+        {"answer_text": ""},
+        {"refusal_reason_review": "invented"},
+        {"final_disposition": "answered", "evidence_support": "supported", "citations": ["d1"]},
+    ],
+)
+def test_refusal_reason_requires_valid_review_reference_and_delivered_message(tmp_path, changes):
+    row = _reviewed_row(
+        **{
+            "final_disposition": "refused",
+            "evidence_support": "not_applicable",
+            "citations": [],
+            "refusal_reason_review": "business_reason_verified",
+            "refusal_evidence_ref": "fixture-review",
+            **changes,
+        }
+    )
+    args, out = _cli_inputs(tmp_path, [_sample(must_refuse=True)], [row])
     with pytest.raises(SystemExit) as exc:
         main(args)
     assert exc.value.code == 2

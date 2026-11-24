@@ -52,7 +52,7 @@ run-specific output file for each execution.
 A reviewed answer is successful only if the labeled expected outcome is met
 and there is no observed RBAC leak. Expected answers must have full evidence
 support and citations, with no explicit Evidence Gate or Answer Gate rejection.
-Expected refusals must actually be refused with not_applicable support.
+Expected refusals must actually be refused with not_applicable support, a delivered refusal message, a separately reviewed correct business reason and a private evidence reference.
 Partial evidence, unnecessary refusal and unauthorized disclosure are not successes.
 
 The metrics block reports success count and rate among reviewed observations.
@@ -61,3 +61,45 @@ missing observations contribute zero to the lower bound and at most one to the
 upper bound. These are deterministic missing-review bounds, not statistical
 confidence intervals. With complete coverage the bounds coincide. Exit 0 still
 means complete scoring, not a quality pass or publication approval.
+
+
+## Refusal reason evidence (scoring revision v2)
+
+A safe system outage is not a successful regulatory decision. For refused
+observations record the independent review classification
+`refusal_reason_review` (business_reason_verified / wrong_business_reason /
+infrastructure_failure / unclassified), plus `refusal_evidence_ref` pointing to
+the private review evidence. A correct business reason must be verified
+against the frozen expected behavior, the actual delivered refusal, authorized
+sources and execution trace. Do not infer this from the gate's own status or
+fabricate review references. The scorer validates structure, not authenticity.
+
+Legacy missing reason rows remain readable but earn no strict refusal credit.
+Legacy `refusal_recall` is disposition-only, not correct-reason quality.
+Use `verified_refusal_precision` (verified correct / all observed refusals)
+and `verified_refusal_recall` (verified correct / observed must-refuse cases);
+retain coverage and strict success bounds across the full planned population.
+Unclassified and infrastructure refusals are counted separately. Partial
+coverage or unverified reasons cannot establish publishable accuracy.
+
+## Paired interview evidence protocol (#18 / #86 / #125 / #154)
+
+Freeze corpus/epoch, actual model assets, candidate depths, reviewed sample
+identities, and environment. Compare BM25, Dense, Hybrid RRF and BiEncoder/
+single/dual CE challenger chains using the existing strict retrieval suite.
+Only same-corpus paired metrics are comparable. No-answer cases are evaluated
+in the answer lane, not treated as retrieval successes. Compare Evidence Gate
+enabled and disabled only in an isolated authorized evaluation environment,
+never in public serving; keep Answer Gate and RBAC in place. Record independent
+evidence support, verified refusal precision/recall, unsafe answers, critical
+regulatory misses, latency and failures. Separate retrieval-only P95 from
+end-to-end response P95. RAGAS faithfulness requires a real configured
+evaluator and remains separate from human support judgments. Choose the
+simplest ranking chain meeting declared quality and safety gates; do not
+remove a stage solely because fixture tests pass. Begin with the existing
+27 reviewed retrieval cases and separately expand toward 100–200 independently
+reviewed cases; do not relabel legacy 301 records as gold. Preserve held-out
+cases and do not tune thresholds on them.
+
+No actual provider/model/ERP or retrieval service calls are made by this
+offline scorer; no new empirical results are claimed.
