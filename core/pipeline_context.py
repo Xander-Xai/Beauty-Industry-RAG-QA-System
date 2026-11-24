@@ -381,11 +381,11 @@ class SessionState:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     @classmethod
-    def for_identity(cls, session_id: str, owner_id: str, role_mask: int, dept_mask: int, epoch: str) -> SessionState:
+    def for_identity(cls, session_id: str | None, owner_id: str, role_mask: int, dept_mask: int, epoch: str) -> SessionState:
         """Only reuse history within the current principal/permission/epoch scope."""
         scope = cls.scope_fingerprint(role_mask, dept_mask, epoch)
-        if not owner_id:
-            return cls(session_id=session_id, access_scope=scope)
+        if not owner_id or not session_id:
+            return cls(session_id=session_id or "", access_scope=scope)
         return cls.get_or_create(session_id, owner_id=owner_id, access_scope=scope)
 
     def _redis_key(self) -> str:
@@ -409,7 +409,10 @@ class SessionState:
 
         # Redis 不可用或未找到，使用内存存储
         with cls._sessions_lock:
-            if key not in cls._sessions:
+            existing = cls._sessions.get(key)
+            if existing is None or (existing.owner_id, existing.session_id, existing.access_scope) != (
+                owner_id, session_id, access_scope
+            ):
                 new_session = cls(session_id=session_id, owner_id=owner_id, access_scope=access_scope)
                 cls._sessions[key] = new_session
                 # 新创建的会话写入 Redis 预热
@@ -434,11 +437,13 @@ class SessionState:
             if data.get("schema_version") != cls._SESSION_SCHEMA_VERSION:
                 logger.debug("Redis 会话 schema 不兼容，忽略并降级: %s", redis_key)
                 return None
-            session = cls._from_dict(data)
-            # Check the full identity, not a delimiter-separated key prefix.
-            if (session.owner_id, session.session_id, session.access_scope) != (owner_id, session_id, access_scope):
+            # Reject absent provenance instead of reconstructing it from defaults.
+            if (data.get("owner_id"), data.get("session_id"), data.get("access_scope")) != (
+                owner_id, session_id, access_scope
+            ):
                 logger.debug("Redis session identity/scope mismatch; ignoring payload")
                 return None
+            session = cls._from_dict(data)
             # 刷新 TTL
             client.expire(redis_key, cls._SESSION_REDIS_TTL)
             cls._publish_redis_degraded(False)
