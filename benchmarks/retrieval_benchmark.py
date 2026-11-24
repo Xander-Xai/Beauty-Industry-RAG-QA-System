@@ -366,6 +366,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     run_id = new_run_id()
+    output_root = Path(args.output_dir)
+    run_dir = output_root / run_id
+    try:
+        run_dir.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        print(f"cannot reserve fresh benchmark run directory: {type(exc).__name__}", file=sys.stderr)
+        return 4
     effective_config = effective_retrieval_config()
     # Wire a real executor only for configurations that pass live backend probes.
     # An unavailable stack remains BLOCKED, never an all-zero successful result.
@@ -535,9 +542,6 @@ def main(argv: list[str] | None = None) -> int:
     metadata["results_are_benchmark"] = not blockers
     metadata["publishable"] = not blockers
 
-    output_root = Path(args.output_dir)
-    run_dir = output_root / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
     rows_written = write_per_query_jsonl(run_dir / "per_query_results.jsonl", runs, data_provenance)
 
     report.write_artifacts(
