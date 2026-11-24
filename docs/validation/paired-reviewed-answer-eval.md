@@ -12,7 +12,7 @@ scopes, workload (including cache state), and review protocol.
 Each arm's private manifest contains arm (baseline/candidate), unique run_id,
 environment (ISOLATED_EVALUATION), experiment_variable (evidence_gate_policy),
 answer_gate_enabled and rbac_enabled (both true), git_sha (40 hex),
-knowledge_epoch (nonnegative integer), dataset_sha256, observations_sha256,
+knowledge_epoch (explicit non-default string, 1–80 ASCII letters/digits/underscore/hyphen), dataset_sha256, observations_sha256,
 corpus_sha256, model_assets_sha256, retrieval_contract_sha256,
 permissions_sha256, workload_sha256, runtime_config_sha256,
 review_protocol_sha256, evidence_gate_policy_sha256 (all 64 hex).

@@ -54,7 +54,7 @@ def _validate_manifest(manifest: dict[str, Any], dataset_raw: bytes, raw: bytes,
     for key in (*_SHARED, "observations_sha256", "evidence_gate_policy_sha256"):
         value = manifest.get(key)
         if key == "knowledge_epoch":
-            if type(value) is not int or value < 0:
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value) or value == "default":
                 raise AnswerEvalError("Invalid knowledge epoch")
         elif not isinstance(value, str) or not (_GIT if key == "git_sha" else _HEX).fullmatch(value):
             raise AnswerEvalError(f"Invalid or missing manifest field: {key}")

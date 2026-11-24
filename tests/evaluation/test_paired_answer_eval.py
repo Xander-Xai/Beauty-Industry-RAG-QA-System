@@ -60,7 +60,7 @@ def _manifest(arm, dataset, raw):
         "dataset_sha256": hashlib.sha256(dataset).hexdigest(),
         "observations_sha256": hashlib.sha256(raw).hexdigest(),
         "git_sha": "a" * 40,
-        "knowledge_epoch": 1,
+        "knowledge_epoch": "20261125_01",
         **{
             key: "a" * 64
             for key in (
@@ -111,7 +111,9 @@ def test_missing_samples_do_not_produce_a_quality_or_p95_claim():
     "changes",
     [
         {"permissions_sha256": "d" * 64},
-        {"knowledge_epoch": 2},
+        {"knowledge_epoch": "20261125_02"},
+        {"knowledge_epoch": 1},
+        {"knowledge_epoch": "default"},
         {"evidence_gate_policy_sha256": "b" * 64},
         {"observations_sha256": "0" * 64},
         {"answer_gate_enabled": False},
