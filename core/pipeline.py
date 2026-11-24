@@ -684,6 +684,9 @@ class OnlineRAGPipeline:
             "ev": config["embedding"]["text"]["model_path"],  # embedding_version
             "ke": config.get("knowledge_version_epoch", "default"),
             "pv": config["generation"]["prompt_version"],
+            # Separate cached answers across ranking/calibration and gate policy changes.
+            "ranking_policy": "ce-monotone-v1",
+            "ranking_config": config.get("retrieval", {}),
             "sf": schema_fingerprint,  # PRD §10.2: schema fingerprint
             "rm": ctx.user_role_mask,
             "dm": ctx.user_dept_mask,

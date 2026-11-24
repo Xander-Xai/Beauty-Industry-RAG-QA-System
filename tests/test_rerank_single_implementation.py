@@ -160,6 +160,15 @@ def test_encode_failure_degrades_to_zero_scores(bi_encoder_module):
 # ── determinism: the two entry points agree on a fixed input ────────────────
 
 
+def test_default_platt_mapping_preserves_high_relevance_score_order(monkeypatch):
+    from retrieval import cross_encoder_ensemble
+
+    monkeypatch.setattr(cross_encoder_ensemble, "config", {"retrieval": {"cross_encoder": {}}})
+    scaler = cross_encoder_ensemble.PlattScaler()
+    assert scaler.calibrate(-2.0) < scaler.calibrate(0.0) < scaler.calibrate(2.0)
+    assert scaler.calibrate(0.0) == 0.5
+
+
 def test_service_and_online_cross_encoder_produce_identical_ranking():
     """``core/pipeline.py`` and ``retrieval-service/main.py`` must rank identically.
 

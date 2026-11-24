@@ -21,3 +21,8 @@ criticality before a pruning decision. Total retrieval P95 is compared only
 when both arms have valid timing for every matched sample. Missing observations
 are null, never zero. This diagnostic does not certify publication, GPU
 resource usage, downstream answer safety, or permission behavior.
+
+
+### Ranking score direction and calibration gate
+
+The default CrossEncoder score mapping is now increasing (`sigmoid(+s)`); the prior implicit negative slope reversed the deterministic high-relevance fixture. Explicit fitted coefficients retain their configured semantics. The default mapping is not fitted calibration. Record model output semantics and calibration, and re-evaluate Evidence/Answer Gate on independently reviewed regulatory and refusal cases before real serving or topology changes. The single-CE arms use raw scores and may differ in preprocessing; whole-chain comparisons do not isolate model count alone. Historical measurements cannot be mixed across calibration versions.

@@ -30,10 +30,10 @@ class PlattScaler:
     """
     Platt Scaling 校准器（PRD §7.3）
 
-    将 CrossEncoder 原始分映射为校准概率。
+    将 CrossEncoder 原始分映射为 [0, 1] 分数；只有经过独立拟合及验证才称为校准概率。
     使用 sigmoid(A * x + B) 公式，参数通过少量校准数据拟合。
 
-    冷启动：使用默认参数 A=-1.0, B=0.0（近似 S 形映射），
+    冷启动：使用默认参数 A=+1.0, B=0.0（单调递增映射，不是已拟合概率），
     后续由离线反馈闭环用标注数据更新 A, B。
     """
 
@@ -47,7 +47,7 @@ class PlattScaler:
         for model_name in ("ce_a", "ce_b", "ensemble"):
             params = calib_config.get(model_name, {})
             self._calibrators[model_name] = {
-                "a": params.get("a", -1.0),
+                "a": params.get("a", 1.0),
                 "b": params.get("b", 0.0),
             }
         logger.info(f"PlattScaler 初始化: {self._calibrators}")
