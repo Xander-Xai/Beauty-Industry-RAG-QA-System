@@ -1,8 +1,11 @@
 """Matched-arm retrieval diagnostics cannot hide losses or population drift."""
 
+import hashlib
+import json
+
 import pytest
 
-from benchmarks.paired_retrieval import compare_arms
+from benchmarks.paired_retrieval import compare_arms, main
 
 
 def row(arm, sample, gold, ranked):
@@ -45,3 +48,19 @@ def test_empty_gold_is_not_zero_quality():
     assert result["scored"] == 0
     assert result["delta_recall_at_10"] is None
     assert result["delta_mrr_at_10"] is None
+
+
+def test_cli_hashes_exact_input_and_preserves_source(tmp_path):
+    source = tmp_path / "rows.jsonl"
+    out = tmp_path / "report.json"
+    records = [row("a", "x", ["a"], []), row("b", "x", ["a"], ["a"])]
+    source.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    original = source.read_bytes()
+    args = ["--per-query", str(source), "--baseline", "a", "--candidate", "b", "--out"]
+    assert main(args + [str(out)]) == 0
+    result = json.loads(out.read_text(encoding="utf-8"))
+    assert result["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert result["delta_recall_at_10"] == 1.0
+    with pytest.raises(SystemExit):
+        main(args + [str(source)])
+    assert source.read_bytes() == original
