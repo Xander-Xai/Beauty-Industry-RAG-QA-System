@@ -2,8 +2,8 @@
 在线 RAG 管线编排器（核心中枢）
 
 对应 readme 4.1 节核心链路：
-Query → 用户身份解析 → 二级缓存（L1/L2）
-  MISS: 复杂度评估 → Query Rewrite → 权限前置绑定 → 双 Embedding 路由
+Query → 用户身份解析 → 复杂度评估 + Query Rewrite → 权限绑定的二级缓存（L1/L2）
+  MISS: 双 Embedding 路由
   → 并行多路召回 → Union 合并去冗 → BiEncoder 宽保留 → Rerank Batch Aggregator
   → CrossEncoder Ensemble → Evidence Ensemble Gate → LLM 生成 → Answer Gate
 """
@@ -32,10 +32,9 @@ class OnlineRAGPipeline:
 
     编排顺序（对应 readme 4.1）：
     1. 身份解析与权限绑定
-    2. 缓存查询（L1/L2）
-    3. KV 准入控制
-    4. 复杂度评估（BERT 二分类）
-    5. Query Rewrite（路由增强器）
+    2. 复杂度评估（BERT 二分类）+ Query Rewrite（路由增强器）
+    3. 按 rewritten_query / requires_context / owner_id 决定缓存隔离
+    4. KV 准入控制
     6. 双 Embedding 路由 + CLIP 判别
     7. 并行多路召回（Dense/BM25/CLIP/Rewrite变体）
     8. Union 合并去冗
@@ -252,28 +251,10 @@ class OnlineRAGPipeline:
                 except Exception as e:
                     logger.debug(f"A/B 实验分流跳过: {e}")
 
-                # ② 缓存查询（L1/L2）— PRD §10.6: requires_context=true 仅限原会话
-                # PRD §4.4: Rewrite 降级时禁用缓存
-                requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False
-                cache_key = self._build_cache_key(ctx)
-                if requires_ctx:
-                    # PRD §10.6: 上下文依赖型查询的缓存仅限同一 session 复用
-                    cache_key = self._scope_cache_key_to_session(cache_key, ctx.session_id)
-                    cached = self.cache.get(cache_key, ctx.user_role_mask, ctx.user_dept_mask)
-                    if cached:
-                        ctx.cache_hit_level = "L2_SESSION"
-                        ctx.final_response = cached.get("answer", "")
-                        ctx.record_timing("cache_hit", 0)
-                        return ctx.final_response
-                else:
-                    cached = self.cache.get(cache_key, ctx.user_role_mask, ctx.user_dept_mask)
-                    if cached:
-                        ctx.cache_hit_level = "L1" if (ctx.user_role_mask == 0 and ctx.user_dept_mask == 0) else "L2"
-                        ctx.final_response = cached.get("answer", "")
-                        ctx.record_timing("cache_hit", 0)
-                        return ctx.final_response
-                ctx.cache_hit_level = "MISS"
-
+                # ② Cache reuse must wait until Rewrite has decided whether
+                # this question depends on conversation memory. Looking up a
+                # global raw-query key before that decision risks cross-session
+                # and cross-user answer reuse.
                 # ③+④ 并行执行 Query Rewrite + 复杂度评估（两者无数据依赖）
                 t_rewrite = time.time()
                 session_state = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
@@ -336,6 +317,11 @@ class OnlineRAGPipeline:
                     ctx.max_output_tokens = max(ctx.max_output_tokens // 2, 256)  # 输出长度收缩
                     ctx.cache_hit_level = "DISABLED"  # 禁用缓存命中
                     logger.info("Rewrite 降级模式：TopK→300, 缓存禁用, 输出收缩")
+
+                # ⑤-b Lookup uses rewritten query + the final requires_context
+                # decision; user- and session-scoped when dialogue-dependent.
+                if not is_fallback and self._read_cache_after_rewrite(ctx):
+                    return ctx.final_response
 
                 # ⑥ KV 准入控制（在 rewrite 之后以获取正确的 business_type 用于 P0/P1/P2 优先级）
                 t_admit = time.time()
@@ -619,6 +605,35 @@ class OnlineRAGPipeline:
 
     # ─── 内部辅助方法 ────────────────────────────────────────
 
+    def _read_cache_after_rewrite(self, ctx) -> bool:
+        """Only reuse after Rewrite resolved context requirements and identity.
+
+        Contextual answers may incorporate a previous answer from the same
+        principal. Never share them by bare session ID or across anonymous
+        requests with unknown ownership.
+        """
+        rewrite = ctx.rewrite_result
+        if rewrite is None or rewrite.fallback:
+            return False
+        context_dependent = bool(rewrite.requires_context)
+        if context_dependent and (not ctx.user_id or not ctx.session_id):
+            ctx.cache_hit_level = "DISABLED_UNSCOPED"
+            return False
+        cache_key = self._build_cache_key(ctx)
+        if context_dependent:
+            cache_key = self._scope_cache_key_to_session(cache_key, ctx.session_id, ctx.user_id)
+            layer = "L2_SESSION"
+        else:
+            layer = "L1" if (ctx.user_role_mask == 0 and ctx.user_dept_mask == 0) else "L2"
+        cached = self.cache.get(cache_key, ctx.user_role_mask, ctx.user_dept_mask)
+        if not isinstance(cached, dict) or not isinstance(cached.get("answer"), str):
+            ctx.cache_hit_level = "MISS"
+            return False
+        ctx.cache_hit_level = layer
+        ctx.final_response = cached["answer"]
+        ctx.record_timing("cache_hit", 0)
+        return True
+
     def _build_cache_key(self, ctx) -> str:
         """
         缓存 Key 统一构造（readme 10.2）
@@ -652,16 +667,15 @@ class OnlineRAGPipeline:
         return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
     @staticmethod
-    def _scope_cache_key_to_session(cache_key: str, session_id: str | None) -> str:
-        """
-        PRD §10.6: requires_context=true 的缓存仅限原会话复用。
+    def _scope_cache_key_to_session(cache_key: str, session_id: str | None, owner_id: str | None) -> str:
+        """Contextual cache identity includes BOTH session and authenticated owner.
 
-        在 cache_key 基础上叠加 session_id，确保不同 session 即使
-        查询完全相同也不会命中彼此的缓存条目。
+        A session ID may be caller-supplied/reused. Refuse to produce a key
+        unless a nonempty owner and session are available.
         """
-        if not session_id:
-            return cache_key
-        scoped = {"base": cache_key, "sid": session_id}
+        if not session_id or not owner_id:
+            raise ValueError("Contextual cache requires both owner_id and session_id")
+        scoped = {"base": cache_key, "sid": session_id, "owner": owner_id}
         return hashlib.sha256(json.dumps(scoped, sort_keys=True).encode()).hexdigest()
 
     def _build_clip_filter(self, ctx):
@@ -1127,7 +1141,9 @@ class OnlineRAGPipeline:
             requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False
             # PRD §10.6: 上下文依赖型查询的缓存仅限同一 session
             if requires_ctx:
-                cache_key = self._scope_cache_key_to_session(cache_key, ctx.session_id)
+                if not ctx.session_id or not ctx.user_id:
+                    return
+                cache_key = self._scope_cache_key_to_session(cache_key, ctx.session_id, ctx.user_id)
             cache_value = {
                 "answer": ctx.final_response,
                 "doc_ids": ctx.evidence_locked_doc_ids,
