@@ -94,7 +94,7 @@ def audit_document_structure(
 
     for windows in sheet_windows.values():
         ordered = sorted(windows)
-        for (_, previous_end), (current_start, _) in zip(ordered, ordered[1:]):
+        for (_, previous_end), (current_start, _) in zip(ordered, ordered[1:], strict=True):
             if current_start <= previous_end:
                 reasons.add("overlapping_sheet_windows")
 
