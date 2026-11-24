@@ -89,6 +89,15 @@ def validate_cosine_vectors(vectors: list[list[float]], count: int, dimension: i
             raise ValueError("invalid experiment cosine vector norm")
 
 
+def normalize_cosine_vectors(vectors: list[list[float]]) -> list[list[float]]:
+    """Normalize validated inputs once per vector before persisting."""
+    normalized = []
+    for vector in vectors:
+        norm = math.hypot(*vector)
+        normalized.append([value / norm for value in vector])
+    return normalized
+
+
 def run(config: dict, args: argparse.Namespace) -> dict:
     index, collection = validate_targets(config, args.confirm_collection, write=args.write)
     text_config = config["embedding"]["text"]
@@ -128,6 +137,8 @@ def run(config: dict, args: argparse.Namespace) -> dict:
         embedder = BGETextEmbedder(str(model_path), dimension, model_revision=text_config.get("model_revision"))
         embeddings = embedder.embed_texts([chunk.text for chunk in chunks])
         validate_cosine_vectors(embeddings, len(chunks), dimension)
+        # Persist unit inputs explicitly: local cosine storage may retain raw inputs on disk.
+        embeddings = normalize_cosine_vectors(embeddings)
         from qdrant_client.http.models import Distance, VectorParams
 
         # Exclusive creation: do not use ensure_collection as an ownership check.
