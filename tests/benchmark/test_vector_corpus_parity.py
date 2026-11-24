@@ -1,4 +1,5 @@
 """Synthetic payload controls, not evidence of real vector retrieval."""
+
 from copy import deepcopy
 
 import pytest
