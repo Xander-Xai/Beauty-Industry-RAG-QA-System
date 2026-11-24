@@ -182,13 +182,18 @@ class ObservedAnswer:
 
 
 def load_samples(path: str | Path) -> list[AnswerEvalSample]:
+    return _parse_samples(Path(path).read_bytes(), str(path))
+
+
+def _parse_samples(raw: bytes, path: str) -> list[AnswerEvalSample]:
     samples: list[AnswerEvalSample] = []
-    with open(path, encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            payload = json.loads(line)
-            samples.append(AnswerEvalSample.from_dict(payload, where=f"{path}:{line_number}"))
+    for line_number, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise AnswerEvalError(f"{path}:{line_number}: expected object")
+        samples.append(AnswerEvalSample.from_dict(payload, where=f"{path}:{line_number}"))
     if not samples:
         raise AnswerEvalError(f"{path}: answer-eval set is empty")
     ids = [s.sample_id for s in samples]
@@ -276,14 +281,15 @@ def score_files(
     dataset_path: str | Path,
     observations_path: str | Path,
 ) -> AnswerEvalReport:
-    samples = load_samples(dataset_path)
+    dataset_raw = Path(dataset_path).read_bytes()
+    samples = _parse_samples(dataset_raw, str(dataset_path))
     observations: list[ObservedAnswer] = []
     with open(observations_path, encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
             observations.append(ObservedAnswer.from_dict(json.loads(line), where=f"{observations_path}:{line_number}"))
-    return score(samples, observations, dataset_sha256=_sha256(dataset_path))
+    return score(samples, observations, dataset_sha256=hashlib.sha256(dataset_raw).hexdigest())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -296,7 +302,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.out.resolve() in {args.dataset.resolve(), args.observations.resolve()}:
         parser.error("output must not overwrite input evidence")
     try:
-        samples = load_samples(args.dataset)
+        dataset_raw = args.dataset.read_bytes()
+        samples = _parse_samples(dataset_raw, str(args.dataset))
         raw = args.observations.read_bytes()
         observations = []
         for line_number, line in enumerate(raw.splitlines(), start=1):
@@ -311,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
             if payload.get("review_status") != "HUMAN_REVIEWED":
                 raise AnswerEvalError(f"{where}: explicit HUMAN_REVIEWED attestation required")
             observations.append(ObservedAnswer.from_dict(payload, where=where))
-        report = score(samples, observations, dataset_sha256=_sha256(args.dataset))
+        report = score(samples, observations, dataset_sha256=hashlib.sha256(dataset_raw).hexdigest())
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, AnswerEvalError) as exc:
         parser.error(f"invalid answer evaluation input ({type(exc).__name__})")
     complete = not report.missing_observations
@@ -324,8 +331,14 @@ def main(argv: list[str] | None = None) -> int:
         "publication_eligibility": "NOT_ASSESSED",
         "note": "Review attestation is caller supplied; no independent reviewer, model or corpus verification.",
     }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive creation protects evidence and prior reports, including
+        # hard links and a destination created between validation and output.
+        with args.out.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(output, ensure_ascii=False, indent=2) + "\n")
+    except OSError as exc:
+        parser.error(f"cannot create new evaluation report ({type(exc).__name__})")
     return 0 if complete else 1
 
 
