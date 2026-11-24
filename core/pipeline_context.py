@@ -381,9 +381,7 @@ class SessionState:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     @classmethod
-    def for_identity(
-        cls, session_id: str, owner_id: str, role_mask: int, dept_mask: int, epoch: str
-    ) -> SessionState:
+    def for_identity(cls, session_id: str, owner_id: str, role_mask: int, dept_mask: int, epoch: str) -> SessionState:
         """Only reuse history within the current principal/permission/epoch scope."""
         scope = cls.scope_fingerprint(role_mask, dept_mask, epoch)
         if not owner_id:
