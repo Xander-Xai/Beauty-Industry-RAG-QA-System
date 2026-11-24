@@ -33,3 +33,8 @@ or correctness proof; supply reviewed assets, test actual vectors and
 record model revision separately. A BUILT receipt is not a retrieval metric.
 Run the existing benchmark CLI with all publication gates afterward.
 No live model or Qdrant execution is claimed by this implementation.
+
+Before creating the fresh collection, validate the full returned embedding
+population, dimensions and finite nonzero cosine norms. Degenerate all-zero
+vectors cannot produce a BUILT receipt through this builder. This check does
+not attest model identity or independently verify persisted vector values.

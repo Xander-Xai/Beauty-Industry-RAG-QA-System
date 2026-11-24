@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -76,6 +77,18 @@ def prepare_chunks(rows: list[dict], records: list[dict], approval: dict, epoch:
     return chunks
 
 
+def validate_cosine_vectors(vectors: list[list[float]], count: int, dimension: int) -> None:
+    """Reject missing, malformed or degenerate embeddings before collection creation."""
+    if len(vectors) != count or count <= 0 or dimension <= 0:
+        raise ValueError("invalid experiment embedding population")
+    for vector in vectors:
+        if len(vector) != dimension:
+            raise ValueError("invalid experiment embedding dimension")
+        norm = math.hypot(*vector)
+        if not math.isfinite(norm) or norm == 0:
+            raise ValueError("invalid experiment cosine vector norm")
+
+
 def run(config: dict, args: argparse.Namespace) -> dict:
     index, collection = validate_targets(config, args.confirm_collection, write=args.write)
     text_config = config["embedding"]["text"]
@@ -114,6 +127,7 @@ def run(config: dict, args: argparse.Namespace) -> dict:
         dimension = int(text_config["dimension"])
         embedder = BGETextEmbedder(str(model_path), dimension, model_revision=text_config.get("model_revision"))
         embeddings = embedder.embed_texts([chunk.text for chunk in chunks])
+        validate_cosine_vectors(embeddings, len(chunks), dimension)
         from qdrant_client.http.models import Distance, VectorParams
 
         # Exclusive creation: do not use ensure_collection as an ownership check.
