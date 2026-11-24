@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 
 from benchmarks.source_approval import _index_content_fingerprint
-from scripts.corpus.index_approved_dense_experiment import prepare_chunks, validate_targets
+from scripts.corpus.index_approved_dense_experiment import prepare_chunks, validate_cosine_vectors, validate_targets
 
 
 def _config():
@@ -96,3 +96,16 @@ def test_duplicate_and_unapproved_rejected():
         prepare_chunks(rows, records + records, approval, "epoch")
     with pytest.raises(ValueError):
         prepare_chunks(rows, records, {"verified": False}, "epoch")
+
+
+@pytest.mark.parametrize(
+    "vectors",
+    [[], [[0.0, 0.0]], [[float("nan"), 1.0]], [[float("inf"), 0.0]], [[1.0]], [[1.0, 0.0], [1.0, 0.0]]],
+)
+def test_invalid_cosine_embedding_population_rejected(vectors):
+    with pytest.raises(ValueError):
+        validate_cosine_vectors(vectors, 1, 2)
+
+
+def test_nonzero_finite_cosine_embeddings_accepted():
+    validate_cosine_vectors([[0.0, 1.0], [-0.5, 0.5]], 2, 2)
