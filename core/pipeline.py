@@ -675,7 +675,24 @@ class OnlineRAGPipeline:
         """
         if not session_id or not owner_id:
             raise ValueError("Contextual cache requires both owner_id and session_id")
-        scoped = {"base": cache_key, "sid": session_id, "owner": owner_id}
+        from core.pipeline_context import SessionState
+
+        session = SessionState.get_or_create(session_id, owner_id=owner_id)
+        # The same prompt may refer to a DIFFERENT entity after another turn.
+        # Hash current conversation content; never embed raw text in cache keys.
+        rounds = [
+            {"query": row.get("user_input", ""), "answer": row.get("response", "")}
+            for row in session.dialog_rounds[-session.max_rounds :]
+        ]
+        history_fingerprint = hashlib.sha256(
+            json.dumps(rounds, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
+        scoped = {
+            "base": cache_key,
+            "sid": session_id,
+            "owner": owner_id,
+            "history": history_fingerprint,
+        }
         return hashlib.sha256(json.dumps(scoped, sort_keys=True).encode()).hexdigest()
 
     def _build_clip_filter(self, ctx):
