@@ -117,7 +117,11 @@ class BiEncoderReranker:
         # 如果有专用 BiEncoder 模型，优先使用
         if self.dedicated_model_available and self._bi_encoder_model_path:
             try:
-                results = self._rerank_with_dedicated_model(query, candidates, top_k)
+                results = (
+                    self._rerank_with_dedicated_model(query, candidates, top_k, strict=True)
+                    if strict
+                    else self._rerank_with_dedicated_model(query, candidates, top_k)
+                )
                 if strict and (
                     len(results) != min(top_k, len(candidates))
                     or not all(np.isfinite(row.bi_score) for row in results)
@@ -134,6 +138,14 @@ class BiEncoderReranker:
             query_embedding = self.embedding_service.encode_text(query).flatten()
             doc_texts = [c.content for c in candidates]
             doc_embeddings = self.embedding_service.encode_texts_batch(doc_texts)
+
+            if strict and (
+                not np.all(np.isfinite(query_embedding))
+                or not np.all(np.isfinite(doc_embeddings))
+                or np.linalg.norm(query_embedding) <= 0
+                or np.any(np.linalg.norm(doc_embeddings, axis=1) <= 0)
+            ):
+                raise ValueError("invalid BiEncoder embeddings")
 
             # 计算余弦相似度
             similarities = np.dot(doc_embeddings, query_embedding) / (
@@ -158,7 +170,7 @@ class BiEncoderReranker:
             # 降级：返回原始候选的前 top_k 条（同样保留溯源字段）
             return [_to_rerank_result(c, bi_score=0.0) for c in candidates[:top_k]]
 
-    def _rerank_with_dedicated_model(self, query: str, candidates: list, top_k: int) -> list:
+    def _rerank_with_dedicated_model(self, query: str, candidates: list, top_k: int, *, strict: bool = False) -> list:
         """使用专用 BiEncoder 模型进行重排序（不同于共享 EmbeddingService）。"""
         if self._dedicated_model is None and self._bi_encoder_model_path:
             from sentence_transformers import SentenceTransformer
@@ -175,6 +187,13 @@ class BiEncoderReranker:
             show_progress_bar=False,
         )
         similarities = np.dot(doc_embs, query_emb)
+        if strict and (
+            not np.all(np.isfinite(similarities))
+            or len(similarities) != len(candidates)
+            or np.linalg.norm(query_emb) <= 0
+            or np.any(np.linalg.norm(doc_embs, axis=1) <= 0)
+        ):
+            raise ValueError("invalid dedicated BiEncoder embeddings or scores")
         top_indices = np.argsort(similarities)[::-1][:top_k]
 
         return [_to_rerank_result(candidates[idx], bi_score=float(similarities[idx])) for idx in top_indices]

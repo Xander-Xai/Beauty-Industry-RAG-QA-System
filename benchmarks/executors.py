@@ -364,9 +364,7 @@ class RerankExecutor(HybridRRFExecutor):
         self._biencoder = biencoder
         self._crossencoder = crossencoder
         # Dependency-injected fixture models are not real-model evidence.
-        self.is_production = (
-            biencoder is None and crossencoder is None and self._bm25 is None and self._dense is None
-        )
+        self.is_production = biencoder is None and crossencoder is None and self._bm25 is None and self._dense is None
 
     def retrieve(self, query: BenchmarkQuery, top_k: int) -> list[RetrievedItem]:
         fused = self._fused(query, top_k)
