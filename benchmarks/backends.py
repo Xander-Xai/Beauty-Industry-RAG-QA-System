@@ -442,20 +442,35 @@ def probe_dense() -> BackendAvailability:
     return BackendAvailability("dense", True, REASON_OK, f"collection {collection}, model {model_path}")
 
 
+def rerank_model_paths(config_name: str) -> dict[str, str]:
+    from common.config import get_config_dict
+
+    config = get_config_dict()
+    models = config.get("gpu1", {}).get("models", {})
+    if config_name not in {"hybrid_rrf_biencoder", "hybrid_rrf_biencoder_crossencoder"}:
+        return {}
+    shared = config.get("embedding", {}).get("text", {}).get("model_path", "")
+    paths = {"biencoder": str(models.get("bi_encoder", {}).get("model_path") or shared)}
+    if config_name.endswith("_crossencoder"):
+        for key in ("cross_encoder_a", "cross_encoder_b"):
+            paths[key] = str(models.get(key, {}).get("model_path") or "")
+    return paths
+
+
+def _probe_rerank_assets(name: str, paths: dict[str, str]) -> BackendAvailability:
+    for key, path in paths.items():
+        if not path or not _looks_like_model_dir(Path(path))[0]:
+            return BackendAvailability(name, False, REASON_MODEL_UNAVAILABLE, f"{key} local model assets missing")
+    return BackendAvailability(name, True, REASON_OK, "local assets present; runtime inference still required")
+
+
 def probe_biencoder() -> BackendAvailability:
-    available, detail = _model_weights_available()
-    if not available:
-        return BackendAvailability("biencoder", False, REASON_MODEL_UNAVAILABLE, f"model path not present: {detail}")
-    return BackendAvailability("biencoder", True, REASON_OK, str(detail))
+    return _probe_rerank_assets("biencoder", rerank_model_paths("hybrid_rrf_biencoder"))
 
 
 def probe_crossencoder() -> BackendAvailability:
-    return BackendAvailability(
-        "crossencoder",
-        False,
-        REASON_MODEL_UNAVAILABLE,
-        "cross-encoder rerankers are not wired to a validated local weights path in this repository",
-    )
+    paths = rerank_model_paths("hybrid_rrf_biencoder_crossencoder")
+    return _probe_rerank_assets("crossencoder", {key: value for key, value in paths.items() if key != "biencoder"})
 
 
 def probe_corpus(

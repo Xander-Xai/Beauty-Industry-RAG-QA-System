@@ -40,18 +40,24 @@ production paths treat as full-access; it is recorded in the artifact via
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
+from types import SimpleNamespace
 from typing import Any, Protocol
 
 from benchmarks import backends
 from benchmarks.models import BenchmarkQuery, RetrievedItem
 from benchmarks.relevance import relevance_key
 
-#: Configurations a real executor can run. BiEncoder / CrossEncoder rerank
-#: configurations are deliberately absent: #18 scopes them out unless real
-#: weights exist, and there is no validated local weights path in this
-#: repository.
-EXECUTABLE_CONFIGS = ("bm25", "dense", "hybrid_rrf")
+EXECUTABLE_CONFIGS = (
+    "bm25",
+    "dense",
+    "hybrid_rrf",
+    "hybrid_rrf_biencoder",
+    "hybrid_rrf_biencoder_crossencoder",
+)
+HYBRID_RECALL_DEPTH = 100
+BIENCODER_KEEP = 150
 
 #: RRF path names, matching ``retrieval/parallel_recall.py`` exactly. They must
 #: agree with the weight keys or a path's weight is silently ignored.
@@ -288,15 +294,16 @@ class HybridRRFExecutor:
         rrf_config = (get_config_dict().get("retrieval") or {}).get("rrf") or {}
         return int(rrf_config.get("k", 60)), rrf_config.get("weights") or None
 
-    def retrieve(self, query: BenchmarkQuery, top_k: int) -> list[RetrievedItem]:
+    def _fused(self, query: BenchmarkQuery, top_k: int) -> list:
         self._ensure_available()
         bm25, dense = self._ensure_retrievers()
         from common.models import RecallResult
         from retrieval_service.rerank.rrf_fusion import rrf_fusion
 
         role_mask, dept_mask = _super_admin_masks()
-        bm25_hits = bm25.search(query.question, role_mask, dept_mask, top_k)
-        dense_hits = dense.search(dense.encode(query.question), _dense_filter(), top_k)
+        depth = max(top_k, HYBRID_RECALL_DEPTH)
+        bm25_hits = bm25.search(query.question, role_mask, dept_mask, depth)
+        dense_hits = dense.search(dense.encode(query.question), _dense_filter(), depth)
 
         def _to_results(hits: Sequence[dict], source: str) -> list[RecallResult]:
             return [
@@ -320,6 +327,10 @@ class HybridRRFExecutor:
             k=k,
             weights=weights,
         )
+        return fused
+
+    def retrieve(self, query: BenchmarkQuery, top_k: int) -> list[RetrievedItem]:
+        fused = self._fused(query, top_k)
         items: list[RetrievedItem] = []
         for rank, result in enumerate(fused[:top_k], start=1):
             key = relevance_key(
@@ -340,6 +351,56 @@ class HybridRRFExecutor:
                     text=result.content,
                 )
             )
+        return items
+
+
+class RerankExecutor(HybridRRFExecutor):
+    """Use the production rerankers; a model error is a failed query, never a ranking."""
+
+    def __init__(self, *, cross: bool = False, biencoder=None, crossencoder=None, **kwargs):
+        super().__init__(**kwargs)
+        self.name = "hybrid_rrf_biencoder_crossencoder" if cross else "hybrid_rrf_biencoder"
+        self._cross = cross
+        self._biencoder = biencoder
+        self._crossencoder = crossencoder
+        # Dependency-injected fixture models are not real-model evidence.
+        self.is_production = biencoder is None and crossencoder is None and self._bm25 is None and self._dense is None
+
+    def retrieve(self, query: BenchmarkQuery, top_k: int) -> list[RetrievedItem]:
+        fused = self._fused(query, top_k)
+        if not fused:
+            raise BenchmarkUnavailable("no candidates to verify rerank execution")
+        if self._biencoder is None:
+            from retrieval.bi_encoder import BiEncoderReranker
+
+            self._biencoder = BiEncoderReranker()
+        retained = max(top_k, BIENCODER_KEEP) if self._cross else top_k
+        ranked = self._biencoder.rerank(query.question, fused, top_k=retained, strict=True)
+        if len(ranked) != min(retained, len(fused)):
+            raise BenchmarkUnavailable("incomplete BiEncoder output")
+        score_field = "bi_score"
+        if self._cross:
+            if self._crossencoder is None:
+                from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
+
+                self._crossencoder = CrossEncoderEnsemble()
+            ctx = SimpleNamespace()
+            expected_count = min(top_k, len(ranked))
+            ranked = self._crossencoder.rerank(query.question, ranked, top_k=top_k, ctx=ctx, strict=True)
+            if getattr(ctx, "ce_stage_provenance", None) != "cross_encoder" or len(ranked) != expected_count:
+                raise BenchmarkUnavailable("CrossEncoder execution not verified")
+            score_field = "ce_score_ensemble"
+        items = []
+        candidates = {(row.doc_id, (row.metadata or {}).get("chunk_id"), row.content) for row in fused}
+        for rank, row in enumerate(ranked[:top_k], 1):
+            chunk_id = (row.metadata or {}).get("chunk_id")
+            key = relevance_key({"doc_id": row.doc_id, "chunk_id": chunk_id, "text": row.content})
+            score = float(getattr(row, score_field))
+            if not key or not math.isfinite(score) or (row.doc_id, chunk_id, row.content) not in candidates:
+                raise BenchmarkUnavailable("rerank result identity or score invalid")
+            items.append(RetrievedItem(rank=rank, key=key, score=score, source=self.name, text=row.content))
+        if len({item.key for item in items}) != len(items):
+            raise BenchmarkUnavailable("duplicate rerank identity")
         return items
 
 
@@ -365,6 +426,8 @@ def build_executor(config_name: str, golden_passages: Sequence[str] | None = Non
         return DenseExecutor(golden_passages=golden_passages)
     if config_name == "hybrid_rrf":
         return HybridRRFExecutor(golden_passages=golden_passages)
+    if config_name in ("hybrid_rrf_biencoder", "hybrid_rrf_biencoder_crossencoder"):
+        return RerankExecutor(cross=config_name.endswith("_crossencoder"), golden_passages=golden_passages)
     raise BenchmarkUnavailable(
         f"no real retrieval executor is implemented for configuration {config_name!r}; "
         f"executable configurations are {', '.join(EXECUTABLE_CONFIGS)}"

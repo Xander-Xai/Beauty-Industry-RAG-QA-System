@@ -279,7 +279,7 @@ class RerankBatchAggregator:
 
         return future.result(timeout=timeout_s)
 
-    def batch_predict(self, model, pairs: list[tuple[str, str]]) -> list[float]:
+    def batch_predict(self, model, pairs: list[tuple[str, str]], *, strict: bool = False) -> list[float]:
         """
         请求内同步批量预测。
 
@@ -307,10 +307,10 @@ class RerankBatchAggregator:
                     batch,
                     batch_size=min(len(batch), self.max_batch_size),
                 )
-                if hasattr(batch_scores, "tolist"):
-                    all_scores.extend(batch_scores.tolist())
-                else:
-                    all_scores.extend(list(batch_scores))
+                scores = batch_scores.tolist() if hasattr(batch_scores, "tolist") else list(batch_scores)
+                if strict and len(scores) != len(batch):
+                    raise ValueError("incomplete CrossEncoder batch")
+                all_scores.extend(scores)
 
             inference_ms = (time.time() - t_start) * 1000
 
@@ -328,7 +328,7 @@ class RerankBatchAggregator:
             with self._lock:
                 self._stats.record_batch(len(pairs), 0.0, inference_ms)
             # Re-raise GPU-related errors so batch_predict_with_fallback can handle them
-            if isinstance(e, RuntimeError):
+            if strict or isinstance(e, RuntimeError):
                 raise
             logger.error(f"Batch predict 失败: {e}")
             return [0.0] * len(pairs)

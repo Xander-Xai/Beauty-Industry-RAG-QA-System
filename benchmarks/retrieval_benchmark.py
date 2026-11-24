@@ -208,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="none",
         help=(
             "retrieval executor: 'none' (default) blocks every configuration because no executor is "
-            "wired; 'real' wires the production BM25 / dense / hybrid-RRF executors. A 'real' run still "
+            "wired; 'real' wires production BM25 / dense / hybrid-RRF / rerank executors. A 'real' run still "
             "requires every backend probe to pass, so an unavailable stack stays BLOCKED."
         ),
     )
@@ -393,6 +393,15 @@ def main(argv: list[str] | None = None) -> int:
     source_approval = gather_source_approval_evidence(gold_rows=[query.raw for query in queries])
     needs_dense_parity = any(name != "bm25" for name in configs)
     parity_before = gather_dense_parity(source_approval) if needs_dense_parity else {}
+    from benchmarks.executors import BIENCODER_KEEP, HYBRID_RECALL_DEPTH
+    from benchmarks.provenance import model_identity
+
+    rerank_paths = {key: path for name in configs for key, path in backends.rerank_model_paths(name).items()}
+    rerank_before = {key: model_identity(path) for key, path in rerank_paths.items()}
+    ranking_depth = {
+        "hybrid_per_path": max(args.top_k, HYBRID_RECALL_DEPTH),
+        "biencoder_keep": max(args.top_k, BIENCODER_KEEP),
+    }
     config_payload = {
         "configs": configs,
         "top_k": args.top_k,
@@ -400,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
         # Snapshot of the settings that actually apply, so two runs against
         # different indexes/collections/model revisions cannot share a hash.
         "effective_config": effective_config,
+        "ranking_depth": ranking_depth,
+        "rerank_assets": rerank_before,
     }
     data_provenance = dataset_data_provenance(dataset_path)
     metadata = {
@@ -421,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         # The snapshot travels with the hash so a run can be reproduced
         # without guessing which endpoint/collection/model was in effect.
         "effective_config": effective_config,
+        "ranking_depth": ranking_depth,
         "requested_configs": configs,
         "executor": args.executor,
         "real_executor_configs": sorted(executor_factories),
@@ -506,6 +518,13 @@ def main(argv: list[str] | None = None) -> int:
         parity_after = gather_dense_parity(source_approval)
         metadata["dense_corpus_parity"] = {"before": parity_before, "after": parity_after}
         blockers.extend(dense_parity_blockers(parity_before, parity_after))
+    if rerank_paths:
+        rerank_after = {key: model_identity(path) for key, path in rerank_paths.items()}
+        metadata["rerank_assets"] = {"before": rerank_before, "after": rerank_after}
+        if any(not row.get("asset_sha256") for row in rerank_before.values()):
+            blockers.append("rerank_model_asset_identity_not_verified")
+        if rerank_before != rerank_after:
+            blockers.append("rerank_model_assets_changed_during_run")
     if git_dirty is not False or not git_sha:
         blockers.append("git_provenance_not_clean")
     if integrity_errors:
