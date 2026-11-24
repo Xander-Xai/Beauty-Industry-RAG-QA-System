@@ -460,13 +460,10 @@ def test_image_tag_matches_the_canonical_runtime_version() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_rolling_update_strategy_is_declared() -> None:
+def test_recreate_strategy_prevents_overlapping_unshared_user_stores() -> None:
     strategy = _by_kind("Deployment")[0]["spec"]["strategy"]
-    assert strategy["type"] == "RollingUpdate"
-    rolling = strategy["rollingUpdate"]
-    assert 0 <= rolling["maxUnavailable"] <= rolling["maxSurge"], (
-        "maxUnavailable should not exceed maxSurge for a zero-downtime rollout"
-    )
+    assert strategy["type"] == "Recreate"
+    assert "rollingUpdate" not in strategy
 
 
 def test_replicas_are_declared() -> None:
@@ -484,13 +481,7 @@ def test_multiple_replicas_require_a_shared_user_store() -> None:
     """
     deployment = _by_kind("Deployment")[0]
     replicas = deployment["spec"]["replicas"]
-    config_data = _by_kind("ConfigMap")[0].get("data", {})
-    uses_shared_db = bool(config_data.get("DATABASE_URL"))
-    if replicas > 1:
-        assert uses_shared_db, (
-            f"replicas={replicas} but no shared user store is configured; "
-            "set DATABASE_URL to a supported shared backend first"
-        )
+    assert replicas == 1, "This contract has no verified shared user store"
 
 
 def test_rs256_primary_auth_is_configured() -> None:

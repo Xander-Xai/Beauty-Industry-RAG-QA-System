@@ -1,16 +1,16 @@
 # ============================================================================
 # Beauty Industry RAG QA System — 微服务模式 Docker Compose
-# 用法: docker compose -f docker-compose.yml -f docker-compose.microservices.yml up -d
+# 非主线、未验收的内部实验；不发布任何实验服务宿主机端口。
+# 显式实验: docker compose -f docker-compose.yml -f docker-compose.microservices.yml --profile experimental-microservices up -d
 # ============================================================================
 
 services:
 
   # ── API Gateway ─────────────────────────────────────────────────────
   api-gateway:
+    profiles: [experimental-microservices]
     build: .
-    command: python -m uvicorn api-gateway.main:app --host 0.0.0.0 --port 8000 --reload
-    ports:
-      - "8000:8000"
+    command: python -m uvicorn api-gateway.main:app --host 0.0.0.0 --port 8000
     environment:
       - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN?SERVICE_AUTH_TOKEN must be set}
       - REWRITE_SERVICE_URL=http://rewrite-service:8101
@@ -33,10 +33,9 @@ services:
 
   # ── Rewrite Service (GPU1) ────────────────────────────────────────
   rewrite-service:
+    profiles: [experimental-microservices]
     build: .
     command: python -m uvicorn rewrite-service.main:app --host 0.0.0.0 --port 8101
-    ports:
-      - "8101:8101"
     environment:
       - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN?SERVICE_AUTH_TOKEN must be set}
     healthcheck:
@@ -50,10 +49,9 @@ services:
 
   # ── Retrieval Service ──────────────────────────────────────────────
   retrieval-service:
+    profiles: [experimental-microservices]
     build: .
     command: python -m uvicorn retrieval-service.main:app --host 0.0.0.0 --port 8200
-    ports:
-      - "8200:8200"
     environment:
       - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN?SERVICE_AUTH_TOKEN must be set}
     depends_on:
@@ -74,10 +72,9 @@ services:
 
   # ── Generation Service ─────────────────────────────────────────────
   generation-service:
+    profiles: [experimental-microservices]
     build: .
     command: python -m uvicorn generation-service.main:app --host 0.0.0.0 --port 8100
-    ports:
-      - "8100:8100"
     environment:
       - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN?SERVICE_AUTH_TOKEN must be set}
     healthcheck:
@@ -91,10 +88,9 @@ services:
 
   # ── Cache Service ──────────────────────────────────────────────────
   cache-service:
+    profiles: [experimental-microservices]
     build: .
     command: python -m uvicorn cache-service.main:app --host 0.0.0.0 --port 8300
-    ports:
-      - "8300:8300"
     environment:
       - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN?SERVICE_AUTH_TOKEN must be set}
     depends_on:
@@ -111,10 +107,9 @@ services:
 
   # ── Monitoring Service ─────────────────────────────────────────────
   monitoring-service:
+    profiles: [experimental-microservices]
     build: .
     command: python -m uvicorn monitoring-service.main:app --host 0.0.0.0 --port 8400
-    ports:
-      - "8400:8400"
     environment:
       - SERVICE_AUTH_TOKEN=${SERVICE_AUTH_TOKEN?SERVICE_AUTH_TOKEN must be set}
     healthcheck:
@@ -128,9 +123,8 @@ services:
 
   # ── PRD §12: Prometheus 指标采集 ──────────────────────────────────
   prometheus:
+    profiles: [experimental-microservices]
     image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
     volumes:
       - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
@@ -145,9 +139,8 @@ services:
 
   # ── PRD §12: Grafana 可视化仪表盘 ────────────────────────────────
   grafana:
+    profiles: [experimental-microservices]
     image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       # ⚠️ 生产环境必须设置强密码！可通过环境变量 GF_SECURITY_ADMIN_PASSWORD 覆盖
@@ -163,11 +156,8 @@ services:
 
   # ── PRD §12: Jaeger 分布式追踪 ───────────────────────────────────
   jaeger:
+    profiles: [experimental-microservices]
     image: jaegertracing/all-in-one:latest
-    ports:
-      - "16686:16686"  # Jaeger UI
-      - "6831:6831/udp"  # Jaeger agent UDP
-      - "14268:14268"  # Jaeger collector HTTP
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     restart: unless-stopped
@@ -176,11 +166,10 @@ services:
 
   # ── Frontend (React SPA) ────────────────────────────────────────
   frontend:
+    profiles: [experimental-microservices]
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    ports:
-      - "3001:80"
     depends_on:
       - api-gateway
     restart: unless-stopped

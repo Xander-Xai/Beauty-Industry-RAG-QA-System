@@ -41,3 +41,15 @@ def test_cpu_compose_has_no_gpu():
     with open("docker-compose.cpu.yml") as f:
         content = f.read()
     assert "CUDA_VISIBLE_DEVICES" not in content
+
+
+def test_experimental_microservices_are_opt_in_and_not_host_published():
+    with open("docker-compose.microservices.yml") as f:
+        services = yaml.safe_load(f)["services"]
+    assert "api-gateway" in services
+    assert "app" not in services
+    for name, service in services.items():
+        assert service["profiles"] == ["experimental-microservices"], name
+        assert not service.get("ports"), name
+        assert service.get("network_mode") != "host", name
+    assert "--reload" not in services["api-gateway"]["command"]
