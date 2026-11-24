@@ -7,6 +7,8 @@ answer here comes from a model.
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from tests.evaluation.answer_eval import (
     AnswerEvalSample,
     ObservedAnswer,
     load_samples,
+    main,
     score,
 )
 
@@ -169,3 +172,78 @@ def test_llm_self_score_shape_is_not_a_human_label():
                 "reviewed_at": "2026-10-09",
             }
         )
+
+
+def _reviewed_row(sample_id="s1", **changes):
+    return {
+        "sample_id": sample_id,
+        "gate_decision": "pass",
+        "answer_gate_passed": True,
+        "final_disposition": "answered",
+        "answer_text": "observed fixture response",
+        "citations": ["d1"],
+        "evidence_support": "supported",
+        "rbac_leak": False,
+        "reviewer": "fixture-reviewer",
+        "reviewed_at": "2026-11-24",
+        "review_status": "HUMAN_REVIEWED",
+        **changes,
+    }
+
+
+def _cli_inputs(tmp_path, samples, observations):
+    dataset = tmp_path / "samples.jsonl"
+    observed = tmp_path / "observations.jsonl"
+    out = tmp_path / "result.json"
+    dataset.write_text("\n".join(json.dumps(asdict(s)) for s in samples), encoding="utf-8")
+    observed.write_text("\n".join(json.dumps(o) for o in observations), encoding="utf-8")
+    return ["--dataset", str(dataset), "--observations", str(observed), "--out", str(out)], out
+
+
+def test_cli_scores_actual_final_refusal_after_evidence_gate_pass(tmp_path):
+    row = _reviewed_row(
+        final_disposition="refused", evidence_support="not_applicable", answer_gate_passed=False, citations=[]
+    )
+    args, out = _cli_inputs(tmp_path, [_sample(must_refuse=True)], [row])
+    assert main(args) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["metrics"]["refusal_recall"] == 1
+    assert report["coverage"] == 1
+    assert report["publication_eligibility"] == "NOT_ASSESSED"
+    assert report["answered_count"] == 0
+
+
+def test_cli_incomplete_coverage_returns_nonzero_and_records_missing_ids(tmp_path):
+    args, out = _cli_inputs(tmp_path, [_sample("s1"), _sample("s2")], [_reviewed_row()])
+    assert main(args) == 1
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["missing_observations"] == ["s2"]
+    assert report["coverage"] == 0.5
+    assert report["status"] == "INCOMPLETE_DIAGNOSTIC"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"rbac_leak": "false"},
+        {"final_disposition": None},
+        {"review_status": "MODEL_SCORED"},
+        {"final_disposition": "answered", "evidence_support": "not_applicable"},
+        {"citations": []},
+        {"answer_text": ""},
+    ],
+)
+def test_cli_rejects_unreviewed_or_malformed_observations(tmp_path, changes):
+    args, out = _cli_inputs(tmp_path, [_sample()], [_reviewed_row(**changes)])
+    with pytest.raises(SystemExit) as exc:
+        main(args)
+    assert exc.value.code == 2
+    assert not out.exists()
+
+
+def test_cli_rejects_string_boolean_in_gold(tmp_path):
+    args, out = _cli_inputs(tmp_path, [_sample(must_refuse="false")], [_reviewed_row()])
+    with pytest.raises(SystemExit) as exc:
+        main(args)
+    assert exc.value.code == 2
+    assert not out.exists()
