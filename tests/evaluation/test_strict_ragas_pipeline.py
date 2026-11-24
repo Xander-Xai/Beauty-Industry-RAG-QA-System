@@ -1,3 +1,5 @@
+import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +8,8 @@ from tests.evaluation.ragas_eval import (
     RAGASEvaluator,
     _parse_args,
     complete_pipeline_report_errors,
+    load_golden_set,
+    main,
     sample_id_for,
 )
 
@@ -76,3 +80,63 @@ def test_strict_cli_refuses_reference_mode_and_duplicate_metrics():
                 "faithfulness",
             ]
         )
+
+
+def _gold(sample_id):
+    return {
+        "sample_id": sample_id,
+        "question": "question",
+        "answer": "answer",
+        "contexts": ["reference"],
+        "ground_truth": "truth",
+    }
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ["not-json"],
+        ["[]"],
+        [json.dumps(_gold("dup")), json.dumps(_gold("dup"))],
+        [json.dumps({**_gold("bad"), "ground_truth": ""})],
+        [json.dumps({**_gold("bad"), "contexts": "not-a-list"})],
+        [],
+    ],
+)
+def test_strict_dataset_rejects_corruption_without_silent_population_loss(tmp_path, lines):
+    dataset = tmp_path / "gold.jsonl"
+    dataset.write_text("\n".join(lines), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_golden_set(str(dataset), strict=True)
+
+
+def test_strict_preflight_uses_no_model_or_credentials(tmp_path, monkeypatch, capsys):
+    dataset = tmp_path / "gold.jsonl"
+    dataset.write_text(json.dumps(_gold("one")) + "\n" + json.dumps(_gold("two")), encoding="utf-8")
+
+    def no_credentials():
+        pytest.fail("preflight must not require evaluator credentials")
+
+    monkeypatch.setattr("tests.evaluation.ragas_eval.require_evaluator_credentials", no_credentials)
+    args = [
+        "ragas_eval",
+        "--dataset",
+        str(dataset),
+        "--pipeline",
+        "--require-ragas",
+        "--require-complete-pipeline",
+        "--preflight-only",
+        "--sample-ids",
+        "two",
+    ]
+    monkeypatch.setattr(sys, "argv", args)
+    assert main() == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "PREFLIGHT_PASS",
+        "dataset_samples": 2,
+        "selected_samples": 1,
+        "model_called": False,
+    }
+    monkeypatch.setattr(sys, "argv", [*args[:-1], "missing"])
+    assert main() == 7
+    assert "dataset_preflight_failed" in capsys.readouterr().err
