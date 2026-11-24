@@ -171,8 +171,7 @@ class TestPipelineVariableOrdering:
             return [MagicMock(ce_score_ensemble=0.99)]
 
         pipeline._cross_encoder_ensemble.rerank.side_effect = degraded_rerank
-        gate = EvidenceEnsembleGate.__new__(EvidenceEnsembleGate)
-        gate._gate_mode = lambda: "test"
+        gate = EvidenceEnsembleGate()
         pipeline._evidence_gate.evaluate.side_effect = gate.evaluate
         pipeline.process(ctx)
         assert pipeline._evidence_gate.evaluate.call_args.kwargs["rerank_results"] == []
