@@ -170,7 +170,7 @@ class BM25Executor:
         if self._retriever is None:
             from retrieval.bm25_retriever import BM25Retriever
 
-            self._retriever = BM25Retriever()
+            self._retriever = BM25Retriever(strict=True)
         return self._retriever
 
     def retrieve(self, query: BenchmarkQuery, top_k: int) -> list[RetrievedItem]:
@@ -212,7 +212,7 @@ class DenseExecutor:
         if self._retriever is None:
             from retrieval.dense_retriever import DenseRetriever
 
-            self._retriever = DenseRetriever()
+            self._retriever = DenseRetriever(strict=True)
         return self._retriever
 
     def _qdrant_filter(self) -> Any:
@@ -279,11 +279,11 @@ class HybridRRFExecutor:
         if self._bm25 is None:
             from retrieval.bm25_retriever import BM25Retriever
 
-            self._bm25 = BM25Retriever()
+            self._bm25 = BM25Retriever(strict=True)
         if self._dense is None:
             from retrieval.dense_retriever import DenseRetriever
 
-            self._dense = DenseRetriever()
+            self._dense = DenseRetriever(strict=True)
         return self._bm25, self._dense
 
     def _rrf_settings(self) -> tuple[int, dict[str, float] | None]:
