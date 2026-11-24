@@ -178,7 +178,8 @@ def test_service_and_online_cross_encoder_produce_identical_ranking():
     ce_b_token = object()
 
     class _FixedAggregator:
-        def batch_predict(self, model, pairs):
+        def batch_predict(self, model, pairs, *, strict=False):
+            assert strict is True
             if model is ce_a_token:
                 return [0.9, 0.1, 0.5]
             return [0.8, 0.2, 0.6]
@@ -197,9 +198,10 @@ def test_service_and_online_cross_encoder_produce_identical_ranking():
             RerankResult(doc_id="d3", content="c3"),
         ]
 
-    online_results = _build(online).rerank("q", _candidates(), top_k=3)
-    served_results = _build(served).rerank("q", _candidates(), top_k=3)
+    online_results = _build(online).rerank("q", _candidates(), top_k=3, strict=True)
+    served_results = _build(served).rerank("q", _candidates(), top_k=3, strict=True)
 
+    assert [r.doc_id for r in online_results] == ["d1", "d3", "d2"]
     assert [r.doc_id for r in online_results] == [r.doc_id for r in served_results]
     assert [r.ce_score_ensemble for r in online_results] == [r.ce_score_ensemble for r in served_results]
 
@@ -221,7 +223,8 @@ def test_service_and_online_cross_encoder_evaluate_the_same_pairs():
     ce_b_token = object()
 
     class _RecordingAggregator:
-        def batch_predict(self, model, pairs):
+        def batch_predict(self, model, pairs, *, strict=False):
+            assert strict is True
             if model is ce_a_token:
                 seen.append(("A", tuple(pairs)))
             return [0.5] * len(pairs)
@@ -235,10 +238,12 @@ def test_service_and_online_cross_encoder_evaluate_the_same_pairs():
 
     candidates = [RerankResult(doc_id="d1", content="内容一"), RerankResult(doc_id="d2", content="内容二")]
 
-    _build(online).rerank("查询", [c.model_copy() for c in candidates], top_k=2)
+    _build(online).rerank("查询", [c.model_copy() for c in candidates], top_k=2, strict=True)
+    assert len(seen) == 1
     online_pairs = seen[-1][1]
 
-    _build(served).rerank("查询", [c.model_copy() for c in candidates], top_k=2)
+    _build(served).rerank("查询", [c.model_copy() for c in candidates], top_k=2, strict=True)
+    assert len(seen) == 2
     served_pairs = seen[-1][1]
 
     assert online_pairs == served_pairs
