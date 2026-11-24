@@ -411,7 +411,7 @@ class RerankExecutor(HybridRRFExecutor):
             )
             if len(scores) != len(ranked) or not all(math.isfinite(float(score)) for score in scores):
                 raise BenchmarkUnavailable("invalid single CrossEncoder scores")
-            for row, score in zip(ranked, scores):
+            for row, score in zip(ranked, scores, strict=True):
                 row.ce_score_ensemble = float(score)
             ranked.sort(key=lambda row: row.ce_score_ensemble, reverse=True)
             ranked = ranked[:top_k]
