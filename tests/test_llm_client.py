@@ -161,7 +161,9 @@ class TestLLMClientGenerate:
         # 模拟会话历史
         from common.config import config
 
-        session = SessionState.for_identity("test_session_hist", "test_user", 0, 0, config.get("knowledge_version_epoch", "default"))
+        session = SessionState.for_identity(
+            "test_session_hist", "test_user", 0, 0, config.get("knowledge_version_epoch", "default")
+        )
         session.dialog_rounds.append({"user_input": "用户问题1", "response": "回答1"})
         session.dialog_rounds.append({"user_input": "用户问题2", "response": "回答2"})
 
