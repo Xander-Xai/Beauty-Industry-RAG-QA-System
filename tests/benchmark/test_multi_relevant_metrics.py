@@ -213,7 +213,9 @@ def test_graded_relevance_survives_the_runner(tmp_path):
     assert len(run.results) == 1
     evidence = run.results[0].to_json_dict({})
     assert evidence["relevant_grades"] == {"d1::c0": 2, "d1::c1": 1}
-    assert evidence["ndcg_at_10"] == pytest.approx(ndcg_graded(evidence["relevant_grades"], evidence["retrieved_items"]))
+    assert evidence["ndcg_at_10"] == pytest.approx(
+        ndcg_graded(evidence["relevant_grades"], evidence["retrieved_items"])
+    )
 
 
 # ── the multi-context defect itself ─────────────────────────────────────────
