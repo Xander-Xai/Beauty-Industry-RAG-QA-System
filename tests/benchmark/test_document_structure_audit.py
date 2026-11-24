@@ -65,9 +65,7 @@ def test_duplicate_block_identity_and_invalid_page_fail():
 
 
 def test_image_collision_or_empty_payload_fails():
-    report = audit_document_structure(
-        doc(images=[image("same", 1), image("same", 2, b"")]), expected_pdf_pages=2
-    )
+    report = audit_document_structure(doc(images=[image("same", 1), image("same", 2, b"")]), expected_pdf_pages=2)
     assert {"duplicate_image_identity", "empty_image_data"} <= set(report.reasons)
 
 
