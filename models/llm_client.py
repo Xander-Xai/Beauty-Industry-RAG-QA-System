@@ -401,7 +401,13 @@ class LLMClient:
         # 不是不可信检索数据，也不做过滤；只是不允许 replayed payload 生成
         # application-owned framing syntax。
         if ctx.session_id:
-            session = SessionState.get_or_create(ctx.session_id, owner_id=ctx.user_id)
+            session = SessionState.for_identity(
+                ctx.session_id,
+                ctx.user_id,
+                ctx.user_role_mask,
+                ctx.user_dept_mask,
+                config.get("knowledge_version_epoch", "default"),
+            )
             history = session.dialog_rounds[-self.max_conversation_rounds :]
             for round in history:
                 if "user_input" in round:

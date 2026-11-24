@@ -196,7 +196,13 @@ def chat_handler(
 
     维护会话状态（最近 6 轮对话历史），支持证据锁定续写。
     """
-    session_state = SessionState.get_or_create(req.session_id, owner_id=identity.user_id)
+    session_state = SessionState.for_identity(
+        req.session_id,
+        identity.user_id,
+        identity.user_role_mask,
+        identity.user_dept_mask,
+        _config.get("knowledge_version_epoch", "default"),
+    )
 
     ctx = RequestContext(
         user_input=req.message,
@@ -262,7 +268,13 @@ def continuation_handler(
     The session is still resolved so the authorization path stays identical to every
     other endpoint — an unauthenticated caller is rejected before reaching the 501.
     """
-    SessionState.get_or_create(req.session_id, owner_id=identity.user_id)
+    SessionState.for_identity(
+        req.session_id,
+        identity.user_id,
+        identity.user_role_mask,
+        identity.user_dept_mask,
+        _config.get("knowledge_version_epoch", "default"),
+    )
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail=("长文续写尚未实现：该端点从未提供续写能力，此前返回的空桩响应会让调用方把空答案误认为模型输出。"),
@@ -283,7 +295,13 @@ def dialog_history_handler(
     """
     对话历史查询入口（单块模式简化版）。
     """
-    session = SessionState.get_or_create(session_id, owner_id=identity.user_id)
+    session = SessionState.for_identity(
+        session_id,
+        identity.user_id,
+        identity.user_role_mask,
+        identity.user_dept_mask,
+        _config.get("knowledge_version_epoch", "default"),
+    )
     return {
         "session_id": session_id,
         "rounds": session.dialog_rounds,

@@ -257,7 +257,13 @@ class OnlineRAGPipeline:
                 # and cross-user answer reuse.
                 # ③+④ 并行执行 Query Rewrite + 复杂度评估（两者无数据依赖）
                 t_rewrite = time.time()
-                session_state = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
+                session_state = SessionState.for_identity(
+                    ctx.session_id,
+                    ctx.user_id,
+                    ctx.user_role_mask,
+                    ctx.user_dept_mask,
+                    config.get("knowledge_version_epoch", "default"),
+                )
                 recent_dialogs = session_state.get_recent_queries()
 
                 # M-5: 使用共享线程池，避免每请求创建 ThreadPoolExecutor
@@ -378,8 +384,12 @@ class OnlineRAGPipeline:
                 # 结果存入 session.async_clip_results，供下一轮多轮对话预热复用
                 if clip_use:
                     try:
-                        session_state_for_clip = SessionState.get_or_create(
-                            ctx.session_id or "default", owner_id=ctx.user_id
+                        session_state_for_clip = SessionState.for_identity(
+                            ctx.session_id,
+                            ctx.user_id,
+                            ctx.user_role_mask,
+                            ctx.user_dept_mask,
+                            config.get("knowledge_version_epoch", "default"),
                         )
                         clip_qdrant_filter = self._build_clip_filter(ctx)
                         # M-5: 使用共享线程池
@@ -566,7 +576,13 @@ class OnlineRAGPipeline:
                 self._write_cache(ctx)
 
                 # ⑱ 更新会话
-                session = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
+                session = SessionState.for_identity(
+                    ctx.session_id,
+                    ctx.user_id,
+                    ctx.user_role_mask,
+                    ctx.user_dept_mask,
+                    config.get("knowledge_version_epoch", "default"),
+                )
                 session.add_round(ctx.user_input, ctx.final_response, ctx.rewrite_result)
                 session.lock_evidence(ctx.evidence_locked_doc_ids)
 
@@ -621,7 +637,9 @@ class OnlineRAGPipeline:
             return False
         cache_key = self._build_cache_key(ctx)
         if context_dependent:
-            cache_key = self._scope_cache_key_to_session(cache_key, ctx.session_id, ctx.user_id)
+            cache_key = self._scope_cache_key_to_session(
+                cache_key, ctx.session_id, ctx.user_id, access_scope=self._session_access_scope(ctx)
+            )
             layer = "L2_SESSION"
         else:
             layer = "L1" if (ctx.user_role_mask == 0 and ctx.user_dept_mask == 0) else "L2"
@@ -667,7 +685,17 @@ class OnlineRAGPipeline:
         return hashlib.sha256(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
     @staticmethod
-    def _scope_cache_key_to_session(cache_key: str, session_id: str | None, owner_id: str | None) -> str:
+    def _session_access_scope(ctx) -> str:
+        from core.pipeline_context import SessionState
+
+        return SessionState.scope_fingerprint(
+            ctx.user_role_mask, ctx.user_dept_mask, config.get("knowledge_version_epoch", "default")
+        )
+
+    @staticmethod
+    def _scope_cache_key_to_session(
+        cache_key: str, session_id: str | None, owner_id: str | None, *, access_scope: str = ""
+    ) -> str:
         """Contextual cache identity includes BOTH session and authenticated owner.
 
         A session ID may be caller-supplied/reused. Refuse to produce a key
@@ -677,7 +705,7 @@ class OnlineRAGPipeline:
             raise ValueError("Contextual cache requires both owner_id and session_id")
         from core.pipeline_context import SessionState
 
-        session = SessionState.get_or_create(session_id, owner_id=owner_id)
+        session = SessionState.get_or_create(session_id, owner_id=owner_id, access_scope=access_scope)
         # The same prompt may refer to a DIFFERENT entity after another turn.
         # Hash current conversation content; never embed raw text in cache keys.
         rounds = [
@@ -691,6 +719,7 @@ class OnlineRAGPipeline:
             "base": cache_key,
             "sid": session_id,
             "owner": owner_id,
+            "access_scope": access_scope,
             "history": history_fingerprint,
         }
         return hashlib.sha256(json.dumps(scoped, sort_keys=True).encode()).hexdigest()
@@ -1077,7 +1106,13 @@ class OnlineRAGPipeline:
         from core.pipeline_context import GenerationResult, SessionState
 
         try:
-            session_state = SessionState.get_or_create(ctx.session_id or "default", owner_id=ctx.user_id)
+            session_state = SessionState.for_identity(
+                ctx.session_id,
+                ctx.user_id,
+                ctx.user_role_mask,
+                ctx.user_dept_mask,
+                config.get("knowledge_version_epoch", "default"),
+            )
 
             # PRD §4.6: 法规类强制启用 Answer Plan — 首次截断后生成大纲
             business_type = ctx.rewrite_result.business_type if ctx.rewrite_result else "general"
@@ -1160,7 +1195,9 @@ class OnlineRAGPipeline:
             if requires_ctx:
                 if not ctx.session_id or not ctx.user_id:
                     return
-                cache_key = self._scope_cache_key_to_session(cache_key, ctx.session_id, ctx.user_id)
+                cache_key = self._scope_cache_key_to_session(
+                    cache_key, ctx.session_id, ctx.user_id, access_scope=self._session_access_scope(ctx)
+                )
             cache_value = {
                 "answer": ctx.final_response,
                 "doc_ids": ctx.evidence_locked_doc_ids,
