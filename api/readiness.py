@@ -198,7 +198,6 @@ def _resolve_endpoints() -> dict[str, str]:
 
 def _build_context() -> ProbeContext:
     from common.config import get_config_dict, is_production_mode
-
     from common.release_contract import industrial_enabled
 
     cfg = get_config_dict()

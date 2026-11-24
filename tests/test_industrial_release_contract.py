@@ -68,3 +68,14 @@ def test_industrial_session_cannot_fallback_to_process_memory(monkeypatch):
     monkeypatch.setattr(pipeline_context, "_get_redis_client", lambda: None)
     with pytest.raises(InfrastructureError):
         pipeline_context.SessionState.get_or_create("session-1", "owner-1", access_scope="test-scope")
+
+
+def test_release_contract_imports_before_pipeline_in_clean_process():
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [sys.executable, "-c", "import common.release_contract; import core.pipeline"],
+        check=True,
+        timeout=60,
+    )

@@ -29,8 +29,13 @@ deploy/prometheus-token
 
 # Model caches and weights: supplied by config.json model_path at runtime,
 # never vendored into the image
-models/*
-!models/*.py
+models/**
+!models/__init__.py
+!models/adapter_manager.py
+!models/blip_service.py
+!models/complexity_evaluator.py
+!models/embedding_service.py
+!models/llm_client.py
 blip-image-captioning-large
 chatglm3-6b
 roberta-base

@@ -17,8 +17,6 @@ from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
 
-from core.exceptions import InfrastructureError
-
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _EPOCH = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 
@@ -148,6 +146,8 @@ def current_manifest(epoch: str) -> ReleaseManifest:
             raise ValueError("Release epoch or validity window mismatch")
         return manifest
     except (KeyError, OSError, ValueError, TypeError) as exc:
+        from core.exceptions import InfrastructureError
+
         raise InfrastructureError("Approved knowledge release unavailable", service="knowledge_release") from exc
 
 

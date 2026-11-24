@@ -30,7 +30,6 @@ from common.models import (
     RecallResult,
     RerankResult,
 )
-
 from common.release_contract import industrial_enabled, release_scope
 from core.exceptions import InfrastructureError
 
