@@ -87,14 +87,14 @@ def test_persisted_vector_fingerprint_detects_vector_only_change():
 def test_vector_fingerprint_tolerates_float32_roundtrip_noise():
     first = _vector_client([[0.6, 0.8]])
     reopened = _vector_client([[0.6000000238418579, 0.800000011920929]])
-    drifted = _vector_client([[0.6001, 0.8]])
+    drifted = _vector_client([[0.8, 0.6]])
     assert read_vector_snapshot(first, "experiment", 2) == read_vector_snapshot(reopened, "experiment", 2)
     assert read_vector_snapshot(first, "experiment", 2)[1] != read_vector_snapshot(drifted, "experiment", 2)[1]
 
 
 @pytest.mark.parametrize(
     "vector",
-    [None, [], [0.0, 0.0], [1.0], [True, 1.0], [float("nan"), 1.0], {"named": [1.0, 0.0]}],
+    [None, [], [0.0, 0.0], [1.0], [True, 1.0], [float("nan"), 1.0], [3.0, 4.0], {"named": [1.0, 0.0]}],
 )
 def test_persisted_vector_audit_rejects_invalid_values(vector):
     with pytest.raises(ValueError, match="invalid_persisted_vector"):
@@ -112,7 +112,7 @@ def test_disk_backed_qdrant_roundtrip_detects_vector_only_update(tmp_path):
     client = QdrantClient(path=location)
     try:
         client.create_collection(collection, vectors_config=VectorParams(size=2, distance=Distance.COSINE))
-        client.upsert(collection, [PointStruct(id=1, vector=[3.0, 4.0], payload=payload)], wait=True)
+        client.upsert(collection, [PointStruct(id=1, vector=[0.6, 0.8], payload=payload)], wait=True)
         rows, original = read_vector_snapshot(client, collection, 2)
         assert rows == [payload]
     finally:
@@ -121,7 +121,7 @@ def test_disk_backed_qdrant_roundtrip_detects_vector_only_update(tmp_path):
     client = QdrantClient(path=location)
     try:
         assert read_vector_snapshot(client, collection, 2) == (rows, original)
-        client.update_vectors(collection, [PointVectors(id=1, vector=[4.0, 3.0])], wait=True)
+        client.update_vectors(collection, [PointVectors(id=1, vector=[0.8, 0.6])], wait=True)
         changed_rows, changed = read_vector_snapshot(client, collection, 2)
         assert changed_rows == rows
         assert changed != original
@@ -131,3 +131,10 @@ def test_disk_backed_qdrant_roundtrip_detects_vector_only_update(tmp_path):
         ]
     finally:
         client.close()
+
+
+def test_nonunit_persisted_values_are_not_silently_normalized():
+    unit = _vector_client([[0.6, 0.8]])
+    assert read_vector_snapshot(unit, "experiment", 2)[1]
+    with pytest.raises(ValueError, match="invalid_persisted_vector_norm"):
+        read_vector_snapshot(_vector_client([[3.0, 4.0]]), "experiment", 2)
