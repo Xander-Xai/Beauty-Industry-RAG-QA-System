@@ -279,7 +279,15 @@ class DocumentProcessor:
         if not callable(detector):
             raise ValueError("PDF table extraction unavailable in this PyMuPDF version")
         try:
-            detected = detector()
+            # PyMuPDF >= 1.28.2 added layout gating to find_tables().
+            # The 2.x default can suppress real ruling-line grids when the
+            # layout model does not classify them as tables. For this explicit
+            # opt-in structural pass, use pure line detection where available;
+            # older releases do not accept the keyword.
+            from inspect import signature
+
+            params = signature(detector).parameters
+            detected = detector(use_layout=False) if "use_layout" in params else detector()
             tables = detected.tables
             if tables is None:
                 raise ValueError("PDF table detection returned no table collection")
