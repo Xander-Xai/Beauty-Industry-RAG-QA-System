@@ -2,7 +2,7 @@
 
 ## 0. 这份文档是什么，不是什么
 
-`deploy/k8s/` 是本仓库的**第二套部署形态**，与 Docker Compose 并列，不是它的替代品。
+`deploy/k8s/` 是单体应用的**可选静态部署实验**，不是与 canonical Docker Compose 并列的已验收生产形态。
 
 | 声明 | 证据等级 |
 |---|---|
@@ -181,11 +181,11 @@ kubectl -n beauty-rag get deploy,pods,svc
 
 本契约**没有**声明共享存储，也**没有**外部数据库后端。副本数 >1 时各Pod 持有互不一致的用户行：一个 Pod 创建的用户可能无法从另一个 Pod 登录，role/dept mask 变更会陈旧，Pod 替换后其上所有用户消失。
 
-**提高副本数需要先落地共享用户存储。** 那是这份最小契约**不做**的真实工作，因此 `replicas: 1` 并非疏漏，而是当前诚实的选择。`test_multiple_replicas_require_a_shared_user_store` 会在未配置 `DATABASE_URL` 而副本数被提高时失败。
+**提高副本数需要先落地并验证共享用户存储。** 那是这份最小契约**不做**的真实工作，因此固定 `replicas: 1`；仅配置 DATABASE_URL 不能证明共享存储可用。静态测试拒绝其他副本数。
 
 同理，`./data/users.db` 没有 volume：单副本下它随Pod 生灭。这是**已声明的限制**，不是生产就绪。
 
-`maxUnavailable: 0` + `maxSurge: 1` 保证单副本滚动更新期间不丢流量。
+采用 `Recreate` 更新策略，避免滚动更新 `maxSurge: 1` 导致两个持有独立 SQLite 用户库的 Pod 同时服务。该策略可能中断服务，仍不保留未挂载的数据，不构成零停机或生产就绪承诺。
 
 ## 6. 配置项的来源
 
@@ -205,7 +205,7 @@ ConfigMap 里每个键都对着一个 `os.environ.get` 调用点验证过，没�
 
 `python3 -m pytest tests/deploy/ -q`（即 `tests/deploy/test_k8s_manifests.py`）→ 31 项静态检查。分组：
 
-YAML 可解析、apiVersion/kind 完整、Namespace 一致 · Deployment selector ⊆ pod labels · Service selector 命中 pod labels、targetPort 匹配 · 探针指向真实免认证端点、liveness 不依赖后端 · secret 仅被引用不硬编码、Secret 无真实值、ConfigMap 无 secret 形态键 · resources requests/limits 齐备且不倒挂 · 镜像 tag 固定且匹配 runtime version、RollingUpdate 策略 · RS256 配置与挂载、**挂载权限对非 root 可读**、**uid 与 Dockerfile 固定值一致**、**推理 URL 用单体实际读取的变量**、ES username 与密码配对、副本数与用户存储。
+YAML 可解析、apiVersion/kind 完整、Namespace 一致 · Deployment selector ⊆ pod labels · Service selector 命中 pod labels、targetPort 匹配 · 探针指向真实免认证端点、liveness 不依赖后端 · secret 仅被引用不硬编码、Secret 无真实值、ConfigMap 无 secret 形态键 · resources requests/limits 齐备且不倒挂 · 镜像 tag 固定且匹配 runtime version、Recreate 策略 · RS256 配置与挂载、**挂载权限对非 root 可读**、**uid 与 Dockerfile 固定值一致**、**推理 URL 用单体实际读取的变量**、ES username 与密码配对、副本数与用户存储。
 
 检查本身经 mutation 验证：硬编码 secret、selector 漂移、探针改向、删除 resources、tag 改 `latest`、secret 键混入 ConfigMap、删除推理 URL、改用 `REWRITE_/GENERATION_SERVICE_URL`、删除 ES username、提高副本数、移除密钥挂载、清空 `JWT_ALGORITHM`、`defaultMode` 退回 `0400`、Dockerfile 去掉 uid 固定 —— 每一项都会让对应测试失败。
 
@@ -214,7 +214,7 @@ YAML 可解析、apiVersion/kind 完整、Namespace 一致 · Deployment selecto
 | 项 | 缺什么 |
 |---|---|
 | manifest 被真实集群 apply | 集群 |
-| 滚动更新承载真实流量 | 集群 + 依赖服务 |
+| 真实集群替换更新与持久化验收 | 集群 + 依赖服务 |
 | RS256 密钥实际挂载并登录成功 | 密钥材料 + 集群 |
 | `./data/users.db` 跨副本持久化 | 共享用户存储（未实现） |
 | 真实模型权重挂载 | 权重，见 [#8](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/8) / [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) |
