@@ -112,6 +112,23 @@ def _apply_env_overrides(raw: dict) -> dict:
     if os.environ.get("KNOWLEDGE_VERSION_EPOCH"):
         raw["knowledge_version_epoch"] = os.environ["KNOWLEDGE_VERSION_EPOCH"]
 
+    asset_root = os.environ.get("MODEL_ASSET_ROOT")
+    if asset_root:
+        def remap(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key in {"model_path", "lora_adapter_path"} and isinstance(value, str):
+                        if value.startswith("./models/"):
+                            node[key] = str(Path(asset_root) / value.removeprefix("./models/"))
+                        elif value == "./blip-image-captioning-large":
+                            node[key] = str(Path(asset_root) / "blip-image-captioning-large")
+                    else:
+                        remap(value)
+            elif isinstance(node, list):
+                for value in node:
+                    remap(value)
+        remap(raw)
+
     return raw
 
 

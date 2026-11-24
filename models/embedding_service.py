@@ -11,6 +11,7 @@ Embedding 服务模块
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 
@@ -140,11 +141,14 @@ class EmbeddingService:
         if self._qdrant_client is None:
             from qdrant_client import QdrantClient
 
+            from common.release_contract import industrial_enabled
+
             self._qdrant_client = QdrantClient(
                 host=config["qdrant"]["host"],
                 port=config["qdrant"]["port"],
                 grpc_port=config["qdrant"]["grpc_port"],
-                prefer_grpc=True,
+                prefer_grpc=not industrial_enabled(),
+                **({"api_key": os.environ["QDRANT_API_KEY"], "https": True} if industrial_enabled() else {}),
             )
             logger.info(f"Qdrant 连接完成: {config['qdrant']['host']}:{config['qdrant']['port']}")
         return self._qdrant_client

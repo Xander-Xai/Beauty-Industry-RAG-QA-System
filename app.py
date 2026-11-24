@@ -182,6 +182,12 @@ def create_app() -> FastAPI:
     if os.path.isdir(static_dir):
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
+    from core.exceptions import InfrastructureError
+
+    @app.exception_handler(InfrastructureError)
+    async def _infrastructure_error(request: Request, exc: InfrastructureError):
+        return JSONResponse(status_code=503, content={"error": "Service temporarily unavailable"})
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         logger.error("未捕获异常: %s %s -> %s", request.method, request.url.path, exc, exc_info=True)
