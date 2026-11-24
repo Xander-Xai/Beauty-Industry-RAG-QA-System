@@ -330,3 +330,23 @@ class TestEmbeddingServiceLazyLoad:
         # Access the property
         _ = inst.embedding_service
         assert inst._embedding_service is not None
+
+
+def test_online_pipeline_shares_embedding_service_with_biencoder():
+    """One pipeline-owned encoder, without loading weights or using a backend."""
+    from core.pipeline import OnlineRAGPipeline
+    from retrieval.bi_encoder import BiEncoderReranker
+
+    pipeline = OnlineRAGPipeline()
+    try:
+        shared = object()
+        pipeline._embedding_service = shared
+        assert pipeline.bi_encoder.embedding_service is shared
+        assert pipeline.embedding_service is shared
+        assert pipeline.bi_encoder is pipeline.bi_encoder
+        # Standalone callers and the dedicated-model path remain compatible.
+        assert BiEncoderReranker()._embedding_service is None
+        assert BiEncoderReranker(embedding_service=shared).embedding_service is shared
+    finally:
+        pipeline._rewrite_pool.shutdown(wait=True)
+        pipeline._clip_pool.shutdown(wait=True)

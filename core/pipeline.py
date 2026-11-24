@@ -131,7 +131,7 @@ class OnlineRAGPipeline:
         if self._bi_encoder is None:
             from retrieval.bi_encoder import BiEncoderReranker
 
-            self._bi_encoder = BiEncoderReranker()
+            self._bi_encoder = BiEncoderReranker(embedding_service=self.embedding_service)
         return self._bi_encoder
 
     @property

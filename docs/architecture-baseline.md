@@ -1,8 +1,27 @@
 # 化妆品知识问答系统架构基线
 
-更新时间：2026-10-07（canonical 架构图收敛到本文件；README 仅保留第一屏简化视图）
+更新时间：2026-11-25（canonical 架构图收敛到本文件；README 仅保留第一屏简化视图）
 
 本文件是“整体架构”“几路召回”“如何重排”“如何控制幻觉”等架构问题的唯一事实基线。README、PRD、代码注释和历史表述稿发生冲突时，以当前主链路代码、配置和架构契约测试为准。
+
+## Architecture decision freeze — 2026-11-25
+
+**主架构：离线多模态知识构建 + 在线 FastAPI 模块化单体 RAG。** 本仓主责检索、证据、权限和知识发布，不引入通用 Agent Loop、MCP/A2A、执行沙箱或跨任务用户画像。本公开参考实现的工程治理不构成任何第三方生产上线证明。
+
+| 设计 | 裁决 | 边界 / 验收 |
+|---|---|---|
+| 单体 + Qdrant + Elasticsearch + Redis | 保留为唯一在线主线 | 微服务目录及 K8s 为非主线可选实验，不扩张；只有独立扩容/故障隔离的实测需求才重新评审 |
+| 动态 2–4 路检索 + RRF | 保留 | CLIP 仅视觉需要；Rewrite 变体仅复杂查询；fallback 不算第五路 |
+| Rewrite 与缓存 | 先 Rewrite 再缓存读取 | requires_context、owner/session、对话指纹、权限及 epoch 必须绑定；不合格绕过缓存 |
+| BiEncoder + 双 CE | 当前实现保留，架构待裁决 | 目标候选为 Hybrid + 单 CE；同一语料、候选深度、权限、模型资产比较 hybrid、BiEncoder、单 CE、双 CE；以 Recall/MRR/NDCG、关键法规漏召回、延迟/资源共同决定；不得提前宣称精简已交付 |
+| Evidence/Answer Gate | 保留 | NLI 是证据一致性信号，不是法规真实性证明；来源、时效、适用条件、拒答必须验证 |
+| 4B/14B 路由与双 GPU | 保留配置，不承诺物理拓扑 | 实测前不能证明吞吐收益；共享 rewrite/生成资源须检查排队、超时和隔离；仅在实测容量或隔离需求成立时增加 GPU 服务 |
+| RBAC/epoch | 保留纵深防御 | 检索前过滤、融合后复核、上下文缓存隔离；uint32 是现有组织约束，不宣称任意规模 ABAC |
+| 后端 fallback | 保留显式降级 | 成功空结果、权限过滤、超时/失败分开记录；不能把失败当命中或当完整评测 |
+
+**资源所有权整改**：默认 `embedding.text.model_path` 与 `gpu1.models.bi_encoder.model_path` 均为同一 BGE 路径；在线 Pipeline 通过依赖注入复用其 EmbeddingService，而不是让 BiEncoder 持有另一套同权重实例。独立调用和不同专用 BiEncoder 路径仍受原契约约束。此处只消除重复服务对象，不移除候选重新评分，不宣称实际 GPU 内存、吞吐或延迟收益已经测量。
+
+**架构裁剪门禁**：先冻结同语料及独立金标，比较简单基线和复杂模块；缺真实模型资产时不删除当前门控或修改分数阈值。保留安全默认和兼容接口，修改排序必须验证拒答和 Answer Gate，CI 与真实评测分别报告。现有 27 样本 BM25 结果不是 Dense/Hybrid/Rerank/RAGAS 的验收。架构裁决先于新增能力；历史审计不回填。
 
 ## 一句话结论
 
@@ -39,7 +58,9 @@ flowchart TB
     AUTH["RS256 认证 + 登录限流<br/>api/routes_auth.py"]
     API["api/routes.py<br/>/api/query · /api/chat"]
     ID["身份解析<br/>uint32 role_mask / dept_mask"]
-    CACHE["L1 进程内 / L2 Redis<br/>key = 知识版本 + 权限指纹"]
+    CACHE["Rewrite 后缓存<br/>权限 / epoch / 上下文身份"]
+    HIT["授权缓存命中：返回结果"]
+    ADMIT["未命中：KV 准入"]
     RW["Query Rewrite + 复杂度判断<br/>并行执行"]
     REC["动态 2–4 路召回<br/>dense_bge · bm25_es · rewrite_variants · clip_visual"]
     RBAC["文档级 RBAC 二次过滤<br/>+ 加权 RRF 融合（唯一入口）"]
@@ -48,7 +69,9 @@ flowchart TB
     GEN["模型路由<br/>共享 4B rewrite+简单 · 14B 复杂"]
     AGATE["Answer Gate<br/>答案 vs 核心证据一致性"]
     OUT["答案 + 证据 + 审计字段"]
-    AUTH --> API --> ID --> CACHE --> RW --> REC --> RBAC --> RERANK --> EGATE --> GEN --> AGATE --> OUT
+    AUTH --> API --> ID --> RW --> CACHE
+    CACHE -->|hit| HIT --> OUT
+    CACHE -->|miss / bypass| ADMIT --> REC --> RBAC --> RERANK --> EGATE --> GEN --> AGATE --> OUT
   end
 
   subgraph OFFLINE["离线知识构建 — offline/ + run_offline.py"]
