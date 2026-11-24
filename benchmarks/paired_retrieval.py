@@ -29,6 +29,9 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
         raise ValueError("sample populations differ or are empty")
     improvements, regressions = [], []
     hit_gains, hit_losses = [], []
+    rr_improvements, rr_regressions = [], []
+    ndcg_improvements, ndcg_regressions = [], []
+    hit1_deltas = []
     recall_deltas, rr_deltas, ndcg_deltas = [], [], []
     excluded = 0
     for sample in sorted(left):
@@ -61,10 +64,21 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
             # Nonempty validated gold has a defined NDCG in both arms.
             if ndcg[0] is None or ndcg[1] is None:
                 raise ValueError("undefined NDCG for nonempty gold")
-            ndcg_deltas.append(ndcg[1] - ndcg[0])
+            ndcg_delta = ndcg[1] - ndcg[0]
+            ndcg_deltas.append(ndcg_delta)
+            if ndcg_delta > 0:
+                ndcg_improvements.append(sample)
+            elif ndcg_delta < 0:
+                ndcg_regressions.append(sample)
         delta = recall[1] - recall[0]
         recall_deltas.append(delta)
-        rr_deltas.append(rr[1] - rr[0])
+        rr_delta = rr[1] - rr[0]
+        rr_deltas.append(rr_delta)
+        hit1_deltas.append(int(rr[1] == 1) - int(rr[0] == 1))
+        if rr_delta > 0:
+            rr_improvements.append(sample)
+        elif rr_delta < 0:
+            rr_regressions.append(sample)
         if delta > 0:
             improvements.append(sample)
         elif delta < 0:
@@ -82,6 +96,11 @@ def compare_arms(rows: Iterable[dict[str, Any]], baseline: str, candidate: str) 
         "excluded_no_gold": excluded,
         "delta_recall_at_10": sum(recall_deltas) / n if n else None,
         "delta_mrr_at_10": sum(rr_deltas) / n if n else None,
+        "delta_hit_at_1": sum(hit1_deltas) / n if n else None,
+        "mrr_improved_ids": rr_improvements,
+        "mrr_regressed_ids": rr_regressions,
+        "ndcg_improved_ids": ndcg_improvements,
+        "ndcg_regressed_ids": ndcg_regressions,
         "ndcg_grade_verified_samples": len(ndcg_deltas),
         "delta_ndcg_at_10": sum(ndcg_deltas) / n if n and len(ndcg_deltas) == n else None,
         "recall_improved_ids": improvements,
@@ -108,8 +127,12 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         parser.error(f"invalid per-query artifact: {type(exc).__name__}")
     report["input_sha256"] = hashlib.sha256(source).hexdigest()
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    except OSError as exc:
+        parser.error(f"cannot create fresh output evidence: {type(exc).__name__}")
     return 0 if report["scored"] else 1
 
 

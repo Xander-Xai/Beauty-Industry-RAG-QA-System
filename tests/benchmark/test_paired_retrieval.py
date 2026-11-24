@@ -102,3 +102,33 @@ def test_pair_rejects_invalid_grade_contract(grades):
     a["relevant_grades"] = b["relevant_grades"] = grades
     with pytest.raises(ValueError, match="invalid relevance grades"):
         compare_arms([a, b], "bm25", "hybrid")
+
+
+def test_equal_recall_can_hide_top_rank_regression():
+    a = row("bm25", "x", ["a"], ["a", "b"])
+    b = row("hybrid", "x", ["a"], ["b", "a"])
+    a["relevant_grades"] = b["relevant_grades"] = {"a": 2}
+    result = compare_arms([a, b], "bm25", "hybrid")
+    assert result["delta_recall_at_10"] == 0
+    assert result["delta_mrr_at_10"] == -0.5
+    assert result["delta_hit_at_1"] == -1.0
+    assert result["mrr_regressed_ids"] == ["x"]
+    assert result["ndcg_regressed_ids"] == ["x"]
+    assert result["hit_lost_ids"] == []
+
+
+def test_cli_rejects_existing_output_and_hardlink(tmp_path):
+    source = tmp_path / "rows.jsonl"
+    out = tmp_path / "existing.json"
+    alias = tmp_path / "alias.jsonl"
+    records = [row("a", "x", ["a"], []), row("b", "x", ["a"], ["a"])]
+    source.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    original = source.read_bytes()
+    out.write_text("previous evidence", encoding="utf-8")
+    alias.hardlink_to(source)
+    args = ["--per-query", str(source), "--baseline", "a", "--candidate", "b", "--out"]
+    for target in (out, alias):
+        with pytest.raises(SystemExit):
+            main(args + [str(target)])
+    assert out.read_text(encoding="utf-8") == "previous evidence"
+    assert source.read_bytes() == original
