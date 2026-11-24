@@ -19,3 +19,13 @@ fail, per-sample IDs/counts differ, or any requested overall or row metric is
 missing/non-finite. A measured zero is valid. Coverage refers only to the
 selected sample set, not the entire corpus or production performance. Selection
 by ID preserves the original dataset index for derived sample IDs.
+
+## Offline preflight before evaluator spending
+
+Append `--preflight-only` to the strict pipeline command above to validate the
+entire JSONL dataset and selected sample IDs without loading the RAG pipeline
+or requiring evaluator credentials. Strict execution uses the same preflight
+before model initialization; malformed JSON, non-object records, invalid
+reference fields, duplicate effective IDs and unknown selections return exit 7.
+A preflight pass proves dataset structure and selection only, not annotation
+quality, source authorization, actual model quality or successful retrieval.

@@ -66,7 +66,7 @@ class PipelineSample:
     model: str = ""
 
 
-def load_golden_set(path: str) -> list[dict]:
+def load_golden_set(path: str, *, strict: bool = False) -> list[dict]:
     """加载 JSON Lines 黄金测试集。
 
     Args:
@@ -86,10 +86,17 @@ def load_golden_set(path: str) -> list[dict]:
             if not stripped:
                 continue
             try:
-                dataset.append(json.loads(stripped))
+                entry = json.loads(stripped)
+                if strict and not isinstance(entry, dict):
+                    raise ValueError(f"invalid_dataset_row:{line_num}")
+                dataset.append(entry)
             except json.JSONDecodeError as exc:
+                if strict:
+                    raise ValueError(f"invalid_dataset_json:{line_num}") from None
                 preview = stripped[:80] + "..." if len(stripped) > 80 else stripped
                 logger.warning("跳过无效 JSON 行 (line %d): %s — 内容: %s", line_num, exc, preview)
+    if strict:
+        validate_golden_set(dataset)
     return dataset
 
 
@@ -100,6 +107,34 @@ def sample_id_for(entry: dict, index: int) -> str:
         return str(explicit)
     digest = hashlib.sha256(str(entry.get("question", "")).encode("utf-8")).hexdigest()[:8]
     return f"{index:04d}-{digest}"
+
+
+def validate_golden_set(dataset: list[dict]) -> None:
+    """Fail closed before any model call; never silently change the population."""
+    if not dataset:
+        raise ValueError("empty_dataset")
+    seen: set[str] = set()
+    for index, entry in enumerate(dataset):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("question"), str)
+            or not entry["question"].strip()
+            or not isinstance(entry.get("ground_truth"), str)
+            or not entry["ground_truth"].strip()
+            or not isinstance(entry.get("answer"), str)
+            or not isinstance(entry.get("contexts"), list)
+            or any(not isinstance(context, str) for context in entry["contexts"])
+        ):
+            raise ValueError(f"invalid_dataset_fields:{index}")
+        for key in ("sample_id", "id"):
+            if key in entry and entry[key] is not None:
+                value = entry[key]
+                if type(value) not in (str, int) or not str(value).strip():
+                    raise ValueError(f"invalid_sample_identity:{index}")
+        sid = sample_id_for(entry, index)
+        if sid in seen:
+            raise ValueError(f"duplicate_sample_identity:{index}")
+        seen.add(sid)
 
 
 def format_for_ragas(
@@ -175,6 +210,8 @@ class RAGASEvaluator:
         self,
         dataset_path: str | None = None,
         metrics: list[str] | None = None,
+        *,
+        strict_dataset: bool = False,
     ) -> None:
         try:
             from common.config import get_config
@@ -185,7 +222,7 @@ class RAGASEvaluator:
         except Exception:
             self._dataset_path = dataset_path or "tests/evaluation/golden_set.jsonl"
             self._default_metrics = metrics or list(_ALL_METRIC_NAMES)
-        self._dataset = load_golden_set(self._dataset_path)
+        self._dataset = load_golden_set(self._dataset_path, strict=strict_dataset)
         self._last_raw_result: Any = None
 
         # Evaluation run state (single evaluation per run).
@@ -621,7 +658,14 @@ def _parse_args(argv: list[str] | None = None):
         action="store_true",
         help="拒绝不完整管线样本或指标报告；必须与 --pipeline 和 --require-ragas 一起使用",
     )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="仅校验严格评测数据和样本选择；不加载 RAG 管线、模型或 evaluator 凭据",
+    )
     args = parser.parse_args(argv)
+    if args.preflight_only and not args.require_complete_pipeline:
+        parser.error("--preflight-only requires --require-complete-pipeline")
     if args.require_complete_pipeline:
         if not (args.pipeline and args.require_ragas):
             parser.error("--require-complete-pipeline requires --pipeline and --require-ragas")
@@ -647,6 +691,28 @@ def main() -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    evaluator = None
+    if args.require_complete_pipeline:
+        try:
+            evaluator = RAGASEvaluator(dataset_path=args.dataset, strict_dataset=True)
+            selected = evaluator.select_entries(limit=args.limit, sample_ids=args.sample_ids)
+        except (OSError, ValueError) as exc:
+            logger.warning("strict dataset preflight rejected: %s", type(exc).__name__)
+            print(json.dumps({"status": "BLOCKED", "reasons": ["dataset_preflight_failed"]}), file=sys.stderr)
+            return 7
+        if args.preflight_only:
+            print(
+                json.dumps(
+                    {
+                        "status": "PREFLIGHT_PASS",
+                        "dataset_samples": len(evaluator.dataset),
+                        "selected_samples": len(selected),
+                        "model_called": False,
+                    }
+                )
+            )
+            return 0
+
     if args.require_ragas:
         try:
             import datasets  # type: ignore[import-untyped]  # noqa: F401
@@ -663,7 +729,8 @@ def main() -> int:
             print(f"RAGAS BLOCKED: {exc}\n缺少 evaluator 凭据；不生成任何质量报告。", file=sys.stderr)
             return 3
 
-    evaluator = RAGASEvaluator(dataset_path=args.dataset)
+    if evaluator is None:
+        evaluator = RAGASEvaluator(dataset_path=args.dataset)
     logger.info("加载了 %d 条测试数据", len(evaluator.dataset))
 
     if args.pipeline:
