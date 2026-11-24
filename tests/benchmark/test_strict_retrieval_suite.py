@@ -1,4 +1,4 @@
-from benchmarks import interview_retrieval_suite as suite
+from benchmarks import strict_retrieval_suite as suite
 
 
 def test_strict_suite_cannot_silently_publish_partial_results(monkeypatch):
