@@ -449,7 +449,18 @@ class EmbeddingService:
         collection_name = config["embedding"]["image_clip"]["collection"]
         client = self.qdrant_client
         query_vector = query_embedding.flatten().tolist()
-        payload_fields = ["doc_id", "content", "ocr_full_text", "image_uri", "role_mask", "dept_mask"]
+        payload_fields = [
+            "doc_id",
+            "image_id",
+            "content",
+            "ocr_full_text",
+            "image_uri",
+            "role_mask",
+            "dept_mask",
+            "status",
+            "doc_version_epoch",
+            "source_path",
+        ]
 
         if hasattr(client, "query_points"):
             response = client.query_points(
@@ -478,6 +489,10 @@ class EmbeddingService:
                     "image_uri": point.payload.get("image_uri", ""),
                     "score": point.score,
                     "metadata": {
+                        "image_id": point.payload.get("image_id"),
+                        "status": point.payload.get("status"),
+                        "doc_version_epoch": point.payload.get("doc_version_epoch"),
+                        "source_path": point.payload.get("source_path"),
                         "role_mask": point.payload.get("role_mask"),
                         "dept_mask": point.payload.get("dept_mask"),
                     },
