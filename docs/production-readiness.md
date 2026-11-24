@@ -368,3 +368,17 @@ Three things are absent on purpose and are not gaps in this document:
   `DESIGN_TARGET`) and eight degradation procedures.
 - [Security regression coverage](security-regression-coverage.md) — fixed threat
   list, the control and test behind each, and the gaps that stay open.
+
+### Regulatory semantic gate (2026-11-25 retrofit)
+
+The online Answer Gate no longer treats high lexical overlap as semantic
+entailment for regulatory answers. Exact whole-passage reproduction is a
+narrow extractive path with no fabricated NLI score; other regulatory answers
+require available NLI with positive entailment and no contradiction. Model
+failure, invalid probabilities and unavailable weights refuse rather than
+fall back to Jaccard. Regulatory answers bypass response caches so an older
+answer cannot skip the updated gate. Non-regulatory semantics are unchanged.
+Regression tests cover a negation with identical numbers and high overlap,
+neutral scores, unavailable NLI and inference failure. This does not establish
+real NLI accuracy, label mapping for arbitrary models, or production latency;
+approved corpus/model and real evaluation remain required.

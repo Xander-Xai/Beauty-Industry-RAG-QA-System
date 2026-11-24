@@ -631,6 +631,9 @@ class OnlineRAGPipeline:
         rewrite = ctx.rewrite_result
         if rewrite is None or rewrite.fallback:
             return False
+        if rewrite.business_type == "regulation":
+            ctx.cache_hit_level = "DISABLED_REGULATION"
+            return False
         context_dependent = bool(rewrite.requires_context)
         if context_dependent and (not ctx.user_id or not ctx.session_id):
             ctx.cache_hit_level = "DISABLED_UNSCOPED"
@@ -1187,7 +1190,7 @@ class OnlineRAGPipeline:
         """写入 L1/L2 缓存 — PRD §10.6 / §4.4"""
         try:
             # PRD §4.4: Rewrite 降级时禁止缓存写入
-            if ctx.rewrite_result and ctx.rewrite_result.fallback:
+            if ctx.rewrite_result and (ctx.rewrite_result.fallback or ctx.rewrite_result.business_type == "regulation"):
                 return
             cache_key = self._build_cache_key(ctx)
             requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False
