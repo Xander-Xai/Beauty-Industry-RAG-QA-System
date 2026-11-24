@@ -11,6 +11,7 @@ GPU 批处理，延迟 ≤25ms
 from __future__ import annotations
 
 import logging
+import math
 import re
 from decimal import Decimal
 
@@ -128,6 +129,32 @@ class AnswerGate:
                     warning=True,
                     is_regulation=True,
                 )
+
+        # Regulation must not mistake lexical overlap or a heuristic fallback
+        # for semantic entailment. Exact whole-passage reproduction is a narrow
+        # extractive case, not a measured NLI score.
+        if is_regulation:
+            if answer.strip() and answer.strip() == top_doc.content.strip():
+                return AnswerGateResult(passed=True, warning=False, is_regulation=True)
+            if not getattr(self, "_use_nli", False):
+                logger.warning("Answer Gate refused non-extractive regulatory answer without NLI")
+                return AnswerGateResult(passed=False, warning=True, is_regulation=True)
+            documents = [top_doc, *(evidence_docs or [])]
+            passages = list(dict.fromkeys(doc.content for doc in documents if doc is not None and doc.content))
+            try:
+                contradiction, entailment = self._nli_inference("\n".join(passages), answer)
+            except Exception:
+                logger.warning("Answer Gate refused regulatory answer after NLI failure")
+                return AnswerGateResult(passed=False, warning=True, is_regulation=True)
+            valid = all(math.isfinite(value) and 0 <= value <= 1 for value in (contradiction, entailment))
+            passed = valid and contradiction < 0.5 and entailment >= 0.5
+            return AnswerGateResult(
+                nli_contradiction_score=contradiction if valid else 0.0,
+                nli_entailment_score=entailment if valid else 0.0,
+                passed=passed,
+                warning=not passed,
+                is_regulation=True,
+            )
 
         # 快速路径：Jaccard 字符相似度预筛选（<1ms vs LLM NLI ~6s）
         jaccard_score = self._jaccard_similarity(top_doc.content, answer)

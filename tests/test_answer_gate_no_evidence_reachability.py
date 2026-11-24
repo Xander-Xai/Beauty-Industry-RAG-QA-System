@@ -143,6 +143,7 @@ def test_regulatory_number_can_be_supported_by_other_authorized_evidence(answer_
     answer = "法规规定相关产品中该成分需要遵守限量标准并提供完整的备案证明，最高限量为3%。"
     top_doc = RerankResult(doc_id="summary", content=summary, source="bm25_es")
     second = RerankResult(doc_id="limit", content="该成分最高限量为3%。", source="dense_bge")
+    monkeypatch.setattr(answer_gate, "_use_nli", True)
     monkeypatch.setattr(answer_gate, "_nli_inference", lambda *_: (0.0, 1.0))
     result = answer_gate.verify(answer=answer, top_doc=top_doc, evidence_docs=[top_doc, second], is_regulation=True)
     assert result.passed is True
@@ -155,3 +156,26 @@ def test_nonregulatory_numeric_change_retains_existing_semantics(answer_gate):
     doc = RerankResult(doc_id="product", content=source, source="bm25_es")
     result = answer_gate.verify(answer=answer, top_doc=doc, is_regulation=False)
     assert result.passed is True
+
+@pytest.mark.parametrize("use_nli,scores", [(False, (0.0, 1.0)), (True, (0.95, 0.02)), (True, (0.05, 0.1))])
+def test_regulatory_negation_cannot_bypass_semantic_gate(answer_gate, monkeypatch, use_nli, scores):
+    source = "本法规明确规定该成分可用于特定类别产品，企业必须按照规定完成安全评估以及备案流程。"
+    opposite = source.replace("可用于", "不可用于")
+    assert answer_gate._jaccard_similarity(source, opposite) > 0.6
+    monkeypatch.setattr(answer_gate, "_use_nli", use_nli)
+    monkeypatch.setattr(answer_gate, "_nli_inference", lambda *_: scores)
+    doc = RerankResult(doc_id="rule", content=source, source="bm25_es")
+    result = answer_gate.verify(answer=opposite, top_doc=doc, is_regulation=True)
+    assert not result.passed
+    assert result.warning
+
+
+def test_regulatory_nli_failure_never_falls_back_to_overlap(answer_gate, monkeypatch):
+    monkeypatch.setattr(answer_gate, "_use_nli", True)
+
+    def fail(*args):
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(answer_gate, "_nli_inference", fail)
+    doc = RerankResult(doc_id="rule", content="该原料必须完成备案后才能使用。", source="bm25_es")
+    assert not answer_gate.verify("使用前必须备案。", doc, is_regulation=True).passed

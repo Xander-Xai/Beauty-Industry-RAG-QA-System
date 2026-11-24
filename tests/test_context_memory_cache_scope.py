@@ -190,3 +190,15 @@ def test_dialog_history_api_does_not_return_previous_role_data(monkeypatch):
     response = dialog_history_handler(session_id=session_id, identity=identity)
     assert response["rounds"] == []
     assert response["locked_doc_ids"] == []
+
+def test_regulation_bypasses_cache_and_requires_fresh_answer_gate():
+    pipeline = OnlineRAGPipeline()
+    ctx = _ctx("regulatory-owner")
+    ctx.rewrite_result = _make_rewrite()
+    ctx.rewrite_result.business_type = "regulation"
+    pipeline._cache = MagicMock()
+    assert pipeline._read_cache_after_rewrite(ctx) is False
+    assert ctx.cache_hit_level == "DISABLED_REGULATION"
+    pipeline._write_cache(ctx)
+    pipeline._cache.get.assert_not_called()
+    pipeline._cache.set.assert_not_called()
