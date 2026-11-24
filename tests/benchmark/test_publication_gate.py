@@ -681,7 +681,11 @@ def test_strict_publication_requires_clean_git_and_integrity(
     monkeypatch.setattr(ContractFixtureRetriever, "is_production", True, raising=False)
     monkeypatch.setattr(run_cli, "git_provenance", lambda root: (git_sha, dirty))
     monkeypatch.setattr(run_cli, "dataset_integrity_errors", lambda rows: integrity)
-    monkeypatch.setattr(run_cli, "gather_source_approval_evidence", lambda **kwargs: {"verified": True})
+    monkeypatch.setattr(
+        run_cli,
+        "gather_source_approval_evidence",
+        lambda **kwargs: {"verified": True, "indexed_payload_sha256": "a" * 64},
+    )
     out = tmp_path / "out"
     code = run_cli.main(
         [

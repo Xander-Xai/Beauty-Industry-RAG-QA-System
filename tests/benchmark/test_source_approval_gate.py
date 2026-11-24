@@ -915,3 +915,87 @@ def test_report_states_the_publication_gate_and_its_blockers():
     assert "`source_not_activatable`×130" in rendered
     assert "Not publishable as a benchmark result" in rendered
     assert "Source approval was not verified" in rendered
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("approved_content_hash", "a" * 64), ("approval_actor", "other-reviewer")],
+)
+def test_same_source_chunks_cannot_disagree_on_approval(corpus_root, ledger, field, value):
+    first = document("chunk-a", approved_provenance(REGULATION, REGULATION_HASH))
+    second = document("chunk-b", approved_provenance(REGULATION, REGULATION_HASH, **{field: value}))
+    report = verify(FakeES([first, second]), corpus_root, ledger)
+    assert not report.verified
+    assert codes(report)["source_provenance_conflict"] == 1
+
+
+def test_duplicate_chunk_and_missing_epoch_are_not_approved(corpus_root, ledger):
+    first = document("chunk-a", approved_provenance(REGULATION, REGULATION_HASH))
+    second = {**first, "doc_id": "other-doc", "doc_version_epoch": ""}
+    report = verify(FakeES([first, second]), corpus_root, ledger)
+    assert not report.verified
+    assert codes(report)["duplicate_chunk_identity"] == 1
+    assert codes(report)["document_epoch_missing"] == 1
+
+
+def test_source_payload_fingerprint_detects_same_identity_text_or_permission_change(corpus_root, ledger):
+    from benchmarks.source_approval import source_snapshot_blockers
+
+    rows = two_approved_documents()
+    before = verify(FakeES(rows), corpus_root, ledger).as_dict()
+    unchanged = verify(FakeES(list(reversed(rows))), corpus_root, ledger).as_dict()
+    assert source_snapshot_blockers(before, unchanged) == []
+    for field, value in (("content", "changed passage"), ("role_mask", 2), ("dept_mask", 4), ("status", "inactive")):
+        changed = [{**rows[0], field: value}, rows[1]]
+        after = verify(FakeES(changed), corpus_root, ledger).as_dict()
+        assert before["content_sha256"] == after["content_sha256"]
+        assert before["indexed_payload_sha256"] != after["indexed_payload_sha256"]
+        assert source_snapshot_blockers(before, after) == ["source_approval_or_payload_changed_during_run"]
+    assert source_snapshot_blockers(before, {"verified": False}) == ["source_approval_snapshot_not_verified"]
+    assert source_snapshot_blockers({"verified": True}, {"verified": True}) == [
+        "source_payload_fingerprint_not_verified"
+    ]
+
+
+def test_index_count_change_blocks_approval(corpus_root, ledger):
+    class ChangingCount(FakeES):
+        def count(self, *, index):
+            value = super().count(index=index)
+            self.declared_count += 1
+            return value
+
+    report = verify(ChangingCount(two_approved_documents()), corpus_root, ledger)
+    assert not report.verified
+    assert codes(report)["index_count_changed"] == 1
+
+
+def test_bm25_cli_refuses_same_identity_payload_drift(tmp_path, corpus_root, ledger, monkeypatch, cli_with_retriever):
+    rows = two_approved_documents()
+    before = verify(FakeES(rows), corpus_root, ledger).as_dict()
+    after = verify(FakeES([{**rows[0], "content": "changed passage"}, rows[1]]), corpus_root, ledger).as_dict()
+    receipts = iter([before, after])
+    monkeypatch.setattr(cli_with_retriever, "gather_source_approval_evidence", lambda **kwargs: next(receipts))
+    dataset = _write_golden_set(
+        tmp_path / "golden.jsonl",
+        [_contract_row("sample-1", "doc-chunk-reg", "chunk-reg", "条款正文")],
+    )
+    out = tmp_path / "out"
+    result = cli_with_retriever.main(
+        [
+            "--config",
+            "bm25",
+            "--dataset",
+            str(dataset),
+            "--output-dir",
+            str(out),
+            "--require-source-approval",
+        ]
+    )
+    metadata = json.loads(next(out.glob("*/metadata.json")).read_text(encoding="utf-8"))
+    assert result == 6
+    assert metadata["source_approval_verified"] is False
+    assert metadata["provenance_verified"] is False
+    assert metadata["publishable"] is False
+    assert "source_approval_or_payload_changed_during_run" in metadata["publication_blockers"]
+    assert metadata["source_approval_snapshot"]["before"] == before
+    assert metadata["source_approval_snapshot"]["after"] == after
