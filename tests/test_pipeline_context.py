@@ -524,7 +524,9 @@ def test_authorized_session_scope_does_not_replay_old_evidence(fake_redis, chang
     old = SessionState.for_identity("scope-test", "owner", 3, 7, "epoch-1")
     old.add_round("old question", "restricted old answer")
     old.lock_evidence(["restricted-doc"])
-    old.store_async_clip_result([RecallResult(doc_id="restricted-image", content="old", score=0.8, source="clip_visual")])
+    old.store_async_clip_result(
+        [RecallResult(doc_id="restricted-image", content="old", score=0.8, source="clip_visual")]
+    )
     assert SessionState.for_identity("scope-test", "owner", 3, 7, "epoch-1").locked_doc_ids == ["restricted-doc"]
 
     role = 1 if changed == "role" else 3
