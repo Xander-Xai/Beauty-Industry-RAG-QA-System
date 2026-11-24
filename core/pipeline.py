@@ -634,6 +634,9 @@ class OnlineRAGPipeline:
         rewrite = ctx.rewrite_result
         if rewrite is None or rewrite.fallback:
             return False
+        if ctx.image_path or ctx.ab_experiment or ctx.degraded:
+            ctx.cache_hit_level = "DISABLED_REQUEST_POLICY"
+            return False
         if rewrite.business_type == "regulation":
             ctx.cache_hit_level = "DISABLED_REGULATION"
             return False
@@ -1195,8 +1198,10 @@ class OnlineRAGPipeline:
     def _write_cache(self, ctx):
         """写入 L1/L2 缓存 — PRD §10.6 / §4.4"""
         try:
-            # PRD §4.4: Rewrite 降级时禁止缓存写入
-            if ctx.rewrite_result and (ctx.rewrite_result.fallback or ctx.rewrite_result.business_type == "regulation"):
+            # Image-dependent, experimental and degraded answers are not shared text-cache entries.
+            if ctx.image_path or ctx.ab_experiment or ctx.degraded or ctx.ce_stage_provenance == "deterministic_fallback":
+                return
+            if ctx.rewrite_result is None or ctx.rewrite_result.fallback or ctx.rewrite_result.business_type == "regulation":
                 return
             cache_key = self._build_cache_key(ctx)
             requires_ctx = ctx.rewrite_result.requires_context if ctx.rewrite_result else False
