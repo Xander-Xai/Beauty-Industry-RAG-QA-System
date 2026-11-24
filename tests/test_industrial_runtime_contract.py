@@ -58,5 +58,13 @@ def test_probe_waits_share_one_deadline(monkeypatch):
 def test_image_build_preserves_python_model_package():
     rules = (Path(__file__).resolve().parents[1] / ".dockerignore").read_text().splitlines()
     assert "models" not in rules
-    assert "models/*" in rules
-    assert "!models/*.py" in rules
+    assert "models/**" in rules
+    assert {rule for rule in rules if rule.startswith("!models/")} == {
+        "!models/__init__.py",
+        "!models/adapter_manager.py",
+        "!models/blip_service.py",
+        "!models/complexity_evaluator.py",
+        "!models/embedding_service.py",
+        "!models/llm_client.py",
+    }
+    assert "!models/*.py" not in rules
