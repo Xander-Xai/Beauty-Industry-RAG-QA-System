@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from benchmarks.backends import _looks_like_model_dir
 from benchmarks.source_approval import gather_source_approval_evidence
-from benchmarks.vector_corpus_parity import _read_es, _read_vectors, compare_payloads
+from benchmarks.vector_corpus_parity import _read_es, compare_payloads, read_vector_snapshot
 from offline.text_ingestion import BGETextEmbedder, QdrantTextWriter, TextChunk
 from scripts.corpus.index_real_corpus_v1_es import load_chunks
 
@@ -89,6 +89,15 @@ def validate_cosine_vectors(vectors: list[list[float]], count: int, dimension: i
             raise ValueError("invalid experiment cosine vector norm")
 
 
+def normalize_cosine_vectors(vectors: list[list[float]]) -> list[list[float]]:
+    """Normalize validated inputs once per vector before persisting."""
+    normalized = []
+    for vector in vectors:
+        norm = math.hypot(*vector)
+        normalized.append([value / norm for value in vector])
+    return normalized
+
+
 def run(config: dict, args: argparse.Namespace) -> dict:
     index, collection = validate_targets(config, args.confirm_collection, write=args.write)
     text_config = config["embedding"]["text"]
@@ -128,6 +137,8 @@ def run(config: dict, args: argparse.Namespace) -> dict:
         embedder = BGETextEmbedder(str(model_path), dimension, model_revision=text_config.get("model_revision"))
         embeddings = embedder.embed_texts([chunk.text for chunk in chunks])
         validate_cosine_vectors(embeddings, len(chunks), dimension)
+        # Persist unit inputs explicitly: local cosine storage may retain raw inputs on disk.
+        embeddings = normalize_cosine_vectors(embeddings)
         from qdrant_client.http.models import Distance, VectorParams
 
         # Exclusive creation: do not use ensure_collection as an ownership check.
@@ -138,10 +149,11 @@ def run(config: dict, args: argparse.Namespace) -> dict:
             raise ValueError("fresh collection creation not confirmed")
         writer = QdrantTextWriter(vectors, collection, dimension, embedding_version=embedder.embedding_version)
         writer.upsert(chunks, embeddings)
-        receipt = compare_payloads(_read_es(es.es_client, index), _read_vectors(vectors, collection), approval)
+        stored_rows, vector_sha = read_vector_snapshot(vectors, collection, dimension)
+        receipt = compare_payloads(_read_es(es.es_client, index), stored_rows, approval)
         if receipt != compare_payloads(rows, rows, approval):
             raise ValueError("ES payload changed during build")
-        return {**result, "status": "BUILT", "written": True, "parity": receipt}
+        return {**result, "status": "BUILT", "written": True, "parity": {**receipt, "vector_sha256": vector_sha}}
     finally:
         vectors.close()
 

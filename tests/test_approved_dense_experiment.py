@@ -1,11 +1,17 @@
 """Safety and exact chunk binding controls; no real BGE calls or store writes."""
 
+import math
 from copy import deepcopy
 
 import pytest
 
 from benchmarks.source_approval import _index_content_fingerprint
-from scripts.corpus.index_approved_dense_experiment import prepare_chunks, validate_cosine_vectors, validate_targets
+from scripts.corpus.index_approved_dense_experiment import (
+    normalize_cosine_vectors,
+    prepare_chunks,
+    validate_cosine_vectors,
+    validate_targets,
+)
 
 
 def _config():
@@ -109,3 +115,12 @@ def test_invalid_cosine_embedding_population_rejected(vectors):
 
 def test_nonzero_finite_cosine_embeddings_accepted():
     validate_cosine_vectors([[0.0, 1.0], [-0.5, 0.5]], 2, 2)
+
+
+def test_builder_normalizes_validated_vectors_before_storage():
+    source = [[3.0, 4.0], [-4.0, 3.0]]
+    validate_cosine_vectors(source, 2, 2)
+    result = normalize_cosine_vectors(source)
+    assert result == [[0.6, 0.8], [-0.8, 0.6]]
+    assert all(math.isclose(math.hypot(*vector), 1.0) for vector in result)
+    assert source == [[3.0, 4.0], [-4.0, 3.0]]
