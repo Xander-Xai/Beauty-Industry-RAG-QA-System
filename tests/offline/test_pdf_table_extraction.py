@@ -134,3 +134,28 @@ def test_real_pymupdf_table_grid_preserves_rows_in_optin_pdf(tmp_path):
     assert tables[0].text == "Name | Limit\nNiacinamide | 5 percent"
     assert tables[0].metadata["page_number"] == 1
     assert tables[0].metadata["table_index"] == 0
+
+
+def test_pymupdf_layout_gate_is_disabled_when_supported():
+    class ModernPage:
+        def __init__(self):
+            self.called = None
+
+        def find_tables(self, *, use_layout=True):
+            self.called = use_layout
+            if use_layout:
+                return SimpleNamespace(tables=[])
+            return SimpleNamespace(tables=[_Table([["INCI", "Limit"], ["A", "2%"]])])
+
+    page = ModernPage()
+    result = DocumentProcessor(pdf_extract_tables=True)._extract_pdf_tables(page, 0)
+    assert page.called is False
+    assert len(result) == 1
+    assert result[0].text == "INCI | Limit\nA | 2%"
+
+
+def test_legacy_pymupdf_table_detector_signature_remains_supported():
+    page = _Page([_Table([["INCI", "Limit"], ["A", "2%"]])])
+    result = DocumentProcessor(pdf_extract_tables=True)._extract_pdf_tables(page, 0)
+    assert len(result) == 1
+    assert result[0].metadata["page_number"] == 1
