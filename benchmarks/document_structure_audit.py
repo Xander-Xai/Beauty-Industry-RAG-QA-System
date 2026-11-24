@@ -37,13 +37,9 @@ class StructureAudit:
         }
 
 
-def audit_document_structure(
-    document: ProcessedDocument, *, expected_pdf_pages: int | None = None
-) -> StructureAudit:
+def audit_document_structure(document: ProcessedDocument, *, expected_pdf_pages: int | None = None) -> StructureAudit:
     """Fail on observable structural corruption; never invent missing metadata."""
-    if expected_pdf_pages is not None and (
-        type(expected_pdf_pages) is not int or expected_pdf_pages <= 0
-    ):
+    if expected_pdf_pages is not None and (type(expected_pdf_pages) is not int or expected_pdf_pages <= 0):
         raise ValueError("expected_pdf_pages must be a positive integer")
     if expected_pdf_pages is not None and document.document_type != "pdf":
         raise ValueError("PDF page count is applicable only to pdf")
@@ -73,8 +69,12 @@ def audit_document_structure(
                 block.metadata.get("sheet_name"),
             )
             if (
-                type(start) is not int or type(end) is not int or start <= 0
-                or end < start or not isinstance(sheet, str) or not sheet
+                type(start) is not int
+                or type(end) is not int
+                or start <= 0
+                or end < start
+                or not isinstance(sheet, str)
+                or not sheet
             ):
                 reasons.add("invalid_sheet_window")
             else:
