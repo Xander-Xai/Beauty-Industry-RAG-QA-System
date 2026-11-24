@@ -84,6 +84,8 @@ def test_config_matrix_covers_expected_names():
         "hybrid_rrf",
         "hybrid_rrf_biencoder",
         "hybrid_rrf_biencoder_crossencoder",
+        "hybrid_rrf_biencoder_crossencoder_a",
+        "hybrid_rrf_biencoder_crossencoder_b",
     }
     for name in backends.CONFIG_DESCRIPTIONS:
         assert name in backends.REQUIRED_BACKENDS
