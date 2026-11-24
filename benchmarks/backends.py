@@ -442,18 +442,27 @@ def probe_dense() -> BackendAvailability:
     return BackendAvailability("dense", True, REASON_OK, f"collection {collection}, model {model_path}")
 
 
+SINGLE_CE_CONFIGS = {
+    "hybrid_rrf_biencoder_crossencoder_a": "cross_encoder_a",
+    "hybrid_rrf_biencoder_crossencoder_b": "cross_encoder_b",
+}
+
+
 def rerank_model_paths(config_name: str) -> dict[str, str]:
     from common.config import get_config_dict
 
     config = get_config_dict()
     models = config.get("gpu1", {}).get("models", {})
-    if config_name not in {"hybrid_rrf_biencoder", "hybrid_rrf_biencoder_crossencoder"}:
+    if config_name not in {"hybrid_rrf_biencoder", "hybrid_rrf_biencoder_crossencoder", *SINGLE_CE_CONFIGS}:
         return {}
     shared = config.get("embedding", {}).get("text", {}).get("model_path", "")
     paths = {"biencoder": str(models.get("bi_encoder", {}).get("model_path") or shared)}
     if config_name.endswith("_crossencoder"):
         for key in ("cross_encoder_a", "cross_encoder_b"):
             paths[key] = str(models.get(key, {}).get("model_path") or "")
+    elif config_name in SINGLE_CE_CONFIGS:
+        key = SINGLE_CE_CONFIGS[config_name]
+        paths[key] = str(models.get(key, {}).get("model_path") or "")
     return paths
 
 
@@ -471,6 +480,19 @@ def probe_biencoder() -> BackendAvailability:
 def probe_crossencoder() -> BackendAvailability:
     paths = rerank_model_paths("hybrid_rrf_biencoder_crossencoder")
     return _probe_rerank_assets("crossencoder", {key: value for key, value in paths.items() if key != "biencoder"})
+
+
+def _probe_single_crossencoder(key: str) -> BackendAvailability:
+    config_name = next(name for name, model in SINGLE_CE_CONFIGS.items() if model == key)
+    return _probe_rerank_assets(key, {key: rerank_model_paths(config_name)[key]})
+
+
+def probe_crossencoder_a() -> BackendAvailability:
+    return _probe_single_crossencoder("cross_encoder_a")
+
+
+def probe_crossencoder_b() -> BackendAvailability:
+    return _probe_single_crossencoder("cross_encoder_b")
 
 
 def probe_corpus(
@@ -554,6 +576,9 @@ STAGE_BY_CONFIG = {
     ),
 }
 
+for _config in SINGLE_CE_CONFIGS:
+    STAGE_BY_CONFIG[_config] = STAGE_BY_CONFIG["hybrid_rrf_biencoder_crossencoder"]
+
 REQUIRED_BACKENDS = {
     "bm25": ("bm25", "corpus"),
     "dense": ("dense", "corpus"),
@@ -561,6 +586,9 @@ REQUIRED_BACKENDS = {
     "hybrid_rrf_biencoder": ("bm25", "dense", "biencoder", "corpus"),
     "hybrid_rrf_biencoder_crossencoder": ("bm25", "dense", "biencoder", "crossencoder", "corpus"),
 }
+
+for _config, _model in SINGLE_CE_CONFIGS.items():
+    REQUIRED_BACKENDS[_config] = ("bm25", "dense", "biencoder", _model, "corpus")
 
 CONFIG_DESCRIPTIONS = {
     "bm25": "Elasticsearch BM25 only",
@@ -570,11 +598,16 @@ CONFIG_DESCRIPTIONS = {
     "hybrid_rrf_biencoder_crossencoder": "hybrid_rrf_biencoder plus CrossEncoder ensemble rerank",
 }
 
+for _config, _model in SINGLE_CE_CONFIGS.items():
+    CONFIG_DESCRIPTIONS[_config] = f"hybrid_rrf plus BiEncoder and single {_model} (ranking only)"
+
 PROBES = {
     "bm25": probe_bm25,
     "dense": probe_dense,
     "biencoder": probe_biencoder,
     "crossencoder": probe_crossencoder,
+    "cross_encoder_a": probe_crossencoder_a,
+    "cross_encoder_b": probe_crossencoder_b,
 }
 
 

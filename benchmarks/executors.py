@@ -55,6 +55,7 @@ EXECUTABLE_CONFIGS = (
     "hybrid_rrf",
     "hybrid_rrf_biencoder",
     "hybrid_rrf_biencoder_crossencoder",
+    *backends.SINGLE_CE_CONFIGS,
 )
 HYBRID_RECALL_DEPTH = 100
 BIENCODER_KEEP = 150
@@ -354,13 +355,57 @@ class HybridRRFExecutor:
         return items
 
 
+class SingleCrossEncoderReranker:
+    """Benchmark-only ranking with exactly one real CE; never used by online gates."""
+
+    def __init__(self, config_name: str):
+        from common.config import get_config_dict
+        from retrieval.rerank_batch_aggregator import RerankBatchAggregator
+        from sentence_transformers import CrossEncoder
+
+        self.model_key = backends.SINGLE_CE_CONFIGS[config_name]
+        model_path = backends.rerank_model_paths(config_name)[self.model_key]
+        self.max_tokens = int(
+            get_config_dict().get("retrieval", {}).get("cross_encoder", {}).get("max_seq_length", 512)
+        )
+        self.model = CrossEncoder(model_path)
+        self.aggregator = RerankBatchAggregator()
+
+    def _truncate(self, text: str) -> str:
+        if not text:
+            return ""
+        tokenizer = self.model.tokenizer
+        encoded = tokenizer(
+            text, truncation=True, max_length=self.max_tokens, return_tensors="pt", add_special_tokens=True
+        )
+        return tokenizer.decode(encoded["input_ids"][0], skip_special_tokens=True)
+
+    def rerank(self, query, candidates, top_k, *, ctx, strict):
+        if not strict or not candidates:
+            raise BenchmarkUnavailable("single CE requires strict nonempty candidates")
+        query_text = self._truncate(query)
+        pairs = [(query_text, self._truncate(row.content)) for row in candidates]
+        scores = self.aggregator.batch_predict(self.model, pairs, strict=True)
+        if len(scores) != len(pairs) or not all(math.isfinite(float(score)) for score in scores):
+            raise BenchmarkUnavailable("invalid single CrossEncoder scores")
+        score_field = "ce_score_a" if self.model_key == "cross_encoder_a" else "ce_score_b"
+        for row, score in zip(candidates, scores, strict=True):
+            setattr(row, score_field, float(score))
+        ranked = sorted(candidates, key=lambda row: getattr(row, score_field), reverse=True)
+        ctx.ce_stage_provenance = self.model_key
+        return ranked[:top_k]
+
+
 class RerankExecutor(HybridRRFExecutor):
     """Use the production rerankers; a model error is a failed query, never a ranking."""
 
-    def __init__(self, *, cross: bool = False, biencoder=None, crossencoder=None, **kwargs):
+    def __init__(self, *, cross: bool = False, single_config=None, biencoder=None, crossencoder=None, **kwargs):
         super().__init__(**kwargs)
-        self.name = "hybrid_rrf_biencoder_crossencoder" if cross else "hybrid_rrf_biencoder"
-        self._cross = cross
+        if single_config is not None and single_config not in backends.SINGLE_CE_CONFIGS:
+            raise ValueError("invalid single CE configuration")
+        self.name = single_config or ("hybrid_rrf_biencoder_crossencoder" if cross else "hybrid_rrf_biencoder")
+        self._cross = cross or single_config is not None
+        self._single_config = single_config
         self._biencoder = biencoder
         self._crossencoder = crossencoder
         # Dependency-injected fixture models are not real-model evidence.
@@ -381,15 +426,23 @@ class RerankExecutor(HybridRRFExecutor):
         score_field = "bi_score"
         if self._cross:
             if self._crossencoder is None:
-                from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
+                if self._single_config is not None:
+                    self._crossencoder = SingleCrossEncoderReranker(self._single_config)
+                else:
+                    from retrieval.cross_encoder_ensemble import CrossEncoderEnsemble
 
-                self._crossencoder = CrossEncoderEnsemble()
+                    self._crossencoder = CrossEncoderEnsemble()
             ctx = SimpleNamespace()
             expected_count = min(top_k, len(ranked))
             ranked = self._crossencoder.rerank(query.question, ranked, top_k=top_k, ctx=ctx, strict=True)
-            if getattr(ctx, "ce_stage_provenance", None) != "cross_encoder" or len(ranked) != expected_count:
+            provenance = backends.SINGLE_CE_CONFIGS.get(self._single_config, "cross_encoder")
+            if getattr(ctx, "ce_stage_provenance", None) != provenance or len(ranked) != expected_count:
                 raise BenchmarkUnavailable("CrossEncoder execution not verified")
-            score_field = "ce_score_ensemble"
+            score_field = {
+                "cross_encoder_a": "ce_score_a",
+                "cross_encoder_b": "ce_score_b",
+                "cross_encoder": "ce_score_ensemble",
+            }[provenance]
         items = []
         candidates = {(row.doc_id, (row.metadata or {}).get("chunk_id"), row.content) for row in fused}
         for rank, row in enumerate(ranked[:top_k], 1):
@@ -428,6 +481,8 @@ def build_executor(config_name: str, golden_passages: Sequence[str] | None = Non
         return HybridRRFExecutor(golden_passages=golden_passages)
     if config_name in ("hybrid_rrf_biencoder", "hybrid_rrf_biencoder_crossencoder"):
         return RerankExecutor(cross=config_name.endswith("_crossencoder"), golden_passages=golden_passages)
+    if config_name in backends.SINGLE_CE_CONFIGS:
+        return RerankExecutor(single_config=config_name, golden_passages=golden_passages)
     raise BenchmarkUnavailable(
         f"no real retrieval executor is implemented for configuration {config_name!r}; "
         f"executable configurations are {', '.join(EXECUTABLE_CONFIGS)}"

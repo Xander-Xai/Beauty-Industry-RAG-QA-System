@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from benchmarks import retrieval_benchmark
+from benchmarks import backends, retrieval_benchmark
 
 ARMS = (
     "bm25",
@@ -19,7 +19,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, help="Reviewed, attributable golden set JSONL")
     parser.add_argument("--output-dir", required=True, help="New experiment artifact root")
+    parser.add_argument("--include-single-ce", action="store_true", help="Include both single-CE architecture arms")
     args = parser.parse_args(argv)
+    arms = (*ARMS, *backends.SINGLE_CE_CONFIGS) if args.include_single_ce else ARMS
     return retrieval_benchmark.main(
         [
             "--dataset",
@@ -27,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
             "--output-dir",
             args.output_dir,
             "--configs",
-            ",".join(ARMS),
+            ",".join(arms),
             "--executor",
             "real",
             "--top-k",
