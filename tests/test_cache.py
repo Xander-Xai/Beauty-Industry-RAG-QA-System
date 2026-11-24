@@ -640,6 +640,22 @@ class TestPipelineLogicalCacheKey:
         build = self._pipeline()._build_cache_key
         assert build(self._ctx(dept_mask=2)) != build(self._ctx(dept_mask=8))
 
+    def test_ranking_and_gate_config_changes_cache_identity(self, monkeypatch):
+        from copy import deepcopy
+
+        from core import pipeline
+
+        build = self._pipeline()._build_cache_key
+        ctx = self._ctx()
+        before = build(ctx)
+        config = deepcopy(pipeline.config["retrieval"])
+        config["cross_encoder"]["platt_scaling"] = {"ensemble": {"a": 2.0, "b": 0.0}}
+        monkeypatch.setitem(pipeline.config, "retrieval", config)
+        after = build(ctx)
+        assert after != before
+        config["evidence_gate"]["thresholds"]["low_confidence"] = 0.65
+        assert build(ctx) != after
+
     def test_same_identity_is_stable(self):
         build = self._pipeline()._build_cache_key
         assert build(self._ctx()) == build(self._ctx())

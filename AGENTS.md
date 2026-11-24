@@ -24,3 +24,5 @@
 
 ## Architecture change gate
 - Follow [architecture decision freeze](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25). Keep the modular monolith canonical; do not add Agent frameworks or duplicate service paths. Reranker simplification requires matched-corpus single-CE/dual-CE and BiEncoder ablation, safety-gate regression and measured latency; no evidence downgrade or untested deletion. Cache lookup follows Rewrite and owner/permission/epoch checks.
+
+- Treat cold-start CE score mappings as uncalibrated scores, not validated probabilities. A score-direction or calibration change must invalidate affected response cache keys and be revalidated on independent regulatory/refusal labels before production use; do not change Evidence Gate thresholds to make tests pass.
