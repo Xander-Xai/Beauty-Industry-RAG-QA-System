@@ -84,6 +84,14 @@ def test_persisted_vector_fingerprint_detects_vector_only_change():
     assert dense_parity_blockers(receipt, {**receipt, "vector_sha256": after}) == ["dense_corpus_changed_during_run"]
 
 
+def test_vector_fingerprint_tolerates_float32_roundtrip_noise():
+    first = _vector_client([[0.6, 0.8]])
+    reopened = _vector_client([[0.6000000238418579, 0.800000011920929]])
+    drifted = _vector_client([[0.6001, 0.8]])
+    assert read_vector_snapshot(first, "experiment", 2) == read_vector_snapshot(reopened, "experiment", 2)
+    assert read_vector_snapshot(first, "experiment", 2)[1] != read_vector_snapshot(drifted, "experiment", 2)[1]
+
+
 @pytest.mark.parametrize(
     "vector",
     [None, [], [0.0, 0.0], [1.0], [True, 1.0], [float("nan"), 1.0], {"named": [1.0, 0.0]}],
@@ -118,8 +126,8 @@ def test_disk_backed_qdrant_roundtrip_detects_vector_only_update(tmp_path):
         assert changed_rows == rows
         assert changed != original
         parity = compare_payloads(rows, changed_rows, _approval(rows))
-        assert dense_parity_blockers(
-            {**parity, "vector_sha256": original}, {**parity, "vector_sha256": changed}
-        ) == ["dense_corpus_changed_during_run"]
+        assert dense_parity_blockers({**parity, "vector_sha256": original}, {**parity, "vector_sha256": changed}) == [
+            "dense_corpus_changed_during_run"
+        ]
     finally:
         client.close()
