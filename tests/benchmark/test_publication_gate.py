@@ -700,7 +700,10 @@ def test_strict_publication_requires_clean_git_and_integrity(
     assert metadata["publishable"] is (expected is None)
     assert metadata["results_are_benchmark"] is metadata["publishable"]
     assert metadata["publication_blockers"] == ([] if expected is None else [expected])
-    assert code == (0 if expected is None else 8)\n\n\ndef test_existing_run_directory_blocks_execution_and_preserves_evidence(
+    assert code == (0 if expected is None else 8)
+
+
+def test_existing_run_directory_blocks_execution_and_preserves_evidence(
     tmp_path, run_cli, attributable_dataset, monkeypatch
 ):
     out = tmp_path / "out"
@@ -714,8 +717,9 @@ def test_strict_publication_requires_clean_git_and_integrity(
         pytest.fail("retrieval must not execute if evidence directory already exists")
 
     monkeypatch.setattr(run_cli, "effective_retrieval_config", unexpected_execution)
-    assert run_cli.main(
+    code = run_cli.main(
         ["--config", "bm25", "--dataset", str(attributable_dataset), "--output-dir", str(out)]
-    ) == 4
+    )
+    assert code == 4
     assert sentinel.read_text(encoding="utf-8") == "original evidence"
     assert list(existing.iterdir()) == [sentinel]
