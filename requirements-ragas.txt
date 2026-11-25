@@ -23,7 +23,7 @@
 # out of production requirements until upstream provides a fixed, importable
 # release.
 
-ragas==0.2.15
+ragas==0.4.4rc1
 langchain-community==0.3.31
 langchain-core==0.3.86
 langchain-openai==0.3.35
