@@ -95,14 +95,12 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      # Known, disclosed, not gating: `npm ci` currently reports 4 advisories
-      # (1 moderate, 3 high) in browserslist, nanoid, postcss and
-      # baseline-browser-mapping. All four are transitive build-toolchain
-      # dependencies reached through Vite, not code the browser executes as
-      # application logic. `npm audit` is NOT a merge gate here because the
-      # registry's quick-audit endpoint is deprecated and returns 400, which
-      # would make the gate flaky rather than meaningful. See
-      # docs/repository-truth-audit.md for the recorded state.
+      # The lockfile was refreshed in PRs #164, #166 and #167. The latest audit
+      # still reports one high Browserslist advisory against <=4.28.6 while the
+      # lockfile resolves 4.29.6; this discrepancy remains under review. Keep
+      # npm audit non-gating because the registry's quick-audit endpoint is
+      # deprecated and can return HTTP 400. See the dated record in
+      # docs/repository-truth-audit.md.
       - name: Report (do not gate) frontend dependency advisories
         working-directory: frontend
         continue-on-error: true
