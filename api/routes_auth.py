@@ -28,8 +28,9 @@ from common.audit import (
     OUTCOME_SUCCESS,
     audit_event,
 )
-from common.auth import _identity_from_jwt, is_admin_role_mask
+from common.auth import _identity_from_jwt, is_admin_role_mask, revalidate_current_identity
 from common.config import get_config
+from common.release_contract import industrial_enabled
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -80,6 +81,16 @@ def _check_redis_rate_limit(ip: str) -> bool:
 
     key = f"ratelimit:login:{ip}"
     try:
+        if industrial_enabled():
+            count = rl.eval(
+                "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end; return n",
+                1,
+                key,
+                int(_LOGIN_RATE_WINDOW),
+            )
+            if int(count) > _LOGIN_RATE_LIMIT:
+                raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后重试")
+            return True
         current = rl.get(key)
         if current is not None and int(current) >= _LOGIN_RATE_LIMIT:
             raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后重试")
@@ -150,6 +161,9 @@ def _check_login_rate_limit(ip: str):
     if _check_redis_rate_limit(ip):
         return
 
+    if industrial_enabled():
+        raise HTTPException(status_code=503, detail="Login rate limiter unavailable")
+
     # Redis 不可用时，回退到内存限流（单 worker 有效）
     now = time.time()
     attempts = _login_attempts[ip]
@@ -200,6 +214,7 @@ def _require_admin_payload(authorization: str | None) -> dict:
         logger.warning("Admin route rejected malformed JWT claims: %s", exc)
         raise HTTPException(status_code=401, detail="Token 授权声明无效") from exc
 
+    revalidate_current_identity(identity)
     if not is_admin_role_mask(identity.user_role_mask):
         # A privileged action refused on authorization grounds is exactly the
         # event an auditor looks for, so it is recorded rather than only

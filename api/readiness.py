@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -147,6 +148,7 @@ class ProbeContext:
     """
 
     is_production: bool
+    industrial: bool = False
     endpoints: dict[str, str] = field(default_factory=dict)
     qdrant: dict[str, Any] = field(default_factory=dict)
     elasticsearch: dict[str, Any] = field(default_factory=dict)
@@ -196,9 +198,11 @@ def _resolve_endpoints() -> dict[str, str]:
 
 def _build_context() -> ProbeContext:
     from common.config import get_config_dict, is_production_mode
+    from common.release_contract import industrial_enabled
 
     cfg = get_config_dict()
     return ProbeContext(
+        industrial=industrial_enabled(),
         is_production=is_production_mode(),
         endpoints=_resolve_endpoints(),
         qdrant=cfg.get("qdrant", {}),
@@ -227,6 +231,11 @@ def probe_redis(ctx: ProbeContext) -> bool:
     try:
         from cache.redis_cache import RedisCache
 
+        if ctx.industrial:
+            from core.pipeline_context import _get_redis_client
+
+            client = _get_redis_client()
+            return bool(RedisCache().enabled and client is not None and client.ping())
         return bool(RedisCache().enabled)
     except Exception:
         logger.debug("readiness: redis probe failed")
@@ -255,8 +264,28 @@ def probe_qdrant(ctx: ProbeContext) -> bool:
             host=ctx.qdrant.get("host", "localhost"),
             port=ctx.qdrant.get("port", 6333),
             timeout=PROBE_TIMEOUT_SECONDS,
+            **({"api_key": os.environ["QDRANT_API_KEY"], "https": True} if ctx.industrial else {}),
         )
-        return bool(client.collection_exists(collection))
+        if not client.collection_exists(collection):
+            return False
+        if ctx.industrial:
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+            from common.config import get_config_dict
+
+            epoch = get_config_dict()["knowledge_version_epoch"]
+            count = client.count(
+                collection,
+                count_filter=Filter(
+                    must=[
+                        FieldCondition(key="doc_version_epoch", match=MatchValue(value=epoch)),
+                        FieldCondition(key="status", match=MatchValue(value="active")),
+                    ]
+                ),
+                exact=True,
+            )
+            return count.count > 0
+        return True
     except Exception:
         logger.debug("readiness: qdrant probe failed")
         return False
@@ -309,7 +338,24 @@ def probe_elasticsearch(ctx: ProbeContext) -> bool:
         password = os.environ.get("ELASTICSEARCH_PASSWORD") or es_cfg.get("password", "")
         if username and password:
             kwargs["basic_auth"] = (username, password)
-        return bool(Elasticsearch(**kwargs).ping())
+        client = Elasticsearch(**kwargs)
+        if ctx.industrial:
+            from common.config import get_config_dict
+
+            epoch = get_config_dict()["knowledge_version_epoch"]
+            result = client.count(
+                index=es_cfg["index"],
+                query={
+                    "bool": {
+                        "filter": [
+                            {"term": {"doc_version_epoch": epoch}},
+                            {"term": {"status": "active"}},
+                        ]
+                    }
+                },
+            )
+            return result["count"] > 0 and result.get("_shards", {}).get("failed", 0) == 0
+        return bool(client.ping())
     except Exception:
         logger.debug("readiness: elasticsearch probe failed")
         return False
@@ -423,6 +469,7 @@ def evaluate_readiness(
     executor = ThreadPoolExecutor(max_workers=max(len(DEPENDENCY_KEYS), 1))
     try:
         futures = {key: executor.submit(active[key], context) for key in DEPENDENCY_KEYS if key in active}
+        deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS + _PROBE_GRACE_SECONDS
         dependencies: dict[str, bool] = {}
         for key in DEPENDENCY_KEYS:
             if key not in futures:
@@ -430,7 +477,7 @@ def evaluate_readiness(
                 dependencies[key] = False
                 continue
             try:
-                dependencies[key] = bool(futures[key].result(timeout=PROBE_TIMEOUT_SECONDS + _PROBE_GRACE_SECONDS))
+                dependencies[key] = bool(futures[key].result(timeout=max(0.0, deadline - time.monotonic())))
             except TimeoutError:
                 # Treat an overrunning probe as unavailable rather than waiting
                 # for it: the answer we need is "can it serve right now", and a
@@ -485,6 +532,16 @@ def evaluate_readiness(
     for key in ("gen_4b", "gen_14b"):
         if key not in required_generation and not dependencies[key]:
             degraded.append(key)
+
+    if context.industrial:
+        from common.config import get_config_dict
+        from common.release_contract import current_manifest
+
+        blockers.extend(key for key in ("redis", "qdrant", "elasticsearch") if not dependencies[key])
+        try:
+            current_manifest(get_config_dict()["knowledge_version_epoch"])
+        except Exception:
+            blockers.append("approved_release")
 
     # Stable order, deduplicated. Dependency names sort by DEPENDENCY_KEYS so the
     # payload is byte-stable across calls; capability names (e.g. "retrieval")

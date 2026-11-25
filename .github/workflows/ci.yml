@@ -42,10 +42,19 @@ jobs:
           # A negation that re-admits secrets or model weights would defeat the
           # whole file. `!.env.example` is safe (template only) and must not
           # match, hence the explicit terminator.
-          if grep -nE '^!\s*(\.env|keys|models|blip-image-captioning-large)(/|/[^.]|\s|$)' .dockerignore; then
-            echo "::error file=.dockerignore::secrets/model directories must not be re-admitted"
-            exit 1
-          fi
+          # Permit only explicit tracked model source files, never globs or
+          # whole model directories. Keep the secret/weight exclusion.
+          while IFS= read -r rule; do
+            case "$rule" in
+              '!models/__init__.py') git ls-files --error-unmatch "models/__init__.py" >/dev/null ;;
+              '!models/adapter_manager.py') git ls-files --error-unmatch "models/adapter_manager.py" >/dev/null ;;
+              '!models/blip_service.py') git ls-files --error-unmatch "models/blip_service.py" >/dev/null ;;
+              '!models/complexity_evaluator.py') git ls-files --error-unmatch "models/complexity_evaluator.py" >/dev/null ;;
+              '!models/embedding_service.py') git ls-files --error-unmatch "models/embedding_service.py" >/dev/null ;;
+              '!models/llm_client.py') git ls-files --error-unmatch "models/llm_client.py" >/dev/null ;;
+              *) echo "::error file=.dockerignore::unsafe secret/model exemption"; exit 1 ;;
+            esac
+          done < <(grep -E '^!\s*(\.env|keys|models|blip-image-captioning-large)(/|/[^.]|\s|$)' .dockerignore || true)
 
       - name: Dockerfile build check
         run: |

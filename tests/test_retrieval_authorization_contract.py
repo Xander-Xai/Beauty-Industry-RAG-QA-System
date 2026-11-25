@@ -355,7 +355,15 @@ def test_clip_embedding_results_retain_minimal_permission_metadata():
     result = service.search_qdrant_image(np.array([0.1]), top_k=1)[0]
 
     assert {"role_mask", "dept_mask"}.issubset(set(client.request["with_payload"]))
-    assert result["metadata"] == {"role_mask": 2, "dept_mask": 4}
+    assert result["metadata"] == {
+        "image_id": None,
+        "status": None,
+        "doc_version_epoch": None,
+        "source_path": None,
+        "role_mask": 2,
+        "dept_mask": 4,
+    }
+    assert {"image_id", "status", "doc_version_epoch"}.issubset(client.request["with_payload"])
 
 
 def test_cached_async_clip_results_are_rechecked_for_current_permissions(monkeypatch):
