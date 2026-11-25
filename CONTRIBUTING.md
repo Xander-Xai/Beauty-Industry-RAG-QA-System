@@ -11,7 +11,7 @@ Thank you for helping improve this public engineering reference. Changes should 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install -r requirements.txt
+python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 For frontend changes:
@@ -33,11 +33,11 @@ npm run build
 Run the relevant checks before opening a pull request:
 
 ```bash
+python -m pytest tests/ -q
 ruff check .
 ruff format --check .
-python3 scripts/check_repo_consistency.py
-python3 scripts/check_public_repository_boundary.py
-python3 -m pytest tests/ -q
+python scripts/check_repo_consistency.py
+python scripts/check_public_repository_boundary.py
 ```
 
 For frontend changes, also run `npm ci && npm run build` from `frontend/`. Integration and external-runtime commands are documented in the relevant guides; do not claim those checks ran unless their actual environment and evidence are available. GitHub branch protection and required Actions checks remain the merge gate.

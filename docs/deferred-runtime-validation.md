@@ -18,6 +18,10 @@
 > deterministic assertion, no environment) and `VAL-STORE-001` (a captured
 > real-Qdrant run). Everything else stays `NOT EXECUTED`.
 >
+> Issue #85 is closed. Its remaining runtime items stay explicit here and are
+> routed to active trackers: ranking to #154, sustained performance/alerts to #32,
+> and deployment topology to #32/#54. Closure of #85 did not imply those runs passed.
+>
 > Each entry is written so that, once the environment exists, the procedure can be
 > run without re-deciding how to validate it. Evidence levels follow the canonical
 > vocabulary in [the evidence map](evidence-map.md#classification-vocabulary).
@@ -41,9 +45,9 @@
 | VAL-RELEASE-001 | Industrial release manifest + live dependency/identity failure acceptance | `PENDING` | [#125](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/125) | `NOT EXECUTED` |
 | VAL-STORE-001 | Real Qdrant service (dense path, epoch point ids, payload filters) | `LOCAL_REAL_VALIDATION` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `EXECUTED` — [record](validation/qdrant-local-real-validation.md) |
 | VAL-DEGRADE-001 | Gate degradation with no rerank weights (deterministic, no environment) | `REPO_VERIFIED` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `EXECUTED` — `tests/test_evidence_gate_degradation.py` |
-| VAL-RERANK-001 | Real two-stage rerank contribution (BiEncoder → CrossEncoder) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
-| VAL-TOPO-001 | Redis Cluster/Sentinel, multi-node ES, TLS, external load balancer | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
-| VAL-ALERT-001 | Sustained alert evaluation under real traffic | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
+| VAL-RERANK-001 | Real two-stage rerank contribution (BiEncoder → CrossEncoder) | `PENDING` | [#154](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/154) | `NOT EXECUTED` |
+| VAL-TOPO-001 | Redis Cluster/Sentinel, multi-node ES, TLS, external load balancer | `PENDING` | [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32) / [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54) | `NOT EXECUTED` |
+| VAL-ALERT-001 | Sustained alert evaluation under real traffic | `PENDING` | [#32](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/32) | `NOT EXECUTED` |
 
 ---
 
@@ -182,9 +186,9 @@
 
 - **Capability:** a real RAGAS quality score over the golden set.
 - **Current evidence level:** `PENDING` (harness `REPO_VERIFIED`).
-- **Reason deferred:** no approved evaluator provider or credential.
+- **Reason deferred:** no dependency set has passed security admission (`diskcache 5.6.3` / `CVE-2025-69872` has no fixed release); no evaluator provider or credential was used.
 - **Required environment / data:** an approved evaluator dependency and credential; `tests/evaluation/golden_set.jsonl`; the live pipeline dependencies (vLLM/Qdrant/ES/Redis) for a real pipeline run.
-- **Exact procedure:** run `python -m tests.evaluation.ragas_eval --require-ragas --pipeline ...` with a configured provider and the live pipeline. `--require-ragas` alone evaluates the dataset reference answers (an evaluator smoke) and must not be accepted as a pipeline-quality result.
+- **Exact procedure:** first resolve an approved dependency set and pass `pip-audit --strict --desc`, `pip check`, RAGAS import and project metric imports in an isolated Python 3.11 environment. Only then set `RAGAS_SECURITY_APPROVED=1` for that exact environment and run `python -m tests.evaluation.ragas_eval --require-ragas --pipeline ...` with authorized data/provider. `--require-ragas` alone evaluates the dataset reference answers (an evaluator smoke) and must not be accepted as a pipeline-quality result.
 - **Expected artifact:** a pipeline-quality report with pipeline provenance, bound to the git SHA and the golden-set hash.
 - **Acceptance criteria:** the `--pipeline` mode runs against the live pipeline and produces a report (not the evaluator-unavailable fallback) with the configured evaluator.
 - **Failure interpretation:** a missing dependency or credential fails fast with no report; that is not a score of zero.
@@ -267,7 +271,7 @@
 - **Acceptance criteria:** the delta is reported even when negative — an unmeasured negative result is the outcome, not a reason to skip.
 - **Failure interpretation:** a rerank call that completes is not a measured contribution.
 - **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with the committed comparison artifact.
-- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+- **Related issue:** #154. **Status:** `NOT EXECUTED`.
 
 ## VAL-TOPO-001 — Production infrastructure topology
 
@@ -280,7 +284,7 @@
 - **Acceptance criteria:** rate limiting, session persistence and epoch-scoped retrieval still behave correctly under failover.
 - **Failure interpretation:** single-node runs, however many are repeated, are not this validation.
 - **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` per topology with a captured run; production HA remains outside the repository's reach either way.
-- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+- **Related issues:** #32 (real performance/observability evidence) and #54 (deployment/readiness environment). **Status:** `NOT EXECUTED`.
 
 ## VAL-ALERT-001 — Sustained alert evaluation
 
@@ -293,4 +297,4 @@
 - **Acceptance criteria:** every rule fires under its stated condition, and no rule fires on a healthy run.
 - **Failure interpretation:** a one-shot rule evaluation (`VAL-OBS-002`) or a dashboard import is not this validation.
 - **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with the sustained-load capture; the thresholds themselves stay `DESIGN_TARGET` until measured.
-- **Related issue:** #85. **Status:** `NOT EXECUTED`.
+- **Related issue:** #32. **Status:** `NOT EXECUTED`.

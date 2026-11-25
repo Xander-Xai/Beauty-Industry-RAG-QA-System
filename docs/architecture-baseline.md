@@ -138,7 +138,7 @@ flowchart TB
   API -.->|"可选 span hooks"| OTEL
 ```
 
-读图约定：`CACHE`/`AUTH`/`OUT` 指向 Redis 的边表示**状态依赖**（会话、L2 缓存、限流计数、审计流），不是独立服务调用；`OUT` 的 `rag_* metrics` 只落在 `MetricsCollector` 并由 `/api/metrics` 暴露给外部 Prometheus，不写入 Qdrant/Elasticsearch/vLLM。Prometheus、Grafana 与 OTLP backend 是外部/可选依赖；此图不表示它们在本仓库中默认运行或已完成闭环。评测工具为离线路径，只有显式 benchmark 执行器会调用真实检索代码。`OFFLINE` 到存储的虚线表示**离线写入**方向，与在线召回互不依赖。`vLLM endpoints` 是配置里的两个端点键，其真实 GPU 部署为 `PENDING`。`/api/continuation` 当前是返回空答案的 stub（见 [user guide](user-guide.md)），不在本链路内。
+读图约定：`CACHE`/`AUTH`/`OUT` 指向 Redis 的边表示**状态依赖**（会话、L2 缓存、限流计数、审计流），不是独立服务调用；`OUT` 的 `rag_* metrics` 只落在 `MetricsCollector` 并由 `/api/metrics` 暴露给外部 Prometheus，不写入 Qdrant/Elasticsearch/vLLM。Prometheus、Grafana 与 OTLP backend 是外部/可选依赖；此图不表示它们在本仓库中默认运行或已完成闭环。评测工具为离线路径，只有显式 benchmark 执行器会调用真实检索代码。`OFFLINE` 到存储的虚线表示**离线写入**方向，与在线召回互不依赖。`vLLM endpoints` 是配置里的两个端点键，其真实 GPU 部署为 `PENDING`。`/api/continuation` 明确返回 HTTP 501 `Not Implemented`，前端不调用且不属于当前业务链路（见 [user guide](user-guide.md)）。
 
 默认联调入口是 FastAPI 单体后端和 React 前端。仓库中的微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/`）属于保留能力，尚不能替代当前单体主线来回答“现有系统架构”，也不代表已与当前前端完成端到端生产验证。
 
@@ -286,7 +286,7 @@ RRF 融合与去重之后，先由 BiEncoder 宽保留 Top 150，再由两个 Cr
 RAGAS harness / reporter / validator 与 Golden Set 已存在：最初 seed 27 条，现 300+ 条，实际条数以
 `validate_golden_set` 输出为准。**格式校验通过 ≠ 领域事实正确**。
 
-RAGAS 是隔离的可选 evaluator，不在默认依赖中。库级 `evaluate()` 保留 evaluator-unavailable fallback（该结果不是质量结果）；使用 `--require-ragas` 运行 strict / real evaluator CLI 时，缺少 evaluator dependency 或 evaluator credential 会 **fail fast**：返回非零状态且不生成任何 quality report。当前没有经过验证的真实 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
+RAGAS 是隔离的可选 evaluator，不在默认依赖中。未获准入时，库级 `evaluate()` 返回 evaluator-unavailable fallback（该结果不是质量结果）且不导入/调用 evaluator。当 evaluator 依赖不可用或 evaluator 凭据缺失时，`--require-ragas` 以非零状态退出（退出码 2/3/8），并且不生成任何质量报告；其中未获安全准入为 8。截至 2026-11-25，候选依赖因无修复版的 diskcache `CVE-2025-69872` 未获准入，真实 RAGAS 评测保持禁用。当前没有经过验证的真实 RAGAS quality score；没有生产反馈数据时，不应声称阈值已经由线上反馈自动学习或每周稳定更新。
 
 ## 标准架构说明
 

@@ -6,6 +6,30 @@
 - Updated the GitHub metadata record to the values read from the live repository on 2026-11-25. Runtime version remains `2.4.0`; no new release is created by this documentation-only change.
 - Refreshed transitive frontend build dependencies via reviewed Dependabot PRs #164, #166 and #167; exact-head required CI passed and the resulting exact-main `npm audit` reports zero findings. This does not change runtime/API version or establish a production security audit.
 
+### Fixed
+
+- **Development dependencies now have one documented entry point.** `requirements.txt`
+  is the runtime set only; `requirements-dev.txt` adds the pytest / pytest-asyncio /
+  pytest-timeout / Ruff toolchain that CI installed ad hoc. README and
+  CONTRIBUTING now install `-r requirements.txt -r requirements-dev.txt` in an
+  explicit Python 3.11 virtual environment, CI installs the same file, and the
+  production Dockerfile still installs `requirements.txt` alone.
+- **The RAGAS evaluator now requires an explicit dependency security admission.**
+  `--require-ragas` exits `8` before importing or calling any evaluator unless
+  `RAGAS_SECURITY_APPROVED=1` is set, the programmatic `evaluate()` path returns
+  its non-quality unavailable marker without importing the evaluator, the CI
+  opt-in job runs strict `pip-audit` before any credential is injected, and the
+  real-evaluator integration test requires the same flag. Candidate `ragas 0.4.4`
+  imports cleanly and fixes the earlier v0.4.3 import and CVE-2026-6587 issues,
+  but its resolved set still contains unpatched `diskcache 5.6.3`
+  (`CVE-2025-69872`), so no evaluator was admitted and no evaluation was run.
+- **Documentation now matches the implemented contracts.** The `/api/continuation`
+  501 behaviour, the RAGAS failure exit codes and the `#production-readiness`
+  anchor are corrected, the archived demo capture is described as a synthetic
+  rendering with a README navigation entry instead of an implied production
+  screenshot, and broken relative links and heading anchors in the data-provenance,
+  truth-audit and evaluation-guide documents are repaired.
+
 - Industrial release candidate: reviewed evidence manifest, applicability and identity checks, strict session/readiness behavior, unified infrastructure errors and model asset mounts. Production acceptance remains outstanding.
 
 ### Fixed

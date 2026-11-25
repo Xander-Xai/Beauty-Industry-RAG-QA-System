@@ -23,8 +23,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install development tools
+        run: pip install -r requirements-dev.txt
 
       - name: Ruff check
         run: ruff check . --output-format=github

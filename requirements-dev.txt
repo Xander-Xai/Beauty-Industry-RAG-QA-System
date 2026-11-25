@@ -1,0 +1,7 @@
+# Development and test tools only. Install alongside requirements.txt for the
+# complete application test environment. Dockerfile intentionally installs only
+# requirements.txt.
+pytest>=8.0,<9
+pytest-asyncio>=0.23,<2
+pytest-timeout>=2.3,<3
+ruff>=0.11,<1

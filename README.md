@@ -11,7 +11,7 @@
 ![Python 3.11](https://img.shields.io/badge/Python-3.11-blue.svg)
 [![Latest release](https://img.shields.io/github/v/release/Xander-Xai/Beauty-Industry-RAG-QA-System)](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/releases)
 
-**导航：** [Quick Start](#quick-start) · [架构](#架构) · [功能](#核心功能) · [评测](#评测) · [部署](docs/deployment-guide.md) · [文档](docs/README.md) · [安全](SECURITY.md) · [贡献](CONTRIBUTING.md) · [版本记录](CHANGELOG.md)
+**导航：** [Quick Start](#quick-start) · [架构](#架构) · [功能](#核心功能) · [评测](#评测) · [Synthetic Demo / 合成数据演示](docs/demo/README.md) · [部署](docs/deployment-guide.md) · [文档](docs/README.md) · [安全](SECURITY.md) · [贡献](CONTRIBUTING.md) · [版本记录](CHANGELOG.md)
 
 ## 项目简介
 
@@ -75,13 +75,17 @@ flowchart TB
 要求 Python 3.11；前端构建另需 Node.js 20。此路径验证仓库代码，不会启动完整 RAG 服务：
 
 ```bash
-python3 -m pip install -r requirements.txt
-python3 -m pytest tests/ -q
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests/ -q
 ruff check .
 ruff format --check .
-python3 scripts/check_repo_consistency.py
-python3 scripts/check_public_repository_boundary.py
+python scripts/check_repo_consistency.py
+python scripts/check_public_repository_boundary.py
 ```
+
+`requirements-dev.txt` supplies the shared pytest and Ruff toolchain used by local development and CI. It is not installed by the production Dockerfile. The demo uses a synthetic corpus and mock API; it demonstrates UI rendering only, not a real RAG backend run.
 
 ### 本地服务栈
 
@@ -141,6 +145,10 @@ Industrial Profile 是 fail-closed 的发布候选配置，不是更轻量的 Qu
 逐能力证据与最新验证记录分别见[证据地图](docs/evidence-map.md)、[验证索引](docs/deferred-runtime-validation.md)及 GitHub [Actions](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions)。外部模型、人工法规审阅、授权数据、GPU 和部署环境缺失时，相关任务保持未验证。
 
 The Kubernetes manifests have 31 static checks in `tests/deploy/test_k8s_manifests.py`; these are static contract checks only and do not prove a real cluster deployment.
+
+## 项目演示（合成数据）
+
+仓库提供一份可复现的**合成数据演示**：真实前端配合 `docs/demo/mock_api.py` 夹具渲染问答、引用与权限拒答流程。演示语料为人工构造，图中延迟、门禁分数与掩码值均为**合成示例**，**不是真实生产运行结果，也不构成真实 RAG 端到端证据**。生成方式、权限对照与复现步骤见 [演示图生成说明](docs/demo/README.md)。
 
 ## 文档与社区
 

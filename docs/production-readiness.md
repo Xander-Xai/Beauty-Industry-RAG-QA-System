@@ -4,7 +4,7 @@ Single answer to one question: **what state is each capability in, and what woul
 still be required before this could take real traffic?**
 
 This document is the detailed table behind the condensed
-[Production Readiness](../README.md#production-readiness) section of the
+[Project status and limitations](../README.md#状态与限制) section of the
 top-level README. It owns the per-capability status; it introduces no capability
 and promotes no evidence. For the classification vocabulary see
 [Evidence map](evidence-map.md#classification-vocabulary); for the architecture
@@ -89,7 +89,7 @@ missing entries are tracked by their owning Issues (#8, #12, #18, #32, #54,
 | Real Qdrant service: dense recall, epoch-versioned point IDs, payload filters | `REPO_VERIFIED` | `PENDING` | One run against a real Qdrant server with a committed artifact (#85 `VAL-STORE-001`). Note the asymmetry: Elasticsearch has `LOCAL_REAL_VALIDATION`, Qdrant does not |
 | Retrieval metrics (Recall / HitRate@k / MRR@10 / NDCG@10) | `REPO_VERIFIED` (metrics, provenance) | `PENDING` (results) | A real ES/Qdrant run with an artifact carrying `git_sha`, dataset sha256, model revision, hardware, sample count, latency, command and limitations (#18) |
 | QPS / P95 / P99 latency | — | `PENDING` | The defined load applied to the real API + LLM + retrieval stack, with a seven-file artifact in which unmeasured stays `null` |
-| RAGAS quality scores | `REPO_VERIFIED` (harness) | `PENDING` | An approved evaluator provider plus credentials, then a real run. `--require-ragas` fails fast without them and emits no report — unavailable is *not* zero |
+| RAGAS quality scores | `REPO_VERIFIED` (harness) | `PENDING` (security admission blocked) | Candidate v0.4.4 still resolves unpatched `diskcache` CVE-2025-69872; `--require-ragas` requires exact-environment `RAGAS_SECURITY_APPROVED=1` before evaluator import or credentials |
 | BGE / CLIP / PaddleOCR real models | `REPO_VERIFIED` (adapter contracts) | `PENDING` | Real weights plus a smoke run (#8) |
 | QLoRA fine-tuning | `REPO_VERIFIED` (tooling) | `PENDING` | A reproducible training run plus adapter artifacts |
 | Airflow scheduling | `REPO_VERIFIED` (DAG registration) | `PENDING` | A real Airflow DAG execution. DAG code existing does not mean a scheduler is running |

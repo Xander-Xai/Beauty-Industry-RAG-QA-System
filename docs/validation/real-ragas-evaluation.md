@@ -1,5 +1,13 @@
 # Real RAGAS evaluation validation
 
+## Current security admission — 2026-11-25
+
+- Upstream's latest stable release is `ragas==0.4.4` (released 2026-11-14). Its release notes fix the v0.4.3 `langchain-community` VertexAI import failure and GHSA-95ww-475f-pr4f / CVE-2026-6587 (affected RAGAS `>=0.2.3, <=0.4.3`).
+- Disposable Python 3.11 candidate: `ragas 0.4.4`, `datasets 5.2.0`, `langchain-core 1.8.4`, `langchain-openai 1.8.5`, `instructor 1.17.0`, `setuptools 84.2.1`. `pip check` passed and `import ragas`, `evaluate`, `datasets`, plus the four metric classes used by this repository imported successfully. Legacy `ragas.metrics` imports emit deprecation warnings.
+- `pip-audit --strict --desc` still reports `diskcache 5.6.3`, `PYSEC-2026-2447` / `GHSA-w8v5-vhqr-4h9v` / `CVE-2025-69872`: unsafe pickle deserialization, affected versions `<=5.6.3`, no fixed version published. PyPI's latest is still 5.6.3. Therefore **no safe evaluator combination is currently admitted**, despite the RAGAS 0.4.4 fixes. The pre-existing pinned requirements also have five open Dependabot alerts (#12).
+- Project evaluator, CI opt-in and runtime integration test now require `RAGAS_SECURITY_APPROVED=1`; the CI opt-in first runs strict `pip-audit` before checking/injecting `OPENAI_API_KEY`. This value must only be supplied after a clean audit of the exact resolved evaluator environment. No data or evaluator credentials were used in this candidate test.
+- Issue #12 remains OPEN. Release conditions: a stable compatible evaluator dependency set with clean strict audit, clean resolver/import checks, project metric imports and harness regression tests; then separately authorized data and credentials before any real evaluation.
+
 Local validation for the RAGAS evaluation path (Issue #12). This records what
 was actually executed, what was fixed, and what remains blocked. Local
 evaluation is not a production quality benchmark.
@@ -29,11 +37,9 @@ no score was produced here, so no quality level is claimed.
 
 ## Dependency findings (real, not faked)
 
-- **Latest RAGAS is import-broken.** `ragas 0.4.3` does `from
-  langchain_community.chat_models.vertexai import ChatVertexAI`, but
-  `langchain-community 0.4.x` no longer ships that module. `pip check` is clean
-  yet `import ragas` raises `ModuleNotFoundError`. This is why the global
-  environment cannot run RAGAS today.
+- **Historical finding (2026-10-02):** `ragas 0.4.3` imported a removed
+  `langchain_community.chat_models.vertexai` module. Upstream fixed this in
+  `ragas 0.4.4`; the current blocker is the unpatched `diskcache` advisory above.
 - **Importable RAGAS carries advisories.** `ragas 0.2.15` imports cleanly in a
   fresh venv with `langchain-community` 0.3.x, but `pip-audit` reports 15
   advisories across `diskcache`, `langchain`, `langchain-core`,

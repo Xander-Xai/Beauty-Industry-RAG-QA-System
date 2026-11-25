@@ -267,9 +267,9 @@ def continuation_handler(
     could not distinguish "the model produced nothing" from "this feature does not
     exist", and an empty answer invites the caller to treat a non-answer as an answer.
 
-    It now returns **501 Not Implemented** with an explicit error body. The limitation is
-    tracked as an open issue rather than described as working behaviour, and no
-    continuation capability is invented here.
+    It now returns **501 Not Implemented** with an explicit error body. The
+    limitation is documented as unsupported; no continuation capability is
+    invented here.
 
     The session is still resolved so the authorization path stays identical to every
     other endpoint — an unauthenticated caller is rejected before reaching the 501.

@@ -126,7 +126,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-timeout pyyaml
+          pip install -r requirements-dev.txt
 
       - name: Alert rules reference only emitted metrics
         run: python -m pytest tests/monitoring/ -q
@@ -208,7 +208,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -216,7 +216,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-timeout
+          pip install -r requirements-dev.txt
 
       - name: Repository consistency
         run: python scripts/check_repo_consistency.py
@@ -259,7 +259,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-timeout
+          pip install -r requirements-dev.txt
 
       # Deterministic only: schema/count/classification checks and harness
       # unit tests. RAGAS itself is intentionally NOT installed, so this job
@@ -321,10 +321,9 @@ jobs:
   ragas-evaluator-smoke:
     name: RAGAS evaluator smoke（需显式启用）
     # Opt-in only. This is an evaluator smoke (reference answers), not a
-    # project-pipeline quality run: CI has no vLLM/Qdrant/ES. The RAGAS deps are
-    # known-unfixed and live only in requirements-ragas.txt, never in the
-    # default production requirements. --require-ragas fails fast instead of
-    # emitting an all-zero fallback report.
+    # project-pipeline quality run: CI has no vLLM/Qdrant/ES. Strict pip-audit
+    # must pass before credentials are exposed. RAGAS remains isolated from
+    # production requirements.
     if: >-
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
@@ -344,9 +343,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Isolated, pinned evaluator deps (vet the security note in the file
-          # before enabling the RAGAS_EVAL_ENABLED repository variable).
           pip install -r requirements-ragas.txt
+          pip install pip-audit
+
+      - name: Security admission for isolated evaluator dependencies
+        run: pip-audit --strict --desc --requirement requirements-ragas.txt
 
       - name: Require API key
         run: |
@@ -358,6 +359,7 @@ jobs:
       - name: Run RAGAS evaluator smoke (fails if ragas is unavailable)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RAGAS_SECURITY_APPROVED: "1"
           DEPLOYMENT_MODE: testing
         run: |
           python -m tests.evaluation.ragas_eval \

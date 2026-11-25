@@ -323,6 +323,15 @@ class RAGASEvaluator:
         selected_metric_names: list[str],
     ) -> dict[str, float]:
         """Call RAGAS once and record availability state."""
+        if os.environ.get("RAGAS_SECURITY_APPROVED") != "1":
+            msg = "RAGAS BLOCKED: evaluator dependency security admission is missing; no evaluator was imported or called."
+            logger.warning(msg)
+            self._last_available = False
+            self._last_warning = msg
+            result: dict[str, float] = {name: 0.0 for name in selected_metric_names}
+            result["_warning"] = msg  # type: ignore[assignment]
+            return result
+
         try:
             from datasets import Dataset  # type: ignore[import-untyped]
             from ragas import evaluate as ragas_evaluate  # type: ignore[import-untyped]
@@ -730,6 +739,12 @@ def main() -> int:
             return 0
 
     if args.require_ragas:
+        if os.environ.get("RAGAS_SECURITY_APPROVED") != "1":
+            print(
+                "RAGAS BLOCKED: dependency security admission is missing; run a clean pip-audit on the exact isolated environment before supplying evaluator credentials.",
+                file=sys.stderr,
+            )
+            return 8
         try:
             import datasets  # type: ignore[import-untyped]  # noqa: F401
             import ragas  # type: ignore[import-untyped]  # noqa: F401

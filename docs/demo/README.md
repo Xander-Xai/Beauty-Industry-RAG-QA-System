@@ -1,6 +1,6 @@
 # README 演示图 · 生成说明
 
-`docs/assets/demo-request-evidence-flow.webp` 是 README 里那一张演示图的来源。它由脚本渲染，**不是**手工画的图，也不是任何生产环境的抓屏。
+`docs/assets/demo-request-evidence-flow.webp` 是仓库保留的合成数据演示图，由脚本渲染；README 提供本页作为演示入口，目前不嵌入该图片。它**不是**手工画的图，也不是任何生产环境的抓屏或真实 RAG 端到端证据。
 
 ## 这张图里有什么
 
