@@ -353,9 +353,10 @@ build, tests, lint, dependency scan and secret scan. PR #165 was closed as
 redundant after #164 refreshed its source-map-js dependency; PR #168 was closed
 as redundant after #167 refreshed Baseline Browser Mapping.
 
-The current `main` SHA `a928c9f69d9a32e13da1cbe63329ad160413bbe2` passed
-`npm ci`, `npm run build`, and `npm audit` with **zero reported vulnerabilities**
-in Actions run [45619395171](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions/runs/45619395171).
+At the frontend dependency-remediation snapshot on 2026-11-25, `main` SHA
+`a928c9f69d9a32e13da1cbe63329ad160413bbe2` passed `npm ci`, `npm run build`, and
+`npm audit` with **zero reported vulnerabilities** in Actions run
+[45619395171](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions/runs/45619395171).
 The live Dependabot alert list has no frontend alerts. One earlier rebased PR run
 reported an advisory against `browserslist <=4.28.6` despite locking `4.29.6`;
 the exact-main rerun supersedes that finding. Reproduce locally with
