@@ -81,7 +81,8 @@ whole story.
 
 Each row needs an environment this repository does not ship. The procedure for
 each is in [Deferred runtime validation](deferred-runtime-validation.md); the
-missing entries are tracked in #85.
+missing entries are tracked by their owning Issues (#8, #12, #18, #32, #54,
+#60, #85 and #125).
 
 | Capability | Code status | Real-environment status | Promotion criterion |
 |---|---|---|---|
@@ -95,6 +96,7 @@ missing entries are tracked in #85.
 | 4B / 14B vLLM GPU topology | `REPO_VERIFIED` (routing contract) | `PENDING` | A real GPU deployment under load (#12). Measured on this host: both endpoints unreachable, both weight directories absent, and **one** GPU visible against an assumed two (`router.gpu_gate`) |
 | Kubernetes deployment and readiness admission | `REPO_VERIFIED` (manifests + 31 static checks) | `PENDING` | A real cluster deployment with the readiness contract observed (#54) |
 | Browser → real RAG backend end-to-end run | `REPO_VERIFIED` (client + API metadata contract) | `PENDING` | One real browser run against the monolith with real ES/Qdrant and real models (#60) |
+| Industrial release manifest, identity and dependency acceptance | `REPO_VERIFIED` (fail-closed implementation + synthetic tests) | `PENDING` | Isolated real deployment with independently reviewed corpus, matching epoch, identity changes and dependency fault cases (#125; procedure `VAL-RELEASE-001`) |
 | Frontend production deployment | — | `PENDING` | Deployment-specific state; this repository does not assert it |
 | Redis Cluster / Sentinel, multi-node Elasticsearch, TLS termination, external load balancer | — | `PENDING` | Multi-node infrastructure (#85 `VAL-TOPO-001`) |
 

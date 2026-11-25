@@ -38,6 +38,7 @@
 | VAL-RAGAS-001 | Real RAGAS quality evaluation | `PENDING` | [#12](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/12) | `NOT EXECUTED` |
 | VAL-K8S-001 | Real Kubernetes deployment + readiness admission | `PENDING` | [#54](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/54) | `NOT EXECUTED` |
 | VAL-E2E-001 | Browser → real RAG backend end-to-end smoke | `PENDING` | [#60](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/60) | `NOT EXECUTED` |
+| VAL-RELEASE-001 | Industrial release manifest + live dependency/identity failure acceptance | `PENDING` | [#125](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/125) | `NOT EXECUTED` |
 | VAL-STORE-001 | Real Qdrant service (dense path, epoch point ids, payload filters) | `LOCAL_REAL_VALIDATION` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `EXECUTED` — [record](validation/qdrant-local-real-validation.md) |
 | VAL-DEGRADE-001 | Gate degradation with no rerank weights (deterministic, no environment) | `REPO_VERIFIED` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `EXECUTED` — `tests/test_evidence_gate_degradation.py` |
 | VAL-RERANK-001 | Real two-stage rerank contribution (BiEncoder → CrossEncoder) | `PENDING` | [#85](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/issues/85) | `NOT EXECUTED` |
@@ -215,6 +216,19 @@
 - **Failure interpretation:** a synthetic mock API capture is not this validation.
 - **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only with the committed real-backend capture.
 - **Related issue:** #60. **Status:** `NOT EXECUTED`.
+
+## VAL-RELEASE-001 — Industrial release and identity acceptance
+
+- **Capability:** the opt-in industrial profile serves only independently reviewed, current evidence under a matching epoch, content digest, permission scope and applicability window, while current identity and required dependencies remain available.
+- **Current evidence level:** `PENDING` (fail-closed implementation and synthetic negative tests are `REPO_VERIFIED`).
+- **Reason deferred:** this environment has no independently reviewed current regulatory corpus/manifest or provisioned industrial identity and dependency stack. Existing local Redis/Postgres containers belong to other projects and are not this RAG deployment.
+- **Required environment / data:** an isolated deployment at the reviewed commit; approved manifest and matching immutable Qdrant/Elasticsearch epoch; provisioned RS256 identity; Redis, Qdrant, Elasticsearch and required model endpoints; authorized test identities with distinct scopes.
+- **Exact procedure:** follow `docs/industrial-release-contract.md`; verify healthy allowed retrieval, expired/tampered/mismatched manifest refusal, permission revocation, identity deactivation, and Redis/Qdrant/Elasticsearch/model dependency outages. Capture startup/readiness and HTTP outcomes without exposing secrets.
+- **Expected artifact:** a provenance-bound report with git SHA, manifest digest (not private manifest contents), corpus/index epoch, model revisions, runtime versions, test identities represented by non-sensitive aliases, commands and outcomes.
+- **Acceptance criteria:** approved evidence passes; stale, changed, unauthorized or unavailable evidence fails closed; identity changes take effect on the next request; no cache/media/BLIP path bypasses release checks.
+- **Failure interpretation:** synthetic tests and CI establish the implementation contract only, not real legal review, runtime security acceptance or production readiness.
+- **Evidence promotion rule:** `PENDING` → `LOCAL_REAL_VALIDATION` only after a real isolated run with independently reviewed data and recorded dependency/identity fault cases; production remains a separate deployment-specific decision.
+- **Related issues:** #125 and #154. **Status:** `NOT EXECUTED`.
 
 ## VAL-STORE-001 — Real Qdrant service
 
