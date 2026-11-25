@@ -59,11 +59,17 @@ def create_app() -> FastAPI:
         # ── startup ─────────────────────────────────────────
         logger.info("系统启动中... 版本=%s", _APP_VERSION)
 
+        from common.release_contract import industrial_enabled, validate_industrial_startup
+
+        validate_industrial_startup(get_config_dict())
+
         # 预初始化 pipeline（触发懒加载以尽早发现配置问题）
         try:
             get_pipeline()
             logger.info("OnlineRAGPipeline 初始化完成")
         except Exception as e:
+            if industrial_enabled():
+                raise RuntimeError("industrial pipeline initialization failed") from e
             logger.error("OnlineRAGPipeline 初始化失败: %s", e)
 
         # CLIP 查询编码器预热：共享编码器只在首个多模态请求时懒加载权重，否则该请求会在
@@ -92,7 +98,12 @@ def create_app() -> FastAPI:
             from auth.jwt_auth import generate_keypair, get_jwt_config
 
             jwt_cfg = get_jwt_config()
-            if jwt_cfg.enabled and jwt_cfg.private_key_path and not os.path.isfile(jwt_cfg.private_key_path):
+            if (
+                not industrial_enabled()
+                and jwt_cfg.enabled
+                and jwt_cfg.private_key_path
+                and not os.path.isfile(jwt_cfg.private_key_path)
+            ):
                 key_dir = os.path.dirname(jwt_cfg.private_key_path)
                 if key_dir:
                     os.makedirs(key_dir, exist_ok=True)
@@ -149,6 +160,7 @@ def create_app() -> FastAPI:
         # H-9: 生产模式下禁用 Swagger/ReDoc，避免暴露 API schema
         docs_url="/docs" if _get_sys_config().deployment_mode != "production" else None,
         redoc_url="/redoc" if _get_sys_config().deployment_mode != "production" else None,
+        openapi_url="/openapi.json" if _get_sys_config().deployment_mode != "production" else None,
     )
 
     # ── 中间件（CORS + 请求日志）──────────────────────────
@@ -169,6 +181,12 @@ def create_app() -> FastAPI:
         static_dir = os.path.join(_project_root, "frontend", "dist")
     if os.path.isdir(static_dir):
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+
+    from core.exceptions import InfrastructureError
+
+    @app.exception_handler(InfrastructureError)
+    async def _infrastructure_error(request: Request, exc: InfrastructureError):
+        return JSONResponse(status_code=503, content={"error": "Service temporarily unavailable"})
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):

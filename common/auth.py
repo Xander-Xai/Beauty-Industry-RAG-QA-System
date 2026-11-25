@@ -15,6 +15,7 @@ Public API:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -94,6 +95,10 @@ def _decode_jwt(token: str) -> dict | None:
         if rs256_payload is not None:
             return rs256_payload
 
+    from common.release_contract import industrial_enabled
+
+    if industrial_enabled():
+        return None
     settings = _get_jwt_settings()
     if not settings["enabled"]:
         return None
@@ -389,6 +394,26 @@ def is_authenticated_principal(user_id: str | None) -> bool:
     return bool(stripped) and stripped != "anonymous"
 
 
+def revalidate_current_identity(identity: UserIdentity) -> None:
+    from common.release_contract import industrial_enabled
+
+    if not industrial_enabled():
+        return
+    from api.routes_auth import get_store
+
+    try:
+        current = get_store().get_user(identity.user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Identity store unavailable") from exc
+    if (
+        current is None
+        or not current.is_active
+        or current.role_mask != identity.user_role_mask
+        or current.dept_mask != identity.user_dept_mask
+    ):
+        raise HTTPException(status_code=401, detail="Identity has changed; authenticate again")
+
+
 async def require_identity(request: Request) -> UserIdentity:
     """
     FastAPI dependency that enforces authentication.
@@ -406,6 +431,7 @@ async def require_identity(request: Request) -> UserIdentity:
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    await asyncio.to_thread(revalidate_current_identity, identity)
     return identity
 
 

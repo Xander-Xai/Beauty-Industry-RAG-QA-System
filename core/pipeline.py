@@ -19,6 +19,7 @@ import time
 
 from common.audit import log_audit_event
 from common.config import get_config_dict
+from common.release_contract import filter_release_candidates, industrial_enabled
 from core.exceptions import InfrastructureError
 
 config = get_config_dict()
@@ -238,7 +239,7 @@ class OnlineRAGPipeline:
                 # ①-b A/B 实验分流（PRD §12.2）
                 ab_overrides = {}
                 try:
-                    running_exps = self.ab_platform.get_running_experiments()
+                    running_exps = [] if industrial_enabled() else self.ab_platform.get_running_experiments()
                     for exp in running_exps:
                         variant = self.ab_platform.assign_variant(ctx.user_id, exp.experiment_id)
                         if variant:
@@ -375,6 +376,9 @@ class OnlineRAGPipeline:
                         top_k_per_path=recall_top_k,
                         rrf_weights=rrf_weights,
                     )
+                ctx.recall_results = filter_release_candidates(
+                    ctx.recall_results, config.get("knowledge_version_epoch", "default")
+                )
                 ctx.record_timing("parallel_recall", (time.time() - t_recall) * 1000)
 
                 # PRD §12: Track CLIP sync timeout
@@ -382,7 +386,7 @@ class OnlineRAGPipeline:
 
                 # GAP-19: CLIP 异步补充召回（PRD §4.5）— 主链路返回后后台执行
                 # 结果存入 session.async_clip_results，供下一轮多轮对话预热复用
-                if clip_use:
+                if clip_use and not industrial_enabled():
                     try:
                         session_state_for_clip = SessionState.for_identity(
                             ctx.session_id,
@@ -419,7 +423,8 @@ class OnlineRAGPipeline:
                 t_blip = time.time()
                 with tracer.trace("blip_inference") if tracer else contextlib.nullcontext():
                     try:
-                        self._maybe_trigger_blip(ctx)
+                        if not industrial_enabled():
+                            self._maybe_trigger_blip(ctx)
                     except Exception as e:
                         logger.debug(f"BLIP 触发跳过: {e}")
                 ctx.record_timing("blip_inference", (time.time() - t_blip) * 1000)
@@ -547,7 +552,7 @@ class OnlineRAGPipeline:
                     ctx.answer_gate_result = self.answer_gate.verify(
                         answer=ctx.generation_result.answer,
                         top_doc=ctx.rerank_results[0] if ctx.rerank_results else None,
-                        is_regulation=(business_type == "regulation"),
+                        is_regulation=(business_type == "regulation" or industrial_enabled()),
                         evidence_docs=ctx.rerank_results[:3],
                     )
                 ctx.record_timing("answer_gate", (time.time() - t_ag) * 1000)
@@ -573,6 +578,14 @@ class OnlineRAGPipeline:
                     return ctx.final_response
 
                 # ⑯ 输出
+                if industrial_enabled():
+                    accepted = filter_release_candidates(
+                        ctx.rerank_results[:3], config.get("knowledge_version_epoch", "default")
+                    )
+                    if len(accepted) != len(ctx.rerank_results[:3]):
+                        ctx.evidence_locked_doc_ids = []
+                        ctx.final_response = "知识证据已失效，请重新查询。"
+                        return ctx.final_response
                 ctx.final_response = ctx.generation_result.answer
 
                 # ⑰ 写入缓存
@@ -631,6 +644,9 @@ class OnlineRAGPipeline:
         principal. Never share them by bare session ID or across anonymous
         requests with unknown ownership.
         """
+        if industrial_enabled():
+            ctx.cache_hit_level = "DISABLED_RELEASE_REVALIDATION"
+            return False
         rewrite = ctx.rewrite_result
         if rewrite is None or rewrite.fallback:
             return False
@@ -1197,6 +1213,8 @@ class OnlineRAGPipeline:
 
     def _write_cache(self, ctx):
         """写入 L1/L2 缓存 — PRD §10.6 / §4.4"""
+        if industrial_enabled():
+            return
         try:
             # Image-dependent, experimental and degraded answers are not shared text-cache entries.
             if (

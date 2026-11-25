@@ -11,6 +11,7 @@ Embedding 服务模块
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 
@@ -140,11 +141,14 @@ class EmbeddingService:
         if self._qdrant_client is None:
             from qdrant_client import QdrantClient
 
+            from common.release_contract import industrial_enabled
+
             self._qdrant_client = QdrantClient(
                 host=config["qdrant"]["host"],
                 port=config["qdrant"]["port"],
                 grpc_port=config["qdrant"]["grpc_port"],
-                prefer_grpc=True,
+                prefer_grpc=not industrial_enabled(),
+                **({"api_key": os.environ["QDRANT_API_KEY"], "https": True} if industrial_enabled() else {}),
             )
             logger.info(f"Qdrant 连接完成: {config['qdrant']['host']}:{config['qdrant']['port']}")
         return self._qdrant_client
@@ -449,7 +453,18 @@ class EmbeddingService:
         collection_name = config["embedding"]["image_clip"]["collection"]
         client = self.qdrant_client
         query_vector = query_embedding.flatten().tolist()
-        payload_fields = ["doc_id", "content", "ocr_full_text", "image_uri", "role_mask", "dept_mask"]
+        payload_fields = [
+            "doc_id",
+            "image_id",
+            "content",
+            "ocr_full_text",
+            "image_uri",
+            "role_mask",
+            "dept_mask",
+            "status",
+            "doc_version_epoch",
+            "source_path",
+        ]
 
         if hasattr(client, "query_points"):
             response = client.query_points(
@@ -478,6 +493,10 @@ class EmbeddingService:
                     "image_uri": point.payload.get("image_uri", ""),
                     "score": point.score,
                     "metadata": {
+                        "image_id": point.payload.get("image_id"),
+                        "status": point.payload.get("status"),
+                        "doc_version_epoch": point.payload.get("doc_version_epoch"),
+                        "source_path": point.payload.get("source_path"),
                         "role_mask": point.payload.get("role_mask"),
                         "dept_mask": point.payload.get("dept_mask"),
                     },

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Industrial release candidate: reviewed evidence manifest, applicability and identity checks, strict session/readiness behavior, unified infrastructure errors and model asset mounts. Production acceptance remains outstanding.
+
 ### Fixed
 
 - **The real-corpus indexer no longer destroys the production Elasticsearch

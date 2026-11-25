@@ -1,6 +1,8 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
-> **架构治理（2026-11-25）**：在线唯一主线为模块化 FastAPI 单体 RAG，缓存读取在 Rewrite 后；BiEncoder/双 CE 为当前实现，在线同模型 BGE 服务复用，排序阶段是否裁剪需同语料质量与延迟消融；#155 实验候选含 CE 冷启动分数方向修复，真实校准及门控验收未完成，微服务及双 GPU 不作已上线声明。见 [架构裁决与裁剪门禁](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25)。
+> **工业发布治理（未发布候选）**：参见 [工业发布合同](docs/industrial-release-contract.md)。本分支新增外部审定证据清单、有效期/版本/权限校验、实时身份复核、严格 Redis 和 readiness、统一 503 及独立工业部署入口。功能实现不等于已完成真实数据/模型/GPU/负载/安全验收；未绑定对象版本的媒体交付和在线 BLIP 不进入工业配置。
+
+> **架构治理（2026-11-25）**：在线唯一主线为模块化 FastAPI 单体 RAG，缓存读取在 Rewrite 后；BiEncoder/双 CE 为当前实现，在线同模型 BGE 服务复用，排序阶段是否裁剪需同语料质量与延迟消融；#155 已合入 main，包含 CE 冷启动分数方向修复，真实校准及门控验收未完成，微服务及双 GPU 不作已上线声明。见 [架构裁决与裁剪门禁](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25)。
 
 
 > **Memory 专项定位（2026-11-24）**：本项目只承担 RAG 的短期会话、权限/版本化证据与上下文缓存隔离，不引入跨任务用户画像。工程补强与历史任职时间严格区分。见 [Memory 工程定位](docs/memory-engineering-positioning-20261124.md) 与 [安全回归](docs/validation/context-memory-cache-isolation-20261124.md)。

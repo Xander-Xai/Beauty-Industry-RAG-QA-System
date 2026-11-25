@@ -1,5 +1,7 @@
 # Documentation index
 
+- [工业发布合同与验收门禁](industrial-release-contract.md)：当前候选治理与明确禁止发布的边界。
+
 For the live default branch, PRs, checks and releases, start with the
 [repository lookup](../README.md#仓库状态怎么查). The evidence map identifies
 the scope of each measurement. Dated audits describe their recorded baseline.

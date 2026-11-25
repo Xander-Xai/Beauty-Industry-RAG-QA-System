@@ -30,6 +30,8 @@ from common.models import (
     RecallResult,
     RerankResult,
 )
+from common.release_contract import industrial_enabled, release_scope
+from core.exceptions import InfrastructureError
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +357,8 @@ class SessionState:
         try:
             client = _get_redis_client()
             if client is None:
+                if industrial_enabled():
+                    raise RuntimeError("Redis unavailable")
                 self._publish_redis_degraded(True)
                 return
             key = self._redis_key()
@@ -362,6 +366,8 @@ class SessionState:
         except Exception as exc:
             logger.debug("会话 Redis 持久化失败（降级内存）: %s", exc)
             self._publish_redis_degraded(True)
+            if industrial_enabled():
+                raise InfrastructureError("Session write unavailable", service="redis") from exc
 
     @staticmethod
     def _key_for(session_id: str, owner_id: str, access_scope: str) -> str:
@@ -377,7 +383,7 @@ class SessionState:
 
     @staticmethod
     def scope_fingerprint(role_mask: int, dept_mask: int, epoch: str) -> str:
-        raw = json.dumps([role_mask, dept_mask, epoch], separators=(",", ":"))
+        raw = json.dumps([role_mask, dept_mask, release_scope(epoch)], separators=(",", ":"))
         return hashlib.sha256(raw.encode()).hexdigest()
 
     @classmethod
@@ -409,6 +415,9 @@ class SessionState:
         if redis_session is not None:
             return redis_session
 
+        if industrial_enabled():
+            return cls(session_id=session_id, owner_id=owner_id, access_scope=access_scope)
+
         # Redis 不可用或未找到，使用内存存储
         with cls._sessions_lock:
             existing = cls._sessions.get(key)
@@ -429,6 +438,8 @@ class SessionState:
         try:
             client = _get_redis_client()
             if client is None:
+                if industrial_enabled():
+                    raise RuntimeError("Redis unavailable")
                 cls._publish_redis_degraded(True)
                 return None
             redis_key = f"session:{cls._key_for(session_id, owner_id, access_scope)}"
@@ -457,6 +468,8 @@ class SessionState:
         except Exception as exc:
             logger.debug("Redis 会话读取失败，降级内存: %s", exc)
             cls._publish_redis_degraded(True)
+            if industrial_enabled():
+                raise InfrastructureError("Session read unavailable", service="redis") from exc
             return None
 
     @classmethod

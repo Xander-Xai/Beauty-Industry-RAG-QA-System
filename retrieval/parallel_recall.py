@@ -244,6 +244,7 @@ class ParallelRecallManager:
             (list[RecallResult], retrieval_agreement_score)
         """
         from auth.bitmask_rbac import build_qdrant_filter, build_qdrant_image_filter
+        from common.release_contract import current_manifest, filter_release_candidates, industrial_enabled
 
         # None means "use the canonical full topology".  A caller-supplied
         # mapping is instead the topology for *this request*: omitted paths are
@@ -253,6 +254,8 @@ class ParallelRecallManager:
             top_k_per_path = config["retrieval"]["parallel_paths"]
 
         active_epoch = config.get("knowledge_version_epoch", "default")
+        if industrial_enabled():
+            current_manifest(active_epoch)
         qdrant_filter = build_qdrant_filter(user_role_mask, user_dept_mask, active_epoch)
         image_qdrant_filter = build_qdrant_image_filter(user_role_mask, user_dept_mask, active_epoch)
 
@@ -318,6 +321,7 @@ class ParallelRecallManager:
                         # 授权过滤前的命中数，用于区分「无命中」与「全部被权限过滤」。
                         clip_pre_filter_hits["clip_visual"] = len(results)
                     results = self._apply_rbac_filter(results, user_role_mask, user_dept_mask)
+                    results = filter_release_candidates(results, active_epoch)
                     path_results[path_name] = results
                     all_results.extend(results)
                     logger.info(f"召回路 [{path_name}] 返回 {len(results)} 条结果")
@@ -395,6 +399,7 @@ class ParallelRecallManager:
             logger.info(f"召回有效文档数 {len(all_doc_ids)} < {FALLBACK_MIN_DOC_IDS}，触发 ES Fallback")
             try:
                 fallback_results = self._recall_es_fallback(query, user_role_mask, user_dept_mask, top_k_per_path)
+                fallback_results = filter_release_candidates(fallback_results, active_epoch)
                 if fallback_results:
                     all_results.extend(fallback_results)
                     logger.info(f"ES Fallback 补充召回 {len(fallback_results)} 条")
