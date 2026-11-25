@@ -23,12 +23,30 @@ including failures; do not fill absent timings with zero. Treat this as a
 declared nearest-rank P95, not independently verified performance.
 
 ```bash
+python -m tests.evaluation.paired_answer_manifest --arm baseline \
+  --run-id <unique-run-id> --dataset /private/gold.jsonl \
+  --observations /private/baseline.jsonl --out /private/baseline-manifest.json \
+  --git-sha <40-hex> --knowledge-epoch <explicit-epoch> \
+  --corpus-sha256 <64-hex> --model-assets-sha256 <64-hex> \
+  --retrieval-contract-sha256 <64-hex> --permissions-sha256 <64-hex> \
+  --workload-sha256 <64-hex> --runtime-config-sha256 <64-hex> \
+  --review-protocol-sha256 <64-hex> --evidence-gate-policy-sha256 <64-hex>
+
 python -m tests.evaluation.paired_answer_eval --dataset /private/gold.jsonl \
   --baseline /private/baseline.jsonl --candidate /private/candidate.jsonl \
   --baseline-manifest /private/baseline-manifest.json \
   --candidate-manifest /private/candidate-manifest.json \
   --out /private/new-paired-report.json
 ```
+
+The manifest builder derives `dataset_sha256`, `observations_sha256`, `git_sha`
+and `knowledge_epoch` from the artifacts and the repository, and requires the
+remaining digests to be declared explicitly — it never guesses a digest. It
+refuses a `default` knowledge epoch, a malformed or missing declared digest, a
+missing artifact and an empty run identity, and it writes with exclusive
+creation so an already declared manifest is never silently replaced. A hand
+written manifest remains acceptable: the builder removes the transcription
+footgun, it does not authenticate the declarations.
 
 Incomplete observations retain planned bounds and missing IDs, suppress
 aggregate deltas, and exit 1. Invalid input exits 2; complete diagnostic
