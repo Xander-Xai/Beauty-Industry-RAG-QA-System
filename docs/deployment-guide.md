@@ -14,6 +14,8 @@
 
 canonical 部署形态是 Docker Compose + FastAPI 单体。Kubernetes、Kafka、GraphRAG 与 Multi-Agent **不是**上线前置条件；如需引入，属于独立的架构变更，不能由本手册的上线检查默认视为已具备。
 
+仓库还提供单机单 worker 的 fail-closed 工业 Compose profile（`docker-compose.industrial.yml`），用于显式配置受控证据 manifest、实时身份复核和严格依赖准入。它是**已实现并经 exact-head CI 验证的候选部署合同**，不是已运行的生产环境；真实审定语料、模型权重、外部依赖故障注入、数据恢复及负载验收仍为 `PENDING`。部署前必须阅读[工业发布合同](industrial-release-contract.md)，不得将普通开发 Compose 当作工业 profile。
+
 > **微服务 Compose 不是可上线形态，不要对外暴露其 Gateway。**
 > `docker-compose.microservices.yml` 现将所有实验组件放入 `experimental-microservices` profile，且不发布任何实验组件的宿主机端口。仅在隔离的开发环境显式启用，使用容器内部网络检查；不要接入真实数据、反向代理或外部流量。该组件的
 > 鉴权边界并不完整：只有 `generation.py` 的路由校验用户身份；`retrieval.py` /

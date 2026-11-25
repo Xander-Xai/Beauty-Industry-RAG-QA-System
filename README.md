@@ -1,6 +1,6 @@
 # 化妆品行业 RAG 问答系统 · Cosmetics Industry RAG QA System
 
-> **工业发布治理（未发布候选）**：参见 [工业发布合同](docs/industrial-release-contract.md)。本分支新增外部审定证据清单、有效期/版本/权限校验、实时身份复核、严格 Redis 和 readiness、统一 503 及独立工业部署入口。功能实现不等于已完成真实数据/模型/GPU/负载/安全验收；未绑定对象版本的媒体交付和在线 BLIP 不进入工业配置。
+> **工业发布治理（代码已合入 main；真实发布验收未完成）**：参见 [工业发布合同](docs/industrial-release-contract.md)。当前主线实现外部审定证据清单、有效期/版本/权限校验、实时身份复核、严格 Redis 和 readiness、统一 503 及独立工业 Compose 入口。代码与 CI 通过不等于真实数据/模型/GPU/负载/安全验收；未绑定对象版本的媒体交付和在线 BLIP 不进入工业配置。
 
 > **架构治理（2026-11-25）**：在线唯一主线为模块化 FastAPI 单体 RAG，缓存读取在 Rewrite 后；BiEncoder/双 CE 为当前实现，在线同模型 BGE 服务复用，排序阶段是否裁剪需同语料质量与延迟消融；#155 已合入 main，包含 CE 冷启动分数方向修复，真实校准及门控验收未完成，微服务及双 GPU 不作已上线声明。见 [架构裁决与裁剪门禁](docs/architecture-baseline.md#architecture-decision-freeze--2026-11-25)。
 
@@ -74,7 +74,7 @@
 | 1 | **这是干什么的** | 把法规 / 成分 / 产品知识建成可检索资产，在线回答带引用的领域问题，证据不足就拒答 | [Architecture](#architecture) |
 | 2 | **解决什么业务问题** | 知识散在 PDF、图片、表格里，人工检索慢且回答容易编造；不同角色该看到的内容也不同 | [Problem](#problem) · [Key Features](#key-features) |
 | 3 | **核心架构** | FastAPI 单体主链路；动态 2–4 路召回 + 加权 RRF、BiEncoder/CrossEncoder 两级重排、Evidence Gate + Answer Gate 双门控、4B/14B 路由 | [Architecture](#architecture) · [docs/architecture-baseline.md](docs/architecture-baseline.md) |
-| 4 | **企业工程化** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook、Docker Compose + Kubernetes 双形态 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) |
+| 4 | **企业工程化** | RS256 认证 + uint32 位掩码 RBAC（存储下推 + 融合前二次过滤 + 缓存物理分区）、结构化业务动作审计、Prometheus 指标与告警规则、SLO/故障 Runbook；Docker Compose 是 canonical 部署，Kubernetes 仅有静态验证契约 | [docs/operations-guide.md](docs/operations-guide.md) · [docs/slo-runbook.md](docs/slo-runbook.md) · [Kubernetes 边界](docs/deployment-guide-k8s.md) |
 | 5 | **怎么跑** | `pip install -r requirements.txt && cp .env.example .env && python3 app.py` → `http://localhost:8000/docs` | [Quick Start](#quick-start) |
 | 6 | **检索怎么做的、为什么这么做** | 动态 2–4 路 → 单入口加权 RRF → 两级重排 → 双 Gate；含「为什么不用微调 / 为什么 Hybrid / 为什么 Rerank」的设计取舍 | [Retrieval Pipeline](#retrieval-pipeline) |
 | 7 | **效果怎么评估** | 评测框架已实现（检索指标 + RAGAS + 性能产物契约）。**Real Corpus V1（27 条具名签署金标 + 两份已审批来源 + 真实 ES 8.11.0）已产出一次正式 BM25 结果，逐样本证据已提交、可离线复算**；Dense / Hybrid、RAGAS 质量分、性能产物与**旧版 301 条数据集**仍为 `PENDING` | [Evaluation](#evaluation) |
