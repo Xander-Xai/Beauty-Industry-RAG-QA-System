@@ -341,26 +341,31 @@ Consequences, each of which is a boundary and not a goal:
    is a single local host. `scripts/check_repo_consistency.py` rejects the erasure and the
    repository-level contradiction.
 
-## Known frontend dependency advisories (disclosed, not gating)
+## Frontend dependency advisory snapshot — 2026-11-25
 
-`npm ci` in `frontend/` currently reports 4 advisories: 1 moderate
-(`baseline-browser-mapping`) and 3 high (`browserslist`, `nanoid`, `postcss`).
+An earlier lockfile snapshot reported four transitive build-toolchain advisories:
+1 moderate (`baseline-browser-mapping`) and 3 high (`browserslist`, `nanoid`,
+`postcss`). The lockfile was refreshed in [PR #164](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/164)
+(PostCSS and transitive packages), [PR #166](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/166)
+(Vite), and [PR #167](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/pull/167)
+(Browserslist and Baseline Browser Mapping). Each passed its exact-head required
+build, tests, lint, dependency scan and secret scan. PR #165 was closed as
+redundant after #164 refreshed its source-map-js dependency; PR #168 was closed
+as redundant after #167 refreshed Baseline Browser Mapping.
 
-Scope, stated precisely:
+The current `main` SHA `a928c9f69d9a32e13da1cbe63329ad160413bbe2` passed
+`npm ci`, `npm run build`, and `npm audit` with **zero reported vulnerabilities**
+in Actions run [45619395171](https://github.com/Xander-Xai/Beauty-Industry-RAG-QA-System/actions/runs/45619395171).
+The live Dependabot alert list has no frontend alerts. One earlier rebased PR run
+reported an advisory against `browserslist <=4.28.6` despite locking `4.29.6`;
+the exact-main rerun supersedes that finding. Reproduce locally with
+`cd frontend && npm ci && npm audit`. The audit step remains non-gating because
+the registry quick-audit endpoint has previously returned HTTP 400.
 
-- All four are **transitive** build-toolchain dependencies reached through
-  `vite`. None is declared in `frontend/package.json`.
-- They are build-time tooling, not code the browser executes as application
-  logic. `postcss` and `browserslist` run at build time; `nanoid` and
-  `baseline-browser-mapping` are transitive build-tool dependencies.
-- This is therefore **not** a claim of a production runtime vulnerability, and
-  not a claim of safety either.
-
-Why it is not a merge gate: the registry's quick-audit endpoint is deprecated
-and currently returns HTTP 400, so gating on it would produce a flaky red build
-rather than a real signal. CI reports the advisories as a non-blocking step so
-they stay visible. Remediation (a lockfile refresh plus a verified frontend
-build) is open work, not something this reconciliation silently performed.
+These are build-time dependencies, not code the browser executes as application
+logic. Dependabot alerts and security update PRs remain enabled; use the live
+security dashboard for current findings rather than treating this dated snapshot
+as a permanent inventory.
 
 ## Enterprise readiness: four layers kept separate
 

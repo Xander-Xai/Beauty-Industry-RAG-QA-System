@@ -103,6 +103,25 @@ flowchart TB
     VLLM["vLLM endpoints<br/>gpu1.models.vllm_4b · gpu0.models.gen_14b"]
   end
 
+  subgraph EVALUATION["离线评测 — 不在在线请求路径"]
+    direction LR
+    EVAL["检索 / 答案评测工具<br/>benchmarks/ · tests/evaluation/"]
+    EVIDENCE["带来源与环境的评测证据<br/>BM25 已有指定范围结果；Dense / Hybrid / RAGAS 待验证"]
+    EVAL --> EVIDENCE
+  end
+
+  subgraph OBSERVABILITY["可观测性配置 — 需外部运行环境"]
+    direction LR
+    METRICS["/api/metrics"]
+    PROM["外部 Prometheus / 告警规则"]
+    GRAFANA["Grafana dashboard JSON"]
+    OTEL["可选 OTLP exporter<br/>默认关闭；运行期验证未完成"]
+    TRACE["外部 OTLP collector / trace backend"]
+    METRICS --> PROM
+    PROM --> GRAFANA
+    OTEL -.-> TRACE
+  end
+
   FE --> AUTH
   REC --> QD
   REC --> ES
@@ -110,14 +129,16 @@ flowchart TB
   AUTH --> RD
   GEN --> VLLM
   OUT -->|"结构化审计"| RD
-  OUT -.->|"rag_* metrics"| METRICS["/api/metrics<br/>外部 Prometheus 抓取"]
+  OUT -.->|"rag_* metrics"| METRICS
 
   PROC -.->|"BGE / CLIP 向量"| QD
   WRITE -.->|"文本 + mapping"| ES
   SEAL -.->|"不可变 epoch"| QD
+  EVAL -->|"真实执行器复用检索链路"| REC
+  API -.->|"可选 span hooks"| OTEL
 ```
 
-读图约定：`CACHE`/`AUTH`/`OUT` 指向 Redis 的边表示**状态依赖**（会话、L2 缓存、限流计数、审计流），不是独立服务调用；`OUT` 的 `rag_* metrics` 只落在 `MetricsCollector` 并由 `/api/metrics` 暴露给外部 Prometheus（图中 `METRICS` 节点），不写入 Qdrant/Elasticsearch/vLLM。`OFFLINE` 到存储的虚线表示**离线写入**方向，与在线召回互不依赖。`vLLM endpoints` 是配置里的两个端点键，其真实 GPU 部署为 `PENDING`。`/api/continuation` 当前是返回空答案的 stub（见 [user guide](user-guide.md)），不在本链路内。
+读图约定：`CACHE`/`AUTH`/`OUT` 指向 Redis 的边表示**状态依赖**（会话、L2 缓存、限流计数、审计流），不是独立服务调用；`OUT` 的 `rag_* metrics` 只落在 `MetricsCollector` 并由 `/api/metrics` 暴露给外部 Prometheus，不写入 Qdrant/Elasticsearch/vLLM。Prometheus、Grafana 与 OTLP backend 是外部/可选依赖；此图不表示它们在本仓库中默认运行或已完成闭环。评测工具为离线路径，只有显式 benchmark 执行器会调用真实检索代码。`OFFLINE` 到存储的虚线表示**离线写入**方向，与在线召回互不依赖。`vLLM endpoints` 是配置里的两个端点键，其真实 GPU 部署为 `PENDING`。`/api/continuation` 当前是返回空答案的 stub（见 [user guide](user-guide.md)），不在本链路内。
 
 默认联调入口是 FastAPI 单体后端和 React 前端。仓库中的微服务目录（`api-gateway/`、`retrieval-service/`、`generation-service/`、`monitoring-service/`、`cache-service/`、`rewrite-service/`）属于保留能力，尚不能替代当前单体主线来回答“现有系统架构”，也不代表已与当前前端完成端到端生产验证。
 

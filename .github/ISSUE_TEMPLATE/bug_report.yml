@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible defect in this repository.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, private corpora, customer data, or vulnerability details. Use SECURITY.md for security reports.
+  - type: input
+    id: version
+    attributes:
+      label: Commit or release
+      description: Provide the commit SHA or release tag.
+      placeholder: main SHA or v2.4.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest reproducible sequence and relevant configuration keys (redact values).
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs and checks
+      description: Add exact commands and redacted output, or state what could not be run.
+    validations:
+      required: false

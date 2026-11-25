@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a scoped improvement to the reference implementation.
+title: "feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Keep proposals aligned with the modular-monolith architecture freeze and current evidence boundaries.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and intended user
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful scope and relevant alternatives.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance and verification
+      description: Include behavior, tests, documentation and any external requirements.
+    validations:
+      required: true

@@ -1,212 +1,84 @@
 # Documentation index
 
-- [工业发布合同与验收门禁](industrial-release-contract.md)：当前候选治理与明确禁止发布的边界。
-
-For the live default branch, PRs, checks and releases, start with the
-[repository lookup](../README.md#仓库状态怎么查). The evidence map identifies
-the scope of each measurement. Dated audits describe their recorded baseline.
+Start with the [project README](../README.md) for setup, architecture, evaluation and status. This index maps canonical references; the [evidence map](evidence-map.md) owns capability evidence, the [architecture baseline](architecture-baseline.md) owns the current runtime architecture, and dated validation records own their recorded run results.
 
 ## Version labelling
 
-Canonical runtime version is `config.json` → `system.version` = `2.4.0`; the newest dated
-release heading in `CHANGELOG.md` is `[2.4.0]` (2026-10-08) and everything after it is
-recorded under `[Unreleased]`.
-
-Where a doc or filename says **v2.5**, that is a **historical working milestone /
-development-phase label**, not a release and not the current runtime version — see
-[Version policy](repository-truth-audit.md#version-policy). Files are not renamed to avoid
-breaking existing links.
+The canonical runtime version is `config.json` → `system.version` = `2.4.0`; the latest dated changelog release and current GitHub release are `[2.4.0]` / `v2.4.0`. Changes after that release remain under `[Unreleased]`. `v2.5` in filenames or documents is a historical working-milestone label, not a release; see [version policy](repository-truth-audit.md#version-policy).
 
 ## Evidence vocabulary
 
-One canonical taxonomy classifies every evidence claim in the current documentation:
-[Classification vocabulary](evidence-map.md#classification-vocabulary). That
-table is the single source; this index does not extend it.
+The [classification vocabulary](evidence-map.md#classification-vocabulary) is the single source of truth. This index repeats its exact inventory for quick reference:
 
-- `HISTORICAL_PRODUCTION` — legacy classification name retained for compatibility only. No third-party production facts are published under it in this repository; see [`DATA_PROVENANCE.md`](../DATA_PROVENANCE.md).
-- `HISTORICAL` — a superseded in-repository implementation/config/design kept for lineage.
-- `REPO_VERIFIED` — implemented here and covered by collected deterministic tests or CI.
-- `LOCAL_REAL_VALIDATION` — exercised here against a real dependency on one local host.
-- `DESIGN_TARGET` — a recorded PRD/plan target with no implementation or reproducible benchmark.
-- `PENDING` — implemented but the real asset/runtime/credential needed to validate it is missing here.
+- `HISTORICAL_PRODUCTION` — legacy classification name retained for compatibility only; no third-party production facts are published under it.
+- `HISTORICAL` — superseded in-repository implementation, configuration or design retained for lineage.
+- `REPO_VERIFIED` — implemented here and covered by deterministic tests or CI.
+- `LOCAL_REAL_VALIDATION` — exercised against a real dependency on one local host.
+- `DESIGN_TARGET` — recorded target/design without a reproducible benchmark.
+- `PENDING` — real asset, runtime or credential required for validation is not available here.
 
-`PARTIAL`, `EXECUTED`, `BLOCKED`, `PASS` and `NOT RUN` are **run outcomes**, not evidence
-levels; see [Run outcomes that are not evidence levels](evidence-map.md#run-outcomes-that-are-not-evidence-levels).
+`PARTIAL`, `EXECUTED`, `BLOCKED`, `PASS`, `NOT RUN` and `NOT EXECUTED` are run outcomes, not evidence levels; see [run outcomes](evidence-map.md#run-outcomes-that-are-not-evidence-levels).
 
 ## Canonical / Current
 
-- [Project overview and quick start](../README.md)
-- [Data provenance and non-affiliation statement](../DATA_PROVENANCE.md): the per-file
-  provenance of every data asset shipped in this repository, the synthetic-data boundary,
-  the sensitive-data audit result, and the history-accessibility caveat. Backed by the
-  machine-readable [`DATA_MANIFEST.json`](../DATA_MANIFEST.json) and enforced by
-  `scripts/check_public_repository_boundary.py`.
-- [Data review backlog](finalization/DATA_REVIEW_BACKLOG.md): material whose licence
-  provenance or technical correctness cannot be confirmed automatically — currently open.
-- [Deployment guide](deployment-guide.md)
-- [Kubernetes deployment contract](deployment-guide-k8s.md): the minimal second deployment form
-  (`deploy/k8s/`, one workload — the FastAPI monolith, not the `api-gateway/` component).
-  Manifests are `REPO_VERIFIED` by static check only; any
-  real cluster deployment is `PENDING`. Docker Compose remains the canonical form.
-- [User guide](user-guide.md)
-- [Operations guide](operations-guide.md)
-- [Data administration guide](data-admin-guide.md)
-- [Repository truth audit](repository-truth-audit.md)
-- [Final canonical-runtime consistency audit](final-canonical-runtime-audit.md): the post-merge
-  re-verification of architecture, generation topology, evidence taxonomy, historical scale and
-  evidence boundaries against the code and config, with a claim/source/code-evidence/classification
-  table. It is an audit record, not a new capability source, and it promotes no evidence.
-- [Repository metadata packet](repository-metadata.md): the intended GitHub About configuration
-  (description, 20 topics, homepage policy, social preview) and the rules it must obey — no
-  homepage that points at a deployment that does not exist, and nothing in the metadata that
-  outruns the evidence.
-- [Security regression coverage](security-regression-coverage.md): the fixed threat list
-  (retrieved-chunk injection, poisoned documents, forged boundary markers, cross-role
-  retrieval and L2 cache leakage, malformed JWT claims, deletion/stale chunks), the control
-  and test behind each, and the bounded gaps that remain open.
-- [Production readiness](production-readiness.md): the per-capability answer to "can this take
-  real traffic" — code status separated from real-environment status, each with the named
-  artifact that would promote it. Owns the condensed
-  [Production Readiness](../README.md#production-readiness) table, the fail-closed degradation
-  property under absent rerank weights, and the concrete boundary of the six retained
-  microservice components.
-- [Open-source configuration and hardcoding audit](open-source-hardcoding-audit.md)
-- [Main-branch governance](main-branch-governance.md): the branch-protection and PR-only
-  merge policy, how it is applied and re-verified.
-- [Repository drift report](repository-drift-report.md): the point-in-time documentation
-  truth audit that recorded and resolved the P0/P1 conflicts across the canonical documents.
-- [Pre-launch checklist](pre-launch-checklist.md)
+### Getting started and operation
 
-## Evaluation
+- [Project overview and Quick Start](../README.md)
+- [User guide](user-guide.md) · [Operations guide](operations-guide.md) · [Deployment guide](deployment-guide.md)
+- [Kubernetes deployment contract](deployment-guide-k8s.md): static contract only; Docker Compose remains canonical and a real cluster run is pending.
+- [Data administration guide](data-admin-guide.md) · [Industrial release contract](industrial-release-contract.md)
+- [Configuration](../config.json) · [Environment variable template](../.env.example) · [API models](../api/models.py)
+- [Data provenance and non-affiliation boundary](../DATA_PROVENANCE.md), backed by [`DATA_MANIFEST.json`](../DATA_MANIFEST.json) and the public-boundary checker.
+- [Pre-launch checklist](pre-launch-checklist.md) · [SLO and incident runbook](slo-runbook.md)
+- [Demo capture guide](demo/README.md): generated interface image uses synthetic mock data, not the real API.
 
-- [RAGAS evaluation guide](ragas-evaluation-guide.md): offline quality-evaluation harness,
-  golden set, reporter and CI boundary.
-- [Retrieval benchmark artifact contract](../artifacts/benchmarks/README.md): the six-file
-  run contract, the wired `--executor real` production adapters, what `BLOCKED` means, and
-  the published evidence package that replaces a raw artifact on disk.
-- [Benchmark data quality](benchmark-data-quality.md): measured golden-set field coverage and the
-  buckets the retrieval benchmark deliberately does not produce.
-- [Real Corpus V1 正式 BM25 运行报告](validation/real-v1-approved-bm25-run.md) ·
-  [中文分词 A/B](validation/chinese-analyzer-ab.md) ·
-  [生产索引与 epoch 治理](validation/production-index-governance.md): the result, the
-  analyzer comparison and the production-index boundary for the Real Corpus V1 scope.
+### Architecture, security and evidence
 
-Retrieval benchmark framework: `REPO_VERIFIED` (deterministic metrics, provenance,
-artifact contract, covered by tests).
-Retrieval benchmark result: `LOCAL_REAL_VALIDATION` for the **Real Corpus V1 BM25**
-scope (27 human-signed records, two approved sources, real Elasticsearch 8.11.0,
-`results_are_benchmark=true`, per-sample evidence recomputable offline); `PENDING`
-for Dense / Hybrid, for the legacy 301-row dataset, and for every other benchmark
-family in this repository.
+- [Architecture baseline](architecture-baseline.md): canonical online and offline flow and architecture decision freeze.
+- [Evidence map](evidence-map.md): canonical taxonomy, capability evidence and benchmark publication criteria.
+- [Repository truth audit](repository-truth-audit.md) · [Production readiness](production-readiness.md)
+- [Security regression coverage](security-regression-coverage.md) · [Security policy](../SECURITY.md)
+- [Main-branch governance](main-branch-governance.md) · [Repository metadata record](repository-metadata.md)
+- [Open-source project reference notes](open-source-project-references-2026-11-25.md)
+- [Open-source hardcoding audit](open-source-hardcoding-audit.md) · [Repository drift audit](repository-drift-report.md) · [Canonical runtime audit](final-canonical-runtime-audit.md)
+- [Agent V1 acceptance scope](agent-v1-acceptance.md): implementation/evidence scope, not a production acceptance report.
 
-### Finalization closeout
+### Evaluation
 
-- [Final engineering audit](finalization/FINAL_ENGINEERING_AUDIT.md): the seven false-claim/
-  permission defects found and fixed in the closeout, the items deliberately not changed,
-  and the residual risks.
-- [Acceptance matrix](finalization/ACCEPTANCE_MATRIX.md): every check with its evidence path,
-  command and result, and the `PASS_*` / `BLOCKED_EXTERNAL` / `NEEDS_HUMAN` verdict per item.
-- [Reproducible evaluation](finalization/REPRODUCIBLE_EVALUATION.md): data prep, annotation
-  spec, model prep, commands and artifact formats.
-- [Evidence manifest](finalization/EVIDENCE_MANIFEST.md): capability → source → test → CI →
-  artifact → evidence level.
-- [Human annotation work package](../tests/evaluation/golden_set_v2/ANNOTATION_WORKPACKAGE.md):
-  the 70-row category-balanced worksheet (in-repo: `tests/evaluation/golden_set_v2/`).
+- [RAGAS evaluation guide](ragas-evaluation-guide.md) · [Benchmark data quality](benchmark-data-quality.md)
+- [Retrieval benchmark artifact contract](../artifacts/benchmarks/README.md) · [Performance artifact contract](../artifacts/performance/README.md)
+- [Real Corpus V1 approved BM25 run](validation/real-v1-approved-bm25-run.md) · [Chinese analyzer comparison](validation/chinese-analyzer-ab.md)
+- [RAG evaluation readiness](validation/rag-eval-readiness.md) · [Reviewed answer evaluation](validation/paired-reviewed-answer-eval.md)
+- [Reviewed answer evaluation details](validation/reviewed-answer-eval.md) · [Retrieval failure triage](validation/retrieval-failure-triage.md)
+- [Strict retrieval suite](validation/strict-retrieval-suite-20261124.md) · [Strict rerank experiment](validation/strict-rerank-experiment-20261124.md)
+- [Dense experiment builder](validation/approved-dense-experiment-builder-20261124.md) · [Dense corpus parity](validation/dense-corpus-parity-20261124.md)
+- [Strict RAGAS pipeline](validation/strict-ragas-pipeline-20261124.md) · [RAGAS result aggregation](validation/ragas-result-aggregation-20261124.md)
+- [Paired ranking regression](validation/real-v1-paired-ranking-regression-20261124.md) · [Source approval and snapshot integrity](validation/source-approval-snapshot-integrity.md)
 
-## Operations / Observability
+### Validation and operations
 
-- [SLO and incident runbook](slo-runbook.md): five objectives (all `DESIGN_TARGET`) plus
-  alert → diagnosis → mitigation → rollback procedures for Redis, Elasticsearch, Qdrant,
-  model endpoints, latency, error rate and knowledge-epoch release.
-- [Prometheus alert rules](../monitoring/prometheus/alerts.yml): six alerts over metrics this
-  application actually emits. Every threshold is a `DESIGN_TARGET`.
-- [OTLP exporter](../monitoring/otel_exporter.py) and the
-  [optional observability overlay](../docker-compose.observability.yml): opt-in span export plus a
-  Prometheus/Jaeger/Grafana stack. The canonical deployment does not start any of it.
-- [Performance evidence artifact contract](../artifacts/performance/README.md): seven-file run
-  contract where *not executed* is never recorded as zero.
+- [Deferred runtime validation index](deferred-runtime-validation.md): external assets, required environment, command and evidence-promotion criteria.
+- [Real RAGAS evaluation status](validation/real-ragas-evaluation.md) · [Qdrant local validation](validation/qdrant-local-real-validation.md)
+- [Context-memory/cache isolation](validation/context-memory-cache-isolation-20261124.md) · [Strict backend failure behavior](validation/strict-backend-failures-20261124.md)
+- [Runtime/security validation snapshot](validation/v2.5-runtime-security-validation.md): `v2.5` is a historical working label, not a release.
+- [Real corpus pre-review](validation/real-corpus-v1-pre-review.md) · [Real RAG evaluation bootstrap](validation/real-rag-evaluation-bootstrap.md)
+- [Earlier BM25 run snapshot](validation/real-v1-bm25-run.md) · [Production-index governance](validation/production-index-governance.md)
+- Each dated validation record is scoped to its stated data and environment; it does not override the current architecture or evidence map.
 
-Performance artifact framework: `REPO_VERIFIED`.
-Performance result, alerting validated in production, and OTLP runtime closed loop: `PENDING`.
+### Governance snapshots and backlog
 
-## Validation
-
-- [v2.5 working-milestone runtime/security validation](validation/v2.5-runtime-security-validation.md):
-  Redis multi-worker, trusted proxy, authenticated Elasticsearch and Prometheus evidence.
-  (`v2.5` is a working-milestone label, not a release.)
-- [Real RAGAS evaluation](validation/real-ragas-evaluation.md): evaluator dependency
-  isolation, correctness fixes, and the real-evaluation blockers.
-- [Real Qdrant store validation](validation/qdrant-local-real-validation.md): a single-host
-  run against a real Qdrant server (`VAL-STORE-001`) covering epoch point ids, payload
-  filters, RBAC re-filter, text+image RRF merge and Qdrant-down degradation, with
-  deterministic vectors (not BGE/CLIP).
-- [RAG evaluation readiness](validation/rag-eval-readiness.md): the golden-set v2 contract
-  coverage (0/301 valid), the answer-level harness, and the exact reason Hit@5/NDCG@10
-  ablation A–E, answer-quality metrics and QPS are `BLOCKED` here — with the environment
-  checklist that would promote them.
-- [Real corpus V1 正式 BM25 运行报告](validation/real-v1-approved-bm25-run.md): the first
-  retrieval result in this repository that cleared **every** publication gate — 27
-  human-signed records, two approved sources, 212/212 documents source-verified,
-  real Elasticsearch 8.11.0, `results_are_benchmark=true`. It also carries the
-  **stage-baseline freeze declaration** for Real Corpus V1.
-- [中文分词 A/B（standard / smartcn / ik_smart）](validation/chinese-analyzer-ab.md): a
-  single-variable comparison on one isolated ES node — same chunk ids, same
-  provenance, same epoch, only the declared analyzer changes. SmartCN Recall@10
-  0.7037 → 0.9259, IK → 0.9630, zero regressions, with the Recall@1 regression and
-  the unfixed sample recorded rather than smoothed over.
-- [生产索引与 epoch 治理](validation/production-index-governance.md): the read-only
-  finding that the production index holds the right content with the wrong
-  provenance, the epoch-binding defect and its fix, the non-destructive blue-green
-  migration plan, and the five conditions kept apart (approved ≠ activatable ≠
-  benchmarkable ≠ production-ready ≠ a current regulatory basis).
-- [Real corpus V1 pre-review report](validation/real-corpus-v1-pre-review.md): the
-  index-rebuild safety contract, the corrected source-trust classification, the 27+3
-  review worksheets, the exploratory-BM25 boundary (cold vs steady latency) and the
-  exact human actions still outstanding. No label is promoted by it.
-- [Deferred runtime validation index](deferred-runtime-validation.md): the single
-  index of every runtime validation, each with its required environment, procedure,
-  expected artifact and evidence-promotion rule. `VAL-DEGRADE-001` and `VAL-STORE-001`
-  are executed; the rest are `NOT EXECUTED`.
+- [Finalization index](finalization/README.md): [engineering audit](finalization/FINAL_ENGINEERING_AUDIT.md) · [acceptance matrix](finalization/ACCEPTANCE_MATRIX.md) · [evidence manifest](finalization/EVIDENCE_MANIFEST.md) · [reproducible evaluation](finalization/REPRODUCIBLE_EVALUATION.md) · [governance report](finalization/GOVERNANCE_REPORT.md) · [data review backlog](finalization/DATA_REVIEW_BACKLOG.md)
 
 ## Architecture & Evidence Truth
 
-- [Architecture baseline](architecture-baseline.md): the current
-  end-to-end retrieval/generation contract the code can be held to.
-- [Evidence map](evidence-map.md): the canonical evidence vocabulary
-  and the classification of every claim. This map owns the taxonomy; the truth audit's
-  `Status` column and the validation records' `Evidence level` columns use the same
-  levels.
+The [architecture baseline](architecture-baseline.md) is the canonical runtime diagram and architecture description. The [evidence map](evidence-map.md) is the canonical capability/evidence classification; validation records are scoped to their named data, model and environment.
 
 ## Design
 
-- [PRD](../PRD.md): product and architecture design. It records goals and target design as
-  well as implemented capabilities; the runtime reconciliation table at the top separates
-  current implementation from historical/target design.
+- [Product requirements and architecture design](../PRD.md): goals and targets are labelled separately from current implementation.
 
 ## Historical / Implementation Plans
 
-Historical documentation lives under [`docs/archive/`](archive/README.md) and nowhere else.
-Every Markdown file under `docs/` is exactly one of two things:
+Any Markdown retained as historical documentation belongs under [`docs/archive/`](archive/README.md), begins with a historical-status banner and is not a source for current capability, architecture, metric or validation claims. Current documentation and dated validation records remain in their canonical folders. The former `docs/superpowers/` files are not present in the current tree; Git history is the only remaining source for them.
 
-- **current/canonical**, listed in this index above and held to the repository
-  consistency guard, or
-- **historical**, under `docs/archive/`, whose opening lines mark it as
-  historical and state that it is not a source for current capability,
-  architecture, metric or validation claims.
-
-`docs/demo/` is current/canonical but holds a generated demo, not a prose guide, so it
-is indexed as a single entry rather than file by file: see
-[the demo README](demo/README.md).
-
-The former `docs/superpowers/` directory was removed from the current branch and
-nothing replaced it; its files remain retrievable from this repository's Git
-history, which is their only archive.
-
-- [Repository truth audit](repository-truth-audit.md) and the canonical guides above are the
-  only sources for the current repository state.
-
-Historical plan ≠ current implementation status, and a plan that has been executed is not a
-current capability statement. When a historical plan and a current document disagree, the
-current document wins: [architecture baseline](architecture-baseline.md),
-[evidence map](evidence-map.md) and the [repository truth
-audit](repository-truth-audit.md).
+When documents disagree, current code/configuration and the canonical [architecture baseline](architecture-baseline.md), [evidence map](evidence-map.md) and [repository truth audit](repository-truth-audit.md) take precedence over historical snapshots.
