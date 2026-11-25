@@ -1,28 +1,26 @@
-# Isolated evaluator environment for real RAGAS runs. NOT part of the default
-# runtime requirements and must never be installed into the production image.
+# Historical isolated evaluator dependency set. It is NOT part of default runtime
+# requirements and must never be installed into the production image. The current
+# dependency set is not security-admitted; do not provide evaluator credentials or
+# real business data until the exact resolved environment passes pip-audit.
 #
-# Why this file exists: the currently resolvable RAGAS releases are not safe to
-# promote to default requirements.
-#   - ragas 0.4.x (latest) is import-broken: ragas/llms/base.py imports
-#     langchain_community.chat_models.vertexai, which langchain-community 0.4
-#     removed. `pip check` is clean yet `import ragas` raises ModuleNotFoundError.
-#   - ragas 0.2.x imports cleanly but pulls langchain 0.3.x, which carries
-#     advisories whose only fixes are in langchain 1.x (incompatible with
-#     ragas 0.2.x). ragas 0.2.15 itself has PYSEC-2026-3046 (no fix) and
-#     PYSEC-2026-3047 (fix 0.3.0rc1).
+# As of 2026-11-25, upstream stable RAGAS is v0.4.4. It fixes the v0.4.3
+# import failure and GHSA-95ww-475f-pr4f / CVE-2026-6587 (affected <=0.4.3).
+# A disposable Python 3.11 candidate environment passed pip check and imported
+# the project-used metrics, but pip-audit still reports diskcache 5.6.3 /
+# PYSEC-2026-2447 (CVE-2025-69872): pickle deserialization, affected <=5.6.3,
+# with no upstream fixed release. This prevents evaluator admission. The older
+# pinned set below also corresponds to the five currently open Dependabot alerts.
 #
-# Use only in a disposable venv:
+# Do not run an evaluator from this dependency file. When a safe compatible set
+# exists, validate in a disposable Python 3.11 environment, require a clean
+# `pip-audit --strict`, `pip check`, RAGAS import, and project metric imports,
+# then set RAGAS_SECURITY_APPROVED=1 for that exact environment only.
+#
+# Reproduction of the historical pin set (no evaluator credentials/data):
 #   python -m venv .venv-ragas && . .venv-ragas/bin/activate
 #   pip install -r requirements-ragas.txt
-#   RUN_REAL_RAGAS=1 OPENAI_API_KEY=... \
-#     python -m tests.evaluation.ragas_eval --require-ragas --pipeline --limit 15
+#   pip-audit --strict --desc
 #
-# Tested 2026-10-02: `pip check` clean, `import ragas` clean, metric imports OK.
-# pip-audit 2026-10-02: 15 advisories (diskcache, langchain, langchain-core,
-# langchain-openai, langchain-text-splitters, ragas). This is why RAGAS stays
-# out of production requirements until upstream provides a fixed, importable
-# release.
-
 ragas==0.2.15
 langchain-community==0.3.31
 langchain-core==0.3.86

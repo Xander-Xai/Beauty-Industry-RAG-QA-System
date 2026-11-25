@@ -1,6 +1,6 @@
 # RAGAS 评估指南
 
-> 本文档说明如何使用 RAGAS 框架对本项目进行离线质量评估。
+> 本文档记录 RAGAS 评测接口和准入要求。**截至 2026-11-25，真实 evaluator 暂停启用**：最新稳定依赖候选仍包含无上游修复版本的 `diskcache` 漏洞。不得为 evaluator 提供 API 凭据或真实业务数据；详见[当前安全复核](validation/real-ragas-evaluation.md#current-security-admission-2026-11-25)与 Issue #12。
 
 ---
 
@@ -27,34 +27,29 @@ RAGAS（Retrieval Augmented Generation Assessment）是 RAG 系统评估的事�
 
 ### 2.1 安装依赖（隔离环境）
 
-RAGAS **不在默认 `requirements.txt` 中**（上游依赖存在未修复的安全问题，且最新版
-`ragas 0.4.x` 当前 `import` 即失败）。请在一次性 venv 中安装固定的 evaluator 依赖：
+RAGAS **不在默认 `requirements.txt` 中**。当前 `requirements-ragas.txt` 是带已知漏洞的历史隔离依赖集合，不是获准执行 evaluator 的安装入口。只有依赖候选通过严格安全审计和兼容性验收后，才可继续：
 
 ```bash
-python -m venv .venv-ragas && . .venv-ragas/bin/activate
-pip install -r requirements-ragas.txt   # ragas==0.2.15 + 兼容的 langchain 0.3.x
-pip check                                # 应为 No broken requirements found
+python3.11 -m venv .venv-ragas && . .venv-ragas/bin/activate
+python -m pip install -r requirements-ragas.txt
+pip check
+pip-audit --strict --desc
 ```
 
-安全提示：`requirements-ragas.txt` 已记录 `pip-audit` 发现的已知漏洞，仅用于本地/临时
-评估环境，**不得**合并进生产镜像。
+当前应审计失败并阻止任何 evaluator 请求；`RAGAS_SECURITY_APPROVED=1` 只能在 exact environment 的严格 `pip-audit`、`pip check`、RAGAS import 与项目指标类 import 均通过后设置。此环境绝不可与生产镜像依赖合并。
 
 ### 2.2 配置 LLM API Key
 
 RAGAS 需要调用 LLM 来评估答案质量。默认使用 OpenAI（provider/model 来自
 `config.json` → `ragas.llm_backend`，可用环境变量覆盖）：
 
-```bash
-export OPENAI_API_KEY=sk-your-key-here
-# 可选覆盖：
-# export RAGAS_EVALUATOR_PROVIDER=openai
-# export RAGAS_EVALUATOR_MODEL=gpt-4o-mini
-# export RAGAS_EVALUATOR_BASE_URL=
-```
+凭据只可在完成安全准入、数据授权和 evaluator 审批之后配置。本轮无获准依赖组合，禁止设置 evaluator 凭据运行真实评测。
 
 ### 2.3 运行评估
 
-一次 run 只调用 evaluator 一次。库级 `evaluate()` 在 evaluator 不可用时保留 fallback（该结果不是质量结果，`_last_available=False`）；使用 `--require-ragas` 时，缺少依赖或 evaluator key 会 fail fast 并返回非零状态且不生成报告。
+一次 run 只调用 evaluator 一次。未安全准入时，库级 `evaluate()` 返回带 `_warning` 的不可用标记（该标记不是质量结果），且不会导入/调用 evaluator。
+
+当 evaluator 依赖不可用或 evaluator 凭据缺失时，`--require-ragas` 以非零状态退出（退出码 2/3/8），并且不生成任何质量报告。未通过安全准入时退出码为 8；准入后缺依赖为 2，缺凭据为 3。
 
 ```bash
 # 评估器 smoke（使用数据集 reference 答案；不代表真实 pipeline 质量）
@@ -69,7 +64,7 @@ python -m tests.evaluation.ragas_eval --require-ragas --pipeline \
   --sample-ids 0000-ab12cd34 0007-ef56ab78
 ```
 
-使用 `--require-ragas` 时的退出码：缺 RAGAS 依赖 `2`；缺 evaluator key `3`；管线初始化失败 `4`；全部样本失败 `5`；
+使用 `--require-ragas` 时的退出码：未通过安全准入 `8`；缺 RAGAS 依赖 `2`；缺 evaluator key `3`；管线初始化失败 `4`；全部样本失败 `5`；
 成功 `0`。任何失败路径都不会写出“成功”报告。
 
 ### 2.4 查看报告
@@ -131,7 +126,7 @@ python -m tests.evaluation.validate_golden_set --dataset tests/evaluation/golden
 - 包含边缘案例：否定查询、多意图查询、模糊查询、跨域查询
 - 定期更新以反映知识库变化
 
-黄金数据集是人工从零编写的。另一条来源是**线上真实失败**：见 [§9 回归数据集](#9-回归数据集负向反馈--人工审批)。
+黄金数据集是人工从零编写的。另一条来源是**线上真实失败**：见 [§9 回归数据集](#9-回归数据集)。
 
 ---
 
@@ -263,7 +258,7 @@ CI **分为两个职责分离的 job**（见 `.github/workflows/ci.yml`）：
 
 ### 6.2 real RAGAS evaluation（显式启用）
 
-默认不运行。仅当仓库变量 `RAGAS_EVAL_ENABLED == 'true'` 且配置了 `OPENAI_API_KEY` 时才运行，并显式安装 `ragas`：
+默认不运行。除仓库变量 `RAGAS_EVAL_ENABLED == 'true'` 与 evaluator 凭据外，还必须先对隔离依赖执行严格 `pip-audit` 并通过；CI 仅在审计成功后才注入 `RAGAS_SECURITY_APPROVED=1` 和 API key。当前已知审计失败，因此不要启用该 workflow：
 
 ```bash
 python -m tests.evaluation.ragas_eval \
@@ -273,7 +268,7 @@ python -m tests.evaluation.ragas_eval \
   --require-ragas
 ```
 
-`--require-ragas` 在缺少 RAGAS 依赖时以退出码 2 失败，**绝不生成零分报告**。这是有意的安全策略：默认依赖集合不安装存在未决安全问题的 RAGAS 包，真实评估必须由维护者显式启用并自行评估依赖/安全策略。
+`--require-ragas` 首先要求 `RAGAS_SECURITY_APPROVED=1`；未通过 exact environment 严格安全审计时以退出码 8 失败，**不会导入或调用 evaluator，也绝不生成报告**。安全准入后，缺依赖则以退出码 2 失败。默认依赖集合不安装 RAGAS 包。
 
 ---
 
@@ -305,9 +300,10 @@ python -m tests.evaluation.ragas_eval \
 
 | 问题 | 原因 | 解决 |
 |------|------|------|
-| `No module named 'ragas'` / `langchain_community...vertexai` | RAGAS 未安装，或最新版 `ragas` 与 `langchain-community` 不兼容 | 在隔离 venv 中 `pip install -r requirements-ragas.txt`；CLI 报 UNAVAILABLE 且不生成报告 |
-| evaluate() 返回全 0 分数 | 库级 fallback，不是质量结果 | CLI 已 fail fast：以非 0 退出且不写报告；用 `--require-ragas` 强制真实依赖 |
-| `RAGAS BLOCKED` / exit 3 | 真实 evaluator 缺少 provider API key | `export OPENAI_API_KEY=...` |
+| `No module named 'ragas'` / `langchain_community...vertexai` | RAGAS 未安装，或使用了历史 v0.4.3 及更早版本的已知 import 问题 | `ragas 0.4.4` 已修复该 import；安装/导入前仍须完成精确依赖集的安全准入 |
+| evaluate() 返回全 0 分数 | 未通过安全准入的库级不可用标记，不是质量结果 | 只在 exact dependency environment 通过严格安全审计及 import 检查后，才可设置 `RAGAS_SECURITY_APPROVED=1` |
+| `RAGAS BLOCKED` / exit 8 | evaluator security admission missing | 不设置凭据；先解除 `diskcache` 未修复漏洞并取得 clean strict audit |
+| `RAGAS BLOCKED` / exit 3 | 安全准入后仍缺 provider API key | 仅在数据授权、evaluator 批准和依赖安全准入完成后配置凭据 |
 | `AuthenticationError` | API Key 无效或未配置 | 检查 `OPENAI_API_KEY` 与 provider/base_url |
 | 管线评估报错 / exit 4 | 基础设施未就绪 | 确保 vLLM / Qdrant / ES / Redis 在运行 |
 | 部分样本失败 | 单条 pipeline 请求失败 | 查看报告 `failures`；成功样本仍会聚合，全部失败则 exit 5 |
@@ -316,7 +312,9 @@ python -m tests.evaluation.ragas_eval \
 
 ---
 
-## 9. 回归数据集（负向反馈 → 人工审批）
+## 9. 回归数据集
+
+本节记录从负向反馈到人工审批的回归数据集流程。
 
 黄金数据集（`golden_set.jsonl`）是人工从零编写的；回归数据集是另一条来源：**线上真实失败**。它回答的是"已经坏掉过的用例，现在修好了吗"。
 

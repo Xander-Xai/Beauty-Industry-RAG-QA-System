@@ -1,8 +1,8 @@
 """Shared fixtures for evaluation tests.
 
 The ``fake_ragas`` fixture installs a deterministic in-memory RAGAS + datasets
-stand-in so the evaluator's "available" path can be tested without network or
-the real (currently unimportable) ragas stack. It records every evaluate call so
+stand-in and test-only security admission so the evaluator's "available" path
+can be tested without network or provider credentials. It records every call so
 tests can assert the evaluator runs exactly once per run.
 """
 
@@ -57,5 +57,6 @@ def fake_ragas(monkeypatch):
     monkeypatch.setitem(sys.modules, "ragas.metrics", mock_metrics)
     monkeypatch.setitem(sys.modules, "datasets", mock_datasets)
     monkeypatch.setenv("OPENAI_API_KEY", "unit-test-key")
+    monkeypatch.setenv("RAGAS_SECURITY_APPROVED", "1")
 
     return call_log

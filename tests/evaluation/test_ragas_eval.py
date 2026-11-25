@@ -182,20 +182,40 @@ class TestRAGASEvaluatorInit:
 
 
 class TestRAGASEvaluatorEvaluate:
-    def test_evaluate_returns_faithfulness_key(self, jsonl_file: str) -> None:
-        """即使 RAGAS 未安装，evaluate() 也应返回包含 faithfulness 的字典。"""
+    def test_evaluate_without_security_admission_does_not_call_evaluator(
+        self, jsonl_file: str, monkeypatch, fake_ragas
+    ) -> None:
+        """Programmatic evaluation stays unavailable until the exact environment is admitted."""
+        from tests.evaluation.ragas_eval import RAGASEvaluator
+
+        monkeypatch.delenv("RAGAS_SECURITY_APPROVED", raising=False)
+        evaluator = RAGASEvaluator(jsonl_file)
+
+        results = evaluator.evaluate()
+
+        assert not evaluator.last_available
+        assert fake_ragas["calls"] == 0
+        assert results["faithfulness"] == 0.0
+        assert "security admission" in results["_warning"].lower()
+
+    def test_evaluate_returns_faithfulness_key(self, jsonl_file: str, monkeypatch) -> None:
+        """RAGAS 未安装时，evaluate() 仍返回 faithfulness 键并标注不可用原因。"""
+        monkeypatch.setenv("RAGAS_SECURITY_APPROVED", "1")
+        monkeypatch.setitem(sys.modules, "ragas", None)
+        monkeypatch.setitem(sys.modules, "datasets", None)
         evaluator = RAGASEvaluator(jsonl_file)
         results = evaluator.evaluate()
         assert isinstance(results, dict)
         assert "faithfulness" in results
         assert results["faithfulness"] == 0.0
+        assert "未安装" in results["_warning"]
 
-    def test_evaluate_returns_warning_when_ragas_missing(self, jsonl_file: str) -> None:
-        """RAGAS 未安装时 evaluate() 应包含 _warning 键。"""
+    def test_evaluate_returns_security_warning_without_admission(self, jsonl_file: str) -> None:
+        """An unadmitted evaluator returns an unavailable marker and is not imported."""
         evaluator = RAGASEvaluator(jsonl_file)
         results = evaluator.evaluate()
         assert "_warning" in results
-        assert "未安装" in results["_warning"]
+        assert "security admission" in results["_warning"].lower()
 
     def test_evaluate_empty_dataset(self, empty_jsonl_file: str) -> None:
         """空数据集应返回空字典，不崩溃。"""
@@ -285,6 +305,7 @@ class TestRAGASEvaluatorCustomAnswerFn:
         """模拟 RAGAS 已安装时的 evaluate() 执行路径"""
         import types
 
+        monkeypatch.setenv("RAGAS_SECURITY_APPROVED", "1")
         # 创建 mock ragas 模块
         mock_ragas = types.ModuleType("ragas")
 
@@ -341,10 +362,11 @@ class TestRAGASEvaluatorCustomAnswerFn:
                 if mod in sys.modules:
                     del sys.modules[mod]
 
-    def test_evaluate_ragas_installed_subset_metrics(self, jsonl_file: str) -> None:
+    def test_evaluate_ragas_installed_subset_metrics(self, jsonl_file: str, monkeypatch) -> None:
         """RAGAS 已安装时，metrics 子集应只返回选中的指标。"""
         import types
 
+        monkeypatch.setenv("RAGAS_SECURITY_APPROVED", "1")
         mock_ragas = types.ModuleType("ragas")
 
         class MockMetric:
@@ -420,6 +442,7 @@ class TestRAGASEvaluatorCustomAnswerFn:
         """--require-ragas 且依赖缺失时返回 2，且不生成报告。"""
         from tests.evaluation.ragas_eval import main
 
+        monkeypatch.setenv("RAGAS_SECURITY_APPROVED", "1")
         monkeypatch.setitem(sys.modules, "ragas", None)
         monkeypatch.setitem(sys.modules, "datasets", None)
         out_dir = tmp_path / "reports"
@@ -433,10 +456,32 @@ class TestRAGASEvaluatorCustomAnswerFn:
         assert not list(out_dir.glob("*.json"))
         assert "RAGAS UNAVAILABLE" in capsys.readouterr().err
 
+    def test_require_ragas_needs_security_admission(
+        self, jsonl_file, monkeypatch, capsys, tmp_path, fake_ragas
+    ) -> None:
+        """Unsafe or unaudited RAGAS dependencies must not reach evaluator credentials."""
+        from tests.evaluation.ragas_eval import main
+
+        monkeypatch.delenv("RAGAS_SECURITY_APPROVED", raising=False)
+        out_dir = tmp_path / "reports"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ragas_eval.py", "--dataset", jsonl_file, "--report-dir", str(out_dir), "--require-ragas"],
+        )
+
+        rc = main()
+
+        assert rc == 8
+        assert fake_ragas["calls"] == 0
+        assert not list(out_dir.glob("*.json"))
+        assert "security admission" in capsys.readouterr().err.lower()
+
     def test_require_ragas_missing_key_returns_3(self, jsonl_file, monkeypatch, capsys, tmp_path, fake_ragas) -> None:
         """真实 evaluator 模式缺少 API key 时返回 3，不生成有效报告。"""
         from tests.evaluation.ragas_eval import main
 
+        monkeypatch.setenv("RAGAS_SECURITY_APPROVED", "1")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         out_dir = tmp_path / "reports"
         monkeypatch.setattr(
@@ -511,6 +556,7 @@ class TestRAGASEvaluatorCustomAnswerFn:
         """RAGAS 已安装时使用自定义 answer_fn 评估"""
         import types
 
+        monkeypatch.setenv("RAGAS_SECURITY_APPROVED", "1")
         # 创建 mock ragas 模块
         mock_ragas = types.ModuleType("ragas")
 

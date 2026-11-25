@@ -17,7 +17,7 @@
 
 这些内容存在的唯一目的，是给人工标注流程与评测 harness 提供一条**形状真实**的输入。它们**不得**用于配方开发、合规判定、成分限用判断，
 也不能作为安全评估依据。完整边界见仓库根目录的
-[`DATA_PROVENANCE.md`](../../DATA_PROVENANCE.md) 第 4 节。
+[`DATA_PROVENANCE.md`](../../../DATA_PROVENANCE.md) 第 4 节。
 
 ## 特别注意
 
@@ -36,4 +36,4 @@
 `benchmarks/golden_set_contract.py` 与 `benchmarks/provenance.py` 定义，
 替换语料时契约保持不变。来源许可无法确认的材料，先进入隔离区
 （`offline/source_trust.py` 的 `UNTRUSTED` 信任级别），人工批准后才可激活。
-准入流程见 [`docs/benchmark-data-quality.md`](../../docs/benchmark-data-quality.md)。
+准入流程见 [`docs/benchmark-data-quality.md`](../../../docs/benchmark-data-quality.md)。

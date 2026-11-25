@@ -10,10 +10,10 @@ explicitly NOT a project-pipeline quality result.
 Level 3 (real pipeline RAGAS) is intentionally not stubbed here: it requires the
 project's VLLM/Qdrant/ES/Redis infrastructure. When that is available, run:
 
-    RUN_REAL_RAGAS=1 OPENAI_API_KEY=... \
+    RUN_REAL_RAGAS=1 RAGAS_SECURITY_APPROVED=1 OPENAI_API_KEY=... \
       python -m tests.evaluation.ragas_eval --require-ragas --pipeline --limit 15
 
-Gate: RUN_REAL_RAGAS=1 and OPENAI_API_KEY set.
+    Gate: RUN_REAL_RAGAS=1, RAGAS_SECURITY_APPROVED=1 and OPENAI_API_KEY set.
 """
 
 from __future__ import annotations
@@ -34,7 +34,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _enabled() -> bool:
-    return os.environ.get("RUN_REAL_RAGAS") == "1" and bool(os.environ.get("OPENAI_API_KEY"))
+    return (
+        os.environ.get("RUN_REAL_RAGAS") == "1"
+        and os.environ.get("RAGAS_SECURITY_APPROVED") == "1"
+        and bool(os.environ.get("OPENAI_API_KEY"))
+    )
 
 
 def _synthetic_dataset() -> str:
@@ -71,7 +75,9 @@ def _synthetic_dataset() -> str:
     return handle.name
 
 
-@pytest.mark.skipif(not _enabled(), reason="set RUN_REAL_RAGAS=1 and OPENAI_API_KEY")
+@pytest.mark.skipif(
+    not _enabled(), reason="requires a security-admitted evaluator, RUN_REAL_RAGAS=1, and OPENAI_API_KEY"
+)
 def test_real_evaluator_smoke_and_report(monkeypatch):
     """Real evaluator: at least one metric returns, no fallback, report serializes."""
     dataset_path = _synthetic_dataset()

@@ -15,7 +15,7 @@
 
 **不得**将其训练出的模型用于合规判定、配方开发、成分限用判断或任何面向消费者的答复。
 
-完整边界见 [`DATA_PROVENANCE.md`](../../DATA_PROVENANCE.md) 第 4 节。
+完整边界见 [`DATA_PROVENANCE.md`](../DATA_PROVENANCE.md) 第 4 节。
 
 ## 替换为真实语料时
 

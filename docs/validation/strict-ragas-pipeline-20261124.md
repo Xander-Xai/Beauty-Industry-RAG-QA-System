@@ -1,7 +1,9 @@
 # Complete pipeline RAGAS acceptance
 
-Issue #12: opt-in strict acceptance of an already configured real evaluator and
-RAG pipeline. The legacy exploratory report behavior is unchanged.
+Issue #12: strict acceptance of an already security-admitted evaluator and RAG
+pipeline. Current dependencies are not admitted; this command is blocked until
+the isolated set passes strict audit and `RAGAS_SECURITY_APPROVED=1` is set for
+that exact environment.
 
 ```bash
 python -m tests.evaluation.ragas_eval --dataset /path/to/approved-evaluation.jsonl \
@@ -9,8 +11,8 @@ python -m tests.evaluation.ragas_eval --dataset /path/to/approved-evaluation.jso
   --report-dir /path/to/new-private-run
 ```
 
-The command requires an independently approved evaluator environment, compatible
-dependencies, model assets, data authorization and provider budget. No external
+The command requires an independently approved evaluator environment (`RAGAS_SECURITY_APPROVED=1`), compatible
+dependencies, model assets, data authorization and provider budget. Until the strict audit is clean, it is blocked. No external
 calls or metrics were executed by this change. See the existing isolated
 RAGAS dependency/security notes in [real-ragas-evaluation.md](real-ragas-evaluation.md).
 
