@@ -1,0 +1,34 @@
+name: Evaluation / reproduction
+description: Report an evaluation result, blocked run, or reproduction discrepancy.
+title: "eval: "
+body:
+  - type: markdown
+    attributes:
+      value: Never include API keys, private data, or model/provider credentials. A metric without provenance is not a publishable result.
+  - type: input
+    id: commit
+    attributes:
+      label: Repository SHA
+    validations:
+      required: true
+  - type: input
+    id: dataset
+    attributes:
+      label: Dataset and provenance
+      description: Identify the committed dataset/version and permission basis; do not upload restricted data.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Model, dependency and environment
+      description: Include exact versions and hardware where relevant; redact secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: command-result
+    attributes:
+      label: Exact command and result
+      description: Include run status, sample count, artifact location, and blocked/skipped reasons.
+    validations:
+      required: true

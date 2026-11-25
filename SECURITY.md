@@ -26,15 +26,15 @@ branch. Other branches are not maintained and receive no backports.
 Including those in a public issue publishes them. Even if you later redact the
 issue, the content has already been exposed.
 
-**Preferred route: GitHub private vulnerability reporting.** If private
-vulnerability reporting / Security Advisories are enabled on this repository, use
-GitHub's *Report a vulnerability* control (the *Security* tab →
-*Report a vulnerability*), which opens a private advisory visible only to the
-maintainer. This is the correct channel for anything that could help an attacker.
+**Preferred route: GitHub private vulnerability reporting.** Use GitHub's
+*Report a vulnerability* control (the *Security* tab → *Report a vulnerability*),
+which opens a private advisory visible to the repository maintainer. Private
+vulnerability reporting is enabled for this repository. This is the correct
+channel for anything that could help an attacker.
 
-If private reporting is not enabled, open a normal issue that contains **only** a
-redacted description of the issue and no sensitive material, and ask for a private
-channel.
+If that control is unavailable, open a normal issue that contains **only** a
+redacted description and no sensitive material; ask the maintainer to establish a
+private channel before sharing details.
 
 There is no guaranteed response time and no paid support SLA. Reports are handled
 best-effort by the maintainer.

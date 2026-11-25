@@ -1,0 +1,25 @@
+name: Documentation
+description: Report a documentation error or propose a focused clarification.
+title: "docs: "
+labels: ["documentation"]
+body:
+  - type: input
+    id: document
+    attributes:
+      label: Document and section
+      placeholder: README.md — Quick Start
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What is incorrect or unclear?
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction or evidence
+      description: Link to the code/config/validation record that establishes the correct wording.
+    validations:
+      required: false
