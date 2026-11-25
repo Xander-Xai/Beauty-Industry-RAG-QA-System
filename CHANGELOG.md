@@ -4,7 +4,7 @@
 
 - Added a concise project README, a current documentation index, contributor guidance, support routing, and focused issue/PR templates. These are repository-governance changes; no runtime capability, API contract, benchmark result, or production-validation state changed.
 - Updated the GitHub metadata record to the values read from the live repository on 2026-11-25. Runtime version remains `2.4.0`; no new release is created by this documentation-only change.
-- Refreshed transitive frontend build dependencies via reviewed Dependabot PRs #164, #166 and #167; exact-head required CI passed. The latest non-gating `npm audit` still reports one high Browserslist advisory whose affected range does not match the committed lock version; it remains under investigation. This does not change runtime/API version or establish a production security audit.
+- Refreshed transitive frontend build dependencies via reviewed Dependabot PRs #164, #166 and #167; exact-head required CI passed and the resulting exact-main `npm audit` reports zero findings. This does not change runtime/API version or establish a production security audit.
 
 - Industrial release candidate: reviewed evidence manifest, applicability and identity checks, strict session/readiness behavior, unified infrastructure errors and model asset mounts. Production acceptance remains outstanding.
 

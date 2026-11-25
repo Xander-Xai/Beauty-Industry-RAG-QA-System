@@ -95,10 +95,9 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      # The lockfile was refreshed in PRs #164, #166 and #167. The latest audit
-      # still reports one high Browserslist advisory against <=4.28.6 while the
-      # lockfile resolves 4.29.6; this discrepancy remains under review. Keep
-      # npm audit non-gating because the registry's quick-audit endpoint is
+      # The lockfile was refreshed in PRs #164, #166 and #167. The exact-main
+      # npm ci and npm audit runs report zero vulnerabilities after that update.
+      # Keep npm audit non-gating because the registry's quick-audit endpoint is
       # deprecated and can return HTTP 400. See the dated record in
       # docs/repository-truth-audit.md.
       - name: Report (do not gate) frontend dependency advisories
