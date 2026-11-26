@@ -19,6 +19,7 @@ container starts or that the services are integrated end to end — see
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -89,6 +90,25 @@ def _import_service(service: str) -> dict:
     return payload
 
 
+def _probe_cors(module_name: str, environment: dict[str, str]) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env.pop("CORS_ORIGINS", None)
+    env.update(environment)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import importlib, json; m=importlib.import_module('{module_name}'); "
+            "print(json.dumps({'origins': m.CORS_ORIGINS}))",
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+
 @pytest.mark.parametrize("service", sorted(SERVICES))
 def test_service_main_module_imports_and_exposes_app(service):
     """Each service's ``main`` module imports and exposes a FastAPI app."""
@@ -109,3 +129,32 @@ def test_service_exposes_a_health_route(service):
         assert payload["paths"], payload
         return
     assert expected in payload["paths"], f"{service} is missing {expected}: {payload['paths']}"
+
+
+def test_asgi_entries_refuse_missing_or_wildcard_origins_in_production():
+    for module in ("api-gateway.main", "api.middleware"):
+        for environment in (
+            {"DEPLOYMENT_MODE": "production"},
+            {"DEPLOYMENT_MODE": "production", "CORS_ORIGINS": "*"},
+            {"DEPLOYMENT_MODE": "production", "CORS_ORIGINS": "*,https://app.example.test"},
+            {"DEPLOYMENT_MODE": "development", "RAG_RELEASE_PROFILE": "industrial"},
+        ):
+            result = _probe_cors(module, environment)
+            assert result.returncode != 0
+            assert "CORS_ORIGINS" in result.stderr
+
+
+def test_asgi_entries_accept_an_explicit_production_origin():
+    for module in ("api-gateway.main", "api.middleware"):
+        result = _probe_cors(module, {"DEPLOYMENT_MODE": "production", "CORS_ORIGINS": "https://app.example.test"})
+
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout.splitlines()[-1]) == {"origins": ["https://app.example.test"]}
+
+
+def test_cors_wildcard_remains_available_only_in_development():
+    for module in ("api-gateway.main", "api.middleware"):
+        result = _probe_cors(module, {"DEPLOYMENT_MODE": "development"})
+
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout.splitlines()[-1]) == {"origins": ["*"]}

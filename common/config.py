@@ -488,6 +488,17 @@ def is_production_mode() -> bool:
     return get_config().deployment_mode == "production"
 
 
+def resolve_cors_origins() -> list[str]:
+    """Resolve the CORS allowlist, keeping wildcard origins development-only."""
+    origins = [origin.strip() for origin in os.environ.get("CORS_ORIGINS", "").split(",") if origin.strip()]
+    production_mode = is_production_mode() or os.environ.get("RAG_RELEASE_PROFILE", "").strip() == "industrial"
+    if production_mode and (not origins or "*" in origins):
+        raise RuntimeError("production mode requires explicit non-wildcard CORS_ORIGINS")
+    if "*" in origins and origins != ["*"]:
+        raise RuntimeError("CORS_ORIGINS cannot mix wildcard and explicit origins")
+    return origins or ["*"]
+
+
 def is_testing_mode() -> bool:
     """Return True if the current deployment mode is 'testing'."""
     return get_config().deployment_mode == "testing"

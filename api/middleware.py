@@ -8,7 +8,6 @@ FastAPI 中间件
 from __future__ import annotations
 
 import logging
-import os
 import time
 
 from fastapi import FastAPI, Request, Response
@@ -16,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from common.audit import reset_request_id, sanitize_request_id, set_request_id
-from common.config import get_config, is_production_mode
+from common.config import resolve_cors_origins
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +53,8 @@ def note_request_finished() -> None:
 
 # CORS 来源白名单：通过环境变量配置，多个来源用逗号分隔
 # 生产环境应设置为具体前端域名，如 "https://internal.example.com"
-_cors_origins_str = os.environ.get("CORS_ORIGINS", "")
-if _cors_origins_str:
-    CORS_ORIGINS = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
-else:
-    # H-10: 生产模式下 CORS_ORIGINS 必须显式设置
-    cfg = get_config()
-    if cfg.deployment_mode == "production" or is_production_mode():
-        raise RuntimeError("生产模式下必须通过 CORS_ORIGINS 环境变量设置允许的来源（不可使用通配符 *）")
-    CORS_ORIGINS = ["*"]
+CORS_ORIGINS = resolve_cors_origins()
+if CORS_ORIGINS == ["*"]:
     logger.warning("CORS_ORIGINS 未设置，使用通配符 *（仅限开发模式）")
 
 # 当使用通配符时禁用 credentials（浏览器安全要求）

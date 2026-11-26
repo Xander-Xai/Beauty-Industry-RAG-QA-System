@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from routers import auth, generation, retrieval, rewrite, system  # noqa: F401
 
-from common.config import get_config
+from common.config import get_config, resolve_cors_origins
 
 # ---------------------------------------------------------------------------
 # 日志配置
@@ -51,19 +51,7 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # CORS 中间件 — 生产环境通过 CORS_ORIGINS 环境变量限制来源
 # ---------------------------------------------------------------------------
-_cors_origins_str = os.environ.get("CORS_ORIGINS", "")
-if _cors_origins_str:
-    CORS_ORIGINS = [o.strip() for o in _cors_origins_str.split(",") if o.strip()]
-else:
-    # H-10: 生产模式下 CORS_ORIGINS 必须显式设置
-    try:
-        from common.config import is_production_mode
-
-        if is_production_mode():
-            raise RuntimeError("生产模式下必须通过 CORS_ORIGINS 环境变量设置允许的来源")
-    except (ImportError, RuntimeError):
-        pass
-    CORS_ORIGINS = ["*"]
+CORS_ORIGINS = resolve_cors_origins()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
