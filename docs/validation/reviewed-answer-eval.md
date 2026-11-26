@@ -82,7 +82,7 @@ retain coverage and strict success bounds across the full planned population.
 Unclassified and infrastructure refusals are counted separately. Partial
 coverage or unverified reasons cannot establish publishable accuracy.
 
-## Paired interview evidence protocol (#18 / #86 / #125 / #154)
+## Paired reviewed-answer evidence protocol (#18 / #86 / #125 / #154)
 
 Freeze corpus/epoch, actual model assets, candidate depths, reviewed sample
 identities, and environment. Compare BM25, Dense, Hybrid RRF and BiEncoder/
