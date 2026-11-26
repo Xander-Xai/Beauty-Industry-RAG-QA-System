@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Partial retrieval failures now remain visible to the request and cache policy.** The canonical pipeline records failed recall/fusion/fallback path names as request-scoped degradation, preventing a response built from an incomplete backend set from being written to the shared answer cache. A successful empty result or an authorization-filtered result is not classified as an execution failure.
 - Added a concise project README, a current documentation index, contributor guidance, support routing, and focused issue/PR templates. These are repository-governance changes; no runtime capability, API contract, benchmark result, or production-validation state changed.
 - Updated the GitHub metadata record to the values read from the live repository on 2026-11-25. Runtime version remains `2.4.0`; no new release is created by this documentation-only change.
 - Refreshed transitive frontend build dependencies via reviewed Dependabot PRs #164, #166 and #167; exact-head required CI passed and the resulting exact-main `npm audit` reports zero findings. This does not change runtime/API version or establish a production security audit.

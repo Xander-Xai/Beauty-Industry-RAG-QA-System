@@ -30,9 +30,11 @@ RBAC 位掩码过滤在召回后通过 is_allowed() 二次校验，并在融合�
 
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -143,6 +145,17 @@ class ParallelRecallManager:
         with self._clip_status_lock:
             self._clip_status = status
 
+    @staticmethod
+    def _clip_status_callback_supported(recall_method) -> bool:
+        """Keep injected legacy three-argument recall methods callable."""
+        try:
+            parameters = inspect.signature(recall_method).parameters
+        except (TypeError, ValueError):
+            return False
+        return "on_status" in parameters or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+
     def warm_up_clip(self) -> tuple[bool, str]:
         """Load the shared query-side CLIP encoder before the first request.
 
@@ -224,6 +237,7 @@ class ParallelRecallManager:
         clip_top_k: int = 20,
         top_k_per_path: dict = None,
         rrf_weights: dict[str, float] | None = None,
+        on_degradation: Callable[[tuple[str, ...]], None] | None = None,
     ) -> tuple[list, float]:
         """
         并行执行多路召回
@@ -239,6 +253,8 @@ class ParallelRecallManager:
             rrf_weights: 本次查询的各路 RRF 权重（query-aware）。为 None 时回退到
                 config.json 的静态 retrieval.rrf.weights。显式传入空 dict 表示
                 「不做加权」，由 rrf_fusion 按等权重（1.0）处理。
+            on_degradation: Optional request-scoped notification for execution failures.
+                Empty results are not failures and do not invoke the callback.
 
         Returns:
             (list[RecallResult], retrieval_agreement_score)
@@ -270,6 +286,14 @@ class ParallelRecallManager:
         path_results: dict[str, list] = {}  # 各路径独立结果（用于计算 agreement）
         futures = {}
         clip_pre_filter_hits: dict[str, int] = {}
+        failed_paths: set[str] = set()
+        clip_statuses: list[ClipPathStatus] = []
+
+        def _capture_clip_status(status: ClipPathStatus) -> None:
+            # Keep the terminal status local to this execute() call. The manager-wide
+            # status remains useful for direct diagnostics, but another request may
+            # overwrite it before this request reaches its degradation check.
+            clip_statuses.append(status)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # ① Dense 语义路 (BGE → Qdrant)
@@ -295,7 +319,20 @@ class ParallelRecallManager:
             # ③ CLIP 视觉语义路
             clip_cfg = top_k_per_path.get("clip_visual")
             if use_clip and clip_cfg is not None and clip_cfg.get("enabled", True):
-                futures[executor.submit(self._recall_clip, query, image_qdrant_filter, clip_top_k)] = "clip_visual"
+                clip_status_kwargs = (
+                    {"on_status": _capture_clip_status}
+                    if self._clip_status_callback_supported(self._recall_clip)
+                    else {}
+                )
+                futures[
+                    executor.submit(
+                        self._recall_clip,
+                        query,
+                        image_qdrant_filter,
+                        clip_top_k,
+                        **clip_status_kwargs,
+                    )
+                ] = "clip_visual"
 
             # ④ 改写泛化路（Query Rewrite 变体）
             # 路径名与 config.json → retrieval.parallel_paths 的键一致，
@@ -327,6 +364,7 @@ class ParallelRecallManager:
                     logger.info(f"召回路 [{path_name}] 返回 {len(results)} 条结果")
                 except Exception as e:
                     logger.error(f"召回路 [{path_name}] 失败: {e}")
+                    failed_paths.add(path_name)
 
         # RRF 融合 — 替代简单拼接
         try:
@@ -345,6 +383,7 @@ class ParallelRecallManager:
             )
         except Exception as e:
             logger.warning(f"RRF 融合失败，回退到简单合并: {e}")
+            failed_paths.add("rrf_fusion")
 
         # 计算 Retrieval Agreement Score（PRD §7.2）
         agreement_score = self._compute_agreement_score(path_results)
@@ -357,15 +396,15 @@ class ParallelRecallManager:
         all_doc_ids = {r.doc_id for r in all_results}
         qdrant_paths = {"dense_bge", "clip_visual", "rewrite_variants"}
         # 结构性失败：路径未出现在 path_results 中（future 本身抛错）。
-        failed_qdrant_paths = {
-            path_name
-            for path_name in qdrant_paths
-            if any(futures[f] == path_name for f in futures) and path_name not in path_results
-        }
+        failed_qdrant_paths = failed_paths.intersection(qdrant_paths)
         # CLIP 路径自带结构化状态，因此它的失败不依赖「整体召回是否偏少」这一旁证：
         # 即使其余通道返回了大量文档，一次视觉召回失败也必须被报告。
-        clip_status = self.clip_path_status()
+        # Never consult the manager-wide status here: another concurrent request
+        # may have overwritten it. UNSET is neutral for an injected path that does
+        # not report its per-execution status.
+        clip_status = clip_statuses[-1] if clip_statuses else ClipPathStatus()
         if "clip_visual" in path_results and clip_status.is_failure:
+            failed_paths.add("clip_visual")
             failed_qdrant_paths.add("clip_visual")
             logger.warning(
                 "CLIP 视觉召回降级: outcome=%s detail=%s elapsed=%.0fms",
@@ -381,8 +420,9 @@ class ParallelRecallManager:
         ):
             # 有命中但授权过滤后为空：这是权限结果，不是召回失败，单独计数。
             self._record_clip_authorization_filtered(clip_pre_filter_hits["clip_visual"])
+        empty_qdrant_paths: set[str] = set()
         if len(all_doc_ids) < 10:
-            failed_qdrant_paths |= {
+            empty_qdrant_paths = {
                 path_name for path_name in qdrant_paths if path_name in path_results and not path_results[path_name]
             }
         if failed_qdrant_paths:
@@ -395,6 +435,8 @@ class ParallelRecallManager:
                 f"Qdrant 路径异常，召回覆盖降级: {sorted(failed_qdrant_paths)}"
                 f"（ES Fallback 是否运行，由融合后有效文档数 <{FALLBACK_MIN_DOC_IDS} 单独决定）"
             )
+        elif empty_qdrant_paths:
+            logger.info("Qdrant 路径无有效结果（可能无命中或被权限/版本过滤）: %s", sorted(empty_qdrant_paths))
         if len(all_doc_ids) < FALLBACK_MIN_DOC_IDS:
             logger.info(f"召回有效文档数 {len(all_doc_ids)} < {FALLBACK_MIN_DOC_IDS}，触发 ES Fallback")
             try:
@@ -405,6 +447,10 @@ class ParallelRecallManager:
                     logger.info(f"ES Fallback 补充召回 {len(fallback_results)} 条")
             except Exception as e:
                 logger.warning(f"ES Fallback 失败: {e}")
+                failed_paths.add("bm25_fallback")
+
+        if failed_paths and on_degradation is not None:
+            on_degradation(tuple(sorted(failed_paths)))
 
         # Keep the authorization boundary after fallback and fusion as a final
         # guard against a retrieval channel returning an unfiltered candidate.
@@ -442,7 +488,14 @@ class ParallelRecallManager:
             for h in hits
         ]
 
-    def _recall_clip(self, query, qdrant_filter, top_k) -> list:
+    def _recall_clip(
+        self,
+        query,
+        qdrant_filter,
+        top_k,
+        *,
+        on_status: Callable[[ClipPathStatus], None] | None = None,
+    ) -> list:
         """CLIP 视觉语义召回（含 PRD §4.5 预算保护）。
 
         返回值契约不变：``list[RecallResult]``，异常时返回 ``[]``，因此 RRF、RBAC 与
@@ -450,6 +503,10 @@ class ParallelRecallManager:
 
         结构化状态通过 :meth:`clip_path_status` 旁路暴露，而不是改变返回类型——
         正常零命中与执行失败都表现为 ``[]``，但两者不再不可区分。
+
+        ``on_status`` receives this invocation's terminal outcome so concurrent
+        ``execute()`` calls do not infer request state from the shared last-status
+        diagnostic.
 
         延迟契约：``clip_sync.timeout_ms`` 现在真正约束调用方等待时间。
         任务提交到长驻单线程池，超时后不等待（CLIP 前向无法安全取消），
@@ -486,6 +543,8 @@ class ParallelRecallManager:
                 detail=status.detail,
             )
             self._set_clip_path_status(status)
+            if on_status is not None:
+                on_status(status)
             self._record_clip_path_status(status)
             return status
 
