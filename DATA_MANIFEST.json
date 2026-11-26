@@ -447,6 +447,15 @@
         "samples.real-v1.input_text"
       ],
       "regulatory_shaped_fields_evidence": "Input texts are the benchmark's own questions plus five generic technical strings (an INCI name, a regulation number, ingredient names). They are not excerpts of the indexed corpus and assert nothing about the law."
+    },
+    {
+      "path": "docs/validation/parser-capability-matrix-20261126.json",
+      "class": "GOVERNANCE",
+      "purpose": "dated machine-readable inventory of parser fixture coverage and known limitations; records no regulatory conclusion or real-document accuracy",
+      "carries_real_regulatory_claims": false,
+      "record_marker": "file",
+      "regulatory_shaped_fields": [],
+      "regulatory_shaped_fields_evidence": "Contains implementation paths, test references, package versions, and explicit PENDING/BLOCKED real-document evidence status; contains no source document text."
     }
   ]
 }

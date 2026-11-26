@@ -76,6 +76,18 @@ def test_full_build_writes_all_stores_and_validates(tmp_path):
     assert len(builder.state_store.all_states()) == 2
 
 
+def test_malformed_document_fails_build_without_state_commit_or_seal(tmp_path):
+    builder, _, _ = _builder(tmp_path)
+    source = _source(tmp_path, "corrupt.pdf", "not a PDF container")
+
+    with pytest.raises(ValueError, match="cannot open PDF"):
+        builder.build_full([source], "parser_failure_epoch", seal=True)
+
+    assert builder.state_store.get("corrupt.pdf") is None
+    assert not builder.text_writer._is_epoch_sealed("parser_failure_epoch")
+    assert not builder.image_writer._is_epoch_sealed("parser_failure_epoch")
+
+
 def test_incremental_carries_forward_and_rebuilds_changes(tmp_path):
     builder, client, es_writer = _builder(tmp_path)
     unchanged = _source(tmp_path, "keep.txt", "keep this stable document")

@@ -217,7 +217,11 @@ class SnapshotBuilder:
                     text=record.ocr_main_text,
                     order=0,
                     block_identity=f"ocr:{record.image_index}",
-                    metadata={"format": "ocr", "page_number": record.page_number},
+                    metadata={
+                        "format": "ocr",
+                        "page_number": record.page_number,
+                        "image_index": record.image_index,
+                    },
                 )
             ],
             images=[],
