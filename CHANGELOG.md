@@ -5,6 +5,7 @@
 - Added a concise project README, a current documentation index, contributor guidance, support routing, and focused issue/PR templates. These are repository-governance changes; no runtime capability, API contract, benchmark result, or production-validation state changed.
 - Updated the GitHub metadata record to the values read from the live repository on 2026-11-25. Runtime version remains `2.4.0`; no new release is created by this documentation-only change.
 - Refreshed transitive frontend build dependencies via reviewed Dependabot PRs #164, #166 and #167; exact-head required CI passed and the resulting exact-main `npm audit` reports zero findings. This does not change runtime/API version or establish a production security audit.
+- Pinned the development test runner to pytest 9.2.0: the previous `<9` range excluded the first release fixing CVE-2025-71176, and its floating constraint prevented Dependabot from determining the installed version. Runtime dependencies are unchanged.
 
 ### Fixed
 
