@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Workflow actions are pinned to immutable commit SHAs.** Upstream version comments preserve the reviewed releases, and Dependabot is configured to propose weekly GitHub Actions updates.
 - **Production CORS configuration is now shared and fail-closed.** The canonical API and retained gateway require explicit non-wildcard `CORS_ORIGINS` in production/industrial mode; a missing value, empty list, or wildcard fails at startup. Development retains its no-credentials wildcard default. This does not make the noncanonical microservice gateway safe to expose; its inbound-auth gaps remain documented.
 - **Partial retrieval failures now remain visible to the request and cache policy.** The canonical pipeline records failed recall/fusion/fallback path names as request-scoped degradation, preventing a response built from an incomplete backend set from being written to the shared answer cache. A successful empty result or an authorization-filtered result is not classified as an execution failure.
 - Added a concise project README, a current documentation index, contributor guidance, support routing, and focused issue/PR templates. These are repository-governance changes; no runtime capability, API contract, benchmark result, or production-validation state changed.

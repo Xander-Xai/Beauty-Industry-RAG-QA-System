@@ -20,10 +20,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           # The same interpreter the shipped image runs on. pip-audit resolves
           # requirements.txt in this environment, so auditing on a different
@@ -47,13 +47,13 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      # Pin to a published release tag instead of a floating branch.
+      # Pin the action code to the reviewed release commit.
       - name: TruffleHog secret scan (merge gate)
-        uses: trufflesecurity/trufflehog@v3.97.9
+        uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9
         with:
           extra_args: --only-verified
 
@@ -61,7 +61,7 @@ jobs:
       # cannot confirm are live, so a revoked or never-issued token still in the
       # tree would pass. Gitleaks covers the other half: pattern and entropy
       # matching over the full history, without requiring verification.
-      # Both are pinned to a release tag rather than a floating branch.
+      # Both actions are pinned to reviewed release commits, not mutable tags.
       # Gitleaks refuses to scan a `pull_request` event without a token, since
       # the event payload it needs to diff the base is fetched through the API.
       # `GITHUB_TOKEN` is the automatically created per-run token; this job only
@@ -70,14 +70,14 @@ jobs:
       # v3, not v2: v3 moves the runtime from Node 20 to Node 24. GitHub removed
       # Node 20 from hosted runners on 2026-09-16, and v2 then stops loading
       # regardless of `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION`. v3 keeps the
-      # same inputs and behaviour. Both tools are pinned to a release tag.
+      # same inputs and behaviour. Both tools are pinned to reviewed SHAs.
       #
       # Scope, stated precisely: on a `pull_request` event the action scans the
       # commit range introduced by the PR, not the whole history. A full-history
       # scan was run separately (210 commits, 1583 blobs) and its six findings
       # are recorded in `.gitleaksignore`.
       - name: Gitleaks scan (merge gate)
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
