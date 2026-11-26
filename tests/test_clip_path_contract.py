@@ -374,22 +374,28 @@ class TestClipPathStatusVocabulary:
 class TestDegradationReporting:
     """A CLIP failure must be reported even when the other channels answer well."""
 
-    def _manager_with_paths(self, clip_results, dense_count=20):
+    def _manager_with_paths(self, clip_results, dense_count=20, *, clip_status=None):
         manager = ParallelRecallManager()
         manager._recall_dense = lambda *a, **k: [
             RecallResult(doc_id=f"t{i}", content="c", score=0.5, source="dense_bge") for i in range(dense_count)
         ]
         manager._recall_bm25 = lambda *a, **k: []
         manager._recall_rewrite_variants = lambda *a, **k: []
-        manager._recall_clip = lambda *a, **k: list(clip_results)
+        manager._recall_es_fallback = lambda *a, **k: []
+
+        def _recall_clip(*_args, on_status=None, **_kwargs):
+            if on_status is not None and clip_status is not None:
+                on_status(clip_status)
+            return list(clip_results)
+
+        manager._recall_clip = _recall_clip
         return manager
 
     def test_healthy_clip_path_is_not_reported_as_degraded(self, caplog):
         manager = self._manager_with_paths(
             [RecallResult(doc_id="v1", content="c", score=0.9, source="clip_visual")],
+            clip_status=ClipPathStatus(ClipPathOutcome.OK, hit_count=1),
         )
-        status = ClipPathStatus(ClipPathOutcome.OK, hit_count=1)
-        manager._set_clip_path_status(status)
 
         with caplog.at_level("WARNING"):
             manager.execute(
@@ -404,9 +410,10 @@ class TestDegradationReporting:
         assert "CLIP 视觉召回降级" not in caplog.text
 
     def test_failed_clip_path_is_reported_even_with_many_dense_hits(self, caplog):
-        manager = self._manager_with_paths([], dense_count=20)
-        manager._set_clip_path_status(
-            ClipPathStatus(ClipPathOutcome.MODEL_UNAVAILABLE, detail="missing_weights"),
+        manager = self._manager_with_paths(
+            [],
+            dense_count=20,
+            clip_status=ClipPathStatus(ClipPathOutcome.MODEL_UNAVAILABLE, detail="missing_weights"),
         )
 
         with caplog.at_level("WARNING"):
@@ -423,8 +430,9 @@ class TestDegradationReporting:
         assert "model_unavailable" in caplog.text
 
     def test_zero_hit_clip_path_is_not_reported_as_a_failure(self, caplog):
-        manager = self._manager_with_paths([], dense_count=20)
-        manager._set_clip_path_status(ClipPathStatus(ClipPathOutcome.EMPTY, hit_count=0))
+        manager = self._manager_with_paths(
+            [], dense_count=20, clip_status=ClipPathStatus(ClipPathOutcome.EMPTY, hit_count=0)
+        )
 
         with caplog.at_level("WARNING"):
             manager.execute(
@@ -437,6 +445,66 @@ class TestDegradationReporting:
             )
 
         assert "CLIP 视觉召回降级" not in caplog.text
+
+    def test_concurrent_requests_do_not_overwrite_clip_failure_status(self, caplog):
+        from concurrent.futures import ThreadPoolExecutor
+
+        manager = self._manager_with_paths([], dense_count=50)
+        failed_request_waiting = threading.Event()
+        healthy_status_written = threading.Event()
+
+        def recall_clip(query, _qdrant_filter, _top_k, *, on_status=None):
+            if query == "failed":
+                status = ClipPathStatus(ClipPathOutcome.MODEL_UNAVAILABLE, detail="missing_weights")
+                manager._set_clip_path_status(status)
+                if on_status is not None:
+                    on_status(status)
+                return []
+
+            status = ClipPathStatus(ClipPathOutcome.OK, hit_count=1)
+            manager._set_clip_path_status(status)
+            if on_status is not None:
+                on_status(status)
+            healthy_status_written.set()
+            return [
+                RecallResult(
+                    doc_id="visual-hit",
+                    content="c",
+                    score=0.9,
+                    source="clip_visual",
+                    metadata={"role_mask": 0, "dept_mask": 0},
+                )
+            ]
+
+        def wait_for_other_request(path_results):
+            if not path_results.get("clip_visual"):
+                failed_request_waiting.set()
+                assert healthy_status_written.wait(timeout=3)
+            return 0.5
+
+        manager._recall_clip = recall_clip
+        manager._compute_agreement_score = wait_for_other_request
+
+        request_args = {
+            "query_embedding": _unit(BGE_DIM),
+            "user_role_mask": 3,
+            "user_dept_mask": 3,
+            "use_clip": True,
+            "clip_top_k": 5,
+            "top_k_per_path": {
+                "dense_bge": {"top_k": 5},
+                "clip_visual": {"top_k": 5},
+            },
+        }
+        with caplog.at_level("WARNING"):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                failed = executor.submit(manager.execute, "failed", **request_args)
+                assert failed_request_waiting.wait(timeout=3)
+                healthy = executor.submit(manager.execute, "healthy", **request_args)
+                healthy.result(timeout=3)
+                failed.result(timeout=3)
+
+        assert "CLIP 视觉召回降级" in caplog.text
 
 
 class TestClipPathMetrics:

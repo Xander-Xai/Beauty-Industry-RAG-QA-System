@@ -8,10 +8,11 @@ GAP-15: 核心管线变量排序修复测试
 
 import os
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from unittest.mock import MagicMock, patch
 
 from core.pipeline import OnlineRAGPipeline
 from core.pipeline_context import (
@@ -177,3 +178,70 @@ class TestPipelineVariableOrdering:
         assert pipeline._evidence_gate.evaluate.call_args.kwargs["rerank_results"] == []
         assert ctx.evidence_result.decision == "reject"
         pipeline._llm_client.generate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_path", "dense_count"),
+    [
+        ("bm25", "bm25_es", 50),
+        ("rrf", "rrf_fusion", 50),
+        ("fallback", "bm25_fallback", 1),
+    ],
+)
+@patch("core.pipeline.log_audit_event")
+def test_partial_recall_failure_marks_response_degraded_and_skips_cache(
+    _mock_audit, monkeypatch, failure_kind, expected_path, dense_count
+):
+    """A successful answer from only some recall paths is not a cacheable healthy run."""
+    from common.models import RecallResult
+    from retrieval.parallel_recall import ParallelRecallManager
+
+    pipeline = OnlineRAGPipeline()
+    _setup_pipeline_mocks(pipeline)
+    pipeline._complexity_evaluator = MagicMock()
+    pipeline._complexity_evaluator.evaluate.return_value = False
+    pipeline._should_use_clip_sync = lambda _rewrite: (False, 0)
+
+    recall = ParallelRecallManager.__new__(ParallelRecallManager)
+    recall.max_workers = 2
+    recall._recall_dense = lambda *_args: [
+        RecallResult(
+            doc_id=f"doc-{index}",
+            content="evidence",
+            score=1.0,
+            source="dense_bge",
+            metadata={"role_mask": 0, "dept_mask": 0},
+        )
+        for index in range(dense_count)
+    ]
+
+    if failure_kind == "bm25":
+
+        def _bm25_failure(*_args):
+            raise RuntimeError("elasticsearch unavailable")
+
+        recall._recall_bm25 = _bm25_failure
+        recall._recall_es_fallback = lambda *_args, **_kwargs: []
+    elif failure_kind == "rrf":
+        recall._recall_bm25 = lambda *_args: []
+        recall._recall_es_fallback = lambda *_args, **_kwargs: []
+
+        def _rrf_failure(*_args, **_kwargs):
+            raise RuntimeError("fusion unavailable")
+
+        monkeypatch.setattr("retrieval.parallel_recall.rrf_fusion", _rrf_failure)
+    else:
+        recall._recall_bm25 = lambda *_args: []
+
+        def _fallback_failure(*_args, **_kwargs):
+            raise RuntimeError("fallback unavailable")
+
+        recall._recall_es_fallback = _fallback_failure
+    pipeline._parallel_recall = recall
+
+    ctx = _make_ctx()
+    assert pipeline.process(ctx) == "烟酰胺在推荐浓度下是安全的。"
+
+    pipeline._cache.set.assert_not_called()
+    assert ctx.degraded is True
+    assert expected_path in (ctx.fallback_reason or "")

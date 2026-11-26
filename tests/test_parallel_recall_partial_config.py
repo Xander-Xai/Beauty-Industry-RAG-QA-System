@@ -27,6 +27,7 @@ def test_reduced_path_mapping_preserves_simple_query_topology():
     manager = _manager()
     called: list[str] = []
     observed: dict[str, int] = {}
+    degraded_paths: list[str] = []
 
     def dense(_embedding, _filter, top_k):
         called.append("dense_bge")
@@ -55,6 +56,7 @@ def test_reduced_path_mapping_preserves_simple_query_topology():
             "dense_bge": {"enabled": True, "top_k": 7},
             "bm25_es": {"enabled": True, "top_k": 11},
         },
+        on_degradation=lambda paths: degraded_paths.extend(paths),
     )
 
     assert results == []
@@ -64,6 +66,7 @@ def test_reduced_path_mapping_preserves_simple_query_topology():
     assert "clip_visual" not in called
     assert "rewrite_variants" not in called
     assert observed == {"dense_bge": 7, "bm25_es": 11}
+    assert degraded_paths == []
 
 
 def test_present_empty_path_config_uses_path_default_top_k():
