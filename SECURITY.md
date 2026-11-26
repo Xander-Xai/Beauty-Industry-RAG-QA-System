@@ -51,6 +51,7 @@ mechanisms, not as guarantees.
 | Document-level RBAC (bitmask role/dept authorization) | `auth/bitmask_rbac.py`, `common/auth.py` |
 | Role/dept cache partitioning (physical cache key separation) | `cache/redis_cache.py` |
 | Trusted proxy handling (`X-Forwarded-For` client-IP resolution) | `api/routes_auth.py`, `app.py` |
+| Production CORS requires explicit non-wildcard origins (development wildcard has credentials disabled) | `common/config.py` (`resolve_cors_origins`), `api/middleware.py`, `api-gateway/main.py` |
 | Login rate limiting | `api-gateway/middleware/rate_limiter.py`, `api/routes_auth.py` |
 | Authenticated metrics endpoint | `api/routes.py` (`/api/metrics`) |
 | Structured audit logging (hashed queries, security-relevant fields) | `auth/audit_log.py`, `common/audit.py` |
