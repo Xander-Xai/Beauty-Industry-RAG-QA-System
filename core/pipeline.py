@@ -366,6 +366,15 @@ class OnlineRAGPipeline:
                         business_type=business_type,
                         is_visual_relevant=clip_use and clip_top_k > 20,
                     )
+
+                    def _mark_recall_degraded(failed_paths: tuple[str, ...]) -> None:
+                        ctx.degraded = True
+                        reason = f"recall_paths_failed:{','.join(failed_paths)}"
+                        if ctx.fallback_reason:
+                            ctx.fallback_reason = f"{ctx.fallback_reason};{reason}"
+                        else:
+                            ctx.fallback_reason = reason
+
                     ctx.recall_results, ctx.retrieval_agreement_score = self.parallel_recall.execute(
                         query=ctx.rewrite_result.rewritten_query,
                         query_embedding=query_embedding,
@@ -375,6 +384,7 @@ class OnlineRAGPipeline:
                         clip_top_k=clip_top_k,
                         top_k_per_path=recall_top_k,
                         rrf_weights=rrf_weights,
+                        on_degradation=_mark_recall_degraded,
                     )
                 ctx.recall_results = filter_release_candidates(
                     ctx.recall_results, config.get("knowledge_version_epoch", "default")
