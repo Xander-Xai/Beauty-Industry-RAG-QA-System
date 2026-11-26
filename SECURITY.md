@@ -55,7 +55,7 @@ mechanisms, not as guarantees.
 | Login rate limiting | `api-gateway/middleware/rate_limiter.py`, `api/routes_auth.py` |
 | Authenticated metrics endpoint | `api/routes.py` (`/api/metrics`) |
 | Structured audit logging (hashed queries, security-relevant fields) | `auth/audit_log.py`, `common/audit.py` |
-| Security CI (dependency vulnerability scan + secret scan) | `.github/workflows/security.yml` |
+| SHA-pinned GitHub Actions with scheduled dependency updates; security CI (dependency vulnerability scan + secret scan) | `.github/workflows/`, `.github/dependabot.yml` |
 | Retrieval prompt trust boundary (untrusted evidence confined to reserved delimiters) | `models/llm_client.py` |
 
 Per-control evidence, the threat each control addresses, and the remaining gap for
