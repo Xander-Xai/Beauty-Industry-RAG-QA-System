@@ -71,6 +71,44 @@ def _xlsx(tmp_path):
     return path
 
 
+def _docx_merged_cells(tmp_path):
+    from docx import Document
+
+    path = tmp_path / "merged.docx"
+    document = Document()
+    document.add_heading("Merged-cell structure", level=1)
+    document.add_paragraph("before-table sentinel")
+    table = document.add_table(rows=3, cols=3)
+    table.cell(0, 0).text = "Horizontal anchor"
+    table.cell(0, 2).text = "right"
+    table.cell(1, 0).text = "Vertical anchor"
+    table.cell(1, 1).text = "row two"
+    table.cell(2, 1).text = "row three"
+    table.cell(0, 0).merge(table.cell(0, 1))
+    table.cell(1, 0).merge(table.cell(2, 0))
+    document.add_paragraph("after-table sentinel")
+    document.save(path)
+    return path
+
+
+def _xlsx_structures(tmp_path):
+    from openpyxl import Workbook
+
+    path = tmp_path / "structures.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Ingredient Values"
+    sheet.merge_cells("A1:C1")
+    sheet["A1"] = "Ingredient schedule"
+    sheet.append(["Ingredient", "Amount", "Unit", "Formula"])
+    sheet.append(["Retinol", 0.3, "0.3%", "=B3*100"])
+    sheet.append(["Niacinamide", 5.0, "5 %", "=B4*100"])
+    other = workbook.create_sheet("Notes")
+    other.append(["Do not infer merged values"])
+    workbook.save(path)
+    return path
+
+
 def test_txt_processor_matches_phase_one_chunk_identity(tmp_path):
     path = _txt(tmp_path, "Alpha beta gamma delta " * 30)
     new = DocumentProcessor(chunk_size=50, chunk_overlap=5)
@@ -119,6 +157,52 @@ def test_docx_preserves_structure(tmp_path):
     assert "Ingredient" in processed.blocks[-1].text
 
 
+def test_docx_merged_cells_are_explicit_and_ordered_through_chunking(tmp_path):
+    import hashlib
+
+    path = _docx_merged_cells(tmp_path)
+    processor = DocumentProcessor(chunk_size=120, chunk_overlap=0)
+    processed = processor.process(path, source_id="fixture/merged.docx")
+
+    assert [block.block_type for block in processed.blocks] == ["heading", "paragraph", "table", "paragraph"]
+    table = processed.blocks[2]
+    assert table.metadata["table_index"] == 2
+    assert table.text == (
+        "Horizontal anchor | Horizontal anchor | right\nVertical anchor | row two | \nVertical anchor | row three |"
+    )
+    assert processed.source_id == "fixture/merged.docx"
+    assert processed.content_hash == hashlib.sha256(path.read_bytes()).hexdigest()
+
+    repeated = processor.process(path, source_id="fixture/merged.docx")
+    assert repeated.doc_id == processed.doc_id
+    assert repeated.content_hash == processed.content_hash
+    chunks = processor.build_chunks(
+        processed,
+        role_mask=0,
+        dept_mask=0,
+        doc_version_epoch="parser-audit-20261126",
+    )
+    assert any(chunk.metadata.get("table_index") == table.metadata["table_index"] for chunk in chunks)
+    assert all(chunk.doc_id == processed.doc_id for chunk in chunks)
+
+
+def test_xlsx_merged_cells_numbers_units_formula_cache_and_locators(tmp_path):
+    path = _xlsx_structures(tmp_path)
+    processed = DocumentProcessor(xlsx_rows_per_block=2).process(path, source_id="fixture/values.xlsx")
+
+    ingredient_blocks = [block for block in processed.blocks if block.metadata["sheet_name"] == "Ingredient Values"]
+    notes_block = next(block for block in processed.blocks if block.metadata["sheet_name"] == "Notes")
+    assert [(block.metadata["row_start"], block.metadata["row_end"]) for block in ingredient_blocks] == [(1, 2), (3, 4)]
+    assert ingredient_blocks[0].text == "Ingredient schedule |  |  | \nIngredient | Amount | Unit | Formula"
+    assert "0.3 | 0.3%" in ingredient_blocks[1].text
+    assert "5 | 5 %" in ingredient_blocks[1].text
+    # openpyxl's read-only data_only view has no calculated value when the file
+    # contains a formula but no cached result; parsing does not evaluate it.
+    assert ingredient_blocks[1].text.endswith("Niacinamide | 5 | 5 % |")
+    assert notes_block.metadata["row_start"] == 1
+    assert "Do not infer merged values" in notes_block.text
+
+
 def test_xlsx_uses_sheet_row_windows(tmp_path):
     processor = DocumentProcessor(xlsx_rows_per_block=2)
     processed = processor.process(_xlsx(tmp_path))
@@ -141,6 +225,29 @@ def test_unsupported_extension_and_limits(tmp_path):
     oversized.write_text("x" * 20, encoding="utf-8")
     with pytest.raises(ValueError, match="ingestion limit"):
         DocumentProcessor(max_document_bytes=8).process(oversized)
+
+
+@pytest.mark.parametrize("extension", ["pdf", "docx", "xlsx"])
+def test_corrupt_binary_containers_fail_explicitly(tmp_path, extension):
+    path = tmp_path / f"corrupt.{extension}"
+    path.write_bytes(b"not a valid document container")
+
+    with pytest.raises(ValueError, match="cannot open"):
+        DocumentProcessor().process(path)
+
+
+def test_binary_size_limit_is_checked_before_parser_import(tmp_path, monkeypatch):
+    import offline.document_processor as document_processor_module
+
+    path = tmp_path / "too-large.pdf"
+    path.write_bytes(b"%PDF-" + b"x" * 32)
+
+    def unexpected_import():
+        raise AssertionError("parser must not be imported before the size check")
+
+    monkeypatch.setattr(document_processor_module, "_import_pymupdf", unexpected_import)
+    with pytest.raises(ValueError, match="ingestion limit"):
+        DocumentProcessor(max_binary_document_bytes=8).process(path)
 
 
 @pytest.mark.parametrize("role,dept", [(-1, 0), (0, 2**32), (True, 0), (0, "1")])

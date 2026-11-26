@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 from qdrant_client import QdrantClient
 
-from offline.document_processor import ExtractedImage
+from offline.document_processor import DocumentProcessor, ExtractedImage
 from offline.embeddings import CLIPImageEmbedder, DeterministicTestImageEmbedder
 from offline.image_processor import (
     DeterministicTestOCRProvider,
     ImageProcessor,
     OCRBlock,
+    OCRResult,
     image_identity,
 )
 from offline.qdrant_writer import QdrantImageWriter
+from offline.snapshot_builder import IngestionSource, SnapshotBuilder
 from offline.source_trust import managed_record
 
 #: These fixtures are managed internal corpus content, so they declare managed
@@ -83,6 +86,74 @@ def test_image_processor_builds_authorized_record():
             doc_version_epoch="epoch_1",
             source_path="/data/scan.png",
         )
+
+
+def test_scanned_pdf_ocr_chunks_keep_page_image_order_and_provenance(tmp_path):
+    import pymupdf
+
+    class RecordingOCR:
+        def extract(self, image_bytes, *, page_number=None, image_index=0):
+            text = f"page-{page_number}-image-{image_index}"
+            return OCRResult(
+                full_text=text,
+                blocks=[
+                    OCRBlock(
+                        text=text,
+                        confidence=0.99,
+                        bbox=(5.0, 5.0, 50.0, 20.0),
+                        page_number=page_number,
+                        image_index=image_index,
+                    )
+                ],
+            )
+
+    path = tmp_path / "two-page-scan.pdf"
+    with pymupdf.open() as document:
+        for _ in (1, 2):
+            page = document.new_page(width=100, height=60)
+            page.insert_image(pymupdf.Rect(5, 5, 95, 55), stream=_png_bytes())
+        document.save(path)
+
+    source_path = str(path.resolve())
+    source_id = "fixture/two-page-scan.pdf"
+    source_provenance = managed_record(source_id).to_payload()
+    document_processor = DocumentProcessor(ocr_min_text_chars=20)
+    processed = document_processor.process(path, source_id=source_id)
+    assert processed.requires_ocr
+    assert [(image.page_number, image.image_index) for image in processed.images] == [(1, 0), (2, 1)]
+
+    image_processor = ImageProcessor(
+        RecordingOCR(), DeterministicTestImageEmbedder(dimension=8), visual_weight_repeat=1
+    )
+    source = IngestionSource(source_id, source_path, "pdf", 0, 0)
+    chunks = []
+    for image in processed.images:
+        record = image_processor.process_image(
+            image=image,
+            doc_id=processed.doc_id,
+            role_mask=0,
+            dept_mask=0,
+            doc_version_epoch="parser-audit-20261126",
+            source_path=source_path,
+            provenance=source_provenance,
+        )
+        assert record.metadata["page_number"] == image.page_number
+        assert record.metadata["image_index"] == image.image_index
+        assert record.ocr_blocks[0]["page_number"] == image.page_number
+        chunks.extend(
+            SnapshotBuilder._ocr_text_chunks(
+                SimpleNamespace(processor=document_processor),
+                processed.doc_id,
+                source,
+                record,
+                "parser-audit-20261126",
+                source_provenance,
+            )
+        )
+
+    assert [(chunk.metadata["page_number"], chunk.metadata["image_index"]) for chunk in chunks] == [(1, 0), (2, 1)]
+    assert all(chunk.source_path == source_path for chunk in chunks)
+    assert all(chunk.provenance == source_provenance for chunk in chunks)
 
 
 def test_standalone_image_identity_is_stable(tmp_path):

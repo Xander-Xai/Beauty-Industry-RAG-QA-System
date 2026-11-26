@@ -77,6 +77,7 @@
 | `docs/validation/evidence/real-v1-approved-bm25-evidence.json` | 4 次运行 | `RUNTIME_EVIDENCE` | 已发布 BM25 运行的机器可读投影：门禁标志、全部检索指标、延迟、来源审批、索引身份与原始产物的 SHA-256 | 仅为门禁状态与指标；**原始运行产物按既有规则不提交**（`artifacts/benchmarks/README.md`）。`source_approval_verified=true` **只表示语料通过来源审批门禁**，不表示可用于生产或代表现行法规结论 |
 | `docs/validation/evidence/real-v1-approved-bm25-per-sample.jsonl` | 27 | `RUNTIME_EVIDENCE` | 27 条逐样本检索结果（Gold Chunk ID、召回 Chunk ID、首个命中名次、逐臂指标），是 `scripts/validation/verify_benchmark_evidence.py` 重算全部已发布指标的输入 | **只含 chunk ID 与名次，不含任何索引文档正文**——由 `tests/validation/test_benchmark_evidence_package.py` 断言。问题文本是基准自撰；它引用的语料摘录不在此文件内重复发布 |
 | `docs/validation/evidence/chinese-analyzer-tokenisation.json` | 8 组采样 | `RUNTIME_EVIDENCE` | 三种分析器（standard / smartcn / ik_smart）对同一批输入的 Elasticsearch `_analyze` 真实输出 | 输入是基准自撰问题与 5 个通用技术串（INCI 名、法规编号、原料名），**不是索引语料的摘录**，不主张任何法规结论 |
+| `docs/validation/parser-capability-matrix-20261126.json` | 5 个格式/处理类别 | `GOVERNANCE` | 日期化解析能力与确定性 fixture 覆盖矩阵，来源为本仓库代码、测试引用及本次本地测试环境 | 不含源文档正文；真实文档保真和 MinerU/Docling 对照明确标为 `PENDING` / `BLOCKED`，不声称解析准确率或法规结论 |
 | `docs/assets/demo-request-evidence-flow.webp` | — | `SYNTHETIC` | 由 `docs/demo/capture_demo.py` 从上述合成语料渲染 | 画面内所有数值均为合成值 |
 
 ### 不在清单内的内容

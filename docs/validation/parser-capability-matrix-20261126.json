@@ -1,0 +1,67 @@
+{
+  "snapshot_date": "2026-11-26",
+  "base_sha": "03dc58e93b6ff9ca2c79d9adaa5d57149d55462d",
+  "environment": {
+    "python": "3.10.12",
+    "pytest": "8.4.2",
+    "pymupdf": "1.28.2",
+    "python_docx": "1.1.2",
+    "openpyxl": "3.1.5",
+    "pillow": "12.2.0"
+  },
+  "evidence_boundary": {
+    "fixture_evidence": "Deterministic repository tests over generated local files and deterministic OCR/image providers only.",
+    "real_document_evidence": "No representative external documents were parsed in this audit.",
+    "real_document_status": "PENDING",
+    "parser_comparison_status": "BLOCKED",
+    "regulatory_accuracy_claim": false
+  },
+  "formats": [
+    {
+      "format": "TXT",
+      "implementation": "offline/document_processor.py",
+      "supported_behavior": ["UTF-8 text with optional BOM", "stable source identity and normalized content digest", "character-window chunking"],
+      "limitations": ["No layout or page locators"],
+      "test_refs": ["tests/offline/test_document_processor.py::test_txt_bom_and_empty_document", "tests/offline/test_document_processor.py::test_txt_processor_matches_phase_one_chunk_identity"],
+      "fixture_status": "REPO_VERIFIED"
+    },
+    {
+      "format": "PDF",
+      "implementation": "offline/document_processor.py",
+      "supported_behavior": ["Per-page text extraction and one-based page locator", "opt-in per-page table extraction and table index", "low-text page render hand-off to OCR/image processing", "corrupt-container and byte-limit rejection"],
+      "limitations": ["Tables are page-local; cross-page continuation is not reconstructed", "Reading order and table fidelity are not established for real complex layouts", "OCR model accuracy is not measured"],
+      "test_refs": ["tests/offline/test_document_processor.py::test_pdf_text_extraction_records_page_metadata", "tests/offline/test_document_processor.py::test_scanned_pdf_requests_ocr_instead_of_empty_success", "tests/offline/test_pdf_table_extraction.py::test_two_page_pdf_keeps_table_page_identity_and_locator_through_chunking", "tests/offline/test_document_processor.py::test_corrupt_binary_containers_fail_explicitly"],
+      "fixture_status": "REPO_VERIFIED"
+    },
+    {
+      "format": "DOCX",
+      "implementation": "offline/document_processor.py",
+      "supported_behavior": ["Body paragraph, heading and table order", "Table index metadata", "Source identity and byte digest"],
+      "limitations": ["Merged cells can repeat anchor text in the extracted row-cell view", "No page or visual layout coordinates", "Current test output includes trailing separator whitespace for blank final cells"],
+      "test_refs": ["tests/offline/test_document_processor.py::test_docx_preserves_structure", "tests/offline/test_document_processor.py::test_docx_merged_cells_are_explicit_and_ordered_through_chunking"],
+      "fixture_status": "REPO_VERIFIED"
+    },
+    {
+      "format": "XLSX",
+      "implementation": "offline/document_processor.py",
+      "supported_behavior": ["Sheet names and one-based row windows", "Merged non-anchor cells remain blank", "Numeric string conversion and literal unit preservation"],
+      "limitations": ["Read-only data_only mode does not evaluate formulas and uncached formula values are empty", "Cell formatting and visual layout are not preserved"],
+      "test_refs": ["tests/offline/test_document_processor.py::test_xlsx_uses_sheet_row_windows", "tests/offline/test_document_processor.py::test_xlsx_merged_cells_numbers_units_formula_cache_and_locators"],
+      "fixture_status": "REPO_VERIFIED"
+    },
+    {
+      "format": "Images and OCR hand-off",
+      "implementation": "offline/image_processor.py; offline/snapshot_builder.py",
+      "supported_behavior": ["Image index and page metadata on processed image records", "OCR text chunks bound to source provenance, page number and image index", "Provider interface supports deterministic test OCR"],
+      "limitations": ["Real PaddleOCR reading order and numeric accuracy were not tested", "Real CLIP image embeddings were not loaded or measured"],
+      "test_refs": ["tests/offline/test_image_processing.py::test_image_processor_builds_authorized_record", "tests/offline/test_image_processing.py::test_scanned_pdf_ocr_chunks_keep_page_image_order_and_provenance"],
+      "fixture_status": "REPO_VERIFIED"
+    }
+  ],
+  "safety_contract": {
+    "corrupt_supported_containers": "Explicit parse error; no empty-success document",
+    "oversized_binary_files": "Rejected before parser import",
+    "failed_snapshot": "Source state is not committed and epoch is not sealed",
+    "evidence_status": "REPO_VERIFIED by the dated offline parser and snapshot regression run"
+  }
+}

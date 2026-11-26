@@ -102,6 +102,62 @@ def test_pdf_optin_passes_source_page_into_table_blocks(tmp_path, monkeypatch):
     assert result.blocks[1].metadata["page_number"] == 1
 
 
+def test_two_page_pdf_keeps_table_page_identity_and_locator_through_chunking(tmp_path, monkeypatch):
+    import hashlib
+
+    import pymupdf
+
+    path = tmp_path / "two-page.pdf"
+    with pymupdf.open() as document:
+        for page_number in (1, 2):
+            page = document.new_page()
+            page.insert_text((70, 70), (f"page-{page_number}-text " * 6))
+        document.save(path)
+
+    def table_finder(_self, _page, page_index):
+        page_number = page_index + 1
+        text = f"page-{page_number}-table " * 6
+        return [
+            DocumentBlock(
+                block_type="table",
+                text=text,
+                order=page_index,
+                block_identity=f"page:{page_index}:table:0",
+                metadata={"format": "pdf", "page_number": page_number, "table_index": 0},
+            )
+        ]
+
+    monkeypatch.setattr(DocumentProcessor, "_extract_pdf_tables", table_finder)
+    processor = DocumentProcessor(chunk_size=100, chunk_overlap=0, pdf_extract_tables=True)
+    processed = processor.process(path, source_id="fixture/two-page.pdf")
+
+    assert [block.block_identity for block in processed.blocks] == [
+        "page:0",
+        "page:0:table:0",
+        "page:1",
+        "page:1:table:0",
+    ]
+    assert [block.metadata["page_number"] for block in processed.blocks] == [1, 1, 2, 2]
+    # Page-local table blocks are deliberately not joined across page boundaries.
+    assert [block.text.split()[0] for block in processed.blocks if block.block_type == "table"] == [
+        "page-1-table",
+        "page-2-table",
+    ]
+
+    chunks = processor.build_chunks(
+        processed,
+        role_mask=0,
+        dept_mask=0,
+        doc_version_epoch="parser-audit-20261126",
+    )
+    table_chunks = [chunk for chunk in chunks if "table_index" in chunk.metadata]
+    assert [chunk.metadata["page_number"] for chunk in table_chunks] == [1, 2]
+    assert all(chunk.metadata["table_index"] == 0 for chunk in table_chunks)
+    assert all(chunk.doc_id == processed.doc_id for chunk in chunks)
+    assert all(chunk.content_hash == processed.content_hash for chunk in chunks)
+    assert all(chunk.content_hash == hashlib.sha256(path.read_bytes()).hexdigest() for chunk in chunks)
+
+
 def test_non_boolean_optin_flag_fails_fast():
     with pytest.raises(ValueError, match="boolean"):
         DocumentProcessor(pdf_extract_tables="yes")
